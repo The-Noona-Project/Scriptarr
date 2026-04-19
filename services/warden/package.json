@@ -1,0 +1,14 @@
+{
+  "name": "scriptarr-warden",
+  "version": "3.0.0",
+  "private": true,
+  "type": "module",
+  "main": "server.mjs",
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node --test tests/**/*.test.mjs"
+  },
+  "dependencies": {
+    "express": "^5.1.0"
+  }
+}

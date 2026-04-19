@@ -1,0 +1,28 @@
+{
+  "name": "scriptarr-3",
+  "version": "3.0.0",
+  "private": true,
+  "description": "Scriptarr 3.0 greenfield monorepo.",
+  "workspaces": [
+    "services/warden",
+    "services/vault",
+    "services/sage",
+    "services/moon",
+    "services/portal",
+    "services/oracle"
+  ],
+  "scripts": {
+    "docker:list": "node ./scripts/docker-images.mjs list",
+    "docker:build": "node ./scripts/docker-images.mjs build",
+    "docker:push": "node ./scripts/docker-images.mjs push",
+    "docker:publish": "node ./scripts/docker-images.mjs publish",
+    "docker:test": "node ./scripts/docker-test-stack.mjs start",
+    "docker:test:teardown": "node ./scripts/docker-test-stack.mjs stop",
+    "test": "npm run test:js && npm run test:raven",
+    "test:js": "npm run test --workspaces --if-present",
+    "test:raven": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/test-raven.ps1"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
