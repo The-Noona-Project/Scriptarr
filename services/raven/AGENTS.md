@@ -13,3 +13,4 @@ Raven is Scriptarr's Java download, library, metadata, and VPN-aware download en
 - Organize downloader, library, metadata, and provider responsibilities into clear modules.
 - Raven replaces Komf; do not add Komf or Kavita coupling back in.
 - Manual metadata overrides are admin-visible contracts and should stay documented.
+- Keep full JavaDoc on Raven main and test Java sources. `gradlew check` is the expected enforcement path.

@@ -14,6 +14,9 @@ import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.nio.charset.StandardCharsets;
 
+/**
+ * Minimal Vault HTTP client used by Raven for shared settings and secrets.
+ */
 @Component
 public class RavenVaultClient {
     private final HttpClient httpClient = HttpClient.newBuilder()
@@ -27,10 +30,26 @@ public class RavenVaultClient {
     @Value("${SCRIPTARR_SERVICE_TOKEN:raven-dev-token}")
     private String serviceToken;
 
+    /**
+     * Load a non-secret setting value from Vault.
+     *
+     * @param key setting key to request
+     * @return parsed JSON payload from Vault
+     * @throws IOException when the Vault response cannot be read
+     * @throws InterruptedException when the request is interrupted
+     */
     public JsonNode getSetting(String key) throws IOException, InterruptedException {
         return get("/api/service/settings/" + encode(key));
     }
 
+    /**
+     * Load a secret value from Vault.
+     *
+     * @param key secret key to request
+     * @return parsed JSON payload from Vault
+     * @throws IOException when the Vault response cannot be read
+     * @throws InterruptedException when the request is interrupted
+     */
     public JsonNode getSecret(String key) throws IOException, InterruptedException {
         return get("/api/service/secrets/" + encode(key));
     }

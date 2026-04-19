@@ -1,5 +1,5 @@
 import {escapeHtml, renderEmptyState, renderStatusBadge, renderTable} from "../dom.js";
-import {formatDate, joinValues} from "../format.js";
+import {formatDate} from "../format.js";
 
 /**
  * Resolve system route config.
@@ -69,6 +69,8 @@ export const renderSystemPage = (result) => {
     const services = result.payload?.services || {};
     const bootstrap = result.payload?.bootstrap || {};
     const runtime = result.payload?.runtime || {};
+    const runtimeNetwork = runtime.managedNetworkName || bootstrap.managedNetworkName || "scriptarr-network";
+    const runtimeMysqlMode = runtime.mysql?.mode || bootstrap.mysql?.mode || "selfhost";
 
     return `
       <div class="content-grid two-up">
@@ -110,7 +112,7 @@ export const renderSystemPage = (result) => {
           })}
           <div class="callout subtle">
             <strong>Network</strong>
-            <p>${escapeHtml(runtime.networkName || bootstrap.networkName || "scriptarr-network")} · ${escapeHtml(runtime.stackMode || "production")} · ${escapeHtml(runtime.mysqlMode || "selfhost")}</p>
+            <p>${escapeHtml(runtimeNetwork)} &middot; ${escapeHtml(runtime.stackMode || "production")} &middot; ${escapeHtml(runtimeMysqlMode)}</p>
           </div>
         </section>
       </div>

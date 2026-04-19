@@ -20,9 +20,9 @@ const usage = () => {
     "  node scripts/docker-test-stack.mjs status [--stack-id local]",
     "",
     "Notes:",
-    "  - Warden runs as a detached host process for the test stack.",
-    "  - The managed services run in Docker on an isolated Scriptarr test network.",
-    "  - Missing local service images are built automatically unless --skip-build is used."
+    "  - Warden runs as a Docker container and reconciles the rest of the stack through the Docker socket.",
+    "  - The managed services run on an isolated Scriptarr test network.",
+    "  - The selected service images are rebuilt from the current workspace unless --skip-build is used."
   ].join("\n"));
 };
 
@@ -82,14 +82,16 @@ const main = async () => {
       containerNamePrefix: `scriptarr-test-${built.stackId}`
     });
     const selected = SCRIPTARR_DOCKER_SERVICES.filter((entry) =>
-      runtimePlan.services.some((service) => service.name === entry.name)
+      entry.name === "scriptarr-warden" || runtimePlan.services.some((service) => service.name === entry.name)
     );
 
     await ensureLocalImages(selected, {
       namespace,
       tag,
       progress,
-      forceBuild: args.build === true || String(args.build || "").toLowerCase() === "true",
+      forceBuild: args.build == null
+        ? true
+        : args.build === true || String(args.build || "").toLowerCase() === "true",
       noCache: args["no-cache"] === true || String(args["no-cache"] || "").toLowerCase() === "true"
     });
   }

@@ -12,6 +12,9 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+/**
+ * Smoke tests for the Raven application scaffold.
+ */
 @SpringBootTest(
     classes = RavenApplication.class,
     webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
@@ -27,6 +30,9 @@ class RavenApplicationTests {
     @Autowired
     private TestRestTemplate restTemplate;
 
+    /**
+     * Verify the health payload surfaces Raven defaults used by Moon admin.
+     */
     @Test
     void healthIncludesProviderDefaultsAndVpnStatus() {
         Map<?, ?> payload = restTemplate.getForObject("http://127.0.0.1:" + port + "/health", Map.class);

@@ -1,3 +1,6 @@
+/**
+ * @file Scriptarr Sage module: services/sage/lib/createSageApp.mjs.
+ */
 import express from "express";
 import {resolveSageConfig} from "./config.mjs";
 import {createVaultClient} from "./vaultClient.mjs";
@@ -53,6 +56,20 @@ const safeJson = async (promise) => {
       error: error instanceof Error ? error.message : String(error)
     };
   }
+};
+
+const loadWardenStatus = async (baseUrl) => {
+  const [health, bootstrap, runtime] = await Promise.all([
+    safeJson(fetch(`${baseUrl}/health`).then((response) => response.json())),
+    safeJson(serviceJson(baseUrl, "/api/bootstrap")),
+    safeJson(serviceJson(baseUrl, "/api/runtime"))
+  ]);
+
+  return {
+    health: health.payload || health,
+    bootstrap: bootstrap.payload || bootstrap,
+    runtime: runtime.payload || runtime
+  };
 };
 
 const serviceJson = async (baseUrl, servicePath, options = {}) => {
@@ -253,6 +270,12 @@ const upsertUserFromDiscord = async ({vaultClient, config, identity}) => {
   });
 };
 
+/**
+ * Create the Scriptarr Sage Express application that brokers Moon-facing auth,
+ * moderation, settings, and Warden orchestration routes.
+ *
+ * @returns {Promise<{app: import("express").Express, config: ReturnType<typeof resolveSageConfig>}>}
+ */
 export const createSageApp = async () => {
   const config = resolveSageConfig();
   const vaultClient = createVaultClient(config);
@@ -395,7 +418,7 @@ export const createSageApp = async () => {
 
   app.get("/api/admin/status", requirePermission(vaultClient, "manage_settings"), async (_req, res) => {
     const [warden, portal, oracle, raven, ravenVpn, metadataProviders] = await Promise.all([
-      safeJson(serviceJson(config.wardenBaseUrl, "/api/bootstrap")),
+      loadWardenStatus(config.wardenBaseUrl),
       safeJson(fetch(`${config.portalBaseUrl}/health`).then((response) => response.json())),
       safeJson(fetch(`${config.oracleBaseUrl}/health`).then((response) => response.json())),
       safeJson(fetch(`${config.ravenBaseUrl}/health`).then((response) => response.json())),
@@ -405,12 +428,13 @@ export const createSageApp = async () => {
 
     res.json({
       services: {
-        warden: warden.payload || warden,
+        warden: warden.health,
         portal,
         oracle,
         raven
       },
       summaries: {
+        warden,
         ravenVpn,
         metadataProviders
       }
@@ -520,3 +544,4 @@ export const createSageApp = async () => {
 
   return {app, config};
 };
+

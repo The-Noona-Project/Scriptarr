@@ -1,3 +1,6 @@
+/**
+ * @file Scriptarr Warden module: services/warden/config/images.mjs.
+ */
 import {DEFAULT_IMAGE_NAMESPACE, DEFAULT_IMAGE_TAG} from "./constants.mjs";
 
 const normalizeString = (value) => String(value ?? "").trim();
@@ -29,3 +32,4 @@ export const resolveImageTag = ({env = process.env} = {}) =>
  */
 export const resolveServiceImage = (serviceName, {env = process.env} = {}) =>
   `${resolveImageNamespace({env})}/${serviceName}:${resolveImageTag({env})}`;
+

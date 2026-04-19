@@ -1,3 +1,6 @@
+/**
+ * @file Scriptarr Warden module: services/warden/config/servicePlan.mjs.
+ */
 import {
   DEFAULT_LOCALAI_PORT,
   DEFAULT_MOON_PORT,
@@ -9,6 +12,7 @@ import {
   DEFAULT_PUBLIC_BASE_URL,
   DEFAULT_RAVEN_PORT,
   DEFAULT_SAGE_PORT,
+  DEFAULT_STACK_ID,
   DEFAULT_STACK_MODE,
   DEFAULT_VAULT_PORT,
   DEFAULT_WARDEN_PORT,
@@ -45,6 +49,30 @@ const resolveContainerName = (serviceName, prefix) => {
   }
 
   return `${normalizedPrefix}-${serviceName.replace(/^scriptarr-/, "")}`;
+};
+
+/**
+ * Resolve the container-name prefix Warden should apply for the current stack.
+ *
+ * @param {{env?: NodeJS.ProcessEnv, containerNamePrefix?: string}} [options]
+ * @returns {string}
+ */
+export const resolveContainerNamePrefix = ({env = process.env, containerNamePrefix = ""} = {}) => {
+  const explicit = normalizeString(containerNamePrefix || env.SCRIPTARR_CONTAINER_NAME_PREFIX);
+  if (explicit) {
+    return explicit;
+  }
+
+  if (resolveStackMode({env}) !== "test") {
+    return "";
+  }
+
+  const normalizedStackId = normalizeString(env.SCRIPTARR_STACK_ID || DEFAULT_STACK_ID)
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+
+  return normalizedStackId ? `scriptarr-test-${normalizedStackId}` : "";
 };
 
 const resolveFolderMounts = (layout, serviceName, keys) =>
@@ -147,6 +175,7 @@ export const resolveServicePlan = ({env = process.env, containerNamePrefix = ""}
   const ravenPort = resolvePort(env.SCRIPTARR_RAVEN_PORT, DEFAULT_RAVEN_PORT);
   const wardenBaseUrlForServices = normalizeString(env.SCRIPTARR_WARDEN_BASE_URL) || DEFAULT_WARDEN_SERVICE_BASE_URL;
   const localAiBaseUrl = normalizeString(env.SCRIPTARR_LOCALAI_BASE_URL) || `http://scriptarr-localai:${DEFAULT_LOCALAI_PORT}/v1`;
+  const resolvedContainerNamePrefix = resolveContainerNamePrefix({env, containerNamePrefix});
 
   /** @type {ReturnType<typeof resolveServicePlan>["services"]} */
   const services = [];
@@ -154,7 +183,7 @@ export const resolveServicePlan = ({env = process.env, containerNamePrefix = ""}
   if (mysql.mode === "selfhost") {
     services.push({
       name: "scriptarr-mysql",
-      containerName: resolveContainerName("scriptarr-mysql", containerNamePrefix),
+      containerName: resolveContainerName("scriptarr-mysql", resolvedContainerNamePrefix),
       image: "mysql:8.4",
       env: {
         MYSQL_ROOT_PASSWORD: mysql.password,
@@ -171,7 +200,7 @@ export const resolveServicePlan = ({env = process.env, containerNamePrefix = ""}
 
   services.push({
     name: "scriptarr-vault",
-    containerName: resolveContainerName("scriptarr-vault", containerNamePrefix),
+    containerName: resolveContainerName("scriptarr-vault", resolvedContainerNamePrefix),
     image: resolveServiceImage("scriptarr-vault", {env}),
     env: {
       SCRIPTARR_VAULT_DRIVER: env.SCRIPTARR_VAULT_DRIVER || "mysql",
@@ -187,7 +216,7 @@ export const resolveServicePlan = ({env = process.env, containerNamePrefix = ""}
 
   services.push({
     name: "scriptarr-sage",
-    containerName: resolveContainerName("scriptarr-sage", containerNamePrefix),
+    containerName: resolveContainerName("scriptarr-sage", resolvedContainerNamePrefix),
     image: resolveServiceImage("scriptarr-sage", {env}),
     env: {
       SCRIPTARR_VAULT_BASE_URL: `http://scriptarr-vault:${vaultPort}`,
@@ -214,7 +243,7 @@ export const resolveServicePlan = ({env = process.env, containerNamePrefix = ""}
 
   services.push({
     name: "scriptarr-moon",
-    containerName: resolveContainerName("scriptarr-moon", containerNamePrefix),
+    containerName: resolveContainerName("scriptarr-moon", resolvedContainerNamePrefix),
     image: resolveServiceImage("scriptarr-moon", {env}),
     env: {
       SCRIPTARR_SAGE_BASE_URL: `http://scriptarr-sage:${sagePort}`,
@@ -228,7 +257,7 @@ export const resolveServicePlan = ({env = process.env, containerNamePrefix = ""}
 
   services.push({
     name: "scriptarr-raven",
-    containerName: resolveContainerName("scriptarr-raven", containerNamePrefix),
+    containerName: resolveContainerName("scriptarr-raven", resolvedContainerNamePrefix),
     image: resolveServiceImage("scriptarr-raven", {env}),
     env: {
       SCRIPTARR_VAULT_BASE_URL: `http://scriptarr-vault:${vaultPort}`,
@@ -243,7 +272,7 @@ export const resolveServicePlan = ({env = process.env, containerNamePrefix = ""}
 
   services.push({
     name: "scriptarr-portal",
-    containerName: resolveContainerName("scriptarr-portal", containerNamePrefix),
+    containerName: resolveContainerName("scriptarr-portal", resolvedContainerNamePrefix),
     image: resolveServiceImage("scriptarr-portal", {env}),
     env: {
       SCRIPTARR_VAULT_BASE_URL: `http://scriptarr-vault:${vaultPort}`,
@@ -259,7 +288,7 @@ export const resolveServicePlan = ({env = process.env, containerNamePrefix = ""}
 
   services.push({
     name: "scriptarr-oracle",
-    containerName: resolveContainerName("scriptarr-oracle", containerNamePrefix),
+    containerName: resolveContainerName("scriptarr-oracle", resolvedContainerNamePrefix),
     image: resolveServiceImage("scriptarr-oracle", {env}),
     env: {
       SCRIPTARR_VAULT_BASE_URL: `http://scriptarr-vault:${vaultPort}`,
@@ -300,3 +329,4 @@ export const resolveServicePlan = ({env = process.env, containerNamePrefix = ""}
     storageLayout
   };
 };
+

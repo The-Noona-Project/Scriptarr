@@ -1,3 +1,6 @@
+/**
+ * @file Scriptarr Warden module: services/warden/tests/localAiProfile.test.mjs.
+ */
 import test from "node:test";
 import assert from "node:assert/strict";
 
@@ -16,3 +19,4 @@ test("warden runtime snapshot keeps localai manual and off first boot", async ()
   assert.equal(runtime.localAi.installOnFirstBoot, false);
   assert.equal(runtime.localAi.lifecycle, "manual");
 });
+

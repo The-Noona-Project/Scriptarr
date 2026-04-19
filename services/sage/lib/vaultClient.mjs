@@ -1,3 +1,6 @@
+/**
+ * @file Scriptarr Sage module: services/sage/lib/vaultClient.mjs.
+ */
 const withBearer = (token) => ({
   "Authorization": `Bearer ${token}`,
   "Content-Type": "application/json"
@@ -15,6 +18,29 @@ const json = async (response) => {
   }
 };
 
+/**
+ * Build Sage's Vault client facade for settings, sessions, requests, and user
+ * mutations.
+ *
+ * @param {{vaultBaseUrl: string, serviceToken: string}} config
+ * @returns {{
+ *   getBootstrapStatus: () => Promise<any>,
+ *   upsertDiscordUser: (payload: Record<string, unknown>) => Promise<any>,
+ *   getUserByDiscordId: (discordUserId: string) => Promise<any>,
+ *   listUsers: () => Promise<any>,
+ *   createSession: (discordUserId: string) => Promise<any>,
+ *   getSessionUser: (token: string) => Promise<any>,
+ *   listRequests: () => Promise<any>,
+ *   getSetting: (key: string) => Promise<any>,
+ *   setSetting: (key: string, value: unknown) => Promise<any>,
+ *   getSecret: (key: string) => Promise<any>,
+ *   setSecret: (key: string, value: unknown) => Promise<any>,
+ *   createRequest: (payload: Record<string, unknown>) => Promise<any>,
+ *   reviewRequest: (id: string | number, payload: Record<string, unknown>) => Promise<any>,
+ *   getProgress: (discordUserId: string) => Promise<any>,
+ *   upsertProgress: (payload: Record<string, unknown>) => Promise<any>
+ * }}
+ */
 export const createVaultClient = (config) => {
   const baseUrl = config.vaultBaseUrl;
   const headers = withBearer(config.serviceToken);
@@ -124,3 +150,4 @@ export const createVaultClient = (config) => {
     }
   };
 };
+

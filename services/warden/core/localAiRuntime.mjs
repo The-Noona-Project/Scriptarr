@@ -1,3 +1,6 @@
+/**
+ * @file Scriptarr Warden module: services/warden/core/localAiRuntime.mjs.
+ */
 import {
   DEFAULT_LOCALAI_CONTAINER_NAME,
   DEFAULT_LOCALAI_PORT
@@ -182,3 +185,4 @@ export const createLocalAiRuntime = ({env = process.env, logger}) => {
     start
   };
 };
+

@@ -1,23 +1,28 @@
-import fs from "node:fs";
+/**
+ * @file Scriptarr Warden module: services/warden/core/testStackManager.mjs.
+ */
 import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import {fileURLToPath} from "node:url";
-import {spawn} from "node:child_process";
 
 import {
   DEFAULT_TEST_MOON_PORT,
   DEFAULT_TEST_STACK_ID,
   DEFAULT_TEST_WARDEN_PORT,
-  DEFAULT_WARDEN_HOST_ALIAS
+  DEFAULT_WARDEN_PORT
 } from "../config/constants.mjs";
+import {resolveServiceImage} from "../config/images.mjs";
 import {resolveServicePlan} from "../config/servicePlan.mjs";
 import {ensureScriptarrStorageFolders, resolveEphemeralTestDataRoot, resolveTestStateDirectory} from "../filesystem/storageLayout.mjs";
-import {containerExists, ensureDockerNetwork, removeDockerContainer, removeDockerNetwork, runDetachedContainer, waitForHttp, waitForMySqlReady} from "../docker/dockerCli.mjs";
+import {
+  containerExists,
+  listContainersByLabel,
+  removeDockerContainer,
+  removeDockerNetwork,
+  runDetachedContainer,
+  waitForHttp
+} from "../docker/dockerCli.mjs";
 import {createLogger} from "../logging/createLogger.mjs";
-
-const MODULE_DIRECTORY = path.dirname(fileURLToPath(import.meta.url));
-const REPO_ROOT = path.resolve(MODULE_DIRECTORY, "../../..");
 
 const normalizeString = (value) => String(value ?? "").trim();
 
@@ -27,7 +32,7 @@ const resolvePort = (value, fallback) => {
 };
 
 /**
- * Normalize a test stack id into a Docker-safe suffix.
+ * Normalize a test stack id into a Docker-safe identifier.
  *
  * @param {string | null | undefined} value
  * @returns {string}
@@ -41,34 +46,34 @@ export const normalizeTestStackId = (value) => {
   return normalized || DEFAULT_TEST_STACK_ID;
 };
 
-const resolveStateFilePath = (stackId) =>
-  path.join(resolveTestStateDirectory({tmpDir: os.tmpdir()}), `${normalizeTestStackId(stackId)}.json`);
+const resolveStateFilePath = (stackId, stateDirectory = resolveTestStateDirectory({tmpDir: os.tmpdir()})) =>
+  path.join(stateDirectory, `${normalizeTestStackId(stackId)}.json`);
 
-const ensureStateDirectory = async () => {
-  await fsPromises.mkdir(resolveTestStateDirectory({tmpDir: os.tmpdir()}), {
+const ensureStateDirectory = async (fsModule = fsPromises, stateDirectory = resolveTestStateDirectory({tmpDir: os.tmpdir()})) => {
+  await fsModule.mkdir(stateDirectory, {
     recursive: true
   });
 };
 
-const readStateFile = async (stackId) => {
-  const statePath = resolveStateFilePath(stackId);
-  const raw = await fsPromises.readFile(statePath, "utf8");
+const readStateFile = async (stackId, fsModule = fsPromises, stateDirectory = resolveTestStateDirectory({tmpDir: os.tmpdir()})) => {
+  const statePath = resolveStateFilePath(stackId, stateDirectory);
+  const raw = await fsModule.readFile(statePath, "utf8");
   return {
     statePath,
     payload: JSON.parse(raw)
   };
 };
 
-const writeStateFile = async (stackId, payload) => {
-  const statePath = resolveStateFilePath(stackId);
-  await ensureStateDirectory();
-  await fsPromises.writeFile(statePath, JSON.stringify(payload, null, 2), "utf8");
+const writeStateFile = async (stackId, payload, fsModule = fsPromises, stateDirectory = resolveTestStateDirectory({tmpDir: os.tmpdir()})) => {
+  const statePath = resolveStateFilePath(stackId, stateDirectory);
+  await ensureStateDirectory(fsModule, stateDirectory);
+  await fsModule.writeFile(statePath, JSON.stringify(payload, null, 2), "utf8");
   return statePath;
 };
 
-const removeStateFile = async (stackId) => {
+const removeStateFile = async (stackId, fsModule = fsPromises, stateDirectory = resolveTestStateDirectory({tmpDir: os.tmpdir()})) => {
   try {
-    await fsPromises.unlink(resolveStateFilePath(stackId));
+    await fsModule.unlink(resolveStateFilePath(stackId, stateDirectory));
   } catch (error) {
     if (error?.code !== "ENOENT") {
       throw error;
@@ -91,6 +96,7 @@ const removeStateFile = async (stackId) => {
  *   stackId: string,
  *   moonPort: number,
  *   wardenPort: number,
+ *   wardenContainerName: string,
  *   dataRoot: string,
  *   env: NodeJS.ProcessEnv
  * }}
@@ -109,22 +115,26 @@ export const buildTestStackEnvironment = ({
   const resolvedDataRoot = dataRoot || resolveEphemeralTestDataRoot({stackId: normalizedStackId});
   const managedNetworkName = `scriptarr-network-test-${normalizedStackId}`;
   const publicBaseUrl = `http://127.0.0.1:${resolvedMoonPort}`;
+  const wardenContainerName = `scriptarr-test-${normalizedStackId}-warden`;
 
   return {
     stackId: normalizedStackId,
     moonPort: resolvedMoonPort,
     wardenPort: resolvedWardenPort,
+    wardenContainerName,
     dataRoot: resolvedDataRoot,
     env: {
       ...env,
       NODE_ENV: env.NODE_ENV || "development",
       SCRIPTARR_STACK_MODE: "test",
+      SCRIPTARR_STACK_ID: normalizedStackId,
       SCRIPTARR_DATA_ROOT: resolvedDataRoot,
       SCRIPTARR_NETWORK_NAME: managedNetworkName,
       SCRIPTARR_MOON_PUBLIC_PORT: String(resolvedMoonPort),
       SCRIPTARR_PUBLIC_BASE_URL: publicBaseUrl,
-      SCRIPTARR_WARDEN_PORT: String(resolvedWardenPort),
-      SCRIPTARR_WARDEN_BASE_URL: `http://${DEFAULT_WARDEN_HOST_ALIAS}:${resolvedWardenPort}`,
+      SCRIPTARR_WARDEN_PORT: String(DEFAULT_WARDEN_PORT),
+      SCRIPTARR_WARDEN_CONTAINER_NAME: wardenContainerName,
+      SCRIPTARR_WARDEN_BASE_URL: "http://scriptarr-warden:4001",
       SCRIPTARR_MYSQL_URL: normalizeString(mysqlUrl) || "SELFHOST",
       SCRIPTARR_MYSQL_USER: normalizeString(env.SCRIPTARR_MYSQL_USER) || "scriptarr",
       SCRIPTARR_MYSQL_PASSWORD: normalizeString(env.SCRIPTARR_MYSQL_PASSWORD) || "scriptarr-dev-password",
@@ -134,70 +144,27 @@ export const buildTestStackEnvironment = ({
   };
 };
 
-const spawnDetachedWarden = async ({env, dataRoot, logger}) => {
-  const logDirectory = path.join(dataRoot, "warden", "logs");
-  const logFile = path.join(logDirectory, "test-stack.log");
-
-  await fsPromises.mkdir(logDirectory, {recursive: true});
-  const outputHandle = fs.openSync(logFile, "a");
-  const child = spawn(process.execPath, ["services/warden/server.mjs"], {
-    cwd: REPO_ROOT,
-    env,
-    detached: true,
-    stdio: ["ignore", outputHandle, outputHandle]
-  });
-  fs.closeSync(outputHandle);
-
-  child.unref();
-  logger.info("Spawned detached Warden test server.", {
-    pid: child.pid,
-    logFile
-  });
-
-  return {
-    pid: child.pid,
-    logFile
-  };
-};
-
-const terminateProcessTree = (pid) => new Promise((resolve, reject) => {
-  if (!pid) {
-    resolve(false);
-    return;
-  }
-
-  if (process.platform === "win32") {
-    const child = spawn("taskkill", ["/PID", String(pid), "/T", "/F"], {
-      shell: false,
-      stdio: "ignore"
-    });
-    child.on("error", reject);
-    child.on("exit", (code) => {
-      if (code === 0 || code === 128) {
-        resolve(true);
-        return;
-      }
-      reject(new Error(`taskkill failed for PID ${pid} with exit ${code}`));
-    });
-    return;
-  }
-
-  try {
-    process.kill(pid, "SIGTERM");
-    resolve(true);
-  } catch (error) {
-    if (error?.code === "ESRCH") {
-      resolve(false);
-      return;
-    }
-    reject(error);
-  }
-});
-
 /**
  * Create the Warden-managed Docker test stack helper.
  *
- * @param {{env?: NodeJS.ProcessEnv, logger?: ReturnType<typeof createLogger>}} [options]
+ * @param {{
+ *   env?: NodeJS.ProcessEnv,
+ *   logger?: ReturnType<typeof createLogger>,
+ *   fsModule?: Pick<typeof fsPromises, "mkdir" | "readFile" | "writeFile" | "unlink" | "rm">,
+ *   stateDirectory?: string,
+ *   ensureStorageFolders?: typeof ensureScriptarrStorageFolders,
+ *   resolvePlan?: typeof resolveServicePlan,
+ *   resolveImage?: typeof resolveServiceImage,
+ *   dockerOps?: {
+ *     containerExists: typeof containerExists,
+ *     listContainersByLabel: typeof listContainersByLabel,
+ *     removeDockerContainer: typeof removeDockerContainer,
+ *     removeDockerNetwork: typeof removeDockerNetwork,
+ *     runDetachedContainer: typeof runDetachedContainer,
+ *     waitForHttp: typeof waitForHttp
+ *   },
+ *   fetchImpl?: typeof fetch
+ * }} [options]
  * @returns {{
  *   start: (options?: {
  *     stackId?: string,
@@ -211,7 +178,55 @@ const terminateProcessTree = (pid) => new Promise((resolve, reject) => {
  *   status: (options?: {stackId?: string}) => Promise<Record<string, unknown>>
  * }}
  */
-export const createTestStackManager = ({env = process.env, logger = createLogger("WARDEN_TEST_STACK", {env})} = {}) => {
+export const createTestStackManager = ({
+  env = process.env,
+  logger = createLogger("WARDEN_TEST_STACK", {env}),
+  fsModule = fsPromises,
+  stateDirectory = resolveTestStateDirectory({tmpDir: os.tmpdir()}),
+  ensureStorageFolders = ensureScriptarrStorageFolders,
+  resolvePlan = resolveServicePlan,
+  resolveImage = resolveServiceImage,
+  dockerOps = {
+    containerExists,
+    listContainersByLabel,
+    removeDockerContainer,
+    removeDockerNetwork,
+    runDetachedContainer,
+    waitForHttp
+  },
+  fetchImpl = fetch
+} = {}) => {
+  const cleanupOrphanedStackContainers = async (stackId) => {
+    const built = buildTestStackEnvironment({env, stackId});
+    const runtimePlan = resolvePlan({
+      env: built.env,
+      containerNamePrefix: `scriptarr-test-${built.stackId}`
+    });
+    const discovered = await dockerOps.listContainersByLabel("scriptarr.stack-id", built.stackId);
+    const fallbackNames = [
+      ...runtimePlan.services.map((service) => service.containerName),
+      built.wardenContainerName
+    ];
+    const names = [...new Set([
+      ...discovered.map((container) => container.name),
+      ...fallbackNames
+    ])];
+    const removedContainers = [];
+
+    for (const containerName of names) {
+      await dockerOps.removeDockerContainer(containerName, {ignoreMissing: true});
+      removedContainers.push(containerName);
+    }
+
+    await dockerOps.removeDockerNetwork(runtimePlan.managedNetworkName, {ignoreMissing: true});
+
+    return {
+      stackId: built.stackId,
+      managedNetworkName: runtimePlan.managedNetworkName,
+      removedContainers
+    };
+  };
+
   const start = async ({
     stackId = DEFAULT_TEST_STACK_ID,
     dataRoot,
@@ -234,81 +249,63 @@ export const createTestStackManager = ({env = process.env, logger = createLogger
       tolerateMissing: true
     });
 
-    await ensureScriptarrStorageFolders(built.dataRoot);
+    await ensureStorageFolders(built.dataRoot);
 
-    const runtimePlan = resolveServicePlan({
+    const runtimePlan = resolvePlan({
       env: built.env,
       containerNamePrefix: `scriptarr-test-${built.stackId}`
     });
+    const wardenImage = resolveImage("scriptarr-warden", {env: built.env});
+    const wardenFolders = runtimePlan.storageLayout.services["scriptarr-warden"];
 
-    await ensureDockerNetwork(runtimePlan.managedNetworkName);
-    const wardenProcess = await spawnDetachedWarden({
+    logger.info("Starting containerized Warden test server.", {
+      container: built.wardenContainerName,
+      image: wardenImage
+    });
+    await dockerOps.runDetachedContainer({
+      name: built.wardenContainerName,
+      image: wardenImage,
       env: built.env,
-      dataRoot: built.dataRoot,
-      logger
-    });
-
-    await waitForHttp(`http://127.0.0.1:${built.wardenPort}/health`, {
-      timeoutMs: 30000,
-      intervalMs: 1000
-    });
-
-    const extraHosts = process.platform === "linux"
-      ? [`${DEFAULT_WARDEN_HOST_ALIAS}:host-gateway`]
-      : [];
-
-    for (const service of runtimePlan.services) {
-      await removeDockerContainer(service.containerName);
-      logger.info("Starting test stack service.", {
-        service: service.name,
-        container: service.containerName
-      });
-      await runDetachedContainer({
-        name: service.containerName,
-        image: service.image,
-        env: service.env,
-        networkName: runtimePlan.managedNetworkName,
-        networkAliases: service.networkAliases,
-        mounts: service.mounts,
-        publishedPorts: service.publishedPorts,
-        extraHosts,
-        labels: {
-          "scriptarr.stack-id": built.stackId,
-          "scriptarr.stack-mode": "test",
-          "scriptarr.service": service.name
+      mounts: [
+        wardenFolders.logs,
+        wardenFolders.runtime,
+        {
+          hostPath: "/var/run/docker.sock",
+          containerPath: "/var/run/docker.sock"
         }
-      });
-
-      if (service.name === "scriptarr-mysql") {
-        await waitForMySqlReady({
-          containerName: service.containerName,
-          password: runtimePlan.mysql.passwordConfigured
-            ? built.env.SCRIPTARR_MYSQL_PASSWORD
-            : "scriptarr-dev-password"
-        });
+      ],
+      publishedPorts: [{hostPort: built.wardenPort, containerPort: DEFAULT_WARDEN_PORT}],
+      labels: {
+        "scriptarr.stack-id": built.stackId,
+        "scriptarr.stack-mode": "test",
+        "scriptarr.service": "scriptarr-warden"
       }
-    }
+    });
 
-    await waitForHttp(`http://127.0.0.1:${built.moonPort}/health`, {
+    await dockerOps.waitForHttp(`http://127.0.0.1:${built.wardenPort}/health`, {
       timeoutMs: 120000,
       intervalMs: 1500
     });
-    await waitForHttp(`http://127.0.0.1:${built.moonPort}/api/moon/auth/bootstrap-status`, {
+    await dockerOps.waitForHttp(`http://127.0.0.1:${built.moonPort}/health`, {
+      timeoutMs: 120000,
+      intervalMs: 1500
+    });
+    await dockerOps.waitForHttp(`http://127.0.0.1:${built.moonPort}/api/moon/auth/bootstrap-status`, {
       timeoutMs: 120000,
       intervalMs: 1500
     });
 
     const payload = {
-      version: 1,
+      version: 2,
       stackId: built.stackId,
       stackMode: "test",
       managedNetworkName: runtimePlan.managedNetworkName,
       dataRoot: built.dataRoot,
       removeDataRootOnStop: removeDataRootOnStop ?? !dataRoot,
       warden: {
-        pid: wardenProcess.pid,
+        containerName: built.wardenContainerName,
+        image: wardenImage,
         port: built.wardenPort,
-        logFile: wardenProcess.logFile,
         healthUrl: `http://127.0.0.1:${built.wardenPort}/health`
       },
       moon: {
@@ -325,7 +322,7 @@ export const createTestStackManager = ({env = process.env, logger = createLogger
       startedAt: new Date().toISOString()
     };
 
-    const statePath = await writeStateFile(built.stackId, payload);
+    const statePath = await writeStateFile(built.stackId, payload, fsModule, stateDirectory);
 
     return {
       started: true,
@@ -337,64 +334,64 @@ export const createTestStackManager = ({env = process.env, logger = createLogger
   const stop = async ({stackId = DEFAULT_TEST_STACK_ID, tolerateMissing = false} = {}) => {
     let state;
     try {
-      const loaded = await readStateFile(stackId);
+      const loaded = await readStateFile(stackId, fsModule, stateDirectory);
       state = loaded.payload;
     } catch (error) {
       if (tolerateMissing && error?.code === "ENOENT") {
+        const orphaned = await cleanupOrphanedStackContainers(stackId);
         return {
           stopped: false,
-          reason: "No saved test stack state was found."
+          reason: "No saved test stack state was found.",
+          cleanedOrphans: true,
+          ...orphaned
         };
       }
       throw error;
     }
 
     for (const service of state.services || []) {
-      await removeDockerContainer(service.containerName, {ignoreMissing: true});
+      await dockerOps.removeDockerContainer(service.containerName, {ignoreMissing: true});
     }
 
-    await removeDockerNetwork(state.managedNetworkName, {ignoreMissing: true});
-
-    if (state.warden?.pid) {
-      try {
-        await terminateProcessTree(state.warden.pid);
-      } catch (error) {
-        logger.warn("Failed to terminate the detached Warden test server cleanly.", {
-          pid: state.warden.pid,
-          error: error instanceof Error ? error.message : String(error)
-        });
-      }
+    if (state.warden?.containerName) {
+      await dockerOps.removeDockerContainer(state.warden.containerName, {ignoreMissing: true});
     }
+
+    await dockerOps.removeDockerNetwork(state.managedNetworkName, {ignoreMissing: true});
 
     if (state.removeDataRootOnStop && state.dataRoot) {
-      await fsPromises.rm(state.dataRoot, {
+      await fsModule.rm(state.dataRoot, {
         recursive: true,
         force: true
       });
     }
 
-    await removeStateFile(state.stackId);
+    await removeStateFile(state.stackId, fsModule, stateDirectory);
 
     return {
       stopped: true,
       stackId: state.stackId,
       managedNetworkName: state.managedNetworkName,
-      removedContainers: (state.services || []).map((service) => service.containerName),
+      removedContainers: [
+        ...(state.services || []).map((service) => service.containerName),
+        state.warden?.containerName
+      ].filter(Boolean),
       removedDataRoot: Boolean(state.removeDataRootOnStop && state.dataRoot)
     };
   };
 
   const status = async ({stackId = DEFAULT_TEST_STACK_ID} = {}) => {
     try {
-      const {payload, statePath} = await readStateFile(stackId);
+      const {payload, statePath} = await readStateFile(stackId, fsModule, stateDirectory);
       const services = await Promise.all((payload.services || []).map(async (service) => ({
         ...service,
-        running: await containerExists(service.containerName)
+        running: await dockerOps.containerExists(service.containerName)
       })));
 
-      const [wardenHealthy, moonHealthy] = await Promise.all([
-        fetch(payload.warden.healthUrl).then((response) => response.ok).catch(() => false),
-        fetch(payload.moon.healthUrl).then((response) => response.ok).catch(() => false)
+      const [wardenHealthy, wardenRunning, moonHealthy] = await Promise.all([
+        fetchImpl(payload.warden.healthUrl).then((response) => response.ok).catch(() => false),
+        payload.warden?.containerName ? dockerOps.containerExists(payload.warden.containerName) : Promise.resolve(false),
+        fetchImpl(payload.moon.healthUrl).then((response) => response.ok).catch(() => false)
       ]);
 
       return {
@@ -404,6 +401,7 @@ export const createTestStackManager = ({env = process.env, logger = createLogger
         services,
         health: {
           warden: wardenHealthy,
+          wardenContainer: wardenRunning,
           moon: moonHealthy
         }
       };
@@ -425,3 +423,4 @@ export const createTestStackManager = ({env = process.env, logger = createLogger
     status
   };
 };
+

@@ -1,3 +1,6 @@
+/**
+ * @file Scriptarr Warden module: services/warden/config/localAiProfiles.mjs.
+ */
 import os from "node:os";
 import {execFileSync} from "node:child_process";
 
@@ -175,3 +178,4 @@ export const resolveLocalAiProfile = ({env = process.env, platform = process.pla
 };
 
 export const localAiProfiles = PROFILE_MAP;
+

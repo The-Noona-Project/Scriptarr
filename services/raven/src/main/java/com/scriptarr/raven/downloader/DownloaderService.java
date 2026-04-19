@@ -27,6 +27,9 @@ import java.util.concurrent.Executors;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
+/**
+ * Serialized Raven download queue that scrapes chapters and stores CBZ archives.
+ */
 @Service
 public class DownloaderService {
     private final Map<String, Map<String, Object>> tasks = new ConcurrentHashMap<>();
@@ -40,6 +43,14 @@ public class DownloaderService {
     private final VpnService vpnService;
     private final ScriptarrLogger logger;
 
+    /**
+     * Create the download queue service.
+     *
+     * @param titleScraper scraper used to search titles and chapters
+     * @param sourceFinder scraper used to resolve page image URLs
+     * @param vpnService VPN coordinator for optional protected downloads
+     * @param logger shared Raven logger
+     */
     public DownloaderService(TitleScraper titleScraper, SourceFinder sourceFinder, VpnService vpnService, ScriptarrLogger logger) {
         this.titleScraper = titleScraper;
         this.sourceFinder = sourceFinder;
@@ -47,10 +58,22 @@ public class DownloaderService {
         this.logger = logger;
     }
 
+    /**
+     * Search the upstream source for titles Raven can queue.
+     *
+     * @param query user-supplied search text
+     * @return normalized search results
+     */
     public List<Map<String, String>> searchTitles(String query) {
         return titleScraper.searchManga(query);
     }
 
+    /**
+     * Queue a new download job and return the initial task snapshot.
+     *
+     * @param request normalized download request payload
+     * @return queued task snapshot
+     */
     public Map<String, Object> queueDownload(DownloadRequest request) {
         String taskId = "task_" + UUID.randomUUID().toString().replace("-", "");
         Map<String, Object> task = new LinkedHashMap<>();
@@ -69,12 +92,22 @@ public class DownloaderService {
         return Map.copyOf(task);
     }
 
+    /**
+     * Snapshot the current task history sorted by newest queue time first.
+     *
+     * @return task snapshots
+     */
     public List<Map<String, Object>> snapshot() {
         return tasks.values().stream()
             .sorted(Comparator.comparing(entry -> String.valueOf(entry.get("queuedAt")), Comparator.reverseOrder()))
             .toList();
     }
 
+    /**
+     * Summarize current queue counters for the health endpoint.
+     *
+     * @return aggregate queue counts
+     */
     public Map<String, Object> stats() {
         long running = tasks.values().stream().filter(entry -> "running".equals(entry.get("status"))).count();
         long failed = tasks.values().stream().filter(entry -> "failed".equals(entry.get("status"))).count();
@@ -87,6 +120,9 @@ public class DownloaderService {
         );
     }
 
+    /**
+     * Stop the queue worker when the Spring context shuts down.
+     */
     @PreDestroy
     public void shutdown() {
         queueWorker.shutdownNow();
@@ -184,4 +220,3 @@ public class DownloaderService {
         return extension.isBlank() ? fallback : extension;
     }
 }
-

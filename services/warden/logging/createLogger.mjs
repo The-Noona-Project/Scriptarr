@@ -1,3 +1,6 @@
+/**
+ * @file Scriptarr Warden module: services/warden/logging/createLogger.mjs.
+ */
 const LEVELS = Object.freeze({
   debug: 10,
   info: 20,
@@ -74,3 +77,4 @@ export const createLogger = (tag, {env = process.env, sink = console} = {}) => {
     error: (message, details) => write("error", message, details)
   };
 };
+

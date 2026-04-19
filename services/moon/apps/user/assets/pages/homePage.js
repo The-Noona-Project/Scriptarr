@@ -53,12 +53,13 @@ export const renderHomePage = (result) => {
       <div class="card-grid">
         ${continueReading.length
           ? continueReading.map((entry) => renderSeriesCard({
-            id: entry.mediaId,
-            title: entry.mediaId,
-            latestChapter: entry.chapterLabel || "In progress",
-            summary: `${formatProgress(entry.positionRatio)} complete`,
+            id: entry.titleId || entry.mediaId,
+            title: entry.title || entry.mediaId,
+            latestChapter: entry.chapterLabel || entry.latestChapter || "In progress",
+            summary: entry.summary || `${formatProgress(entry.positionRatio)} complete`,
+            coverAccent: entry.coverAccent,
             progressRatio: entry.positionRatio,
-            href: entry.bookmark?.chapterId ? `/reader/${entry.mediaId}/${entry.bookmark.chapterId}` : `/title/${entry.mediaId}`
+            href: entry.bookmark?.chapterId ? `/reader/${entry.titleId || entry.mediaId}/${entry.bookmark.chapterId}` : `/title/${entry.titleId || entry.mediaId}`
           })).join("")
           : renderEmptyState("No saved progress yet", "Start reading a chapter and Moon will surface it here.")}
       </div>

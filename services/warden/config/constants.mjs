@@ -1,4 +1,7 @@
 /**
+ * @file Scriptarr Warden module: services/warden/config/constants.mjs.
+ */
+/**
  * Shared Warden defaults used across runtime planning, Docker orchestration,
  * and the repo-level developer helpers.
  */
@@ -15,6 +18,14 @@ export const DEFAULT_STACK_MODE = "production";
 export const DEFAULT_PUBLIC_BASE_URL = "http://localhost:3000";
 
 export const DEFAULT_WARDEN_PORT = 4001;
+
+export const DEFAULT_WARDEN_CONTAINER_NAME = "scriptarr-warden";
+
+export const DEFAULT_WARDEN_NETWORK_ALIAS = "scriptarr-warden";
+
+export const DEFAULT_WARDEN_LOG_DIR = "/var/log/scriptarr";
+
+export const DEFAULT_WARDEN_RUNTIME_DIR = "/var/lib/scriptarr";
 
 export const DEFAULT_MOON_PORT = 3000;
 
@@ -42,6 +53,10 @@ export const MYSQL_SELFHOST_VALUE = "SELFHOST";
 
 export const DEFAULT_WARDEN_SERVICE_BASE_URL = "http://scriptarr-warden:4001";
 
+export const DEFAULT_DOCKER_SOCKET_PATH = "/var/run/docker.sock";
+
+export const DEFAULT_DOCKER_DESKTOP_HOST_ROOT = "/run/desktop/mnt/host";
+
 export const DEFAULT_LOCALAI_PORT = 8080;
 
 export const DEFAULT_LOCALAI_CONTAINER_NAME = "scriptarr-localai";
@@ -58,6 +73,8 @@ export const DEFAULT_TEST_STATE_DIRECTORY_NAME = "scriptarr-warden-test-stacks";
 
 export const DEFAULT_WARDEN_HOST_ALIAS = "host.docker.internal";
 
+export const DEFAULT_STACK_ID = "default";
+
 export const DEFAULT_UNIX_SCRIPTARR_DATA_ROOT = "/mnt/user/scriptarr";
 
 export const FIRST_PARTY_SERVICE_NAMES = Object.freeze([
@@ -73,3 +90,4 @@ export const FIRST_PARTY_SERVICE_NAMES = Object.freeze([
 export const BUILDABLE_SERVICE_NAMES = Object.freeze(
   FIRST_PARTY_SERVICE_NAMES.filter((serviceName) => serviceName !== "scriptarr-warden")
 );
+

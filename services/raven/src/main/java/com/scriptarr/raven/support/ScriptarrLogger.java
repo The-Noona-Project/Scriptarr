@@ -18,6 +18,9 @@ import java.util.Locale;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.stream.Stream;
 
+/**
+ * Lightweight file-and-console logger used by the Raven scaffold.
+ */
 @Service
 public class ScriptarrLogger implements InitializingBean {
     private static final String LATEST_LOG = "latest.log";
@@ -31,6 +34,11 @@ public class ScriptarrLogger implements InitializingBean {
     private BufferedWriter writer;
     private boolean debugEnabled;
 
+    /**
+     * Initialize the downloads root, log rotation, and active log writer.
+     *
+     * @throws Exception when the log directories cannot be prepared
+     */
     @Override
     public void afterPropertiesSet() throws Exception {
         debugEnabled = parseDebug(System.getenv("DEBUG"));
@@ -47,34 +55,81 @@ public class ScriptarrLogger implements InitializingBean {
         info("LOGGER", "Scriptarr Raven logger ready.", "downloadsRoot=" + downloadsRoot.toAbsolutePath());
     }
 
+    /**
+     * Resolve the filesystem root Raven uses for downloads and VPN artifacts.
+     *
+     * @return downloads root path
+     */
     public Path getDownloadsRoot() {
         return downloadsRoot;
     }
 
+    /**
+     * Resolve the filesystem root Raven uses for logs.
+     *
+     * @return logs root path
+     */
     public Path getLogsRoot() {
         return logsRoot;
     }
 
+    /**
+     * Snapshot the most recent sanitized error messages.
+     *
+     * @return recent error messages
+     */
     public List<String> recentErrors() {
         return List.copyOf(recentErrors);
     }
 
+    /**
+     * Write an informational log line.
+     *
+     * @param tag short subsystem tag
+     * @param message log message
+     */
     public void info(String tag, String message) {
         write("INFO", tag, message, null);
     }
 
+    /**
+     * Write an informational log line with a structured detail suffix.
+     *
+     * @param tag short subsystem tag
+     * @param message log message
+     * @param detail additional detail text
+     */
     public void info(String tag, String message, String detail) {
         write("INFO", tag, message, detail);
     }
 
+    /**
+     * Write a warning log line.
+     *
+     * @param tag short subsystem tag
+     * @param message log message
+     */
     public void warn(String tag, String message) {
         write("WARN", tag, message, null);
     }
 
+    /**
+     * Write a warning log line with a structured detail suffix.
+     *
+     * @param tag short subsystem tag
+     * @param message log message
+     * @param detail additional detail text
+     */
     public void warn(String tag, String message, String detail) {
         write("WARN", tag, message, detail);
     }
 
+    /**
+     * Write a debug log line when debug logging is enabled.
+     *
+     * @param tag short subsystem tag
+     * @param message log message
+     */
     public void debug(String tag, String message) {
         if (!debugEnabled) {
             return;
@@ -82,6 +137,13 @@ public class ScriptarrLogger implements InitializingBean {
         write("DEBUG", tag, message, null);
     }
 
+    /**
+     * Write an error log line and retain its sanitized detail for the health view.
+     *
+     * @param tag short subsystem tag
+     * @param message log message
+     * @param error error to summarize
+     */
     public void error(String tag, String message, Throwable error) {
         String detail = error != null ? sanitize(error.getMessage()) : "";
         if (!detail.isBlank()) {
@@ -93,6 +155,11 @@ public class ScriptarrLogger implements InitializingBean {
         write("ERROR", tag, message, detail);
     }
 
+    /**
+     * Close the active log writer during shutdown.
+     *
+     * @throws IOException when the log writer cannot be closed
+     */
     @PreDestroy
     public void close() throws IOException {
         if (writer != null) {

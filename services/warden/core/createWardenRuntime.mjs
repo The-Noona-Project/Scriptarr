@@ -1,7 +1,11 @@
+/**
+ * @file Scriptarr Warden module: services/warden/core/createWardenRuntime.mjs.
+ */
 import {resolveDiscordCallbackUrl} from "../config/servicePlan.mjs";
 import {resolveWardenRuntimeSnapshot, resolveWardenServerConfig} from "../config/runtimeConfig.mjs";
 import {createLogger} from "../logging/createLogger.mjs";
 import {createLocalAiRuntime} from "./localAiRuntime.mjs";
+import {createManagedStackRuntime} from "./managedStackRuntime.mjs";
 
 /**
  * Assemble the Warden runtime object shared by the API routes and the repo
@@ -11,7 +15,8 @@ import {createLocalAiRuntime} from "./localAiRuntime.mjs";
  * @returns {{
  *   config: {port: number, host: string | undefined, stackMode: string},
  *   logger: ReturnType<typeof createLogger>,
- *   getRuntime: () => ReturnType<typeof resolveWardenRuntimeSnapshot>,
+ *   initialize: () => Promise<void>,
+ *   getRuntime: () => Promise<ReturnType<typeof resolveWardenRuntimeSnapshot>>,
  *   getBootstrap: () => {
  *     installMode: string,
  *     stackMode: string,
@@ -24,6 +29,7 @@ import {createLocalAiRuntime} from "./localAiRuntime.mjs";
  *     services: Array<{name: string, image: string, containerName: string}>
  *   },
  *   getStorageLayout: () => ReturnType<typeof resolveWardenRuntimeSnapshot>["storage"],
+ *   getHealth: () => Promise<Record<string, unknown>>,
  *   getLocalAiStatus: () => Record<string, unknown>,
  *   refreshLocalAiStatus: () => Promise<Record<string, unknown>>,
  *   configureLocalAi: (payload?: {profileKey?: string, imageMode?: string, customImage?: string}) => Promise<Record<string, unknown>>,
@@ -39,19 +45,29 @@ export const createWardenRuntime = ({env = process.env} = {}) => {
     env,
     logger: createLogger("WARDEN_LOCALAI", {env})
   });
+  const managedStack = createManagedStackRuntime({
+    env,
+    logger: createLogger("WARDEN_STACK", {env})
+  });
 
-  const getRuntime = () =>
+  const getRuntime = async () =>
     resolveWardenRuntimeSnapshot({
       env,
-      localAiStatus: localAi.getStatus()
+      localAiStatus: localAi.getStatus(),
+      runtimeStatus: await managedStack.refreshStatus()
     });
 
   return {
     config,
     logger,
+    initialize: () => managedStack.initialize(),
     getRuntime,
     getBootstrap: () => {
-      const runtime = getRuntime();
+      const runtime = resolveWardenRuntimeSnapshot({
+        env,
+        localAiStatus: localAi.getStatus(),
+        runtimeStatus: managedStack.getStatusSnapshot()
+      });
       return {
         installMode: runtime.installMode,
         stackMode: runtime.stackMode,
@@ -68,7 +84,23 @@ export const createWardenRuntime = ({env = process.env} = {}) => {
         }))
       };
     },
-    getStorageLayout: () => getRuntime().storage,
+    getStorageLayout: () => resolveWardenRuntimeSnapshot({
+      env,
+      localAiStatus: localAi.getStatus(),
+      runtimeStatus: managedStack.getStatusSnapshot()
+    }).storage,
+    getHealth: async () => {
+      const runtime = await getRuntime();
+      return {
+        ok: Boolean(runtime.warden.dockerSocketAvailable) && !runtime.warden.lastError,
+        service: "scriptarr-warden",
+        stackMode: runtime.stackMode,
+        dockerSocketAvailable: runtime.warden.dockerSocketAvailable,
+        attachedToManagedNetwork: runtime.warden.attachedToManagedNetwork,
+        lastReconciledAt: runtime.warden.lastReconciledAt,
+        error: runtime.warden.lastError
+      };
+    },
     getLocalAiStatus: () => localAi.getStatus(),
     refreshLocalAiStatus: () => localAi.refreshStatus(),
     configureLocalAi: (payload) => localAi.configure(payload),
@@ -77,3 +109,4 @@ export const createWardenRuntime = ({env = process.env} = {}) => {
     getDiscordCallbackUrl: () => resolveDiscordCallbackUrl({env})
   };
 };
+

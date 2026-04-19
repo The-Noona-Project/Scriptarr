@@ -12,6 +12,9 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 
+/**
+ * Source page scraper that extracts chapter image URLs from supported hosts.
+ */
 @Component
 public class SourceFinder {
     private static final String USER_AGENT =
@@ -19,10 +22,21 @@ public class SourceFinder {
 
     private final ScriptarrLogger logger;
 
+    /**
+     * Create the source finder with Raven logging support.
+     *
+     * @param logger shared Raven logger
+     */
     public SourceFinder(ScriptarrLogger logger) {
         this.logger = logger;
     }
 
+    /**
+     * Find page image URLs for a chapter source page.
+     *
+     * @param chapterUrl chapter URL to inspect
+     * @return ordered page image URLs
+     */
     public List<String> findSource(String chapterUrl) {
         if (chapterUrl == null || chapterUrl.isBlank()) {
             return List.of();
@@ -81,4 +95,3 @@ public class SourceFinder {
         return unique.isEmpty() ? List.of() : List.copyOf(new ArrayList<>(unique));
     }
 }
-

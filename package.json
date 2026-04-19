@@ -22,6 +22,10 @@
     "test:js": "npm run test --workspaces --if-present",
     "test:raven": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/test-raven.ps1"
   },
+  "devDependencies": {
+    "eslint": "^9.39.0",
+    "eslint-plugin-jsdoc": "^61.4.0"
+  },
   "engines": {
     "node": ">=22"
   }

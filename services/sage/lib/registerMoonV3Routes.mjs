@@ -1,3 +1,6 @@
+/**
+ * @file Scriptarr Sage module: services/sage/lib/registerMoonV3Routes.mjs.
+ */
 import {hasPermission} from "./auth.mjs";
 
 const defaultReaderPreferences = Object.freeze({
@@ -111,6 +114,19 @@ const buildLogRows = ({bootstrap, oracle, portal, raven, titles, tasks, requests
   return rows;
 };
 
+const enrichProgressEntry = (entry = {}, titleIndex = new Map()) => {
+  const title = titleIndex.get(normalizeString(entry.mediaId)) || {};
+  return {
+    ...entry,
+    titleId: normalizeString(entry.mediaId),
+    title: normalizeString(title.title, normalizeString(entry.mediaId, "Untitled")),
+    mediaType: normalizeString(title.mediaType, "manga"),
+    coverAccent: normalizeString(title.coverAccent, "#4f8f88"),
+    latestChapter: normalizeString(title.latestChapter, entry.chapterLabel || "In progress"),
+    summary: normalizeString(title.summary)
+  };
+};
+
 const readUserScopedSetting = async (vaultClient, prefix, discordUserId, fallback) => {
   const setting = await vaultClient.getSetting(`${prefix}.${discordUserId}`);
   return setting?.value ?? fallback;
@@ -203,7 +219,7 @@ export const registerMoonV3Routes = (app, {
 
   const loadServiceStatus = async () => {
     const [warden, portal, oracle, raven] = await Promise.all([
-      safeJson(fetch(`${config.wardenBaseUrl}/api/bootstrap`).then((response) => response.json())),
+      safeJson(fetch(`${config.wardenBaseUrl}/health`).then((response) => response.json())),
       safeJson(fetch(`${config.portalBaseUrl}/health`).then((response) => response.json())),
       safeJson(fetch(`${config.oracleBaseUrl}/health`).then((response) => response.json())),
       safeJson(fetch(`${config.ravenBaseUrl}/health`).then((response) => response.json()))
@@ -437,10 +453,11 @@ export const registerMoonV3Routes = (app, {
       vaultClient.getProgress(req.user.discordUserId),
       readUserScopedSetting(vaultClient, "moon.following", req.user.discordUserId, [])
     ]);
+    const titleIndex = new Map(titles.map((title) => [title.id, title]));
 
     res.json({
       latestTitles: titles.slice(0, 8),
-      continueReading: normalizeArray(progress),
+      continueReading: normalizeArray(progress).map((entry) => enrichProgressEntry(entry, titleIndex)),
       requests: requests.filter((entry) => entry.requestedBy.discordUserId === req.user.discordUserId),
       following: normalizeArray(following)
     });
@@ -632,3 +649,4 @@ export const registerMoonV3Routes = (app, {
 };
 
 export default registerMoonV3Routes;
+

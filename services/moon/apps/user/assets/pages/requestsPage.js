@@ -53,7 +53,7 @@ export const renderRequestsPage = (result) => {
               ${(result.payload.requests || []).map((entry) => `
                 <article class="stack-card">
                   <strong>${escapeHtml(entry.title)}</strong>
-                  <span>${escapeHtml(entry.status)} Â· ${escapeHtml(formatDate(entry.updatedAt, {includeTime: true}))}</span>
+                  <span>${escapeHtml(entry.status)} · ${escapeHtml(formatDate(entry.updatedAt, {includeTime: true}))}</span>
                   <p>${escapeHtml(entry.notes || "No notes")}</p>
                 </article>
               `).join("")}

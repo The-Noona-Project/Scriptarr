@@ -1,3 +1,6 @@
+/**
+ * @file Scriptarr Sage module: services/sage/server.mjs.
+ */
 import {createSageApp} from "./lib/createSageApp.mjs";
 
 const {app, config} = await createSageApp();
@@ -9,3 +12,4 @@ if (process.env.NODE_ENV !== "test") {
 }
 
 export default app;
+

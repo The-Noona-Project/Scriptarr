@@ -28,6 +28,9 @@ import java.util.Optional;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
+/**
+ * Manages optional PIA/OpenVPN sessions for Raven downloads.
+ */
 @Service
 public class VpnService {
     private static final String PIA_OPENVPN_ZIP_URL = "https://www.privateinternetaccess.com/openvpn/openvpn-ip.zip";
@@ -43,11 +46,20 @@ public class VpnService {
     private volatile String activeRegion = "";
     private volatile String lastError = "";
 
+    /**
+     * Create the VPN service.
+     *
+     * @param settingsService Raven settings service
+     * @param logger shared Raven logger
+     */
     public VpnService(RavenSettingsService settingsService, ScriptarrLogger logger) {
         this.settingsService = settingsService;
         this.logger = logger;
     }
 
+    /**
+     * Ensure an enabled VPN profile is connected before Raven starts a download.
+     */
     public synchronized void ensureConnectedIfEnabled() {
         RavenVpnSettings settings = settingsService.getVpnSettings();
         if (!settings.enabled()) {
@@ -86,6 +98,11 @@ public class VpnService {
         }
     }
 
+    /**
+     * Build the VPN status payload exposed by Raven health endpoints.
+     *
+     * @return VPN status snapshot
+     */
     public Map<String, Object> status() {
         Map<String, Object> payload = new HashMap<>();
         payload.put("enabled", settingsService.getVpnSettings().enabled());
@@ -95,6 +112,9 @@ public class VpnService {
         return payload;
     }
 
+    /**
+     * Stop the active OpenVPN process during shutdown.
+     */
     @PreDestroy
     public synchronized void stop() {
         if (openVpnProcess != null) {

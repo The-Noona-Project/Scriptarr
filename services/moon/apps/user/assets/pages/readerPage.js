@@ -305,7 +305,7 @@ export const enhanceReaderPage = async (root, {api, rerender, setFlash}, result)
       titleId: payload.title.id,
       chapterId: payload.chapter.id,
       pageIndex: state.currentPageIndex,
-      label: `${payload.chapter.label} Â· Page ${state.currentPageIndex + 1}`
+      label: `${payload.chapter.label} · Page ${state.currentPageIndex + 1}`
     });
 
     if (!result.ok) {

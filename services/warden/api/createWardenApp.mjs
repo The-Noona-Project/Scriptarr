@@ -1,3 +1,6 @@
+/**
+ * @file Scriptarr Warden module: services/warden/api/createWardenApp.mjs.
+ */
 import express from "express";
 import {registerHealthRoutes} from "./registerHealthRoutes.mjs";
 import {registerLocalAiRoutes} from "./registerLocalAiRoutes.mjs";
@@ -32,3 +35,4 @@ export const createWardenApp = ({env = process.env} = {}) => {
     logger: runtime.logger
   };
 };
+

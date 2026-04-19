@@ -32,6 +32,11 @@ Scriptarr no longer ships a compose-based deployment path in this repo. Each fir
 
 Published images target `docker.darkmatterservers.com/the-noona-project/scriptarr-<service>:<tag>`.
 
+The supported runtime install path is to manually start only `scriptarr-warden`. Warden runs as its own container with
+the Docker socket bind plus its `warden/logs` and `warden/runtime` mounts, then reconciles Moon, Vault, Sage, Raven,
+Portal, Oracle, and optional managed MySQL for you. See [ServerAdmin.md](ServerAdmin.md) for the full container
+contract and the recommended `docker run` shape.
+
 For end-to-end Docker verification, use:
 
 - `npm run docker:test`
@@ -39,7 +44,8 @@ For end-to-end Docker verification, use:
 
 ## First Boot
 
-1. Start Warden with `SUPERUSER_ID` set to the Discord user id that is allowed to claim the first admin session.
+1. Start the `scriptarr-warden` container with the Docker socket bind, `SUPERUSER_ID`, and the host data root Warden
+   should use for managed service storage.
 2. Provide the Discord bot token as `DISCORD_TOKEN`.
 3. Set `SCRIPTARR_MYSQL_URL` to `SELFHOST` for managed MySQL or to `mysql://...` for an external database.
 4. Optionally set `SCRIPTARR_MYSQL_USER` if you want to override the managed app user or supply a username that is
@@ -56,6 +62,8 @@ For end-to-end Docker verification, use:
 - Vault is the only supported broker to the shared MySQL database.
 - Warden owns one shared internal Docker network named `scriptarr-network`. Moon is the only first-party service
   exposed publicly by default.
+- Warden is not published publicly by default outside the test stack. Admins should talk to the stack through Moon
+  unless they are debugging from inside the managed Docker network.
 - LocalAI is optional for overall stack health and is not installed on first boot.
 - Oracle starts disabled and OpenAI-first. LocalAI is enabled later from Moon admin when the admin is ready for a slow
   install or start cycle.

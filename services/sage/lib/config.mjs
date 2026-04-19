@@ -1,5 +1,34 @@
+/**
+ * @file Scriptarr Sage module: services/sage/lib/config.mjs.
+ */
+/**
+ * Normalize a service base URL by trimming any trailing slash.
+ *
+ * @param {string | undefined} value
+ * @param {string} fallback
+ * @returns {string}
+ */
 const normalizeBaseUrl = (value, fallback) => String(value || fallback).replace(/\/$/, "");
 
+/**
+ * Resolve the Scriptarr Sage runtime configuration from environment variables.
+ *
+ * @returns {{
+ *   port: number,
+ *   vaultBaseUrl: string,
+ *   wardenBaseUrl: string,
+ *   portalBaseUrl: string,
+ *   oracleBaseUrl: string,
+ *   ravenBaseUrl: string,
+ *   publicBaseUrl: string,
+ *   serviceToken: string,
+ *   superuserId: string,
+ *   discordClientId: string,
+ *   discordClientSecret: string,
+ *   discordToken: string,
+ *   autoProvisionDiscordUsers: boolean
+ * }}
+ */
 export const resolveSageConfig = () => ({
   port: Number.parseInt(process.env.SCRIPTARR_SAGE_PORT || "3004", 10),
   vaultBaseUrl: normalizeBaseUrl(process.env.SCRIPTARR_VAULT_BASE_URL, "http://127.0.0.1:3005"),
@@ -15,3 +44,4 @@ export const resolveSageConfig = () => ({
   discordToken: process.env.SCRIPTARR_DISCORD_TOKEN || process.env.DISCORD_TOKEN || "",
   autoProvisionDiscordUsers: process.env.SCRIPTARR_AUTO_PROVISION_DISCORD_USERS !== "false"
 });
+

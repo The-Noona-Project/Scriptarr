@@ -14,6 +14,9 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 
+/**
+ * Loads Raven settings from Vault and merges them with local defaults.
+ */
 @Service
 public class RavenSettingsService {
     private static final String VPN_KEY = "raven.vpn";
@@ -27,12 +30,24 @@ public class RavenSettingsService {
     @Value("${SCRIPTARR_COMICVINE_API_KEY:}")
     private String comicVineApiKeyEnv;
 
+    /**
+     * Create the settings service.
+     *
+     * @param vaultClient Vault client used for shared settings and secrets
+     * @param logger shared Raven logger
+     * @param providers discovered metadata providers
+     */
     public RavenSettingsService(RavenVaultClient vaultClient, ScriptarrLogger logger, List<MetadataProvider> providers) {
         this.vaultClient = vaultClient;
         this.logger = logger;
         this.providers = List.copyOf(providers);
     }
 
+    /**
+     * Load Raven VPN settings, including the secret PIA password.
+     *
+     * @return normalized VPN settings
+     */
     public RavenVpnSettings getVpnSettings() {
         try {
             JsonNode settingsNode = Optional.ofNullable(vaultClient.getSetting(VPN_KEY).get("value")).orElse(null);
@@ -48,6 +63,11 @@ public class RavenSettingsService {
         }
     }
 
+    /**
+     * Load the metadata provider settings that Moon admin should display.
+     *
+     * @return provider settings sorted by priority
+     */
     public List<Map<String, Object>> getMetadataProviderSettings() {
         Map<String, JsonNode> configuredById = new HashMap<>();
         try {
@@ -89,6 +109,12 @@ public class RavenSettingsService {
         return List.copyOf(normalized);
     }
 
+    /**
+     * Check whether a specific metadata provider is enabled.
+     *
+     * @param providerId provider id to resolve
+     * @return {@code true} when the provider is enabled
+     */
     public boolean isMetadataProviderEnabled(String providerId) {
         return getMetadataProviderSettings().stream()
             .filter(entry -> providerId.equalsIgnoreCase(String.valueOf(entry.get("id"))))
@@ -97,6 +123,11 @@ public class RavenSettingsService {
             .orElse(false);
     }
 
+    /**
+     * Resolve the ComicVine API key from Raven's process environment.
+     *
+     * @return trimmed ComicVine API key or an empty string
+     */
     public String getComicVineApiKey() {
         return comicVineApiKeyEnv == null ? "" : comicVineApiKeyEnv.trim();
     }
@@ -106,4 +137,3 @@ public class RavenSettingsService {
         return normalized.isBlank() ? fallback : normalized;
     }
 }
-

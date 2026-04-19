@@ -1,3 +1,6 @@
+/**
+ * @file Scriptarr Sage module: services/sage/lib/auth.mjs.
+ */
 const getBearerToken = (header) => {
   if (!header) {
     return "";
@@ -6,9 +9,24 @@ const getBearerToken = (header) => {
   return scheme?.toLowerCase() === "bearer" ? token || "" : "";
 };
 
+/**
+ * Determine whether a signed-in user carries a specific permission or global
+ * admin access.
+ *
+ * @param {{permissions?: string[]}} user
+ * @param {string} permission
+ * @returns {boolean}
+ */
 export const hasPermission = (user, permission) =>
   Boolean(user?.permissions?.includes("admin") || user?.permissions?.includes(permission));
 
+/**
+ * Build an Express middleware that resolves the current session user through
+ * Vault's session APIs.
+ *
+ * @param {ReturnType<import("./vaultClient.mjs").createVaultClient>} vaultClient
+ * @returns {import("express").RequestHandler}
+ */
 export const requireSession = (vaultClient) => async (req, res, next) => {
   const token = getBearerToken(req.headers.authorization);
   if (!token) {
@@ -25,6 +43,14 @@ export const requireSession = (vaultClient) => async (req, res, next) => {
   next();
 };
 
+/**
+ * Build an Express middleware that enforces a named permission after the
+ * request session has been resolved.
+ *
+ * @param {ReturnType<import("./vaultClient.mjs").createVaultClient>} vaultClient
+ * @param {string} permission
+ * @returns {import("express").RequestHandler}
+ */
 export const requirePermission = (vaultClient, permission) => {
   const requireUser = requireSession(vaultClient);
   return async (req, res, next) => {
@@ -37,3 +63,4 @@ export const requirePermission = (vaultClient, permission) => {
     });
   };
 };
+

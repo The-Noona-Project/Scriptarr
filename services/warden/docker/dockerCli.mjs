@@ -1,4 +1,8 @@
+/**
+ * @file Scriptarr Warden module: services/warden/docker/dockerCli.mjs.
+ */
 import {spawn} from "node:child_process";
+import {toDockerDesktopHostPath} from "../filesystem/storageLayout.mjs";
 
 const normalizeString = (value) => String(value ?? "").trim();
 
@@ -54,6 +58,20 @@ export const runDocker = (args, {cwd = process.cwd(), stdinText = null, stdio = 
 });
 
 /**
+ * Determine whether the current runtime can reach the Docker engine.
+ *
+ * @returns {Promise<boolean>}
+ */
+export const dockerSocketAvailable = async () => {
+  try {
+    await runDocker(["info", "--format", "{{.ID}}"]);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+/**
  * Determine whether a local Docker image already exists.
  *
  * @param {string} image
@@ -66,6 +84,71 @@ export const imageExists = async (image) => {
   } catch {
     return false;
   }
+};
+
+/**
+ * Inspect a Docker container and return its JSON metadata.
+ *
+ * @param {string} containerName
+ * @returns {Promise<Record<string, unknown> | null>}
+ */
+export const inspectDockerContainer = async (containerName) => {
+  try {
+    const {stdout} = await runDocker(["container", "inspect", containerName], {
+      stdio: "pipe"
+    });
+    const [payload] = JSON.parse(stdout);
+    return payload || null;
+  } catch (error) {
+    if (/No such container/i.test(String(error))) {
+      return null;
+    }
+    throw error;
+  }
+};
+
+/**
+ * List Docker containers that match an exact label filter.
+ *
+ * @param {string} labelKey
+ * @param {string} labelValue
+ * @returns {Promise<Array<{id: string, name: string, image: string, labels: Record<string, string>}>>}
+ */
+export const listContainersByLabel = async (labelKey, labelValue) => {
+  const {stdout} = await runDocker([
+    "ps",
+    "-a",
+    "--filter",
+    `label=${labelKey}=${labelValue}`,
+    "--format",
+    "{{.ID}}\t{{.Names}}\t{{.Image}}\t{{.Labels}}"
+  ]);
+
+  return normalizeString(stdout)
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .map((line) => {
+      const [id, name, image, rawLabels = ""] = line.split("\t");
+      return {
+        id,
+        name,
+        image,
+        labels: Object.fromEntries(String(rawLabels).split(",").filter(Boolean).map((pair) => {
+          const [key, ...value] = pair.split("=");
+          return [key, value.join("=")];
+        }))
+      };
+    });
+};
+
+/**
+ * Start an existing Docker container.
+ *
+ * @param {string} containerName
+ * @returns {Promise<void>}
+ */
+export const startDockerContainer = async (containerName) => {
+  await runDocker(["start", containerName]);
 };
 
 /**
@@ -128,7 +211,7 @@ export const removeDockerNetwork = async (networkName, {ignoreMissing = true} = 
   try {
     await runDocker(["network", "rm", networkName]);
   } catch (error) {
-    if (!ignoreMissing || !/No such network/i.test(String(error))) {
+    if (!ignoreMissing || !/No such network|not found/i.test(String(error))) {
       throw error;
     }
   }
@@ -155,14 +238,23 @@ export const runDetachedContainer = async ({
   name,
   image,
   env = {},
-  networkName,
+  networkName = "",
   networkAliases = [],
   mounts = [],
   publishedPorts = [],
   labels = {},
-  extraHosts = []
+  extraHosts = [],
+  restartPolicy = "no"
 }) => {
-  const args = ["run", "-d", "--name", name, "--network", networkName];
+  const args = ["run", "-d", "--name", name];
+
+  if (networkName) {
+    args.push("--network", networkName);
+  }
+
+  if (restartPolicy && restartPolicy !== "no") {
+    args.push("--restart", restartPolicy);
+  }
 
   for (const alias of networkAliases) {
     args.push("--network-alias", alias);
@@ -184,7 +276,7 @@ export const runDetachedContainer = async ({
     if (!mount?.hostPath || !mount?.containerPath) {
       continue;
     }
-    args.push("-v", `${mount.hostPath}:${mount.containerPath}`);
+    args.push("-v", `${toDockerDesktopHostPath(mount.hostPath)}:${mount.containerPath}`);
   }
 
   for (const publishedPort of publishedPorts) {
@@ -193,6 +285,54 @@ export const runDetachedContainer = async ({
 
   args.push(image);
   await runDocker(args);
+};
+
+/**
+ * Connect an existing container to a Docker network, optionally applying
+ * aliases on that network.
+ *
+ * @param {{
+ *   containerName: string,
+ *   networkName: string,
+ *   aliases?: string[]
+ * }} options
+ * @returns {Promise<void>}
+ */
+export const connectContainerToNetwork = async ({
+  containerName,
+  networkName,
+  aliases = []
+}) => {
+  const args = ["network", "connect"];
+  for (const alias of aliases) {
+    args.push("--alias", alias);
+  }
+  args.push(networkName, containerName);
+  await runDocker(args);
+};
+
+/**
+ * Disconnect a container from a Docker network if it is already attached.
+ *
+ * @param {{
+ *   containerName: string,
+ *   networkName: string,
+ *   ignoreMissing?: boolean
+ * }} options
+ * @returns {Promise<void>}
+ */
+export const disconnectContainerFromNetwork = async ({
+  containerName,
+  networkName,
+  ignoreMissing = true
+}) => {
+  try {
+    await runDocker(["network", "disconnect", networkName, containerName]);
+  } catch (error) {
+    if (!ignoreMissing || !/is not connected|No such container|No such network/i.test(String(error))) {
+      throw error;
+    }
+  }
 };
 
 /**
@@ -265,3 +405,4 @@ export const waitForHttp = async (url, {timeoutMs = 120000, intervalMs = 1500} =
 
   throw new Error(`Timed out waiting for ${url}.`);
 };
+

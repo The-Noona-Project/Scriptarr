@@ -20,6 +20,9 @@ import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+/**
+ * Search and chapter scraper for Raven's current source provider.
+ */
 @Component
 public class TitleScraper {
     private static final String SOURCE_BASE_URL = "https://weebcentral.com";
@@ -28,10 +31,21 @@ public class TitleScraper {
 
     private final ScriptarrLogger logger;
 
+    /**
+     * Create the title scraper with Raven logging support.
+     *
+     * @param logger shared Raven logger
+     */
     public TitleScraper(ScriptarrLogger logger) {
         this.logger = logger;
     }
 
+    /**
+     * Search the upstream source for candidate series.
+     *
+     * @param titleName search query supplied by the user
+     * @return normalized title search results
+     */
     public List<Map<String, String>> searchManga(String titleName) {
         if (titleName == null || titleName.isBlank()) {
             return List.of();
@@ -54,6 +68,12 @@ public class TitleScraper {
         }
     }
 
+    /**
+     * Fetch and normalize the chapter list for a title source page.
+     *
+     * @param titleUrl source series URL
+     * @return normalized chapters ordered by the upstream source
+     */
     public List<Map<String, String>> getChapters(String titleUrl) {
         if (titleUrl == null || titleUrl.isBlank()) {
             return List.of();
@@ -214,4 +234,3 @@ public class TitleScraper {
         }
     }
 }
-

@@ -20,6 +20,9 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
+/**
+ * Aggregates Raven metadata providers and normalizes their API payloads.
+ */
 @Service
 public class MetadataService {
     private final List<MetadataProvider> providers;
@@ -30,16 +33,35 @@ public class MetadataService {
         .build();
     private final ObjectMapper objectMapper = new ObjectMapper();
 
+    /**
+     * Create the metadata service.
+     *
+     * @param providers discovered metadata providers
+     * @param settingsService shared Raven settings service
+     * @param logger shared Raven logger
+     */
     public MetadataService(List<MetadataProvider> providers, RavenSettingsService settingsService, ScriptarrLogger logger) {
         this.providers = List.copyOf(providers);
         this.settingsService = settingsService;
         this.logger = logger;
     }
 
+    /**
+     * Describe the configured metadata providers and their enabled state.
+     *
+     * @return provider descriptions in UI order
+     */
     public List<Map<String, Object>> describeProviders() {
         return settingsService.getMetadataProviderSettings();
     }
 
+    /**
+     * Search enabled metadata providers for a series name.
+     *
+     * @param name series name to search
+     * @param requestedProvider optional provider filter
+     * @return aggregated provider results
+     */
     public List<Map<String, Object>> search(String name, String requestedProvider) {
         List<Map<String, Object>> results = new ArrayList<>();
         for (Map<String, Object> provider : describeProviders()) {
@@ -60,6 +82,15 @@ public class MetadataService {
         return List.copyOf(results);
     }
 
+    /**
+     * Record a metadata identification request for later library repair work.
+     *
+     * @param provider provider id selected by the admin
+     * @param providerSeriesId provider-specific series id
+     * @param seriesId internal Scriptarr series id
+     * @param libraryId library id the match belongs to
+     * @return confirmation payload
+     */
     public Map<String, Object> identify(String provider, String providerSeriesId, String seriesId, String libraryId) {
         Map<String, Object> response = new HashMap<>();
         response.put("ok", true);
@@ -71,6 +102,13 @@ public class MetadataService {
         return response;
     }
 
+    /**
+     * Load series detail payloads for a specific metadata provider result.
+     *
+     * @param provider provider id to query
+     * @param providerSeriesId provider-specific series id
+     * @return normalized provider detail payload
+     */
     public Map<String, Object> seriesDetails(String provider, String providerSeriesId) {
         try {
             return switch (provider.toLowerCase(Locale.ROOT)) {
@@ -246,4 +284,3 @@ public class MetadataService {
         return objectMapper.readTree(response.body());
     }
 }
-

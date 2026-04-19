@@ -1,10 +1,16 @@
+/**
+ * @file Scriptarr Warden module: services/warden/filesystem/storageLayout.mjs.
+ */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
 import {
+  DEFAULT_DOCKER_DESKTOP_HOST_ROOT,
   DEFAULT_TEST_STATE_DIRECTORY_NAME,
-  DEFAULT_UNIX_SCRIPTARR_DATA_ROOT
+  DEFAULT_UNIX_SCRIPTARR_DATA_ROOT,
+  DEFAULT_WARDEN_LOG_DIR,
+  DEFAULT_WARDEN_RUNTIME_DIR
 } from "../config/constants.mjs";
 
 const WINDOWS_DRIVE_PATH_PATTERN = /^[A-Za-z]:[\\/]/;
@@ -18,6 +24,68 @@ const normalizeString = (value) => (typeof value === "string" ? value.trim() : "
  * @returns {boolean}
  */
 export const isWindowsAbsolutePath = (value) => WINDOWS_DRIVE_PATH_PATTERN.test(normalizeString(value));
+
+/**
+ * Translate a Windows host path into the Linux path Docker Desktop exposes to
+ * Linux containers that talk to the shared Docker engine.
+ *
+ * @param {string} value
+ * @param {{platform?: NodeJS.Platform, dockerDesktopHostRoot?: string}} [options]
+ * @returns {string}
+ */
+export const toDockerDesktopHostPath = (
+  value,
+  {
+    platform = process.platform,
+    dockerDesktopHostRoot = DEFAULT_DOCKER_DESKTOP_HOST_ROOT
+  } = {}
+) => {
+  const normalized = normalizeString(value);
+  if (platform === "win32" && path.posix.isAbsolute(normalized)) {
+    return path.posix.normalize(normalized);
+  }
+
+  if (platform === "win32" || !isWindowsAbsolutePath(normalized)) {
+    return path.normalize(normalized);
+  }
+
+  const driveLetter = normalized.slice(0, 1).toLowerCase();
+  const remainder = normalized
+    .slice(2)
+    .replace(/\\/g, "/")
+    .replace(/^\/+/, "");
+
+  return path.posix.join(dockerDesktopHostRoot, driveLetter, remainder);
+};
+
+/**
+ * Resolve the filesystem path that the current runtime should use when it needs
+ * to create or inspect a host-backed Scriptarr storage folder.
+ *
+ * @param {string} value
+ * @param {{platform?: NodeJS.Platform, dockerDesktopHostRoot?: string}} [options]
+ * @returns {string}
+ */
+export const resolveHostFilesystemPath = (
+  value,
+  {
+    platform = process.platform,
+    dockerDesktopHostRoot = DEFAULT_DOCKER_DESKTOP_HOST_ROOT
+  } = {}
+) => {
+  const normalized = normalizeString(value);
+  if (!normalized) {
+    return normalized;
+  }
+
+  if (platform === "win32" && path.posix.isAbsolute(normalized)) {
+    return path.posix.normalize(normalized);
+  }
+
+  return platform === "win32"
+    ? path.normalize(normalized)
+    : toDockerDesktopHostPath(normalized, {platform, dockerDesktopHostRoot});
+};
 
 /**
  * Convert a user path or relative path into an absolute host path.
@@ -104,8 +172,8 @@ export const buildScriptarrStorageLayout = (rootPath) => {
     root,
     services: {
       "scriptarr-warden": {
-        logs: buildFolderEntry(path.join(root, "warden", "logs"), null),
-        runtime: buildFolderEntry(path.join(root, "warden", "runtime"), null)
+        logs: buildFolderEntry(path.join(root, "warden", "logs"), DEFAULT_WARDEN_LOG_DIR),
+        runtime: buildFolderEntry(path.join(root, "warden", "runtime"), DEFAULT_WARDEN_RUNTIME_DIR)
       },
       "scriptarr-mysql": {
         data: buildFolderEntry(path.join(root, "mysql", "data"), "/var/lib/mysql")
@@ -168,18 +236,36 @@ export const describeScriptarrStorageLayout = (rootPath) => {
  * Create the runtime directories described by the Scriptarr storage layout.
  *
  * @param {string} rootPath
+ * @param {{
+ *   fsModule?: Pick<typeof fs, "mkdir">,
+ *   platform?: NodeJS.Platform,
+ *   dockerDesktopHostRoot?: string
+ * }} [options]
  * @returns {Promise<void>}
  */
-export const ensureScriptarrStorageFolders = async (rootPath) => {
+export const ensureScriptarrStorageFolders = async (
+  rootPath,
+  {
+    fsModule = fs,
+    platform = process.platform,
+    dockerDesktopHostRoot = DEFAULT_DOCKER_DESKTOP_HOST_ROOT
+  } = {}
+) => {
   const layout = buildScriptarrStorageLayout(rootPath);
-  await fs.mkdir(layout.root, {recursive: true});
+  await fsModule.mkdir(resolveHostFilesystemPath(layout.root, {
+    platform,
+    dockerDesktopHostRoot
+  }), {recursive: true});
 
   const folders = Object.values(layout.services)
     .flatMap((entry) => Object.values(entry))
-    .map((folder) => folder.hostPath);
+    .map((folder) => resolveHostFilesystemPath(folder.hostPath, {
+      platform,
+      dockerDesktopHostRoot
+    }));
 
   for (const folderPath of folders) {
-    await fs.mkdir(folderPath, {recursive: true});
+    await fsModule.mkdir(folderPath, {recursive: true});
   }
 };
 
@@ -204,3 +290,4 @@ export const resolveTestStateDirectory = ({tmpDir = os.tmpdir()} = {}) =>
  */
 export const resolveEphemeralTestDataRoot = ({stackId, tmpDir = os.tmpdir(), now = Date.now()} = {}) =>
   path.join(tmpDir, `scriptarr-test-stack-${normalizeString(stackId) || "local"}-${now}`);
+

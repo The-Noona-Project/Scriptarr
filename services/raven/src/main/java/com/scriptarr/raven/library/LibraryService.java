@@ -11,10 +11,20 @@ import java.util.Map;
 public final class LibraryService {
     private final List<LibraryTitle> titles;
 
+    /**
+     * Create a library projection from a fixed set of titles.
+     *
+     * @param titles titles Raven should expose to Moon
+     */
     public LibraryService(List<LibraryTitle> titles) {
         this.titles = List.copyOf(titles);
     }
 
+    /**
+     * Build the seeded library scaffold used by the current 3.0 preview stack.
+     *
+     * @return seeded library projection
+     */
     public static LibraryService seedDefault() {
         return new LibraryService(List.of(
             new LibraryTitle(
@@ -94,14 +104,31 @@ public final class LibraryService {
         ));
     }
 
+    /**
+     * List every title currently exposed by Raven.
+     *
+     * @return immutable title list
+     */
     public List<LibraryTitle> listTitles() {
         return titles;
     }
 
+    /**
+     * Find a single title by its stable Scriptarr id.
+     *
+     * @param id title id to resolve
+     * @return matching title or {@code null} when it is unknown
+     */
     public LibraryTitle findTitle(String id) {
         return titles.stream().filter((entry) -> entry.id().equals(id)).findFirst().orElse(null);
     }
 
+    /**
+     * Build the reader manifest for a title's available chapters.
+     *
+     * @param titleId title id to resolve
+     * @return reader manifest or {@code null} when the title is unknown
+     */
     public ReaderManifest readerManifest(String titleId) {
         LibraryTitle title = findTitle(titleId);
         if (title == null) {
@@ -112,6 +139,13 @@ public final class LibraryService {
         return new ReaderManifest(title, chapters);
     }
 
+    /**
+     * Build the chapter payload used by Moon's native reader.
+     *
+     * @param titleId title id to resolve
+     * @param chapterId chapter id to resolve
+     * @return chapter payload or {@code null} when the title or chapter is unknown
+     */
     public ReaderChapterPayload readerChapter(String titleId, String chapterId) {
         ReaderManifest manifest = readerManifest(titleId);
         if (manifest == null) {
@@ -134,6 +168,14 @@ public final class LibraryService {
         return new ReaderChapterPayload(manifest.title(), chapter, pages, previousChapterId, nextChapterId);
     }
 
+    /**
+     * Render a synthetic SVG preview page for Moon's reader flow.
+     *
+     * @param titleId title id to resolve
+     * @param chapterId chapter id to resolve
+     * @param pageIndex zero-based page index to render
+     * @return SVG bytes or {@code null} when the page is unavailable
+     */
     public byte[] renderReaderPage(String titleId, String chapterId, int pageIndex) {
         ReaderChapterPayload payload = readerChapter(titleId, chapterId);
         if (payload == null || pageIndex < 0 || pageIndex >= payload.pages().size()) {

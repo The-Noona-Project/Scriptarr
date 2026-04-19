@@ -1,3 +1,6 @@
+/**
+ * @file Scriptarr Warden module: services/warden/tests/servicePlan.test.mjs.
+ */
 import test from "node:test";
 import assert from "node:assert/strict";
 
@@ -36,3 +39,19 @@ test("service plan omits managed mysql for external mysql urls", () => {
   assert.equal(plan.services.find((service) => service.name === "scriptarr-sage").env.SCRIPTARR_WARDEN_BASE_URL, "http://host.docker.internal:4101");
   assert.match(plan.services.find((service) => service.name === "scriptarr-vault").containerName, /^scriptarr-test-demo-vault$/);
 });
+
+test("test-mode service plans derive stack-scoped container names from the stack id", () => {
+  const plan = resolveServicePlan({
+    env: {
+      SCRIPTARR_STACK_MODE: "test",
+      SCRIPTARR_STACK_ID: "demo",
+      SCRIPTARR_MYSQL_URL: "SELFHOST",
+      SCRIPTARR_MYSQL_USER: "scriptarr",
+      SCRIPTARR_MYSQL_PASSWORD: "secret"
+    }
+  });
+
+  assert.equal(plan.services.find((service) => service.name === "scriptarr-mysql").containerName, "scriptarr-test-demo-mysql");
+  assert.equal(plan.services.find((service) => service.name === "scriptarr-moon").containerName, "scriptarr-test-demo-moon");
+});
+

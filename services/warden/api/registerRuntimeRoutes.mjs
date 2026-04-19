@@ -1,17 +1,20 @@
 /**
+ * @file Scriptarr Warden module: services/warden/api/registerRuntimeRoutes.mjs.
+ */
+/**
  * Register the runtime information routes surfaced by Warden.
  *
  * @param {import("express").Express} app
  * @param {{
- *   getRuntime: () => Record<string, unknown>,
+ *   getRuntime: () => Promise<Record<string, unknown>>,
  *   getBootstrap: () => Record<string, unknown>,
  *   getStorageLayout: () => Record<string, unknown>,
  *   getDiscordCallbackUrl: () => string
  * }} runtime
  */
 export const registerRuntimeRoutes = (app, runtime) => {
-  app.get("/api/runtime", (_req, res) => {
-    res.json(runtime.getRuntime());
+  app.get("/api/runtime", async (_req, res) => {
+    res.json(await runtime.getRuntime());
   });
 
   app.get("/api/bootstrap", (_req, res) => {
@@ -28,3 +31,4 @@ export const registerRuntimeRoutes = (app, runtime) => {
     });
   });
 };
+

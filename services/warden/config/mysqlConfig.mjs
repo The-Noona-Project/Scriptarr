@@ -1,3 +1,6 @@
+/**
+ * @file Scriptarr Warden module: services/warden/config/mysqlConfig.mjs.
+ */
 import {
   DEFAULT_MYSQL_DATABASE,
   DEFAULT_MYSQL_PASSWORD,
@@ -157,3 +160,4 @@ export const toInternalMysqlEnv = (mysqlConfig) => ({
   SCRIPTARR_MYSQL_USER: mysqlConfig.user,
   SCRIPTARR_MYSQL_PASSWORD: mysqlConfig.password
 });
+

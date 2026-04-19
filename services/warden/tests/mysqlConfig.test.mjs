@@ -1,3 +1,6 @@
+/**
+ * @file Scriptarr Warden module: services/warden/tests/mysqlConfig.test.mjs.
+ */
 import test from "node:test";
 import assert from "node:assert/strict";
 
@@ -40,3 +43,4 @@ test("parse mysql url rejects non-mysql protocols", () => {
     MysqlConfigError
   );
 });
+

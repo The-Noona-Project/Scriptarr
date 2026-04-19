@@ -1,4 +1,7 @@
 /**
+ * @file Scriptarr Warden module: services/warden/api/registerLocalAiRoutes.mjs.
+ */
+/**
  * Register the LocalAI configuration and lifecycle routes.
  *
  * @param {import("express").Express} app
@@ -31,3 +34,4 @@ export const registerLocalAiRoutes = (app, runtime) => {
     res.status(202).json(await runtime.startLocalAi());
   });
 };
+

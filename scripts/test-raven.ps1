@@ -8,7 +8,7 @@ $env:SCRIPTARR_RAVEN_LOG_DIR = Join-Path $ravenRoot "build\\test-logs"
 
 Push-Location $ravenRoot
 try {
-  & .\gradlew.bat --no-daemon test
+  & .\gradlew.bat --no-daemon check
 } finally {
   Pop-Location
 }

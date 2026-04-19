@@ -30,6 +30,42 @@ The repo publishes one image per first-party service. Use the root helpers when 
 
 Published images use `docker.darkmatterservers.com/the-noona-project/scriptarr-<service>:<tag>`.
 
+## Start Warden
+
+The supported install path is to manually start only `scriptarr-warden`. Do not manually start Moon, Sage, Vault,
+Raven, Portal, Oracle, or managed MySQL containers one by one.
+
+Recommended container contract:
+
+- container name: `scriptarr-warden`
+- required bind: `/var/run/docker.sock:/var/run/docker.sock`
+- required persistent mounts:
+  - `<data-root>/warden/logs:/var/log/scriptarr`
+  - `<data-root>/warden/runtime:/var/lib/scriptarr`
+- required env: `SCRIPTARR_DATA_ROOT`, `SUPERUSER_ID`, `DISCORD_TOKEN`, `SCRIPTARR_MYSQL_URL`
+- optional env: `SCRIPTARR_PUBLIC_BASE_URL`, Discord OAuth vars, MySQL fallback vars
+- normal installs should not publish the Warden port; Moon remains the default public first-party surface
+
+Example shape:
+
+```bash
+docker run -d \
+  --name scriptarr-warden \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v <data-root>/warden/logs:/var/log/scriptarr \
+  -v <data-root>/warden/runtime:/var/lib/scriptarr \
+  -e SCRIPTARR_DATA_ROOT=<data-root> \
+  -e SCRIPTARR_PUBLIC_BASE_URL=https://scriptarr.example.com \
+  -e SCRIPTARR_MYSQL_URL=SELFHOST \
+  -e SUPERUSER_ID=<discord-user-id> \
+  -e DISCORD_TOKEN=<discord-bot-token> \
+  docker.darkmatterservers.com/the-noona-project/scriptarr-warden:latest
+```
+
+If you run Docker Desktop on Windows, `SCRIPTARR_DATA_ROOT` can still be a Windows host path such as
+`C:\ScriptarrData`. Warden translates that host path when it reconciles sibling containers from inside its Linux
+container.
+
 ## Install Shape
 
 Warden now boots an almost full Scriptarr stack on first install:
@@ -70,9 +106,12 @@ Example callback shape:
 
 Warden manages one shared internal Docker network named `scriptarr-network`.
 
+- Warden attaches itself to `scriptarr-network` after boot so the managed services can reach `http://scriptarr-warden:4001`.
 - Vault, Sage, Raven, Portal, Oracle, and managed MySQL stay internal to that network.
 - Moon also joins `scriptarr-network`, but it is the only first-party service Warden publishes publicly by default.
 - LocalAI joins the same internal network when an admin installs or starts it later from Moon admin.
+- Outside the Docker test flow, Warden itself should stay unpublished unless you are doing a deliberate internal debug
+  session.
 
 ## LocalAI Behavior
 
@@ -158,6 +197,11 @@ Recommended data folders under `SCRIPTARR_DATA_ROOT`:
 - `warden/logs/`
 - `warden/runtime/`
 
+Warden's own container mounts are:
+
+- `warden/logs -> /var/log/scriptarr`
+- `warden/runtime -> /var/lib/scriptarr`
+
 ## Docker Test Workflow
 
 The repo ships a Docker-backed end-to-end validation flow:
@@ -170,7 +214,8 @@ The test stack uses:
 - `SELFHOST` MySQL by default
 - an isolated suffixed Scriptarr network
 - a temporary data root unless you override it
-- a detached host-run Warden API plus Docker-managed Scriptarr services
+- a containerized Warden that reconciles the rest of the Docker-managed Scriptarr services
+- Warden published to a host port only in test mode so the helper can poll health and report status
 - Moon exposed on a dedicated test port so you can hit browser or API flows safely
 
 ## Recovery Notes

@@ -1,8 +1,12 @@
+/**
+ * @file Scriptarr Warden module: services/warden/server.mjs.
+ */
 import {createWardenApp} from "./api/createWardenApp.mjs";
 
-const {app, config, logger} = createWardenApp();
+const {app, config, logger, runtime} = createWardenApp();
 
 if (process.env.NODE_ENV !== "test") {
+  await runtime.initialize();
   app.listen(config.port, config.host, () => {
     logger.info("Warden listening.", {
       port: config.port,
@@ -13,3 +17,4 @@ if (process.env.NODE_ENV !== "test") {
 }
 
 export default app;
+

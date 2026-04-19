@@ -22,6 +22,9 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * HTTP API controller for Raven library, downloader, metadata, and reader endpoints.
+ */
 @RestController
 @RequestMapping
 public class RavenController {
@@ -31,6 +34,15 @@ public class RavenController {
     private final RavenSettingsService settingsService;
     private final LibraryService libraryService;
 
+    /**
+     * Create the Raven controller.
+     *
+     * @param metadataService metadata service
+     * @param downloaderService download queue service
+     * @param vpnService VPN status service
+     * @param settingsService Raven settings service
+     * @param libraryService library projection service
+     */
     public RavenController(
         MetadataService metadataService,
         DownloaderService downloaderService,
@@ -45,6 +57,11 @@ public class RavenController {
         this.libraryService = libraryService;
     }
 
+    /**
+     * Expose the Raven health payload.
+     *
+     * @return health payload with download, VPN, and provider state
+     */
     @GetMapping("/health")
     public Map<String, Object> health() {
         return Map.of(
@@ -56,11 +73,22 @@ public class RavenController {
         );
     }
 
+    /**
+     * List the current Raven library titles.
+     *
+     * @return library payload
+     */
     @GetMapping("/v1/library")
     public Map<String, Object> library() {
         return Map.of("titles", libraryService.listTitles());
     }
 
+    /**
+     * Load a single Raven library title.
+     *
+     * @param titleId title id to resolve
+     * @return matching title or a not-found payload
+     */
     @GetMapping("/v1/library/{titleId}")
     public ResponseEntity<?> libraryTitle(@PathVariable("titleId") String titleId) {
         var title = libraryService.findTitle(titleId);
@@ -70,6 +98,12 @@ public class RavenController {
         return ResponseEntity.ok(title);
     }
 
+    /**
+     * Load the reader manifest for a title.
+     *
+     * @param titleId title id to resolve
+     * @return reader manifest or a not-found payload
+     */
     @GetMapping("/v1/reader/{titleId}")
     public ResponseEntity<?> readerManifest(@PathVariable("titleId") String titleId) {
         ReaderManifest payload = libraryService.readerManifest(titleId);
@@ -79,6 +113,13 @@ public class RavenController {
         return ResponseEntity.ok(payload);
     }
 
+    /**
+     * Load the reader payload for a specific chapter.
+     *
+     * @param titleId title id to resolve
+     * @param chapterId chapter id to resolve
+     * @return chapter payload or a not-found payload
+     */
     @GetMapping("/v1/reader/{titleId}/{chapterId}")
     public ResponseEntity<?> readerChapter(
         @PathVariable("titleId") String titleId,
@@ -91,6 +132,14 @@ public class RavenController {
         return ResponseEntity.ok(payload);
     }
 
+    /**
+     * Render a single reader page as SVG.
+     *
+     * @param titleId title id to resolve
+     * @param chapterId chapter id to resolve
+     * @param pageIndex zero-based page index
+     * @return SVG bytes or a not-found payload
+     */
     @GetMapping(value = "/v1/reader/{titleId}/{chapterId}/page/{pageIndex}", produces = "image/svg+xml")
     public ResponseEntity<?> readerPage(
         @PathVariable("titleId") String titleId,
@@ -106,11 +155,23 @@ public class RavenController {
             .body(payload);
     }
 
+    /**
+     * Search upstream download sources for a title.
+     *
+     * @param query title query to search
+     * @return candidate source titles
+     */
     @GetMapping("/v1/downloads/search")
     public List<Map<String, String>> searchDownloads(@RequestParam("query") String query) {
         return downloaderService.searchTitles(query);
     }
 
+    /**
+     * Queue a new Raven download task.
+     *
+     * @param body request payload from Moon or Sage
+     * @return accepted task payload or a validation error
+     */
     @PostMapping("/v1/downloads/queue")
     public ResponseEntity<Map<String, Object>> queueDownload(@RequestBody Map<String, Object> body) {
         String titleName = String.valueOf(body.getOrDefault("titleName", "")).trim();
@@ -128,16 +189,33 @@ public class RavenController {
         return ResponseEntity.status(HttpStatus.ACCEPTED).body(downloaderService.queueDownload(request));
     }
 
+    /**
+     * Snapshot the Raven download task list.
+     *
+     * @return task history
+     */
     @GetMapping("/v1/downloads/tasks")
     public List<Map<String, Object>> tasks() {
         return downloaderService.snapshot();
     }
 
+    /**
+     * Describe Raven's metadata providers.
+     *
+     * @return metadata provider payload
+     */
     @GetMapping("/v1/metadata/providers")
     public Map<String, Object> providers() {
         return Map.of("providers", metadataService.describeProviders());
     }
 
+    /**
+     * Search metadata providers for a series.
+     *
+     * @param name series name to search
+     * @param provider optional provider filter
+     * @return aggregated metadata matches
+     */
     @GetMapping("/v1/metadata/search")
     public List<Map<String, Object>> searchMetadata(
         @RequestParam("name") String name,
@@ -146,6 +224,12 @@ public class RavenController {
         return metadataService.search(name, provider);
     }
 
+    /**
+     * Record a metadata identification match.
+     *
+     * @param body identification payload from Moon admin
+     * @return confirmation payload
+     */
     @PostMapping("/v1/metadata/identify")
     public Map<String, Object> identify(@RequestBody Map<String, Object> body) {
         return metadataService.identify(
@@ -156,6 +240,13 @@ public class RavenController {
         );
     }
 
+    /**
+     * Load details for a specific provider series.
+     *
+     * @param provider provider id to query
+     * @param providerSeriesId provider-specific series id
+     * @return provider detail payload
+     */
     @GetMapping("/v1/metadata/series-details")
     public Map<String, Object> seriesDetails(
         @RequestParam("provider") String provider,
