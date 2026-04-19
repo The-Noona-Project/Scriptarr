@@ -30,6 +30,9 @@ public class RavenSettingsService {
     @Value("${SCRIPTARR_COMICVINE_API_KEY:}")
     private String comicVineApiKeyEnv;
 
+    @Value("${SCRIPTARR_MAL_CLIENT_ID:}")
+    private String malClientIdEnv;
+
     /**
      * Create the settings service.
      *
@@ -87,7 +90,9 @@ public class RavenSettingsService {
             int defaultPriority = switch (provider.id()) {
                 case "mangadex" -> 10;
                 case "anilist" -> 20;
-                case "comicvine" -> 30;
+                case "mangaupdates" -> 30;
+                case "mal" -> 40;
+                case "comicvine" -> 50;
                 default -> 100;
             };
             boolean enabled = configured != null ? configured.path("enabled").asBoolean("mangadex".equals(provider.id())) : "mangadex".equals(provider.id());
@@ -95,6 +100,9 @@ public class RavenSettingsService {
                 ? configured.path("priority").asInt(defaultPriority)
                 : defaultPriority;
             if ("comicvine".equals(provider.id()) && getComicVineApiKey().isBlank()) {
+                enabled = false;
+            }
+            if ("mal".equals(provider.id()) && getMalClientId().isBlank()) {
                 enabled = false;
             }
             normalized.add(new HashMap<>(Map.of(
@@ -130,6 +138,15 @@ public class RavenSettingsService {
      */
     public String getComicVineApiKey() {
         return comicVineApiKeyEnv == null ? "" : comicVineApiKeyEnv.trim();
+    }
+
+    /**
+     * Resolve the MyAnimeList client id from Raven's process environment.
+     *
+     * @return trimmed MAL client id or an empty string
+     */
+    public String getMalClientId() {
+        return malClientIdEnv == null ? "" : malClientIdEnv.trim();
     }
 
     private String normalize(String value, String fallback) {

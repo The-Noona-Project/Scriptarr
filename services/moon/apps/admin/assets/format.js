@@ -44,7 +44,7 @@ export const statusTone = (status) => {
     return "good";
   }
 
-  if (["pending", "queued", "watching", "warning", "degraded"].includes(normalized)) {
+  if (["pending", "queued", "watching", "warning", "degraded", "update available", "available"].includes(normalized)) {
     return "warn";
   }
 

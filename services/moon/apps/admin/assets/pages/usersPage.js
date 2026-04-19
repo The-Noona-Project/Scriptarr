@@ -36,7 +36,7 @@ export const renderUsersPage = (result) => {
           renderChipList(user.permissions || [])
         ]),
         emptyTitle: "No users yet",
-        emptyBody: "Users appear after Discord claim or login flows create sessions."
+        emptyBody: "Users appear after Discord login creates sessions."
       })}
     </section>
   `;

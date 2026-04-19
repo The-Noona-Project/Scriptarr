@@ -388,22 +388,42 @@ export const createTestStackManager = ({
         running: await dockerOps.containerExists(service.containerName)
       })));
 
-      const [wardenHealthy, wardenRunning, moonHealthy] = await Promise.all([
-        fetchImpl(payload.warden.healthUrl).then((response) => response.ok).catch(() => false),
+      const [wardenHealth, wardenRunning, moonHealthy, runtime] = await Promise.all([
+        fetchImpl(payload.warden.healthUrl).then(async (response) => ({
+          ok: response.ok,
+          payload: response.ok && typeof response.json === "function" ? await response.json().catch(() => null) : null
+        })).catch(() => ({ok: false, payload: null})),
         payload.warden?.containerName ? dockerOps.containerExists(payload.warden.containerName) : Promise.resolve(false),
-        fetchImpl(payload.moon.healthUrl).then((response) => response.ok).catch(() => false)
+        fetchImpl(payload.moon.healthUrl).then((response) => response.ok).catch(() => false),
+        fetchImpl(`http://127.0.0.1:${payload.warden.port}/api/runtime`).then(async (response) =>
+          response.ok && typeof response.json === "function" ? response.json() : null
+        ).catch(() => null)
       ]);
+      const runtimeServices = new Map((runtime?.services || []).map((service) => [service.containerName, service]));
+      const enrichedServices = services.map((service) => {
+        const runtimeService = runtimeServices.get(service.containerName) || null;
+        return {
+          ...service,
+          health: runtimeService?.health || (service.running ? "running" : "missing"),
+          status: runtimeService?.status || (service.running ? "running" : "missing"),
+          conflict: runtimeService?.conflict || null
+        };
+      });
+      const allServicesHealthy = enrichedServices.length > 0
+        && enrichedServices.every((service) => service.running === true && ["healthy", "running"].includes(String(service.health || "").toLowerCase()));
 
       return {
         exists: true,
         statePath,
         ...payload,
-        services,
+        services: enrichedServices,
         health: {
-          warden: wardenHealthy,
+          warden: wardenHealth.ok,
           wardenContainer: wardenRunning,
-          moon: moonHealthy
-        }
+          moon: moonHealthy,
+          allServicesHealthy
+        },
+        runtime
       };
     } catch (error) {
       if (error?.code === "ENOENT") {

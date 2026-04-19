@@ -6,6 +6,7 @@ import {resolveWardenRuntimeSnapshot, resolveWardenServerConfig, sanitizeWardenR
 import {createLogger} from "../logging/createLogger.mjs";
 import {createLocalAiRuntime} from "./localAiRuntime.mjs";
 import {createManagedStackRuntime} from "./managedStackRuntime.mjs";
+import {createUpdateRuntime} from "./updateRuntime.mjs";
 
 /**
  * Assemble the Warden runtime object shared by the API routes and the repo
@@ -35,6 +36,9 @@ import {createManagedStackRuntime} from "./managedStackRuntime.mjs";
  *   configureLocalAi: (payload?: {profileKey?: string, imageMode?: string, customImage?: string}) => Promise<Record<string, unknown>>,
  *   installLocalAi: () => Promise<Record<string, unknown>>,
  *   startLocalAi: () => Promise<Record<string, unknown>>,
+ *   getUpdates: () => Promise<Record<string, unknown>>,
+ *   checkUpdates: (requestedServices?: string[]) => Promise<Record<string, unknown>>,
+ *   installUpdates: (requestedServices?: string[]) => Promise<Record<string, unknown>>,
  *   getDiscordCallbackUrl: () => string
  * }}
  */
@@ -48,6 +52,11 @@ export const createWardenRuntime = ({env = process.env} = {}) => {
   const managedStack = createManagedStackRuntime({
     env,
     logger: createLogger("WARDEN_STACK", {env})
+  });
+  const updates = createUpdateRuntime({
+    env,
+    logger: createLogger("WARDEN_UPDATES", {env}),
+    managedStack
   });
 
   const buildRuntimeSnapshot = async () =>
@@ -108,6 +117,9 @@ export const createWardenRuntime = ({env = process.env} = {}) => {
     configureLocalAi: (payload) => localAi.configure(payload),
     installLocalAi: () => localAi.install(),
     startLocalAi: () => localAi.start(),
+    getUpdates: () => updates.getStatus(),
+    checkUpdates: (requestedServices) => updates.checkForUpdates(requestedServices),
+    installUpdates: (requestedServices) => updates.installUpdates(requestedServices),
     getDiscordCallbackUrl: () => resolveDiscordCallbackUrl({env})
   };
 };

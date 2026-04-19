@@ -17,3 +17,7 @@ requests, users, settings, and system sections under `/admin`.
 
 Fresh installs intentionally show empty library states until Raven has real imported titles to surface, and the admin
 program now ships in a dark-only theme by default.
+
+Moon no longer exposes a dev-session claim path. Discord login is the supported first-owner and admin sign-in flow, and
+Moon serves versioned CSS or JS asset URLs with `no-store` HTML responses so new publishes invalidate stale browser
+bundles automatically.

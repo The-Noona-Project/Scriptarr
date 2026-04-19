@@ -33,10 +33,9 @@ export const renderUserShell = ({route, content, user, loginUrl, bootstrap, flas
       <div class="session-panel">
         <div class="session-kicker">Session</div>
         <strong>${escapeHtml(user?.username || "Not signed in")}</strong>
-        <span>${escapeHtml(user?.role || (bootstrap?.ownerClaimed ? "Use Discord login or a dev claim session." : `First owner: ${bootstrap?.superuserId || "missing"}`))}</span>
+        <span>${escapeHtml(user?.role || (bootstrap?.ownerClaimed ? "Use Discord login to sign in." : `First owner: ${bootstrap?.superuserId || "missing"}`))}</span>
         <div class="session-actions">
           ${user ? "" : `<a class="solid-button" href="${escapeHtml(loginUrl || "#")}">Discord login</a>`}
-          ${user ? "" : `<button class="ghost-button" type="button" data-action="claim-dev-session">Claim dev session</button>`}
         </div>
       </div>
     </header>

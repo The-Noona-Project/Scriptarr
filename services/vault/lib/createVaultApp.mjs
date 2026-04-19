@@ -113,6 +113,50 @@ export const createVaultApp = async ({logger = createLogger("VAULT")} = {}) => {
     res.json(await store.getProgressByUser(req.params.discordUserId));
   });
 
+  app.get("/api/service/raven/titles", async (_req, res) => {
+    res.json(await store.listRavenTitles());
+  });
+
+  app.get("/api/service/raven/titles/:titleId", async (req, res) => {
+    const title = await store.getRavenTitle(req.params.titleId);
+    if (!title) {
+      res.status(404).json({error: "Raven title not found."});
+      return;
+    }
+    res.json(title);
+  });
+
+  app.put("/api/service/raven/titles/:titleId", requireJson, async (req, res) => {
+    res.json(await store.upsertRavenTitle({
+      ...req.body,
+      id: req.params.titleId
+    }));
+  });
+
+  app.put("/api/service/raven/titles/:titleId/chapters", requireJson, async (req, res) => {
+    res.json(await store.replaceRavenChapters(req.params.titleId, Array.isArray(req.body?.chapters) ? req.body.chapters : []));
+  });
+
+  app.get("/api/service/raven/download-tasks", async (_req, res) => {
+    res.json(await store.listRavenDownloadTasks());
+  });
+
+  app.put("/api/service/raven/download-tasks/:taskId", requireJson, async (req, res) => {
+    res.json(await store.upsertRavenDownloadTask({
+      ...req.body,
+      taskId: req.params.taskId
+    }));
+  });
+
+  app.get("/api/service/raven/metadata-matches/:titleId", async (req, res) => {
+    const match = await store.getRavenMetadataMatch(req.params.titleId);
+    res.json(match || {titleId: req.params.titleId, provider: null, providerSeriesId: null, details: {}});
+  });
+
+  app.put("/api/service/raven/metadata-matches/:titleId", requireJson, async (req, res) => {
+    res.json(await store.setRavenMetadataMatch(req.params.titleId, req.body || {}));
+  });
+
   logger.info("Vault app initialized.", {
     driver: config.driver
   });

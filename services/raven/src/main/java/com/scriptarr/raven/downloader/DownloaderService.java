@@ -2,6 +2,10 @@ package com.scriptarr.raven.downloader;
 
 import com.scriptarr.raven.support.ScriptarrLogger;
 import com.scriptarr.raven.vpn.VpnService;
+import com.scriptarr.raven.library.LibraryChapter;
+import com.scriptarr.raven.library.LibraryService;
+import com.scriptarr.raven.settings.RavenVaultClient;
+import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import org.springframework.stereotype.Service;
 
@@ -20,6 +24,7 @@ import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Locale;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
@@ -41,6 +46,8 @@ public class DownloaderService {
     private final TitleScraper titleScraper;
     private final SourceFinder sourceFinder;
     private final VpnService vpnService;
+    private final LibraryService libraryService;
+    private final RavenVaultClient vaultClient;
     private final ScriptarrLogger logger;
 
     /**
@@ -49,13 +56,73 @@ public class DownloaderService {
      * @param titleScraper scraper used to search titles and chapters
      * @param sourceFinder scraper used to resolve page image URLs
      * @param vpnService VPN coordinator for optional protected downloads
+     * @param libraryService library projection and persistence service
+     * @param vaultClient Vault-backed Raven persistence client
      * @param logger shared Raven logger
      */
-    public DownloaderService(TitleScraper titleScraper, SourceFinder sourceFinder, VpnService vpnService, ScriptarrLogger logger) {
+    public DownloaderService(
+        TitleScraper titleScraper,
+        SourceFinder sourceFinder,
+        VpnService vpnService,
+        LibraryService libraryService,
+        RavenVaultClient vaultClient,
+        ScriptarrLogger logger
+    ) {
         this.titleScraper = titleScraper;
         this.sourceFinder = sourceFinder;
         this.vpnService = vpnService;
+        this.libraryService = libraryService;
+        this.vaultClient = vaultClient;
         this.logger = logger;
+    }
+
+    /**
+     * Restore queued Raven download tasks so the serialized worker can resume
+     * after a container restart.
+     */
+    @PostConstruct
+    public void restorePersistedTasks() {
+        try {
+            var payload = vaultClient.listDownloadTasks();
+            if (payload == null || !payload.isArray()) {
+                return;
+            }
+
+            payload.forEach((node) -> {
+                Map<String, Object> task = new LinkedHashMap<>();
+                task.put("taskId", node.path("taskId").asText(""));
+                task.put("titleId", node.path("titleId").asText(""));
+                task.put("titleName", node.path("titleName").asText(""));
+                task.put("titleUrl", node.path("titleUrl").asText(""));
+                task.put("requestType", node.path("requestType").asText("manga"));
+                task.put("requestedBy", node.path("requestedBy").asText("scriptarr"));
+                task.put("status", node.path("status").asText("queued"));
+                task.put("message", node.path("message").asText(""));
+                task.put("percent", node.path("percent").asInt(0));
+                task.put("queuedAt", node.path("queuedAt").asText(Instant.now().toString()));
+                task.put("updatedAt", node.path("updatedAt").asText(Instant.now().toString()));
+                String taskId = String.valueOf(task.get("taskId"));
+                if (taskId.isBlank()) {
+                    return;
+                }
+
+                tasks.put(taskId, task);
+                String status = String.valueOf(task.get("status"));
+                if ("queued".equals(status) || "running".equals(status)) {
+                    task.put("status", "queued");
+                    task.put("message", "Restored after Raven restart.");
+                    persistTask(taskId);
+                    queueWorker.submit(() -> process(taskId, new DownloadRequest(
+                        String.valueOf(task.get("titleName")),
+                        String.valueOf(task.get("titleUrl")),
+                        String.valueOf(task.get("requestType")),
+                        String.valueOf(task.get("requestedBy"))
+                    )));
+                }
+            });
+        } catch (Exception error) {
+            logger.warn("DOWNLOAD", "Failed to restore persisted Raven tasks.", error.getMessage());
+        }
     }
 
     /**
@@ -78,6 +145,7 @@ public class DownloaderService {
         String taskId = "task_" + UUID.randomUUID().toString().replace("-", "");
         Map<String, Object> task = new LinkedHashMap<>();
         task.put("taskId", taskId);
+        task.put("titleId", libraryService.slugifyTitleId(request.titleName()));
         task.put("titleName", request.titleName());
         task.put("titleUrl", request.titleUrl());
         task.put("requestType", request.requestType());
@@ -87,6 +155,7 @@ public class DownloaderService {
         task.put("percent", 0);
         task.put("queuedAt", Instant.now().toString());
         tasks.put(taskId, task);
+        persistTask(taskId);
 
         queueWorker.submit(() -> process(taskId, request));
         return Map.copyOf(task);
@@ -137,14 +206,33 @@ public class DownloaderService {
             if (chapters.isEmpty()) {
                 throw new IllegalStateException("No chapters were found for the requested title URL.");
             }
+            TitleDetails details = titleScraper.getTitleDetails(request.titleUrl());
 
-            Path titleRoot = logger.getDownloadsRoot().resolve(sanitizeFileName(request.titleName()));
+            Path titleRoot = resolveTitleRoot(request);
             Files.createDirectories(titleRoot);
 
             int total = chapters.size();
             for (int index = 0; index < chapters.size(); index++) {
                 Map<String, String> chapter = chapters.get(index);
-                downloadChapter(titleRoot, request, chapter);
+                Path archivePath = downloadChapter(titleRoot, request, chapter);
+                libraryService.recordDownloadedChapter(
+                    request.titleName(),
+                    request.requestType(),
+                    request.titleUrl(),
+                    null,
+                    details,
+                    new LibraryChapter(
+                        chapterId(request, chapter),
+                        chapterLabel(chapter),
+                        chapter.getOrDefault("chapter_number", String.valueOf(index + 1)),
+                        countArchiveEntries(archivePath),
+                        null,
+                        true,
+                        archivePath.toString(),
+                        chapter.get("href")
+                    ),
+                    archivePath
+                );
                 int percent = Math.max(10, (int) (((index + 1) / (double) total) * 100));
                 update(taskId, "running", "Downloaded chapter " + chapter.get("chapter_number") + ".", percent);
             }
@@ -156,7 +244,7 @@ public class DownloaderService {
         }
     }
 
-    private void downloadChapter(Path titleRoot, DownloadRequest request, Map<String, String> chapter) throws IOException, InterruptedException {
+    private Path downloadChapter(Path titleRoot, DownloadRequest request, Map<String, String> chapter) throws IOException, InterruptedException {
         List<String> images = sourceFinder.findSource(chapter.get("href"));
         if (images.isEmpty()) {
             throw new IllegalStateException("No chapter pages were found for " + chapter.get("href"));
@@ -178,6 +266,7 @@ public class DownloaderService {
             }
         }
         logger.info("DOWNLOAD", "Saved chapter archive.", "file=" + archivePath.getFileName());
+        return archivePath;
     }
 
     private byte[] downloadImage(String imageUrl) throws IOException, InterruptedException {
@@ -202,6 +291,47 @@ public class DownloaderService {
         task.put("message", message);
         task.put("percent", percent);
         task.put("updatedAt", Instant.now().toString());
+        persistTask(taskId);
+    }
+
+    private void persistTask(String taskId) {
+        Map<String, Object> task = tasks.get(taskId);
+        if (task == null) {
+            return;
+        }
+        try {
+            vaultClient.putDownloadTask(taskId, task);
+        } catch (Exception error) {
+            logger.warn("DOWNLOAD", "Failed to persist a Raven task snapshot.", error.getMessage());
+        }
+    }
+
+    private Path resolveTitleRoot(DownloadRequest request) {
+        String mediaType = request.requestType() == null || request.requestType().isBlank()
+            ? "manga"
+            : request.requestType().trim().toLowerCase(Locale.ROOT);
+        return logger.getDownloadsRoot()
+            .resolve(mediaType)
+            .resolve(sanitizeFileName(request.titleName()));
+    }
+
+    private String chapterId(DownloadRequest request, Map<String, String> chapter) {
+        return libraryService.slugifyTitleId(request.titleName())
+            + "-c"
+            + chapter.getOrDefault("chapter_number", "0").replace('.', '-');
+    }
+
+    private String chapterLabel(Map<String, String> chapter) {
+        String chapterNumber = chapter.getOrDefault("chapter_number", "0");
+        return "Chapter " + chapterNumber;
+    }
+
+    private int countArchiveEntries(Path archivePath) {
+        try (java.util.zip.ZipFile zipFile = new java.util.zip.ZipFile(archivePath.toFile())) {
+            return (int) zipFile.stream().filter((entry) -> !entry.isDirectory()).count();
+        } catch (Exception ignored) {
+            return 1;
+        }
     }
 
     private String sanitizeFileName(String value) {

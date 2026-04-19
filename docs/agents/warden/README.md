@@ -12,9 +12,13 @@
   same absolute path so Warden can create the host storage tree directly.
 - Keep Docker health checks aligned between Warden, the managed HTTP services, and managed MySQL so operators can trust
   Docker's `healthy` status during first boot and upgrades.
+- `npm run docker:healthcheck` is the default Warden-managed smoke flow for contributors. It is expected to take a
+  while on cold machines because it rebuilds images and may need to pull missing layers.
 - LocalAI is manual in 3.0: no first-boot pull, install, or start.
 - AI acceleration is optional; safe fallback is required.
 - The repo-level Docker test stack is Warden-managed, starts a containerized Warden first, and should stay aligned with
   the runtime service plan.
 - Warden's public bootstrap and runtime APIs must redact secrets before Moon or other operators consume them.
+- The managed-service update path lives behind Moon -> Sage -> Warden and only targets the sibling first-party
+  services. Warden and MySQL are informational or manual in the current product scope.
 - Keep full JSDoc on exported Warden `.mjs` source and tests so the ESLint doc gate stays green.

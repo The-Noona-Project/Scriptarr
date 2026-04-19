@@ -144,21 +144,47 @@ export const renderSystemPage = (result) => {
   }
 
   if (result.routeId === "system-updates") {
+    const services = result.payload?.services || [];
+    const job = result.payload?.job || null;
+    const checkedAt = result.payload?.checkedAt || null;
+    const selectableServices = services.filter((service) => service.updateAvailable);
+
     return `
       <section class="panel-section">
         <div class="section-heading">
           <div>
             <span class="section-kicker">Images</span>
-            <h2>Published channels</h2>
+            <h2>Managed service updates</h2>
           </div>
         </div>
+        <div class="action-row update-toolbar">
+          <button class="ghost-button" type="button" data-action="check-updates">Check now</button>
+          <button class="ghost-button" type="button" data-action="install-selected" ${selectableServices.length ? "" : "disabled"}>Install selected</button>
+          <button class="solid-button" type="button" data-action="install-all">Install all</button>
+        </div>
+        ${job ? `
+          <div class="callout subtle">
+            <strong>Update job ${escapeHtml(job.jobId)}</strong>
+            <p>${escapeHtml(job.status === "running"
+              ? `Installing ${job.requestedServices?.join(", ") || "managed services"}`
+              : job.error || "The last update job finished cleanly.")}</p>
+          </div>
+        ` : ""}
+        ${checkedAt ? `
+          <p class="field-note">Last checked ${escapeHtml(formatDate(checkedAt, {includeTime: true}))}.</p>
+        ` : ""}
         ${renderTable({
-          columns: ["Service", "Image", "Container", "Registry"],
-          rows: (result.payload?.services || []).map((service) => [
+          columns: ["Pick", "Service", "Status", "Running image", "Available image", "Container", "Image"],
+          rows: services.map((service) => [
+            service.updateAvailable
+              ? `<label class="checkbox-cell"><input type="checkbox" data-update-service="${escapeHtml(service.name)}" checked></label>`
+              : `<span class="muted-copy">-</span>`,
             `<strong>${escapeHtml(service.name)}</strong>`,
-            escapeHtml(service.image),
+            renderStatusBadge(service.updateAvailable ? "Update available" : "Current"),
+            escapeHtml(service.runningImageLabel || "missing"),
+            escapeHtml(service.localImageLabel || "unknown"),
             escapeHtml(service.containerName),
-            escapeHtml(service.channel)
+            escapeHtml(service.image)
           ]),
           emptyTitle: "No image data",
           emptyBody: "Warden has not surfaced image tags for the managed stack yet."
@@ -210,7 +236,51 @@ export const renderSystemPage = (result) => {
   `;
 };
 
+/**
+ * Enhance system page interactions after the shell renders.
+ *
+ * @param {HTMLElement} root
+ * @param {{api: ReturnType<import("../api.js").createAdminApi>, rerender: () => Promise<void>, setFlash: (tone: string, text: string) => void}} context
+ * @param {Awaited<ReturnType<typeof loadSystemPage>>} result
+ * @returns {Promise<void>}
+ */
+export const enhanceSystemPage = async (root, {api, rerender, setFlash}, result) => {
+  if (result.routeId !== "system-updates") {
+    return;
+  }
+
+  const selectedServices = () => Array.from(root.querySelectorAll("[data-update-service]:checked"))
+    .map((input) => input.getAttribute("data-update-service"))
+    .filter(Boolean);
+
+  root.querySelector("[data-action='check-updates']")?.addEventListener("click", async () => {
+    const response = await api.post("/api/moon/v3/admin/system/updates/check");
+    setFlash(response.ok ? "good" : "bad", response.ok ? "Checked the managed service channels." : response.payload?.error || "Unable to check for updates.");
+    await rerender();
+  });
+
+  root.querySelector("[data-action='install-selected']")?.addEventListener("click", async () => {
+    const services = selectedServices();
+    const response = await api.post("/api/moon/v3/admin/system/updates/install", {services});
+    setFlash(response.ok ? "good" : "bad", response.ok ? "Started the selected managed service update job." : response.payload?.error || "Unable to start the selected update job.");
+    await rerender();
+  });
+
+  root.querySelector("[data-action='install-all']")?.addEventListener("click", async () => {
+    const response = await api.post("/api/moon/v3/admin/system/updates/install");
+    setFlash(response.ok ? "good" : "bad", response.ok ? "Started the full managed service update job." : response.payload?.error || "Unable to start the full update job.");
+    await rerender();
+  });
+
+  if (result.payload?.job?.status === "running") {
+    globalThis.setTimeout(() => {
+      void rerender();
+    }, 2000);
+  }
+};
+
 export default {
   loadSystemPage,
-  renderSystemPage
+  renderSystemPage,
+  enhanceSystemPage
 };

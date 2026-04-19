@@ -153,6 +153,27 @@ export const inspectDockerContainer = async (containerName) => {
 };
 
 /**
+ * Inspect a local Docker image and return its JSON metadata.
+ *
+ * @param {string} image
+ * @returns {Promise<Record<string, unknown> | null>}
+ */
+export const inspectDockerImage = async (image) => {
+  try {
+    const {stdout} = await runDocker(["image", "inspect", image], {
+      stdio: "pipe"
+    });
+    const [payload] = JSON.parse(stdout);
+    return payload || null;
+  } catch (error) {
+    if (/No such image/i.test(String(error))) {
+      return null;
+    }
+    throw error;
+  }
+};
+
+/**
  * List Docker containers that match an exact label filter.
  *
  * @param {string} labelKey
@@ -390,6 +411,34 @@ export const runDetachedContainer = async ({
 };
 
 /**
+ * Pull a Docker image and stream progress lines through the provided logger.
+ *
+ * @param {string} image
+ * @param {{logger?: {info: Function}}} [options]
+ * @returns {Promise<void>}
+ */
+export const pullDockerImage = async (image, {logger} = {}) => {
+  await runDocker(["pull", image], {
+    onStdoutLine: logger
+      ? (line) => {
+        logger.info("Docker pull output.", {
+          image,
+          output: line
+        });
+      }
+      : undefined,
+    onStderrLine: logger
+      ? (line) => {
+        logger.info("Docker pull progress.", {
+          image,
+          output: line
+        });
+      }
+      : undefined
+  });
+};
+
+/**
  * Connect an existing container to a Docker network, optionally applying
  * aliases on that network.
  *
@@ -506,5 +555,39 @@ export const waitForHttp = async (url, {timeoutMs = 120000, intervalMs = 1500} =
   }
 
   throw new Error(`Timed out waiting for ${url}.`);
+};
+
+/**
+ * Wait for a Docker container to become healthy, or at least running when it
+ * does not define a container health check.
+ *
+ * @param {string} containerName
+ * @param {{timeoutMs?: number, intervalMs?: number}} [options]
+ * @returns {Promise<Record<string, unknown>>}
+ */
+export const waitForContainerHealthy = async (containerName, {timeoutMs = 180000, intervalMs = 2000} = {}) => {
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    const inspect = await inspectDockerContainer(containerName);
+    const state = inspect?.State || {};
+    const healthStatus = state?.Health?.Status || "";
+
+    if (healthStatus === "healthy") {
+      return inspect;
+    }
+
+    if (!state?.Health && state?.Running) {
+      return inspect;
+    }
+
+    if (state?.Status === "exited" || state?.Status === "dead") {
+      throw new Error(`Container ${containerName} stopped before it became healthy.`);
+    }
+
+    await sleep(intervalMs);
+  }
+
+  throw new Error(`Timed out waiting for container ${containerName} to become healthy.`);
 };
 

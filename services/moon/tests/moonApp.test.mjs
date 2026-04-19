@@ -64,13 +64,28 @@ test("moon serves split entry documents and proxies Moon v3 JSON plus SVG payloa
   const server = app.listen(0);
   const baseUrl = `http://127.0.0.1:${server.address().port}`;
 
-  const [userPage, adminPage] = await Promise.all([
-    fetch(`${baseUrl}/`).then((response) => response.text()),
-    fetch(`${baseUrl}/admin`).then((response) => response.text())
+  const [userPageResponse, adminPageResponse] = await Promise.all([
+    fetch(`${baseUrl}/`),
+    fetch(`${baseUrl}/admin`)
   ]);
+  const userPage = await userPageResponse.text();
+  const adminPage = await adminPageResponse.text();
 
   assert.match(userPage, /Scriptarr Moon/);
   assert.match(adminPage, /Scriptarr Admin/);
+  assert.match(userPage, /\/user-assets\/styles\.css\?v=/);
+  assert.match(userPage, /\/user-assets\/app\.js\?v=/);
+  assert.match(adminPage, /\/admin-assets\/styles\.css\?v=/);
+  assert.match(adminPage, /\/admin-assets\/app\.js\?v=/);
+  assert.equal((await fetch(`${baseUrl}/admin`)).headers.get("cache-control"), "no-store");
+  const adminAppResponse = await fetch(`${baseUrl}/admin-assets/app.js`);
+  assert.equal(adminAppResponse.headers.get("cache-control"), "no-store");
+  assert.match(await adminAppResponse.text(), /\.\/main\.js\?v=/);
+  const userMainResponse = await fetch(`${baseUrl}/user-assets/main.js`);
+  assert.equal(userMainResponse.headers.get("cache-control"), "no-store");
+  assert.match(await userMainResponse.text(), /\.\/api\.js\?v=/);
+  assert.doesNotMatch(userPage, /Claim dev session/);
+  assert.doesNotMatch(adminPage, /Claim dev session/);
 
   const libraryResponse = await fetch(`${baseUrl}/api/moon/v3/user/library`);
   assert.equal(libraryResponse.status, 200);

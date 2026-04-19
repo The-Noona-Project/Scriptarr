@@ -37,5 +37,6 @@ Read this before editing Scriptarr.
 - Vault is the supported broker for shared MySQL-backed state.
 - Requests created in Moon and Discord must converge on one moderated flow.
 - LocalAI is optional to overall platform health; degrade safely when AI dependencies are unavailable.
-- Prefer Docker-based verification for cross-service work. `npm run docker:test` is the supported end-to-end test mode,
-  and `npm run docker:test:teardown` is the matching cleanup path.
+- Prefer Docker-based verification for cross-service work. `npm run docker:healthcheck` is the default smoke path for
+  agents and contributors, while `npm run docker:test` remains the deeper end-to-end flow. `npm run docker:test:teardown`
+  is the matching manual cleanup path when the deeper test stack is left running.

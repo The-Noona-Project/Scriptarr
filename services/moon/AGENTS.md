@@ -16,4 +16,6 @@ Moon serves the forward-facing user app at `/` and the admin app at `/admin` fro
 - Split Moon files before they grow into monoliths. If a file is approaching 2000 lines, break it into smaller modules when possible.
 - Treat files nearing 4000 lines as overdue for decomposition unless they are generated or framework-constrained.
 - Keep `/admin` aligned with Arr-style admin density and `/` aligned with Moon's native reading-first UX.
+- Keep Discord login as Moon's only first-owner and admin sign-in path. Do not reintroduce dev-session claim flows.
+- Keep Moon HTML uncacheable and its static CSS or JS assets versioned so publishes invalidate stale browser bundles cleanly.
 - Preserve Moon's native reader flows. Do not reintroduce Kavita runtime handoff behavior.

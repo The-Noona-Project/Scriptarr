@@ -5,6 +5,7 @@ import com.scriptarr.raven.downloader.DownloaderService;
 import com.scriptarr.raven.library.ReaderChapterPayload;
 import com.scriptarr.raven.library.ReaderManifest;
 import com.scriptarr.raven.library.LibraryService;
+import com.scriptarr.raven.library.RenderedPage;
 import com.scriptarr.raven.metadata.MetadataService;
 import com.scriptarr.raven.settings.RavenSettingsService;
 import com.scriptarr.raven.vpn.VpnService;
@@ -140,19 +141,19 @@ public class RavenController {
      * @param pageIndex zero-based page index
      * @return SVG bytes or a not-found payload
      */
-    @GetMapping(value = "/v1/reader/{titleId}/{chapterId}/page/{pageIndex}", produces = "image/svg+xml")
+    @GetMapping("/v1/reader/{titleId}/{chapterId}/page/{pageIndex}")
     public ResponseEntity<?> readerPage(
         @PathVariable("titleId") String titleId,
         @PathVariable("chapterId") String chapterId,
         @PathVariable("pageIndex") int pageIndex
     ) {
-        byte[] payload = libraryService.renderReaderPage(titleId, chapterId, pageIndex);
+        RenderedPage payload = libraryService.renderReaderPage(titleId, chapterId, pageIndex);
         if (payload == null) {
             return ResponseEntity.status(HttpStatus.NOT_FOUND).build();
         }
         return ResponseEntity.ok()
-            .contentType(MediaType.parseMediaType("image/svg+xml"))
-            .body(payload);
+            .contentType(MediaType.parseMediaType(payload.mediaType()))
+            .body(payload.bytes());
     }
 
     /**

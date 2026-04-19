@@ -42,3 +42,33 @@ test("system status page prefers runtime network and nested mysql mode details",
   assert.doesNotMatch(html, /Â·/);
   assert.match(html, /&middot;/);
 });
+
+test("system updates page renders actionable update controls and digest status", () => {
+  const html = renderSystemPage({
+    ok: true,
+    routeId: "system-updates",
+    payload: {
+      checkedAt: "2026-04-19T18:00:00.000Z",
+      job: {
+        jobId: "update_abc123",
+        status: "running",
+        requestedServices: ["scriptarr-moon"]
+      },
+      services: [{
+        name: "scriptarr-moon",
+        updateAvailable: true,
+        runningImageLabel: "old-image",
+        localImageLabel: "new-image",
+        containerName: "scriptarr-moon",
+        image: "docker.darkmatterservers.com/the-noona-project/scriptarr-moon:latest"
+      }]
+    }
+  });
+
+  assert.match(html, /Check now/);
+  assert.match(html, /Install selected/);
+  assert.match(html, /Install all/);
+  assert.match(html, /Update available/);
+  assert.match(html, /old-image/);
+  assert.match(html, /new-image/);
+});

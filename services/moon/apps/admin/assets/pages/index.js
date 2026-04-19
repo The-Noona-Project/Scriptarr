@@ -6,7 +6,7 @@ import {loadLibraryPage, renderLibraryPage} from "./libraryPage.js";
 import {loadOverviewPage, renderOverviewPage} from "./overviewPage.js";
 import {enhanceRequestsPage, loadRequestsPage, renderRequestsPage} from "./requestsPage.js";
 import {enhanceSettingsPage, loadSettingsPage, renderSettingsPage} from "./settingsPage.js";
-import {loadSystemPage, renderSystemPage} from "./systemPage.js";
+import {enhanceSystemPage, loadSystemPage, renderSystemPage} from "./systemPage.js";
 import {loadUsersPage, renderUsersPage} from "./usersPage.js";
 import {loadWantedPage, renderWantedPage} from "./wantedPage.js";
 
@@ -37,11 +37,11 @@ const pageModules = {
   requests: {load: loadRequestsPage, render: renderRequestsPage, enhance: enhanceRequestsPage},
   users: {load: loadUsersPage, render: renderUsersPage},
   settings: {load: loadSettingsPage, render: renderSettingsPage, enhance: enhanceSettingsPage},
-  "system-status": {load: loadSystemPage, render: renderSystemPage},
-  "system-tasks": {load: loadSystemPage, render: renderSystemPage},
-  "system-updates": {load: loadSystemPage, render: renderSystemPage},
-  "system-events": {load: loadSystemPage, render: renderSystemPage},
-  "system-logs": {load: loadSystemPage, render: renderSystemPage}
+  "system-status": {load: loadSystemPage, render: renderSystemPage, enhance: enhanceSystemPage},
+  "system-tasks": {load: loadSystemPage, render: renderSystemPage, enhance: enhanceSystemPage},
+  "system-updates": {load: loadSystemPage, render: renderSystemPage, enhance: enhanceSystemPage},
+  "system-events": {load: loadSystemPage, render: renderSystemPage, enhance: enhanceSystemPage},
+  "system-logs": {load: loadSystemPage, render: renderSystemPage, enhance: enhanceSystemPage}
 };
 
 /**

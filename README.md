@@ -44,6 +44,7 @@ has real imported titles to surface.
 
 For end-to-end Docker verification, use:
 
+- `npm run docker:healthcheck`
 - `npm run docker:test`
 - `npm run docker:test:teardown`
 
@@ -59,9 +60,10 @@ For end-to-end Docker verification, use:
 5. Watch the Warden logs while it reconciles the sibling containers. First boot now surfaces when Docker is creating or
    downloading the managed images.
    Docker health checks now report `healthy` for Warden plus the managed services once each container settles.
-6. Open Moon, confirm the bootstrap surface shows the configured first owner id, and use the admin claim flow.
+6. Open Moon, confirm the bootstrap surface shows the configured first owner id, and use Discord login to claim the
+   first owner session.
 7. Copy the callback URL surfaced by Warden or Moon into the Discord developer portal.
-8. Finish integrations, library, metadata, VPN, Oracle, and moderation settings in Moon admin.
+8. Finish integrations, library, metadata, VPN, Oracle, moderation, and managed-service update settings in Moon admin.
 
 ## Key Contracts
 
@@ -76,6 +78,8 @@ For end-to-end Docker verification, use:
 - LocalAI is optional for overall stack health and is not installed on first boot.
 - Oracle starts disabled and OpenAI-first. LocalAI is enabled later from Moon admin when the admin is ready for a slow
   install or start cycle.
+- Moon admin stays dark by default, serves versioned browser assets, and exposes the managed-service updates flow for
+  Vault, Sage, Moon, Raven, Portal, and Oracle.
 
 ## Docs
 

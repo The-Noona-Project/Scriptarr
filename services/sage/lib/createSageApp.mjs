@@ -18,7 +18,9 @@ const ORACLE_OPENAI_API_KEY_SECRET = "oracle.openai.apiKey";
 const knownMetadataProviders = Object.freeze([
   {id: "mangadex", name: "MangaDex", scopes: ["manga", "webtoon"], enabled: true, priority: 10},
   {id: "anilist", name: "AniList", scopes: ["manga"], enabled: false, priority: 20},
-  {id: "comicvine", name: "ComicVine", scopes: ["comic"], enabled: false, priority: 30, credentialKey: "comicVineApiKey"}
+  {id: "mangaupdates", name: "MangaUpdates", scopes: ["manga", "webtoon"], enabled: false, priority: 30},
+  {id: "mal", name: "MyAnimeList", scopes: ["manga"], enabled: false, priority: 40, credentialKey: "malClientId"},
+  {id: "comicvine", name: "ComicVine", scopes: ["comic"], enabled: false, priority: 50, credentialKey: "comicVineApiKey"}
 ]);
 
 const safeJson = async (promise) => {
@@ -32,9 +34,16 @@ const safeJson = async (promise) => {
   }
 };
 
+const fetchJsonWithTimeout = async (url, timeoutMs = 1200) => {
+  const response = await fetch(url, {
+    signal: AbortSignal.timeout(timeoutMs)
+  });
+  return response.json();
+};
+
 const loadWardenStatus = async (baseUrl) => {
   const [health, bootstrap, runtime] = await Promise.all([
-    safeJson(fetch(`${baseUrl}/health`).then((response) => response.json())),
+    safeJson(fetchJsonWithTimeout(`${baseUrl}/health`)),
     safeJson(serviceJson(baseUrl, "/api/bootstrap")),
     safeJson(serviceJson(baseUrl, "/api/runtime"))
   ]);
@@ -283,11 +292,11 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
 
   app.get("/health", async (_req, res) => {
     const [vault, warden, portal, oracle, raven] = await Promise.all([
-      safeJson(fetch(`${config.vaultBaseUrl}/health`).then((response) => response.json())),
-      safeJson(fetch(`${config.wardenBaseUrl}/health`).then((response) => response.json())),
-      safeJson(fetch(`${config.portalBaseUrl}/health`).then((response) => response.json())),
-      safeJson(fetch(`${config.oracleBaseUrl}/health`).then((response) => response.json())),
-      safeJson(fetch(`${config.ravenBaseUrl}/health`).then((response) => response.json()))
+      safeJson(fetchJsonWithTimeout(`${config.vaultBaseUrl}/health`)),
+      safeJson(fetchJsonWithTimeout(`${config.wardenBaseUrl}/health`)),
+      safeJson(fetchJsonWithTimeout(`${config.portalBaseUrl}/health`)),
+      safeJson(fetchJsonWithTimeout(`${config.oracleBaseUrl}/health`)),
+      safeJson(fetchJsonWithTimeout(`${config.ravenBaseUrl}/health`))
     ]);
 
     res.json({
@@ -314,47 +323,20 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
     });
   });
 
-  app.post("/api/auth/claim", async (req, res) => {
-    try {
-      const identity = {
-        discordUserId: String(req.body.discordUserId || "").trim(),
-        username: String(req.body.username || "").trim() || "Scriptarr User",
-        avatarUrl: req.body.avatarUrl || null
-      };
-      if (!identity.discordUserId) {
-        res.status(400).json({error: "discordUserId is required."});
-        return;
-      }
-      const user = await upsertUserFromDiscord({vaultClient, config, identity});
-      const session = await vaultClient.createSession(user.discordUserId);
-      res.json({token: session.token, user, callbackUrl: buildCallbackUrl(config)});
-    } catch (error) {
-      logger.warn("Owner or user claim failed.", {
-        discordUserId: req.body?.discordUserId,
-        error
-      });
-      res.status(403).json({error: error instanceof Error ? error.message : String(error)});
-    }
-  });
-
   app.get("/api/auth/discord/callback", async (req, res) => {
     try {
-      const mockDiscordUserId = String(req.query.mockDiscordUserId || "").trim();
-      const identity = mockDiscordUserId
-        ? {
-          discordUserId: mockDiscordUserId,
-          username: String(req.query.username || "Dev Discord User"),
-          avatarUrl: null
-        }
-        : await exchangeDiscordCode(config, String(req.query.code || ""));
-
+      const code = String(req.query.code || "").trim();
+      if (!code) {
+        res.status(400).json({error: "Discord OAuth code is required."});
+        return;
+      }
+      const identity = await exchangeDiscordCode(config, code);
       const user = await upsertUserFromDiscord({vaultClient, config, identity});
       const session = await vaultClient.createSession(user.discordUserId);
       res.json({token: session.token, user});
     } catch (error) {
       logger.warn("Discord callback login failed.", {
         codePresent: Boolean(req.query.code),
-        mockDiscordUserId: String(req.query.mockDiscordUserId || "").trim(),
         error
       });
       res.status(403).json({error: error instanceof Error ? error.message : String(error)});
@@ -553,6 +535,31 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
       method: "POST"
     }));
     res.status(result.status || 200).json(result.payload || result);
+  });
+
+  app.get("/api/updates", requirePermission(vaultClient, "manage_settings"), async (_req, res) => {
+    const result = await serviceJson(config.wardenBaseUrl, "/api/updates");
+    res.status(result.status).json(result.payload);
+  });
+
+  app.post("/api/updates/check", requirePermission(vaultClient, "manage_settings"), async (req, res) => {
+    const result = await serviceJson(config.wardenBaseUrl, "/api/updates/check", {
+      method: "POST",
+      body: {
+        services: normalizeArray(req.body?.services)
+      }
+    });
+    res.status(result.status).json(result.payload);
+  });
+
+  app.post("/api/updates/install", requirePermission(vaultClient, "manage_settings"), async (req, res) => {
+    const result = await serviceJson(config.wardenBaseUrl, "/api/updates/install", {
+      method: "POST",
+      body: {
+        services: normalizeArray(req.body?.services)
+      }
+    });
+    res.status(result.status).json(result.payload);
   });
 
   registerMoonV3Routes(app, {

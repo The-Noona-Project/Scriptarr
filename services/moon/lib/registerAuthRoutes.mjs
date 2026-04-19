@@ -56,19 +56,6 @@ export const registerAuthRoutes = (app, {config, getSessionToken, logger}) => {
     res.status(result.status).json(result.payload);
   });
 
-  app.post("/api/moon/auth/claim", async (req, res) => {
-    const result = await proxyToSage(req, "/api/auth/claim", {
-      method: "POST",
-      body: req.body
-    });
-
-    if (result.status < 400 && result.payload?.token) {
-      res.setHeader("Set-Cookie", serializeCookie(config.sessionCookieName, result.payload.token));
-    }
-
-    res.status(result.status).json(result.payload);
-  });
-
   app.get("/api/moon/auth/discord/callback", async (req, res) => {
     const query = toQueryString(req.query);
     const result = await proxyToSage(req, `/api/auth/discord/callback${query ? `?${query}` : ""}`);

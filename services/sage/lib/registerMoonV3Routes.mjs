@@ -408,15 +408,28 @@ export const registerMoonV3Routes = (app, {
   }));
 
   app.get("/api/moon-v3/admin/system/updates", requireAdminSettings(async (_req, res) => {
-    const bootstrap = await safeJson(serviceJson(config.wardenBaseUrl, "/api/bootstrap"));
-    const services = normalizeArray(bootstrap.payload?.services || bootstrap.services).map((entry) => ({
-      name: entry.name,
-      image: entry.image,
-      containerName: entry.containerName,
-      channel: "docker.darkmatterservers.com/the-noona-project"
-    }));
+    const updates = await serviceJson(config.wardenBaseUrl, "/api/updates");
+    res.status(updates.status).json(updates.payload);
+  }));
 
-    res.json({services});
+  app.post("/api/moon-v3/admin/system/updates/check", requireAdminSettings(async (req, res) => {
+    const updates = await serviceJson(config.wardenBaseUrl, "/api/updates/check", {
+      method: "POST",
+      body: {
+        services: normalizeArray(req.body?.services)
+      }
+    });
+    res.status(updates.status).json(updates.payload);
+  }));
+
+  app.post("/api/moon-v3/admin/system/updates/install", requireAdminSettings(async (req, res) => {
+    const updates = await serviceJson(config.wardenBaseUrl, "/api/updates/install", {
+      method: "POST",
+      body: {
+        services: normalizeArray(req.body?.services)
+      }
+    });
+    res.status(updates.status).json(updates.payload);
   }));
 
   app.get("/api/moon-v3/admin/system/events", requireAdminSettings(async (_req, res) => {

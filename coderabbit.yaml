@@ -1,4 +1,4 @@
-name: Scriptarr 3.0
+name: Scriptarr
 description: AI review profile for the Scriptarr 3.0 greenfield monorepo.
 language: javascript
 ai_reviewer: true

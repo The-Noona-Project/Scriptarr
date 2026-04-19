@@ -19,6 +19,7 @@ import {
   removeDockerContainer,
   runDetachedContainer,
   startDockerContainer,
+  waitForContainerHealthy,
   waitForMySqlReady
 } from "../docker/dockerCli.mjs";
 import {toDockerDesktopHostPath} from "../filesystem/storageLayout.mjs";
@@ -210,7 +211,8 @@ const buildServiceStatus = ({
     managed: inspect?.Config?.Labels?.["scriptarr.managed-by"] === DEFAULT_WARDEN_NETWORK_ALIAS,
     driftReasons,
     publishedPorts: descriptor.publishedPorts,
-    networkAliases: descriptor.networkAliases
+    networkAliases: descriptor.networkAliases,
+    containerImageId: normalizeString(inspect?.Image)
   };
 };
 
@@ -409,6 +411,7 @@ export const createManagedStackRuntime = ({env = process.env, logger}) => {
         restartPolicy: descriptor.restartPolicy,
         logger
       });
+      await waitForContainerHealthy(descriptor.containerName);
       logger.info("Managed container created.", {
         service: descriptor.name,
         container: descriptor.containerName
@@ -453,6 +456,7 @@ export const createManagedStackRuntime = ({env = process.env, logger}) => {
         restartPolicy: descriptor.restartPolicy,
         logger
       });
+      await waitForContainerHealthy(descriptor.containerName);
       logger.info("Managed container recreated.", {
         service: descriptor.name,
         container: descriptor.containerName
@@ -469,6 +473,7 @@ export const createManagedStackRuntime = ({env = process.env, logger}) => {
         container: descriptor.containerName
       });
       await startDockerContainer(descriptor.containerName);
+      await waitForContainerHealthy(descriptor.containerName);
     }
 
     if (inspect?.State?.Running && driftReasons.length === 0) {
@@ -498,6 +503,56 @@ export const createManagedStackRuntime = ({env = process.env, logger}) => {
         await removeDockerContainer(container.name, {ignoreMissing: true});
       }
     }
+  };
+
+  const recreateDescriptor = async (descriptor) => {
+    logger.info("Recreating managed container to apply an updated image.", {
+      service: descriptor.name,
+      container: descriptor.containerName,
+      image: descriptor.image
+    });
+    await removeDockerContainer(descriptor.containerName, {ignoreMissing: true});
+    await runDetachedContainer({
+      name: descriptor.containerName,
+      image: descriptor.image,
+      env: descriptor.env,
+      networkName: managedNetworkName,
+      networkAliases: descriptor.networkAliases,
+      mounts: descriptor.mounts,
+      publishedPorts: descriptor.publishedPorts,
+      healthCheck: descriptor.healthCheck,
+      labels: descriptor.labels,
+      restartPolicy: descriptor.restartPolicy,
+      logger
+    });
+    await waitForContainerHealthy(descriptor.containerName);
+    return buildServiceStatus({
+      descriptor,
+      inspect: await inspectDockerContainer(descriptor.containerName)
+    });
+  };
+
+  const reconcileSelectedServices = async (serviceNames = [], {forceRecreate = false} = {}) => {
+    const plan = resolveServicePlan({env});
+    const requested = new Set((serviceNames || []).map((entry) => normalizeString(entry)).filter(Boolean));
+    const descriptors = plan.services
+      .filter((service) => requested.has(service.name))
+      .map(desiredDescriptorFor);
+    const statuses = [];
+
+    for (const descriptor of descriptors) {
+      const status = forceRecreate ? await recreateDescriptor(descriptor) : await reconcileDescriptor(descriptor);
+      statuses.push(status);
+      if (descriptor.name === "scriptarr-mysql" && plan.mysql.mode === "selfhost") {
+        await waitForMySqlReady({
+          containerName: descriptor.containerName,
+          password: plan.mysql.password
+        });
+      }
+    }
+
+    await refreshStatus();
+    return statuses;
   };
 
   const refreshStatus = async () => {
@@ -595,6 +650,7 @@ export const createManagedStackRuntime = ({env = process.env, logger}) => {
   return {
     initialize,
     refreshStatus,
+    reconcileSelectedServices,
     getStatusSnapshot: () => ({
       warden: {
         containerName: state.selfContainerName,

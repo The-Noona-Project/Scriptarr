@@ -23,6 +23,9 @@ public record LibraryTitle(
     String metadataProvider,
     String metadataMatchedAt,
     List<Map<String, String>> relations,
+    String sourceUrl,
+    String coverUrl,
+    String downloadRoot,
     List<LibraryChapter> chapters
 ) {
 }

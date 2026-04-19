@@ -99,16 +99,6 @@ export const bootUserApp = (root) => {
       });
     });
 
-    root.querySelector("[data-action='claim-dev-session']")?.addEventListener("click", async () => {
-      const bootstrap = chromeContext.bootstrap || {};
-      const identity = bootstrap.ownerClaimed
-        ? {discordUserId: "scriptarr-reader-dev", username: "Scriptarr Reader Dev"}
-        : {discordUserId: bootstrap.superuserId || "scriptarr-owner-dev", username: "Scriptarr Owner Dev"};
-      const result = await api.claimDevSession(identity);
-      setFlash(result.ok ? "good" : "bad", result.ok ? `Signed in as ${identity.username}.` : result.payload?.error || "Unable to claim a dev session.");
-      await render();
-    });
-
     await enhanceUserPage(route, root, {
       api,
       navigate,

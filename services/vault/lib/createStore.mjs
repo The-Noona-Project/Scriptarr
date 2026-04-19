@@ -12,6 +12,38 @@ const parseJsonColumn = (value, fallback = null) => {
   return value;
 };
 
+const sortRavenTitles = (titles) => [...titles].sort((left, right) => String(left.title || "").localeCompare(String(right.title || "")));
+const sortRavenChapters = (chapters) => [...chapters].sort((left, right) => {
+  const leftNumber = Number.parseFloat(String(left.chapterNumber || "0"));
+  const rightNumber = Number.parseFloat(String(right.chapterNumber || "0"));
+  if (Number.isFinite(leftNumber) && Number.isFinite(rightNumber) && leftNumber !== rightNumber) {
+    return rightNumber - leftNumber;
+  }
+  return String(right.chapterNumber || right.label || "").localeCompare(String(left.chapterNumber || left.label || ""));
+});
+const normalizeRavenTitle = (title, chapters = []) => ({
+  id: title.id,
+  title: title.title,
+  mediaType: title.mediaType || "manga",
+  status: title.status || "active",
+  latestChapter: title.latestChapter || "",
+  coverAccent: title.coverAccent || "#4f8f88",
+  summary: title.summary || "",
+  releaseLabel: title.releaseLabel || "",
+  chapterCount: Number.parseInt(String(title.chapterCount || 0), 10) || 0,
+  chaptersDownloaded: Number.parseInt(String(title.chaptersDownloaded || 0), 10) || 0,
+  author: title.author || "",
+  tags: Array.isArray(title.tags) ? title.tags : [],
+  aliases: Array.isArray(title.aliases) ? title.aliases : [],
+  metadataProvider: title.metadataProvider || "",
+  metadataMatchedAt: title.metadataMatchedAt || null,
+  relations: Array.isArray(title.relations) ? title.relations : [],
+  sourceUrl: title.sourceUrl || "",
+  coverUrl: title.coverUrl || "",
+  downloadRoot: title.downloadRoot || "",
+  chapters: sortRavenChapters(chapters)
+});
+
 const defaultPermissionsForRole = (role) => {
   switch (role) {
     case "owner":
@@ -32,6 +64,10 @@ const createMemoryStore = () => {
     secrets: new Map(),
     requests: new Map(),
     progress: new Map(),
+    ravenTitles: new Map(),
+    ravenChapters: new Map(),
+    ravenDownloadTasks: new Map(),
+    ravenMetadataMatches: new Map(),
     requestSeq: 1
   };
 
@@ -156,6 +192,59 @@ const createMemoryStore = () => {
     },
     async getProgressByUser(discordUserId) {
       return Array.from(state.progress.values()).filter((entry) => entry.discordUserId === discordUserId);
+    },
+    async listRavenTitles() {
+      return sortRavenTitles(Array.from(state.ravenTitles.values()).map((title) =>
+        normalizeRavenTitle(title, Array.from((state.ravenChapters.get(title.id) || new Map()).values()))
+      ));
+    },
+    async getRavenTitle(titleId) {
+      const title = state.ravenTitles.get(titleId);
+      if (!title) {
+        return null;
+      }
+      return normalizeRavenTitle(title, Array.from((state.ravenChapters.get(titleId) || new Map()).values()));
+    },
+    async upsertRavenTitle(title) {
+      const existing = state.ravenTitles.get(title.id) || {};
+      state.ravenTitles.set(title.id, {
+        ...existing,
+        ...normalizeRavenTitle(title, existing.chapters || []),
+        updatedAt: nowIso()
+      });
+      return this.getRavenTitle(title.id);
+    },
+    async replaceRavenChapters(titleId, chapters) {
+      state.ravenChapters.set(titleId, new Map(sortRavenChapters(chapters).map((chapter) => [chapter.id, {
+        ...chapter,
+        updatedAt: nowIso()
+      }])));
+      return Array.from(state.ravenChapters.get(titleId).values());
+    },
+    async listRavenDownloadTasks() {
+      return Array.from(state.ravenDownloadTasks.values()).sort((left, right) =>
+        String(right.queuedAt || right.updatedAt || "").localeCompare(String(left.queuedAt || left.updatedAt || ""))
+      );
+    },
+    async upsertRavenDownloadTask(task) {
+      state.ravenDownloadTasks.set(task.taskId, {
+        ...(state.ravenDownloadTasks.get(task.taskId) || {}),
+        ...task,
+        updatedAt: nowIso()
+      });
+      return state.ravenDownloadTasks.get(task.taskId);
+    },
+    async getRavenMetadataMatch(titleId) {
+      return state.ravenMetadataMatches.get(titleId) || null;
+    },
+    async setRavenMetadataMatch(titleId, value) {
+      const entry = {
+        titleId,
+        ...value,
+        updatedAt: nowIso()
+      };
+      state.ravenMetadataMatches.set(titleId, entry);
+      return entry;
     }
   };
 };
@@ -229,6 +318,69 @@ const createMysqlStore = (config) => {
         updated_at DATETIME NOT NULL
       )
     `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS raven_titles (
+        title_id VARCHAR(191) PRIMARY KEY,
+        title VARCHAR(255) NOT NULL,
+        media_type VARCHAR(64) NOT NULL,
+        status_name VARCHAR(64) NOT NULL,
+        latest_chapter VARCHAR(64) NULL,
+        cover_accent VARCHAR(32) NULL,
+        summary TEXT NULL,
+        release_label VARCHAR(64) NULL,
+        chapter_count INT NOT NULL DEFAULT 0,
+        chapters_downloaded INT NOT NULL DEFAULT 0,
+        author_name VARCHAR(255) NULL,
+        tags_json JSON NOT NULL,
+        aliases_json JSON NOT NULL,
+        relations_json JSON NOT NULL,
+        metadata_provider VARCHAR(64) NULL,
+        metadata_matched_at DATETIME NULL,
+        source_url TEXT NULL,
+        cover_url TEXT NULL,
+        download_root TEXT NULL,
+        updated_at DATETIME NOT NULL
+      )
+    `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS raven_chapters (
+        title_id VARCHAR(191) NOT NULL,
+        chapter_id VARCHAR(191) NOT NULL,
+        label_name VARCHAR(255) NOT NULL,
+        chapter_number VARCHAR(64) NULL,
+        page_count INT NOT NULL DEFAULT 0,
+        release_date VARCHAR(64) NULL,
+        is_available TINYINT(1) NOT NULL DEFAULT 1,
+        archive_path TEXT NULL,
+        source_url TEXT NULL,
+        updated_at DATETIME NOT NULL,
+        PRIMARY KEY (title_id, chapter_id)
+      )
+    `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS raven_download_tasks (
+        task_id VARCHAR(191) PRIMARY KEY,
+        title_id VARCHAR(191) NULL,
+        title_name VARCHAR(255) NOT NULL,
+        title_url TEXT NOT NULL,
+        request_type VARCHAR(64) NOT NULL,
+        requested_by VARCHAR(64) NOT NULL,
+        status_name VARCHAR(64) NOT NULL,
+        message_text TEXT NULL,
+        percent_value INT NOT NULL DEFAULT 0,
+        queued_at DATETIME NOT NULL,
+        updated_at DATETIME NOT NULL
+      )
+    `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS raven_metadata_matches (
+        title_id VARCHAR(191) PRIMARY KEY,
+        provider_id VARCHAR(64) NOT NULL,
+        provider_series_id VARCHAR(191) NOT NULL,
+        details_json JSON NOT NULL,
+        updated_at DATETIME NOT NULL
+      )
+    `);
   };
 
   const toUser = (row) => ({
@@ -241,6 +393,38 @@ const createMysqlStore = (config) => {
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString()
   });
+  const toRavenChapter = (row) => ({
+    id: row.chapter_id,
+    label: row.label_name,
+    chapterNumber: row.chapter_number,
+    pageCount: row.page_count,
+    releaseDate: row.release_date,
+    available: row.is_available === 1,
+    archivePath: row.archive_path,
+    sourceUrl: row.source_url,
+    updatedAt: row.updated_at.toISOString()
+  });
+  const toRavenTitle = (row, chapters = []) => normalizeRavenTitle({
+    id: row.title_id,
+    title: row.title,
+    mediaType: row.media_type,
+    status: row.status_name,
+    latestChapter: row.latest_chapter,
+    coverAccent: row.cover_accent,
+    summary: row.summary,
+    releaseLabel: row.release_label,
+    chapterCount: row.chapter_count,
+    chaptersDownloaded: row.chapters_downloaded,
+    author: row.author_name,
+    tags: parseJsonColumn(row.tags_json, []),
+    aliases: parseJsonColumn(row.aliases_json, []),
+    metadataProvider: row.metadata_provider,
+    metadataMatchedAt: row.metadata_matched_at ? row.metadata_matched_at.toISOString() : null,
+    relations: parseJsonColumn(row.relations_json, []),
+    sourceUrl: row.source_url,
+    coverUrl: row.cover_url,
+    downloadRoot: row.download_root
+  }, chapters);
 
   return {
     driver: "mysql",
@@ -421,6 +605,194 @@ const createMysqlStore = (config) => {
         bookmark: parseJsonColumn(row.bookmark_json),
         updatedAt: row.updated_at.toISOString()
       }));
+    },
+    async listRavenTitles() {
+      const [titleRows] = await pool.query("SELECT * FROM raven_titles ORDER BY title ASC");
+      if (!titleRows.length) {
+        return [];
+      }
+      const [chapterRows] = await pool.query("SELECT * FROM raven_chapters");
+      const chaptersByTitle = new Map();
+      for (const row of chapterRows) {
+        if (!chaptersByTitle.has(row.title_id)) {
+          chaptersByTitle.set(row.title_id, []);
+        }
+        chaptersByTitle.get(row.title_id).push(toRavenChapter(row));
+      }
+      return titleRows.map((row) => toRavenTitle(row, chaptersByTitle.get(row.title_id) || []));
+    },
+    async getRavenTitle(titleId) {
+      const [titleRows] = await pool.query("SELECT * FROM raven_titles WHERE title_id = ? LIMIT 1", [titleId]);
+      if (!titleRows[0]) {
+        return null;
+      }
+      const [chapterRows] = await pool.query("SELECT * FROM raven_chapters WHERE title_id = ?", [titleId]);
+      return toRavenTitle(titleRows[0], chapterRows.map(toRavenChapter));
+    },
+    async upsertRavenTitle(title) {
+      await pool.query(`
+        INSERT INTO raven_titles (
+          title_id, title, media_type, status_name, latest_chapter, cover_accent, summary, release_label,
+          chapter_count, chapters_downloaded, author_name, tags_json, aliases_json, relations_json,
+          metadata_provider, metadata_matched_at, source_url, cover_url, download_root, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+        ON DUPLICATE KEY UPDATE
+          title = VALUES(title),
+          media_type = VALUES(media_type),
+          status_name = VALUES(status_name),
+          latest_chapter = VALUES(latest_chapter),
+          cover_accent = VALUES(cover_accent),
+          summary = VALUES(summary),
+          release_label = VALUES(release_label),
+          chapter_count = VALUES(chapter_count),
+          chapters_downloaded = VALUES(chapters_downloaded),
+          author_name = VALUES(author_name),
+          tags_json = VALUES(tags_json),
+          aliases_json = VALUES(aliases_json),
+          relations_json = VALUES(relations_json),
+          metadata_provider = VALUES(metadata_provider),
+          metadata_matched_at = VALUES(metadata_matched_at),
+          source_url = VALUES(source_url),
+          cover_url = VALUES(cover_url),
+          download_root = VALUES(download_root),
+          updated_at = NOW()
+      `, [
+        title.id,
+        title.title,
+        title.mediaType || "manga",
+        title.status || "active",
+        title.latestChapter || "",
+        title.coverAccent || "#4f8f88",
+        title.summary || "",
+        title.releaseLabel || "",
+        Number.parseInt(String(title.chapterCount || 0), 10) || 0,
+        Number.parseInt(String(title.chaptersDownloaded || 0), 10) || 0,
+        title.author || "",
+        JSON.stringify(Array.isArray(title.tags) ? title.tags : []),
+        JSON.stringify(Array.isArray(title.aliases) ? title.aliases : []),
+        JSON.stringify(Array.isArray(title.relations) ? title.relations : []),
+        title.metadataProvider || null,
+        title.metadataMatchedAt || null,
+        title.sourceUrl || null,
+        title.coverUrl || null,
+        title.downloadRoot || null
+      ]);
+      return this.getRavenTitle(title.id);
+    },
+    async replaceRavenChapters(titleId, chapters) {
+      await pool.query("DELETE FROM raven_chapters WHERE title_id = ?", [titleId]);
+      for (const chapter of sortRavenChapters(Array.isArray(chapters) ? chapters : [])) {
+        await pool.query(`
+          INSERT INTO raven_chapters (
+            title_id, chapter_id, label_name, chapter_number, page_count, release_date, is_available, archive_path, source_url, updated_at
+          )
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+        `, [
+          titleId,
+          chapter.id,
+          chapter.label || chapter.id,
+          chapter.chapterNumber || null,
+          Number.parseInt(String(chapter.pageCount || 0), 10) || 0,
+          chapter.releaseDate || null,
+          chapter.available === false ? 0 : 1,
+          chapter.archivePath || null,
+          chapter.sourceUrl || null
+        ]);
+      }
+      const [rows] = await pool.query("SELECT * FROM raven_chapters WHERE title_id = ?", [titleId]);
+      return rows.map(toRavenChapter);
+    },
+    async listRavenDownloadTasks() {
+      const [rows] = await pool.query("SELECT * FROM raven_download_tasks ORDER BY queued_at DESC");
+      return rows.map((row) => ({
+        taskId: row.task_id,
+        titleId: row.title_id,
+        titleName: row.title_name,
+        titleUrl: row.title_url,
+        requestType: row.request_type,
+        requestedBy: row.requested_by,
+        status: row.status_name,
+        message: row.message_text,
+        percent: row.percent_value,
+        queuedAt: row.queued_at.toISOString(),
+        updatedAt: row.updated_at.toISOString()
+      }));
+    },
+    async upsertRavenDownloadTask(task) {
+      await pool.query(`
+        INSERT INTO raven_download_tasks (
+          task_id, title_id, title_name, title_url, request_type, requested_by, status_name, message_text, percent_value, queued_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+        ON DUPLICATE KEY UPDATE
+          title_id = VALUES(title_id),
+          title_name = VALUES(title_name),
+          title_url = VALUES(title_url),
+          request_type = VALUES(request_type),
+          requested_by = VALUES(requested_by),
+          status_name = VALUES(status_name),
+          message_text = VALUES(message_text),
+          percent_value = VALUES(percent_value),
+          queued_at = VALUES(queued_at),
+          updated_at = NOW()
+      `, [
+        task.taskId,
+        task.titleId || null,
+        task.titleName,
+        task.titleUrl,
+        task.requestType || "manga",
+        task.requestedBy || "scriptarr",
+        task.status || "queued",
+        task.message || "",
+        Number.parseInt(String(task.percent || 0), 10) || 0,
+        task.queuedAt || nowIso()
+      ]);
+      const [rows] = await pool.query("SELECT * FROM raven_download_tasks WHERE task_id = ? LIMIT 1", [task.taskId]);
+      const row = rows[0];
+      return {
+        taskId: row.task_id,
+        titleId: row.title_id,
+        titleName: row.title_name,
+        titleUrl: row.title_url,
+        requestType: row.request_type,
+        requestedBy: row.requested_by,
+        status: row.status_name,
+        message: row.message_text,
+        percent: row.percent_value,
+        queuedAt: row.queued_at.toISOString(),
+        updatedAt: row.updated_at.toISOString()
+      };
+    },
+    async getRavenMetadataMatch(titleId) {
+      const [rows] = await pool.query("SELECT * FROM raven_metadata_matches WHERE title_id = ? LIMIT 1", [titleId]);
+      const row = rows[0];
+      return row
+        ? {
+          titleId: row.title_id,
+          provider: row.provider_id,
+          providerSeriesId: row.provider_series_id,
+          details: parseJsonColumn(row.details_json, {}),
+          updatedAt: row.updated_at.toISOString()
+        }
+        : null;
+    },
+    async setRavenMetadataMatch(titleId, value) {
+      await pool.query(`
+        INSERT INTO raven_metadata_matches (title_id, provider_id, provider_series_id, details_json, updated_at)
+        VALUES (?, ?, ?, ?, NOW())
+        ON DUPLICATE KEY UPDATE
+          provider_id = VALUES(provider_id),
+          provider_series_id = VALUES(provider_series_id),
+          details_json = VALUES(details_json),
+          updated_at = NOW()
+      `, [
+        titleId,
+        value.provider || "",
+        value.providerSeriesId || "",
+        JSON.stringify(value.details || {})
+      ]);
+      return this.getRavenMetadataMatch(titleId);
     }
   };
 };

@@ -1,10 +1,10 @@
-# Scriptarr 3.0 Server Admin Guide
+# Scriptarr Server Admin Guide
 
 This guide is for the supported Docker image install path.
 
 ## Required First-Boot Environment
 
-- `SUPERUSER_ID`: Discord user id allowed to claim the first admin session
+- `SUPERUSER_ID`: Discord user id allowed to sign in as the first admin during bootstrap
 - `DISCORD_TOKEN`: Discord bot token used by Portal and admin setup surfaces
 
 Recommended environment:
@@ -27,6 +27,7 @@ The repo publishes one image per first-party service. Use the root helpers when 
 - `npm run docker:build`
 - `npm run docker:push`
 - `npm run docker:publish`
+- `npm run docker:healthcheck`
 
 Published images use `docker.darkmatterservers.com/the-noona-project/scriptarr-<service>:<tag>`.
 
@@ -115,6 +116,7 @@ Example callback shape:
 
 Moon's bootstrap surface should also show the configured first-owner Discord id before the first claim. If it does not,
 double-check that `SUPERUSER_ID` was passed into Warden correctly.
+Moon no longer exposes a dev-session claim path, so Discord login is the supported bootstrap and admin sign-in flow.
 
 ## Network Topology
 
@@ -152,12 +154,13 @@ temporarily unavailable.
 
 ## Core Admin Tasks In Moon
 
-- claim the first admin session
+- sign in as the first admin through Discord
 - verify Discord auth and callback settings
 - configure libraries and storage paths
 - manage request moderation
 - configure Raven VPN credentials and region for PIA/OpenVPN-backed downloads
 - review Raven metadata providers, with MangaDex enabled by default
+- check or install managed Scriptarr service updates from `/admin/system/updates`
 - configure Oracle and optional LocalAI runtime settings
 - manage users, roles, and permissions
 - inspect Warden service health and runtime config
@@ -234,7 +237,7 @@ The test stack uses:
 
 ## Recovery Notes
 
-- If the first admin cannot claim the instance, confirm the Discord user id matches `SUPERUSER_ID`.
+- If the first admin cannot sign in during bootstrap, confirm the Discord user id matches `SUPERUSER_ID`.
 - If Moon shows Discord auth as incomplete, re-check the public base URL and callback URL in the Discord developer
   portal.
 - If Oracle is off, confirm the chosen provider and credentials in Moon admin before treating the rest of the stack as

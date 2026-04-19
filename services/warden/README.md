@@ -18,6 +18,7 @@ The supported database inputs are:
 
 Warden also ships the Docker-backed test stack used by repo contributors:
 
+- `npm run docker:healthcheck`
 - `npm run docker:test`
 - `npm run docker:test:teardown`
 
@@ -41,4 +42,7 @@ Warden also ships the Docker-backed test stack used by repo contributors:
 
 - `/api/bootstrap`: static service plan, install mode, callback URL, and storage contract
 - `/api/runtime`: Warden self status plus live managed-service runtime details, with sensitive env values redacted
+- `/api/updates`: current managed-service image state plus the latest in-memory update job
+- `/api/updates/check`: pull-first update check for the managed sibling services
+- `/api/updates/install`: asynchronous managed-service install or restart flow for the sibling services
 - `/health`: service health, Docker socket availability, and latest reconcile summary

@@ -9,6 +9,8 @@ public record LibraryChapter(
     String chapterNumber,
     int pageCount,
     String releaseDate,
-    boolean available
+    boolean available,
+    String archivePath,
+    String sourceUrl
 ) {
 }

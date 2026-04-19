@@ -27,3 +27,7 @@
   - `/following`
 - Moon stays responsible for browser-safe proxying into Sage. Browsers should not call Raven, Warden, Vault, Portal, or Oracle directly.
 - Moon should show honest empty states when Raven has no imported titles, and `/admin` should stay dark by default.
+- Keep Discord login as the only bootstrap and admin sign-in path. Do not reintroduce claim-dev-session behavior.
+- Keep HTML responses uncached and static admin or user assets versioned so publishes invalidate the browser cache
+  without relying on manual hard refreshes.
+- `/admin/system/updates` is an actionable Moon surface that checks or starts managed-service update jobs through Sage.

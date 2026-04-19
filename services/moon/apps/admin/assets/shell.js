@@ -28,7 +28,7 @@ export const renderAdminShell = ({route, content, user, flash, loginUrl, bootstr
       <div class="identity-card">
         <div class="identity-kicker">Admin session</div>
         <strong>Not signed in</strong>
-        <span>${bootstrap?.ownerClaimed ? "Use Discord login or a dev claim session." : `First owner: ${escapeHtml(bootstrap?.superuserId || "missing")}`}</span>
+        <span>${bootstrap?.ownerClaimed ? "Use Discord login to sign in." : `First owner: ${escapeHtml(bootstrap?.superuserId || "missing")}`}</span>
       </div>
     `;
 
@@ -67,7 +67,6 @@ export const renderAdminShell = ({route, content, user, flash, loginUrl, bootstr
             <div class="header-buttons">
               <a class="ghost-button" href="/" target="_self">Open user app</a>
               ${user ? "" : `<a class="solid-button" href="${escapeHtml(loginUrl || "#")}">Discord login</a>`}
-              ${user ? "" : `<button class="ghost-button" type="button" data-action="claim-dev-session">Claim dev session</button>`}
             </div>
           </div>
         </header>

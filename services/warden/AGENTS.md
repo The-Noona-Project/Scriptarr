@@ -24,5 +24,9 @@ for the host hardware, and exposes manual LocalAI lifecycle actions after instal
   network.
 - Keep full JSDoc on exported Warden `.mjs` source and test files. `npm test` is expected to fail when doc coverage
   regresses.
+- Keep `npm run docker:healthcheck` aligned with Warden's real runtime plan; it is the default cross-service smoke path
+  for contributors and agents.
+- Keep Moon -> Sage -> Warden managed-service updates scoped to the sibling first-party services. Warden and MySQL stay
+  manual unless the product requirements explicitly change.
 - If service boot order, network topology, LocalAI image selection, first-boot auth, or Docker test mode changes,
   update the Warden docs.

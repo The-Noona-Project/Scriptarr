@@ -17,6 +17,7 @@
     "docker:build": "node ./scripts/docker-images.mjs build",
     "docker:push": "node ./scripts/docker-images.mjs push",
     "docker:publish": "node ./scripts/docker-images.mjs publish",
+    "docker:healthcheck": "node ./scripts/docker-healthcheck.mjs",
     "docker:test": "node ./scripts/docker-test-stack.mjs start",
     "docker:test:teardown": "node ./scripts/docker-test-stack.mjs stop",
     "test": "npm run test:js && npm run test:raven",

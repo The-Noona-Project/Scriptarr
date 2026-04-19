@@ -14,6 +14,8 @@ process.env.SUPERUSER_ID = "owner-1";
 const {createVaultApp} = await import("../../vault/lib/createVaultApp.mjs");
 const {createSageApp} = await import("../lib/createSageApp.mjs");
 
+const originalFetch = globalThis.fetch;
+
 const defaultLibraryTitle = Object.freeze({
   id: "dan-da-dan",
   title: "Dandadan",
@@ -132,7 +134,45 @@ const createDependencyStub = ({libraryTitles = [defaultLibraryTitle]} = {}) => {
   return Promise.resolve({server, calls});
 };
 
-test("sage claims the first owner and moderates requests", async () => {
+const installDiscordFetchStub = () => {
+  globalThis.fetch = async (input, init) => {
+    const url = String(input);
+
+    if (url === "https://discord.com/api/oauth2/token") {
+      return new Response(JSON.stringify({access_token: "discord-access-token"}), {
+        status: 200,
+        headers: {"Content-Type": "application/json"}
+      });
+    }
+
+    if (url === "https://discord.com/api/users/@me") {
+      return new Response(JSON.stringify({
+        id: "owner-1",
+        username: "Owner",
+        global_name: "Owner",
+        avatar: null
+      }), {
+        status: 200,
+        headers: {"Content-Type": "application/json"}
+      });
+    }
+
+    return originalFetch(input, init);
+  };
+};
+
+const restoreFetch = () => {
+  globalThis.fetch = originalFetch;
+};
+
+const signInViaDiscord = async (baseUrl) =>
+  fetch(`${baseUrl}/api/auth/discord/callback?code=test-oauth-code`).then((response) => response.json());
+
+test.afterEach(() => {
+  restoreFetch();
+});
+
+test("sage signs in the first owner through the Discord callback and moderates requests", async () => {
   const {app: vaultApp} = await createVaultApp();
   const vaultServer = vaultApp.listen(0);
   const vaultPort = vaultServer.address().port;
@@ -146,17 +186,17 @@ test("sage claims the first owner and moderates requests", async () => {
   process.env.SCRIPTARR_PORTAL_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
   process.env.SCRIPTARR_ORACLE_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
   process.env.SCRIPTARR_RAVEN_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_DISCORD_CLIENT_ID = "discord-client-id";
+  process.env.SCRIPTARR_DISCORD_CLIENT_SECRET = "discord-client-secret";
+
+  installDiscordFetchStub();
 
   const {app: sageApp} = await createSageApp();
   const sageServer = sageApp.listen(0);
   const sagePort = sageServer.address().port;
   const baseUrl = `http://127.0.0.1:${sagePort}`;
 
-  const ownerClaim = await fetch(`${baseUrl}/api/auth/claim`, {
-    method: "POST",
-    headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({discordUserId: "owner-1", username: "Owner"})
-  }).then((response) => response.json());
+  const ownerClaim = await signInViaDiscord(baseUrl);
 
   assert.ok(ownerClaim.token);
   assert.equal(ownerClaim.user.role, "owner");
@@ -288,17 +328,17 @@ test("sage keeps Moon library routes empty when Raven has no imported titles", a
   process.env.SCRIPTARR_PORTAL_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
   process.env.SCRIPTARR_ORACLE_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
   process.env.SCRIPTARR_RAVEN_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_DISCORD_CLIENT_ID = "discord-client-id";
+  process.env.SCRIPTARR_DISCORD_CLIENT_SECRET = "discord-client-secret";
+
+  installDiscordFetchStub();
 
   const {app: sageApp} = await createSageApp();
   const sageServer = sageApp.listen(0);
   const sagePort = sageServer.address().port;
   const baseUrl = `http://127.0.0.1:${sagePort}`;
 
-  const ownerClaim = await fetch(`${baseUrl}/api/auth/claim`, {
-    method: "POST",
-    headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({discordUserId: "owner-1", username: "Owner"})
-  }).then((response) => response.json());
+  const ownerClaim = await signInViaDiscord(baseUrl);
 
   const headers = {
     "Authorization": `Bearer ${ownerClaim.token}`
@@ -314,6 +354,37 @@ test("sage keeps Moon library routes empty when Raven has no imported titles", a
   assert.equal(overview.counts.titles, 0);
   assert.equal(overview.counts.missingChapters, 0);
   assert.equal(overview.counts.metadataGaps, 0);
+
+  sageServer.close();
+  vaultServer.close();
+  dependencyStub.server.close();
+});
+
+test("sage no longer exposes a dev-session claim endpoint", async () => {
+  const {app: vaultApp} = await createVaultApp();
+  const vaultServer = vaultApp.listen(0);
+  const vaultPort = vaultServer.address().port;
+
+  const dependencyStub = await createDependencyStub();
+  dependencyStub.server.listen(0);
+  const dependencyPort = dependencyStub.server.address().port;
+
+  process.env.SCRIPTARR_VAULT_BASE_URL = `http://127.0.0.1:${vaultPort}`;
+  process.env.SCRIPTARR_WARDEN_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_PORTAL_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_ORACLE_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_RAVEN_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+
+  const {app: sageApp} = await createSageApp();
+  const sageServer = sageApp.listen(0);
+  const sagePort = sageServer.address().port;
+  const response = await fetch(`http://127.0.0.1:${sagePort}/api/auth/claim`, {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({discordUserId: "owner-1"})
+  });
+
+  assert.equal(response.status, 404);
 
   sageServer.close();
   vaultServer.close();
