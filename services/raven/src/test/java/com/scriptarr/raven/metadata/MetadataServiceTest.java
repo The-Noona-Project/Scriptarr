@@ -37,7 +37,11 @@ class MetadataServiceTest {
         ScriptarrLogger logger = mock(ScriptarrLogger.class);
         when(logger.getDownloadsRoot()).thenReturn(tempDir);
 
-        LibraryService libraryService = new LibraryService(brokerClient, logger);
+        LibraryService libraryService = new LibraryService(
+            brokerClient,
+            new RavenSettingsService(brokerClient, logger, List.of()),
+            logger
+        );
         LibraryTitle comicTitle = new LibraryTitle(
             "title-1",
             "Blacksad",

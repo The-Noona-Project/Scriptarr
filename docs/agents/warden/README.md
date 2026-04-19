@@ -15,6 +15,9 @@
 - `npm run docker:healthcheck` is the default Warden-managed smoke flow for contributors. It is expected to take a
   while on cold machines because it rebuilds images and may need to pull missing layers.
 - LocalAI is manual in 3.0: no first-boot pull, install, or start.
+- LocalAI presets now use the LocalAI AIO image family. Warden must mount persistent LocalAI state, pass the correct
+  hardware flags for the selected preset, wait for readiness before reporting success, and constrain the AIO `MODELS`
+  preload set to the Oracle-safe text generation profile instead of the full bundled list.
 - AI acceleration is optional; safe fallback is required.
 - The repo-level Docker test stack is Warden-managed, starts a containerized Warden first, and should stay aligned with
   the runtime service plan.

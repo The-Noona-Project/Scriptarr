@@ -51,6 +51,7 @@ const requestJson = async (baseUrl, headers, path, {
  *
  * @param {{env?: NodeJS.ProcessEnv}} [options]
  * @returns {{
+ *   getSetting: (key: string) => Promise<any>,
  *   listJobs: (filters?: Record<string, string>) => Promise<any[]>,
  *   getJob: (jobId: string) => Promise<any>,
  *   upsertJob: (jobId: string, payload: Record<string, unknown>) => Promise<any>,
@@ -76,6 +77,13 @@ export const createSageBrokerClient = ({env = process.env} = {}) => {
   };
 
   return {
+    async getSetting(key) {
+      const result = await requestJson(baseUrl, headers, `/api/internal/vault/settings/${encodeURIComponent(key)}`, {
+        allowStatuses: [404],
+        context: "Failed to load a shared setting through Sage"
+      });
+      return result.status === 404 ? null : result.payload;
+    },
     async listJobs(filters = {}) {
       return (await requestJson(baseUrl, headers, `/api/internal/jobs${buildSuffix(filters)}`, {
         context: "Failed to list broker jobs through Sage"

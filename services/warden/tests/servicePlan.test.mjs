@@ -29,6 +29,8 @@ test("service plan exposes the fixed Scriptarr network and selfhost mysql by def
   assert.match(plan.services.find((service) => service.name === "scriptarr-mysql").healthCheck.command, /mysqladmin ping/);
   assert.match(plan.services.find((service) => service.name === "scriptarr-moon").healthCheck.command, /127\.0\.0\.1:3000\/health/);
   assert.match(plan.services.find((service) => service.name === "scriptarr-raven").healthCheck.command, /curl -fsS http:\/\/127\.0\.0\.1:8080\/health/);
+  assert.match(plan.services.find((service) => service.name === "scriptarr-oracle").healthCheck.command, /python -c/);
+  assert.match(plan.services.find((service) => service.name === "scriptarr-oracle").healthCheck.command, /127\.0\.0\.1:3001\/health/);
 });
 
 test("service plan omits managed mysql for external mysql urls", () => {

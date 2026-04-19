@@ -42,20 +42,26 @@ import {createUpdateRuntime} from "./updateRuntime.mjs";
  *   getDiscordCallbackUrl: () => string
  * }}
  */
-export const createWardenRuntime = ({env = process.env} = {}) => {
+export const createWardenRuntime = ({
+  env = process.env,
+  loggerFactory = createLogger,
+  localAiRuntimeFactory = createLocalAiRuntime,
+  managedStackRuntimeFactory = createManagedStackRuntime,
+  updateRuntimeFactory = createUpdateRuntime
+} = {}) => {
   const config = resolveWardenServerConfig({env});
-  const logger = createLogger("WARDEN", {env});
-  const localAi = createLocalAiRuntime({
+  const logger = loggerFactory("WARDEN", {env});
+  const localAi = localAiRuntimeFactory({
     env,
-    logger: createLogger("WARDEN_LOCALAI", {env})
+    logger: loggerFactory("WARDEN_LOCALAI", {env})
   });
-  const managedStack = createManagedStackRuntime({
+  const managedStack = managedStackRuntimeFactory({
     env,
-    logger: createLogger("WARDEN_STACK", {env})
+    logger: loggerFactory("WARDEN_STACK", {env})
   });
-  const updates = createUpdateRuntime({
+  const updates = updateRuntimeFactory({
     env,
-    logger: createLogger("WARDEN_UPDATES", {env}),
+    logger: loggerFactory("WARDEN_UPDATES", {env}),
     managedStack
   });
 
@@ -71,7 +77,16 @@ export const createWardenRuntime = ({env = process.env} = {}) => {
   return {
     config,
     logger,
-    initialize: () => managedStack.initialize(),
+    initialize: async () => {
+      await managedStack.initialize();
+      try {
+        await localAi.initialize();
+      } catch (error) {
+        logger.warn("LocalAI runtime refresh failed during Warden initialization.", {
+          error: error instanceof Error ? error.message : String(error)
+        });
+      }
+    },
     getRuntime,
     getBootstrap: () => {
       const runtime = resolveWardenRuntimeSnapshot({

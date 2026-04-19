@@ -297,6 +297,7 @@ export const removeDockerNetwork = async (networkName, {ignoreMissing = true} = 
  *   networkAliases?: string[],
  *   mounts?: Array<{hostPath: string, containerPath: string | null}>,
  *   publishedPorts?: Array<{hostPort: number, containerPort: number}>,
+ *   extraArgs?: string[],
  *   healthCheck?: {
  *     command: string,
  *     interval?: string,
@@ -319,6 +320,7 @@ export const runDetachedContainer = async ({
   networkAliases = [],
   mounts = [],
   publishedPorts = [],
+  extraArgs = [],
   healthCheck = null,
   labels = {},
   extraHosts = [],
@@ -360,6 +362,10 @@ export const runDetachedContainer = async ({
 
   for (const publishedPort of publishedPorts) {
     args.push("-p", `${publishedPort.hostPort}:${publishedPort.containerPort}`);
+  }
+
+  for (const extraArg of extraArgs) {
+    args.push(String(extraArg));
   }
 
   if (healthCheck?.command) {

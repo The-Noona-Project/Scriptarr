@@ -1,5 +1,10 @@
 import {escapeHtml, renderEmptyState} from "../dom.js";
 
+const OPENAI_DEFAULT_MODEL = "gpt-4.1-mini";
+const LOCALAI_DEFAULT_MODEL = "gpt-4";
+
+const fallbackModelForProvider = (provider) => provider === "localai" ? LOCALAI_DEFAULT_MODEL : OPENAI_DEFAULT_MODEL;
+
 /**
  * Load the full admin settings payload.
  *
@@ -20,6 +25,16 @@ export const renderSettingsPage = (result) => {
   }
 
   const {ravenVpn = {}, metadataProviders = {}, oracle = {}, warden = {}} = result.payload || {};
+  const oracleProvider = oracle.provider === "localai" ? "localai" : "openai";
+  const oracleModel = oracle.model || fallbackModelForProvider(oracleProvider);
+  const localAiState = [
+    warden.installed ? "installed" : "not installed",
+    warden.running ? "running" : "not running"
+  ];
+
+  if (warden.running) {
+    localAiState.push(warden.ready ? "ready" : "still starting");
+  }
 
   return `
     <div class="content-grid two-up">
@@ -99,37 +114,37 @@ export const renderSettingsPage = (result) => {
         <label>
           <span>Provider</span>
           <select id="oracle-provider">
-            <option value="openai" ${oracle.provider === "openai" ? "selected" : ""}>OpenAI</option>
-            <option value="localai" ${oracle.provider === "localai" ? "selected" : ""}>LocalAI</option>
+            <option value="openai" ${oracleProvider === "openai" ? "selected" : ""}>OpenAI</option>
+            <option value="localai" ${oracleProvider === "localai" ? "selected" : ""}>LocalAI</option>
           </select>
         </label>
         <label>
           <span>Model</span>
-          <input id="oracle-model" type="text" value="${escapeHtml(oracle.model || "gpt-4.1-mini")}">
+          <input id="oracle-model" type="text" value="${escapeHtml(oracleModel)}" placeholder="${escapeHtml(fallbackModelForProvider(oracleProvider))}">
         </label>
         <label>
           <span>OpenAI API key</span>
           <input id="oracle-openai-key" type="password" placeholder="${oracle.openAiApiKeyConfigured ? "Leave blank to keep stored value" : "sk-..."}">
         </label>
         <label>
-          <span>LocalAI preset</span>
+          <span>LocalAI AIO preset</span>
           <select id="localai-profile">
-            <option value="cpu" ${oracle.localAiProfileKey === "cpu" ? "selected" : ""}>CPU</option>
-            <option value="nvidia" ${oracle.localAiProfileKey === "nvidia" ? "selected" : ""}>NVIDIA CUDA 12</option>
-            <option value="amd" ${oracle.localAiProfileKey === "amd" ? "selected" : ""}>AMD</option>
-            <option value="intel" ${oracle.localAiProfileKey === "intel" ? "selected" : ""}>Intel</option>
+            <option value="cpu" ${oracle.localAiProfileKey === "cpu" ? "selected" : ""}>CPU AIO</option>
+            <option value="nvidia" ${oracle.localAiProfileKey === "nvidia" ? "selected" : ""}>NVIDIA CUDA 12 AIO</option>
+            <option value="amd" ${oracle.localAiProfileKey === "amd" ? "selected" : ""}>AMD HIPBLAS AIO</option>
+            <option value="intel" ${oracle.localAiProfileKey === "intel" ? "selected" : ""}>Intel AIO</option>
           </select>
         </label>
         <label class="wide-field">
           <span>Custom LocalAI image</span>
-          <input id="localai-custom-image" type="text" value="${escapeHtml(oracle.localAiCustomImage || "")}" placeholder="localai/localai:latest-gpu-nvidia-cuda-12">
+          <input id="localai-custom-image" type="text" value="${escapeHtml(oracle.localAiCustomImage || "")}" placeholder="localai/localai:latest-aio-gpu-nvidia-cuda-12">
         </label>
         <div class="inline-note wide-field">
           <strong>Runtime state</strong>
-          <p>Oracle starts off by default and prefers OpenAI on install. LocalAI is ${warden.installed ? "installed" : "not installed"} and ${warden.running ? "running" : "not running"} right now. Pulling or starting LocalAI can take 5 to 20 minutes depending on the host.</p>
+          <p>Oracle starts off by default and prefers OpenAI on install. LocalAI AIO is ${localAiState.join(", ")} right now. Pulling or starting LocalAI can take 5 to 20 minutes depending on the host, and the first ready state may take a little longer while the AIO runtime warms up.</p>
         </div>
         <div class="action-row wide-field">
-          <button class="ghost-button" id="localai-install" type="button">Install LocalAI image</button>
+          <button class="ghost-button" id="localai-install" type="button">Install LocalAI AIO image</button>
           <button class="ghost-button" id="localai-start" type="button">Start LocalAI</button>
           <button class="solid-button" type="submit">Save Oracle settings</button>
         </div>
@@ -150,6 +165,21 @@ export const renderSettingsPage = (result) => {
  * @returns {Promise<void>}
  */
 export const enhanceSettingsPage = async (root, {api, rerender, setFlash}) => {
+  const oracleProvider = root.querySelector("#oracle-provider");
+  const oracleModel = root.querySelector("#oracle-model");
+
+  oracleProvider?.addEventListener("change", () => {
+    if (!oracleModel) {
+      return;
+    }
+    const nextDefault = fallbackModelForProvider(oracleProvider.value);
+    const currentValue = oracleModel.value.trim();
+    if (!currentValue || currentValue === OPENAI_DEFAULT_MODEL || currentValue === LOCALAI_DEFAULT_MODEL) {
+      oracleModel.value = nextDefault;
+      oracleModel.placeholder = nextDefault;
+    }
+  });
+
   root.querySelector("#raven-vpn-form")?.addEventListener("submit", async (event) => {
     event.preventDefault();
     const result = await api.put("/api/moon/admin/settings/raven/vpn", {
@@ -177,10 +207,12 @@ export const enhanceSettingsPage = async (root, {api, rerender, setFlash}) => {
   root.querySelector("#oracle-form")?.addEventListener("submit", async (event) => {
     event.preventDefault();
     const customImage = root.querySelector("#localai-custom-image")?.value.trim() || "";
+    const provider = root.querySelector("#oracle-provider")?.value || "openai";
+    const model = root.querySelector("#oracle-model")?.value.trim() || fallbackModelForProvider(provider);
     const result = await api.put("/api/moon/admin/settings/oracle", {
       enabled: root.querySelector("#oracle-enabled")?.checked,
-      provider: root.querySelector("#oracle-provider")?.value || "openai",
-      model: root.querySelector("#oracle-model")?.value || "gpt-4.1-mini",
+      provider,
+      model,
       openAiApiKey: root.querySelector("#oracle-openai-key")?.value || "",
       localAiProfileKey: root.querySelector("#localai-profile")?.value || "nvidia",
       localAiImageMode: customImage ? "custom" : "preset",
@@ -192,7 +224,7 @@ export const enhanceSettingsPage = async (root, {api, rerender, setFlash}) => {
 
   root.querySelector("#localai-install")?.addEventListener("click", async () => {
     const result = await api.post("/api/moon/admin/warden/localai/install", {});
-    setFlash(result.ok ? "warn" : "bad", result.ok ? "LocalAI image install started. This can take a while." : result.payload?.error || "Unable to start LocalAI install.");
+    setFlash(result.ok ? "warn" : "bad", result.ok ? "LocalAI AIO image install started. This can take a while." : result.payload?.error || "Unable to start LocalAI install.");
     await rerender();
   });
 

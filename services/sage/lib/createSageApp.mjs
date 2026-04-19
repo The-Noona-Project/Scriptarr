@@ -16,6 +16,8 @@ const RAVEN_VPN_PASSWORD_SECRET = "raven.vpn.piaPassword";
 const RAVEN_METADATA_KEY = "raven.metadata.providers";
 const ORACLE_SETTINGS_KEY = "oracle.settings";
 const ORACLE_OPENAI_API_KEY_SECRET = "oracle.openai.apiKey";
+const ORACLE_OPENAI_DEFAULT_MODEL = process.env.SCRIPTARR_ORACLE_OPENAI_MODEL || "gpt-4.1-mini";
+const ORACLE_LOCALAI_DEFAULT_MODEL = "gpt-4";
 
 const knownMetadataProviders = Object.freeze([
   {id: "mangadex", name: "MangaDex", scopes: ["manga", "webtoon"], enabled: true, priority: 10},
@@ -125,7 +127,7 @@ const defaultOracleSettings = () => ({
   key: ORACLE_SETTINGS_KEY,
   enabled: false,
   provider: "openai",
-  model: process.env.SCRIPTARR_ORACLE_OPENAI_MODEL || "gpt-4.1-mini",
+  model: ORACLE_OPENAI_DEFAULT_MODEL,
   temperature: 0.2,
   localAiProfileKey: "nvidia",
   localAiImageMode: "preset",
@@ -169,13 +171,18 @@ const normalizeRavenVpnSettings = (value, secretValue) => {
 const normalizeOracleSettings = (value, secretValue) => {
   const defaults = defaultOracleSettings();
   const temperature = Number.parseFloat(String(value?.temperature ?? defaults.temperature));
+  const provider = ["openai", "localai"].includes(normalizeString(value?.provider, defaults.provider))
+    ? normalizeString(value?.provider, defaults.provider)
+    : defaults.provider;
+  const model = normalizeString(
+    value?.model,
+    provider === "localai" ? ORACLE_LOCALAI_DEFAULT_MODEL : defaults.model
+  );
   return {
     ...defaults,
     enabled: normalizeBoolean(value?.enabled, defaults.enabled),
-    provider: ["openai", "localai"].includes(normalizeString(value?.provider, defaults.provider))
-      ? normalizeString(value?.provider, defaults.provider)
-      : defaults.provider,
-    model: normalizeString(value?.model, defaults.model),
+    provider,
+    model,
     temperature: Number.isFinite(temperature) ? temperature : defaults.temperature,
     localAiProfileKey: normalizeString(value?.localAiProfileKey, defaults.localAiProfileKey),
     localAiImageMode: ["preset", "custom"].includes(normalizeString(value?.localAiImageMode, defaults.localAiImageMode))

@@ -21,6 +21,7 @@ import java.util.Optional;
 public class RavenSettingsService {
     private static final String VPN_KEY = "raven.vpn";
     private static final String VPN_PASSWORD_KEY = "raven.vpn.piaPassword";
+    private static final String NAMING_KEY = "raven.naming";
     private static final String PROVIDERS_KEY = "raven.metadata.providers";
 
     private final RavenBrokerClient brokerClient;
@@ -53,16 +54,46 @@ public class RavenSettingsService {
      */
     public RavenVpnSettings getVpnSettings() {
         try {
-            JsonNode settingsNode = Optional.ofNullable(brokerClient.getSetting(VPN_KEY).get("value")).orElse(null);
-            JsonNode passwordNode = Optional.ofNullable(brokerClient.getSecret(VPN_PASSWORD_KEY).get("value")).orElse(null);
-            boolean enabled = settingsNode != null && settingsNode.path("enabled").asBoolean(false);
-            String region = settingsNode != null ? normalize(settingsNode.path("region").asText("us_california"), "us_california") : "us_california";
-            String piaUsername = settingsNode != null ? normalize(settingsNode.path("piaUsername").asText(""), "") : "";
-            String piaPassword = passwordNode != null ? normalize(passwordNode.asText(""), "") : "";
-            return new RavenVpnSettings(enabled, region, piaUsername, piaPassword);
+            return loadVpnSettings();
         } catch (Exception error) {
             logger.warn("SETTINGS", "Failed to load Raven VPN settings.", error.getMessage());
             return new RavenVpnSettings(false, "us_california", "", "");
+        }
+    }
+
+    /**
+     * Load Raven VPN settings and fail when the broker request cannot be completed.
+     *
+     * @return normalized VPN settings
+     * @throws Exception when shared settings cannot be loaded
+     */
+    public RavenVpnSettings requireVpnSettings() throws Exception {
+        return loadVpnSettings();
+    }
+
+    /**
+     * Load Raven naming settings for chapter archives and page files.
+     *
+     * @return normalized naming settings
+     */
+    public RavenNamingSettings getNamingSettings() {
+        try {
+            JsonNode settingsNode = Optional.ofNullable(brokerClient.getSetting(NAMING_KEY).get("value")).orElse(null);
+            RavenNamingSettings defaults = RavenNamingSettings.defaults();
+            if (settingsNode == null || settingsNode.isMissingNode() || settingsNode.isNull()) {
+                return defaults;
+            }
+
+            return new RavenNamingSettings(
+                settingsNode.path("chapterTemplate").asText(defaults.chapterTemplate()),
+                settingsNode.path("pageTemplate").asText(defaults.pageTemplate()),
+                settingsNode.path("pagePad").asInt(defaults.pagePad()),
+                settingsNode.path("chapterPad").asInt(defaults.chapterPad()),
+                settingsNode.path("volumePad").asInt(defaults.volumePad())
+            ).normalized();
+        } catch (Exception error) {
+            logger.warn("SETTINGS", "Failed to load Raven naming settings.", error.getMessage());
+            return RavenNamingSettings.defaults();
         }
     }
 
@@ -152,5 +183,15 @@ public class RavenSettingsService {
     private String normalize(String value, String fallback) {
         String normalized = value == null ? "" : value.trim();
         return normalized.isBlank() ? fallback : normalized;
+    }
+
+    private RavenVpnSettings loadVpnSettings() throws Exception {
+        JsonNode settingsNode = Optional.ofNullable(brokerClient.getSetting(VPN_KEY).get("value")).orElse(null);
+        JsonNode passwordNode = Optional.ofNullable(brokerClient.getSecret(VPN_PASSWORD_KEY).get("value")).orElse(null);
+        boolean enabled = settingsNode != null && settingsNode.path("enabled").asBoolean(false);
+        String region = settingsNode != null ? normalize(settingsNode.path("region").asText("us_california"), "us_california") : "us_california";
+        String piaUsername = settingsNode != null ? normalize(settingsNode.path("piaUsername").asText(""), "") : "";
+        String piaPassword = passwordNode != null ? normalize(passwordNode.asText(""), "") : "";
+        return new RavenVpnSettings(enabled, region, piaUsername, piaPassword);
     }
 }

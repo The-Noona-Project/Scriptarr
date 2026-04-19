@@ -9,7 +9,8 @@ test("resolve localai profile honors explicit GPU hint", async () => {
   const {resolveLocalAiProfile} = await import(`../config/localAiProfiles.mjs?${Date.now()}`);
   const profile = resolveLocalAiProfile();
   assert.equal(profile.key, "intel");
-  assert.equal(profile.image, "localai/localai:latest-gpu-intel");
+  assert.equal(profile.image, "localai/localai:latest-aio-gpu-intel");
+  assert.deepEqual(profile.runtimeArgs, ["--device", "/dev/dri", "--group-add", "video"]);
   delete process.env.SCRIPTARR_GPU_HINT;
 });
 

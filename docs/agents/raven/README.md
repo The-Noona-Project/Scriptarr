@@ -11,6 +11,10 @@
 - Raven library storage now uses dynamic source-backed type labels and the managed folder lifecycle:
   - `/downloads/downloading/<type-slug>/<title-folder>`
   - `/downloads/downloaded/<type-slug>/<title-folder>`
+- Raven VPN should fail closed when enabled, and reconnect logic must honor the configured region instead of assuming
+  an existing tunnel is still valid.
+- Raven chapter and page filenames now come from the brokered `raven.naming` template settings while title-folder
+  naming stays stable for rescan compatibility.
 - New Raven catalog entries should use opaque durable ids instead of title slugs. Treat title ids as opaque route
   parameters everywhere outside Raven's internals.
 - Raven parity notes from the old Noona services:

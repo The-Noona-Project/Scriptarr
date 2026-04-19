@@ -5,6 +5,8 @@ import com.scriptarr.raven.library.LibraryNaming;
 import com.scriptarr.raven.library.LibraryService;
 import com.scriptarr.raven.library.LibraryTitle;
 import com.scriptarr.raven.settings.RavenBrokerClient;
+import com.scriptarr.raven.settings.RavenNamingSettings;
+import com.scriptarr.raven.settings.RavenSettingsService;
 import com.scriptarr.raven.support.ScriptarrLogger;
 import com.scriptarr.raven.vpn.VpnService;
 import jakarta.annotation.PostConstruct;
@@ -28,6 +30,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
@@ -56,6 +59,7 @@ public class DownloaderService {
     private final VpnService vpnService;
     private final LibraryService libraryService;
     private final RavenBrokerClient brokerClient;
+    private final RavenSettingsService settingsService;
     private final ScriptarrLogger logger;
 
     /**
@@ -66,6 +70,7 @@ public class DownloaderService {
      * @param vpnService VPN coordinator for optional protected downloads
      * @param libraryService library projection and persistence service
      * @param brokerClient Sage-backed broker client for Raven state
+     * @param settingsService Sage-backed Raven settings service
      * @param logger shared Raven logger
      */
     public DownloaderService(
@@ -74,6 +79,7 @@ public class DownloaderService {
         VpnService vpnService,
         LibraryService libraryService,
         RavenBrokerClient brokerClient,
+        RavenSettingsService settingsService,
         ScriptarrLogger logger
     ) {
         this.titleScraper = titleScraper;
@@ -81,6 +87,7 @@ public class DownloaderService {
         this.vpnService = vpnService;
         this.libraryService = libraryService;
         this.brokerClient = brokerClient;
+        this.settingsService = settingsService;
         this.logger = logger;
     }
 
@@ -228,6 +235,7 @@ public class DownloaderService {
             TitleDetails details = titleScraper.getTitleDetails(request.titleUrl());
             String typeLabel = resolveLibraryTypeLabel(request, details);
             String typeSlug = LibraryNaming.normalizeTypeSlug(typeLabel);
+            RavenNamingSettings namingSettings = settingsService.getNamingSettings();
             Path workingRoot = resolveTitleRoot(DOWNLOADING_FOLDER_NAME, request.titleName(), typeSlug);
             Path finalRoot = resolveTitleRoot(DOWNLOADED_FOLDER_NAME, request.titleName(), typeSlug);
 
@@ -238,7 +246,7 @@ public class DownloaderService {
             Map<String, String> sourceByChapter = new LinkedHashMap<>();
             for (int index = 0; index < chapters.size(); index++) {
                 Map<String, String> chapter = chapters.get(index);
-                Path archivePath = downloadChapter(workingRoot, request, chapter);
+                Path archivePath = downloadChapter(workingRoot, request, typeLabel, chapter, namingSettings);
                 String chapterNumber = normalizeStoredChapterNumber(chapter.getOrDefault("chapter_number", String.valueOf(index + 1)));
                 sourceByChapter.put(chapterNumber, chapter.get("href"));
                 int percent = Math.max(10, (int) (((index + 1) / (double) total) * 90));
@@ -274,22 +282,45 @@ public class DownloaderService {
         }
     }
 
-    private Path downloadChapter(Path titleRoot, DownloadRequest request, Map<String, String> chapter) throws IOException, InterruptedException {
+    private Path downloadChapter(
+        Path titleRoot,
+        DownloadRequest request,
+        String typeLabel,
+        Map<String, String> chapter,
+        RavenNamingSettings namingSettings
+    ) throws IOException, InterruptedException {
         List<String> images = sourceFinder.findSource(chapter.get("href"));
         if (images.isEmpty()) {
             throw new IllegalStateException("No chapter pages were found for " + chapter.get("href"));
         }
 
         String chapterNumber = normalizeStoredChapterNumber(chapter.getOrDefault("chapter_number", "0"));
-        String archiveName = LibraryNaming.sanitizeTitleFolder(request.titleName()) + "_c" + chapterNumber + ".cbz";
+        String volumeNumber = normalizeStoredVolumeNumber(chapter.get("volume_number"));
+        String archiveName = LibraryNaming.buildChapterArchiveName(
+            namingSettings,
+            request.titleName(),
+            typeLabel,
+            chapterNumber,
+            volumeNumber,
+            images.size(),
+            resolveDomain(chapter.get("href"))
+        );
         Path archivePath = titleRoot.resolve(archiveName);
 
         try (ZipOutputStream zip = new ZipOutputStream(Files.newOutputStream(archivePath))) {
             for (int index = 0; index < images.size(); index++) {
                 String imageUrl = images.get(index);
                 byte[] bytes = downloadImage(imageUrl);
-                String extension = resolveExtension(imageUrl, "jpg");
-                ZipEntry entry = new ZipEntry(String.format("%03d.%s", index + 1, extension));
+                String extension = resolveExtension(imageUrl, ".jpg");
+                ZipEntry entry = new ZipEntry(LibraryNaming.buildPageFileName(
+                    namingSettings,
+                    request.titleName(),
+                    typeLabel,
+                    chapterNumber,
+                    volumeNumber,
+                    index + 1,
+                    extension
+                ));
                 zip.putNextEntry(entry);
                 zip.write(bytes);
                 zip.closeEntry();
@@ -300,13 +331,14 @@ public class DownloaderService {
     }
 
     private List<LibraryChapter> buildLibraryChapters(Path finalRoot, Map<String, String> sourceByChapter) throws IOException {
+        RavenNamingSettings namingSettings = settingsService.getNamingSettings();
         try (var archives = Files.list(finalRoot)) {
             return archives
                 .filter(Files::isRegularFile)
                 .filter((path) -> path.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".cbz"))
                 .sorted()
                 .map((path) -> {
-                    String chapterNumber = extractChapterNumber(path.getFileName().toString());
+                    String chapterNumber = LibraryNaming.extractChapterNumber(path.getFileName().toString(), namingSettings);
                     return new LibraryChapter(
                         "",
                         "Chapter " + chapterNumber,
@@ -531,16 +563,6 @@ public class DownloaderService {
         }
     }
 
-    private String extractChapterNumber(String fileName) {
-        String normalized = fileName.replaceFirst("(?i)\\.cbz$", "");
-        java.util.regex.Matcher matcher = java.util.regex.Pattern.compile("(?i)(?:chapter|c|_c)([0-9]+(?:\\.[0-9]+)?)").matcher(normalized);
-        if (matcher.find()) {
-            return normalizeStoredChapterNumber(matcher.group(1));
-        }
-        matcher = java.util.regex.Pattern.compile("([0-9]+(?:\\.[0-9]+)?)").matcher(normalized);
-        return matcher.find() ? normalizeStoredChapterNumber(matcher.group(1)) : String.valueOf(Math.abs(fileName.hashCode()));
-    }
-
     private String normalizeStoredChapterNumber(String value) {
         if (value == null || value.isBlank()) {
             return "0";
@@ -552,16 +574,37 @@ public class DownloaderService {
         }
     }
 
+    private String normalizeStoredVolumeNumber(String value) {
+        if (value == null || value.isBlank()) {
+            return "";
+        }
+        try {
+            String normalized = new java.math.BigDecimal(value.trim()).stripTrailingZeros().toPlainString();
+            return "0".equals(normalized) ? "" : normalized;
+        } catch (NumberFormatException ignored) {
+            return value.trim();
+        }
+    }
+
     private String resolveExtension(String url, String fallback) {
         int dotIndex = url.lastIndexOf('.');
         if (dotIndex < 0 || dotIndex >= url.length() - 1) {
             return fallback;
         }
-        String extension = url.substring(dotIndex + 1).toLowerCase(Locale.ROOT);
+        String extension = url.substring(dotIndex).toLowerCase(Locale.ROOT);
         if (extension.contains("?")) {
             extension = extension.substring(0, extension.indexOf('?'));
         }
         return extension.isBlank() ? fallback : extension;
+    }
+
+    private String resolveDomain(String href) {
+        try {
+            URI uri = URI.create(Optional.ofNullable(href).orElse(""));
+            return uri.getHost() == null ? "" : uri.getHost();
+        } catch (Exception ignored) {
+            return "";
+        }
     }
 
     private void copyIfPresent(com.fasterxml.jackson.databind.JsonNode node, Map<String, Object> target, String field) {

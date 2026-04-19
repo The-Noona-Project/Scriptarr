@@ -136,16 +136,19 @@ Warden manages one shared internal Docker network named `scriptarr-network`.
 
 ## LocalAI Behavior
 
-Warden inspects the host and selects a LocalAI image by hardware class:
+Warden inspects the host and selects a LocalAI AIO image by hardware class:
 
-- NVIDIA: `localai/localai:latest-gpu-nvidia-cuda-12`
-- Intel: `localai/localai:latest-gpu-intel`
-- AMD: `localai/localai:latest-gpu-hipblas`
-- CPU fallback: `localai/localai:latest`
+- NVIDIA: `localai/localai:latest-aio-gpu-nvidia-cuda-12`
+- Intel: `localai/localai:latest-aio-gpu-intel`
+- AMD: `localai/localai:latest-aio-gpu-hipblas`
+- CPU fallback: `localai/localai:latest-aio-cpu`
 
 LocalAI is not installed or started on first boot. Moon admin lets the server admin choose a preset image or custom
-override and then manually trigger the install or start flow later. This can take 5 to 20 minutes depending on the
-host.
+override and then manually trigger the install or start flow later. Warden now mounts the persistent LocalAI models and
+data folders, passes the matching hardware flags for the selected preset, and waits for LocalAI readiness before it
+reports startup success. This can take 5 to 20 minutes depending on the host, and the first AIO warm-up may take a bit
+longer. Warden now boots the official AIO images with the Oracle-safe text-generation preload set instead of the full
+default AIO bundle so startup does not block on optional speech, image, or other bundled models.
 
 If GPU-specific startup is unavailable, the rest of Scriptarr should stay healthy while AI features remain disabled or
 temporarily unavailable.
@@ -154,8 +157,11 @@ temporarily unavailable.
 
 - Oracle starts in an off state on install.
 - Oracle defaults to provider `openai`.
+- Oracle now runs as a FastAPI Python service while keeping the same internal HTTP contract for Sage, Moon, and Portal.
 - The OpenAI API key can be entered in Moon admin before Oracle is enabled.
 - Admins can later switch Oracle to LocalAI from Moon admin and then manually install or start LocalAI through Warden.
+- When the provider is `localai` and no model is set explicitly, Scriptarr falls back to the LocalAI-friendly `gpt-4`
+  alias instead of the OpenAI default model name.
 
 ## Core Admin Tasks In Moon
 
@@ -229,6 +235,9 @@ Raven's download tree now uses a two-stage layout under `raven/downloads/`:
 - `downloading/<type-slug>/<title-folder>/...` for active or incomplete work
 - `downloaded/<type-slug>/<title-folder>/...` for completed promoted library content
 
+Raven also supports internal chapter and page naming templates through the brokered `raven.naming` setting. This pass
+keeps title-folder naming unchanged so rescans remain compatible with the current library model.
+
 ## Docker Test Workflow
 
 The repo ships a Docker-backed end-to-end validation flow:
@@ -254,5 +263,7 @@ The test stack uses:
   unhealthy.
 - If LocalAI actions are slow, let the Moon admin job continue instead of retrying immediately; the initial pull and
   startup are intentionally long-running.
+- If Raven VPN is enabled, failed settings reads or failed tunnel startup now block downloads instead of silently
+  falling back to direct traffic. Fix the VPN settings first, then retry the job.
 - If the Docker test stack is already running, tear it down with `npm run docker:test:teardown` before starting a new
   isolated run with the same stack id.

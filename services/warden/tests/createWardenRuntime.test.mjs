@@ -26,3 +26,65 @@ test("warden bootstrap payload omits raw secrets while keeping the install contr
   assert.equal(bootstrap.mysql.user, "vault-user");
   assert.doesNotMatch(serialized, /vault-password|discord-client-secret|discord-bot-token/);
 });
+
+test("warden initialize refreshes the LocalAI runtime after stack reconciliation", async () => {
+  const calls = [];
+  const loggerFactory = () => ({
+    info() {},
+    warn() {},
+    error() {}
+  });
+
+  const runtime = createWardenRuntime({
+    env: {},
+    loggerFactory,
+    localAiRuntimeFactory: () => ({
+      async initialize() {
+        calls.push("localai");
+      },
+      getStatus() {
+        return {};
+      },
+      async refreshStatus() {
+        return {};
+      },
+      async configure() {
+        return {};
+      },
+      async install() {
+        return {};
+      },
+      async start() {
+        return {};
+      }
+    }),
+    managedStackRuntimeFactory: () => ({
+      async initialize() {
+        calls.push("stack");
+      },
+      async refreshStatus() {
+        return {};
+      },
+      getStatusSnapshot() {
+        return {
+          warden: {},
+          managedServices: []
+        };
+      }
+    }),
+    updateRuntimeFactory: () => ({
+      async getStatus() {
+        return {};
+      },
+      async checkForUpdates() {
+        return {};
+      },
+      async installUpdates() {
+        return {};
+      }
+    })
+  });
+
+  await runtime.initialize();
+  assert.deepEqual(calls, ["stack", "localai"]);
+});

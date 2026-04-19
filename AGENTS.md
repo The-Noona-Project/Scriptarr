@@ -40,6 +40,12 @@ Read this before editing Scriptarr.
 - Requests created in Moon and Discord must converge on one moderated flow.
 - Raven stores active downloads under `downloading/<type>/...` and promotes completed library content into
   `downloaded/<type>/...`.
+- Oracle now lives in `services/oracle` as a Python FastAPI service even though the repo-level test and Docker helpers
+  still flow through the npm workspace.
+- Warden's LocalAI presets now target the LocalAI AIO image family, should only report success after readiness, and
+  should boot the Oracle-safe text-generation preload set instead of the full bundled model list.
+- Raven VPN should fail closed when enabled, and Raven chapter or page naming now comes from the internal
+  `raven.naming` template settings rather than only hard-coded defaults.
 - LocalAI is optional to overall platform health; degrade safely when AI dependencies are unavailable.
 - Prefer Docker-based verification for cross-service work. `npm run docker:healthcheck` is the default smoke path for
   agents and contributors, while `npm run docker:test` remains the deeper end-to-end flow. `npm run docker:test:teardown`

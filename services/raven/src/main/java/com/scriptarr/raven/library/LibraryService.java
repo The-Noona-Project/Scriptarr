@@ -5,6 +5,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.scriptarr.raven.downloader.TitleDetails;
 import com.scriptarr.raven.settings.RavenBrokerClient;
+import com.scriptarr.raven.settings.RavenNamingSettings;
+import com.scriptarr.raven.settings.RavenSettingsService;
 import com.scriptarr.raven.support.ScriptarrLogger;
 import jakarta.annotation.PostConstruct;
 import org.springframework.stereotype.Service;
@@ -42,6 +44,7 @@ public final class LibraryService {
     };
 
     private final RavenBrokerClient brokerClient;
+    private final RavenSettingsService settingsService;
     private final ScriptarrLogger logger;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -49,10 +52,12 @@ public final class LibraryService {
      * Create the shared Raven library service.
      *
      * @param brokerClient Sage-backed broker client for durable catalog state
+     * @param settingsService Sage-backed Raven settings service
      * @param logger shared Raven logger
      */
-    public LibraryService(RavenBrokerClient brokerClient, ScriptarrLogger logger) {
+    public LibraryService(RavenBrokerClient brokerClient, RavenSettingsService settingsService, ScriptarrLogger logger) {
         this.brokerClient = brokerClient;
+        this.settingsService = settingsService;
         this.logger = logger;
     }
 
@@ -478,6 +483,7 @@ public final class LibraryService {
             String titleName = LibraryNaming.titleFromFolder(folder.getFileName().toString());
             String typeLabel = LibraryNaming.normalizeTypeLabel(rawType);
             String typeSlug = LibraryNaming.normalizeTypeSlug(typeLabel);
+            RavenNamingSettings namingSettings = settingsService.getNamingSettings();
             List<LibraryChapter> chapters = new ArrayList<>();
             LibraryTitle existing = findMatchingTitle(titleName, "", typeSlug, folder);
             String titleId = existing != null && existing.id() != null && !existing.id().isBlank()
@@ -485,7 +491,7 @@ public final class LibraryService {
                 : UUID.randomUUID().toString();
 
             for (Path archive : archives) {
-                String chapterNumber = extractChapterNumber(archive.getFileName().toString());
+                String chapterNumber = LibraryNaming.extractChapterNumber(archive.getFileName().toString(), namingSettings);
                 chapters.add(new LibraryChapter(
                     chapterId(titleId, chapterNumber),
                     "Chapter " + chapterNumber,
@@ -669,10 +675,7 @@ public final class LibraryService {
 
     private byte[] readArchivePage(Path archivePath, int pageIndex) throws IOException {
         try (ZipFile zipFile = new ZipFile(archivePath.toFile())) {
-            List<? extends ZipEntry> entries = zipFile.stream()
-                .filter((entry) -> !entry.isDirectory())
-                .sorted(Comparator.comparing(ZipEntry::getName))
-                .toList();
+            List<? extends ZipEntry> entries = sortArchiveEntries(zipFile);
             if (pageIndex < 0 || pageIndex >= entries.size()) {
                 return null;
             }
@@ -688,10 +691,7 @@ public final class LibraryService {
         }
 
         try (ZipFile zipFile = new ZipFile(Path.of(chapter.archivePath()).toFile())) {
-            List<? extends ZipEntry> entries = zipFile.stream()
-                .filter((entry) -> !entry.isDirectory())
-                .sorted(Comparator.comparing(ZipEntry::getName))
-                .toList();
+            List<? extends ZipEntry> entries = sortArchiveEntries(zipFile);
             if (pageIndex < 0 || pageIndex >= entries.size()) {
                 return "image/jpeg";
             }
@@ -736,16 +736,6 @@ public final class LibraryService {
         } catch (NumberFormatException ignored) {
             return value.trim();
         }
-    }
-
-    private String extractChapterNumber(String fileName) {
-        String normalized = fileName.replaceFirst("(?i)\\.cbz$", "");
-        java.util.regex.Matcher matcher = java.util.regex.Pattern.compile("(?i)(?:chapter|c)\\s*([0-9]+(?:\\.[0-9]+)?)").matcher(normalized);
-        if (matcher.find()) {
-            return matcher.group(1);
-        }
-        matcher = java.util.regex.Pattern.compile("([0-9]+(?:\\.[0-9]+)?)").matcher(normalized);
-        return matcher.find() ? matcher.group(1) : String.valueOf(Math.abs(fileName.hashCode()));
     }
 
     private String chapterId(String titleId, String chapterNumber) {
@@ -820,5 +810,17 @@ public final class LibraryService {
         } catch (Exception error) {
             logger.warn("LIBRARY", "Failed to persist the Raven rescan job.", error.getMessage());
         }
+    }
+
+    private List<? extends ZipEntry> sortArchiveEntries(ZipFile zipFile) {
+        RavenNamingSettings namingSettings = settingsService.getNamingSettings();
+        return zipFile.stream()
+            .filter((entry) -> !entry.isDirectory())
+            .sorted(
+                Comparator
+                    .comparingInt((ZipEntry entry) -> LibraryNaming.extractPageOrder(entry.getName(), namingSettings))
+                    .thenComparing(ZipEntry::getName)
+            )
+            .toList();
     }
 }

@@ -421,6 +421,57 @@ test("sage no longer exposes a dev-session claim endpoint", async () => {
   dependencyStub.server.close();
 });
 
+test("sage defaults a blank LocalAI model to an AIO-friendly alias", async () => {
+  const {app: vaultApp} = await createVaultApp();
+  const vaultServer = vaultApp.listen(0);
+  const vaultPort = vaultServer.address().port;
+
+  const dependencyStub = await createDependencyStub();
+  dependencyStub.server.listen(0);
+  const dependencyPort = dependencyStub.server.address().port;
+
+  process.env.SCRIPTARR_VAULT_BASE_URL = `http://127.0.0.1:${vaultPort}`;
+  process.env.SCRIPTARR_WARDEN_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_PORTAL_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_ORACLE_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_RAVEN_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_DISCORD_CLIENT_ID = "discord-client-id";
+  process.env.SCRIPTARR_DISCORD_CLIENT_SECRET = "discord-client-secret";
+
+  installDiscordFetchStub();
+
+  const {app: sageApp} = await createSageApp();
+  const sageServer = sageApp.listen(0);
+  const sagePort = sageServer.address().port;
+  const baseUrl = `http://127.0.0.1:${sagePort}`;
+
+  const ownerClaim = await signInViaDiscord(baseUrl);
+  const response = await fetch(`${baseUrl}/api/admin/settings/oracle`, {
+    method: "PUT",
+    headers: {
+      "Authorization": `Bearer ${ownerClaim.token}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      enabled: true,
+      provider: "localai",
+      model: "",
+      localAiProfileKey: "cpu",
+      localAiImageMode: "preset",
+      localAiCustomImage: ""
+    })
+  });
+  const oracleSettings = await response.json();
+
+  assert.equal(response.status, 200);
+  assert.equal(oracleSettings.provider, "localai");
+  assert.equal(oracleSettings.model, "gpt-4");
+
+  sageServer.close();
+  vaultServer.close();
+  dependencyStub.server.close();
+});
+
 test("sage brokers service-to-service routes with internal service auth", async () => {
   const {app: vaultApp} = await createVaultApp();
   const vaultServer = vaultApp.listen(0);
@@ -481,6 +532,28 @@ test("sage brokers service-to-service routes with internal service auth", async 
     headers: oracleHeaders
   }).then((response) => response.json());
   assert.equal(oracleStatus.managedNetworkName, "scriptarr-network-bootstrap");
+
+  const updatedOracleSettings = await fetch(`${baseUrl}/api/internal/vault/settings/oracle.settings`, {
+    method: "PUT",
+    headers: {
+      "Authorization": "Bearer warden-dev-token",
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      value: {
+        provider: "localai",
+        model: "gpt-4"
+      }
+    })
+  }).then((response) => response.json());
+  assert.equal(updatedOracleSettings.value.provider, "localai");
+
+  const brokeredOracleSettings = await fetch(`${baseUrl}/api/internal/vault/settings/oracle.settings`, {
+    headers: {
+      "Authorization": "Bearer warden-dev-token"
+    }
+  }).then((response) => response.json());
+  assert.equal(brokeredOracleSettings.value.model, "gpt-4");
 
   const oracleChat = await fetch(`${baseUrl}/api/internal/oracle/chat`, {
     method: "POST",

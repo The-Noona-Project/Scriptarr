@@ -106,6 +106,11 @@ const buildCurlHttpHealthCheck = (port, {startPeriod = "25s"} = {}) => ({
   startPeriod
 });
 
+const buildPythonHttpHealthCheck = (port) => ({
+  command: `python -c "import sys,urllib.request; response=urllib.request.urlopen('http://127.0.0.1:${port}/health', timeout=4); sys.exit(0 if response.status < 400 else 1)"`,
+  ...DEFAULT_HTTP_HEALTH_CHECK
+});
+
 const buildMysqlHealthCheck = () => ({
   command: "mysqladmin ping -h 127.0.0.1 -u\"$MYSQL_USER\" -p\"$MYSQL_PASSWORD\" --silent || exit 1",
   ...DEFAULT_MYSQL_HEALTH_CHECK
@@ -347,7 +352,7 @@ export const resolveServicePlan = ({env = process.env, containerNamePrefix = ""}
     mounts: resolveFolderMounts(storageLayout, "scriptarr-oracle", ["logs"]),
     networkAliases: ["scriptarr-oracle"],
     publishedPorts: [],
-    healthCheck: buildNodeHttpHealthCheck(oraclePort),
+    healthCheck: buildPythonHttpHealthCheck(oraclePort),
     containerPort: oraclePort
   });
 

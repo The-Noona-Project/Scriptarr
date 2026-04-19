@@ -52,7 +52,7 @@ export const registerInternalBrokerRoutes = (app, {
     res.json(user);
   }));
 
-  app.get("/api/internal/vault/settings/:key", withService(requireService, ["scriptarr-oracle", "scriptarr-raven"], async (req, res) => {
+  app.get("/api/internal/vault/settings/:key", withService(requireService, ["scriptarr-oracle", "scriptarr-raven", "scriptarr-warden"], async (req, res) => {
     res.json(await vaultClient.getSetting(req.params.key));
   }));
 

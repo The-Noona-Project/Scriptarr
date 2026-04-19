@@ -17,7 +17,7 @@ handles Discord, and Oracle provides optional read-only AI chat.
 - `scriptarr-moon`: same-origin user app at `/`, native reader routes under `/reader/*`, and Arr-style admin app at `/admin`
 - `scriptarr-raven`: Spring Boot Java 24 downloader, library, metadata, and PIA/OpenVPN-aware download engine
 - `scriptarr-portal`: Discord onboarding, requests, notifications, subscriptions, and Oracle bridge
-- `scriptarr-oracle`: LangChain JS service that starts disabled, defaults to OpenAI config, and can optionally use
+- `scriptarr-oracle`: FastAPI Python service that starts disabled, defaults to OpenAI config, and can optionally use
   LocalAI later
 
 ## Docker Images
@@ -43,6 +43,8 @@ Fresh installs no longer seed demo titles into Moon or Raven. The user and admin
 has real imported titles to surface.
 Raven now stages active work under `downloading/<type>/...` and promotes completed library content into
 `downloaded/<type>/...` inside the Raven downloads tree.
+Raven also supports old-style chapter and page naming templates behind the internal `raven.naming` setting while
+keeping the current title-folder layout stable for rescans.
 
 For end-to-end Docker verification, use:
 
@@ -83,6 +85,10 @@ For end-to-end Docker verification, use:
 - LocalAI is optional for overall stack health and is not installed on first boot.
 - Oracle starts disabled and OpenAI-first. LocalAI is enabled later from Moon admin when the admin is ready for a slow
   install or start cycle.
+- Warden-managed LocalAI presets now use the LocalAI AIO image family and only report startup success once the LocalAI
+  runtime is actually ready. Warden now starts those AIO images with the Oracle-safe text-generation preload set
+  instead of the full bundled model list so first startup does not get stuck on optional speech or media models.
+- Raven VPN should fail closed when VPN-backed downloads are enabled and the tunnel cannot be established.
 - Moon admin stays dark by default, serves versioned browser assets, and exposes the managed-service updates flow for
   Vault, Sage, Moon, Raven, Portal, and Oracle.
 

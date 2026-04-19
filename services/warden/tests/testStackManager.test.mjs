@@ -75,6 +75,7 @@ test("containerized test stack manager persists warden container state and tears
     resolveImage: () => "scriptarr-warden:test",
     dockerOps: {
       containerExists: async (containerName) => containerName === "scriptarr-test-demo-warden" || containerName === "scriptarr-test-demo-moon",
+      inspectDockerContainer: async () => null,
       listContainersByLabel: async () => [],
       removeDockerContainer: async (containerName) => {
         removedContainers.push(containerName);
@@ -165,6 +166,7 @@ test("test stack stop cleans orphaned containers when the state file is missing"
     }),
     dockerOps: {
       containerExists: async () => false,
+      inspectDockerContainer: async () => null,
       listContainersByLabel: async () => [],
       removeDockerContainer: async (containerName) => {
         removedContainers.push(containerName);
@@ -186,6 +188,159 @@ test("test stack stop cleans orphaned containers when the state file is missing"
   assert.equal(result.stopped, false);
   assert.equal(result.cleanedOrphans, true);
   assert.deepEqual(removedContainers, [
+    "scriptarr-test-demo-mysql",
+    "scriptarr-test-demo-moon",
+    "scriptarr-test-demo-warden"
+  ]);
+  assert.deepEqual(removedNetworks, ["scriptarr-network-test-demo"]);
+
+  await fs.rm(tempRoot, {recursive: true, force: true});
+});
+
+test("test stack stop removes stack-owned LocalAI before deleting the network", async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "scriptarr-warden-localai-stop-"));
+  const dataRoot = path.join(tempRoot, "data");
+  const stateDirectory = path.join(tempRoot, "state");
+  const removedContainers = [];
+  const removedNetworks = [];
+
+  const manager = createTestStackManager({
+    env: {},
+    fsModule: fs,
+    stateDirectory,
+    ensureStorageFolders: async (rootPath) => {
+      await fs.mkdir(rootPath, {recursive: true});
+    },
+    resolvePlan: ({env, containerNamePrefix}) => ({
+      managedNetworkName: env.SCRIPTARR_NETWORK_NAME,
+      mysql: {mode: "selfhost"},
+      services: [{
+        name: "scriptarr-moon",
+        containerName: `${containerNamePrefix}-moon`,
+        image: "scriptarr-moon:test"
+      }],
+      storageLayout: {
+        services: {
+          "scriptarr-warden": {
+            logs: {
+              hostPath: path.join(dataRoot, "warden", "logs"),
+              containerPath: "/var/log/scriptarr"
+            },
+            runtime: {
+              hostPath: path.join(dataRoot, "warden", "runtime"),
+              containerPath: "/var/lib/scriptarr"
+            }
+          }
+        }
+      }
+    }),
+    resolveImage: () => "scriptarr-warden:test",
+    dockerOps: {
+      containerExists: async () => false,
+      inspectDockerContainer: async (containerName) => containerName === "scriptarr-localai"
+        ? {
+          NetworkSettings: {
+            Networks: {
+              "scriptarr-network-test-demo": {}
+            }
+          }
+        }
+        : null,
+      listContainersByLabel: async () => [],
+      removeDockerContainer: async (containerName) => {
+        removedContainers.push(containerName);
+      },
+      removeDockerNetwork: async (networkName) => {
+        removedNetworks.push(networkName);
+      },
+      runDetachedContainer: async () => {},
+      waitForHttp: async () => {}
+    },
+    fetchImpl: async () => ({ok: true})
+  });
+
+  const started = await manager.start({
+    stackId: "demo",
+    dataRoot
+  });
+
+  removedContainers.length = 0;
+  removedNetworks.length = 0;
+
+  const stopped = await manager.stop({stackId: "demo"});
+  assert.equal(stopped.stopped, true);
+  assert.deepEqual(removedContainers, [
+    "scriptarr-test-demo-moon",
+    "scriptarr-localai",
+    "scriptarr-test-demo-warden"
+  ]);
+  assert.deepEqual(stopped.removedContainers, [
+    "scriptarr-test-demo-moon",
+    "scriptarr-localai",
+    "scriptarr-test-demo-warden"
+  ]);
+  assert.deepEqual(removedNetworks, ["scriptarr-network-test-demo"]);
+
+  await fs.rm(tempRoot, {recursive: true, force: true});
+});
+
+test("orphan cleanup removes a labeled stack-owned LocalAI container", async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "scriptarr-warden-localai-orphan-"));
+  const removedContainers = [];
+  const removedNetworks = [];
+
+  const manager = createTestStackManager({
+    env: {},
+    fsModule: fs,
+    stateDirectory: path.join(tempRoot, "state"),
+    resolvePlan: ({env, containerNamePrefix}) => ({
+      managedNetworkName: env.SCRIPTARR_NETWORK_NAME,
+      mysql: {mode: "selfhost"},
+      services: [
+        {name: "scriptarr-mysql", containerName: `${containerNamePrefix}-mysql`, image: "scriptarr-mysql:test"},
+        {name: "scriptarr-moon", containerName: `${containerNamePrefix}-moon`, image: "scriptarr-moon:test"}
+      ],
+      storageLayout: {
+        services: {
+          "scriptarr-warden": {
+            logs: {hostPath: path.join(tempRoot, "logs"), containerPath: "/var/log/scriptarr"},
+            runtime: {hostPath: path.join(tempRoot, "runtime"), containerPath: "/var/lib/scriptarr"}
+          }
+        }
+      }
+    }),
+    dockerOps: {
+      containerExists: async () => false,
+      inspectDockerContainer: async () => null,
+      listContainersByLabel: async () => [{
+        id: "abc123",
+        name: "scriptarr-localai",
+        image: "localai/localai:latest-aio-cpu",
+        labels: {
+          "scriptarr.stack-id": "demo",
+          "scriptarr.stack-mode": "test"
+        }
+      }],
+      removeDockerContainer: async (containerName) => {
+        removedContainers.push(containerName);
+      },
+      removeDockerNetwork: async (networkName) => {
+        removedNetworks.push(networkName);
+      },
+      runDetachedContainer: async () => {},
+      waitForHttp: async () => {}
+    },
+    fetchImpl: async () => ({ok: false})
+  });
+
+  const result = await manager.stop({
+    stackId: "demo",
+    tolerateMissing: true
+  });
+
+  assert.equal(result.cleanedOrphans, true);
+  assert.deepEqual(removedContainers, [
+    "scriptarr-localai",
     "scriptarr-test-demo-mysql",
     "scriptarr-test-demo-moon",
     "scriptarr-test-demo-warden"

@@ -1,6 +1,7 @@
 package com.scriptarr.raven.library;
 
 import com.scriptarr.raven.downloader.TitleDetails;
+import com.scriptarr.raven.settings.RavenSettingsService;
 import com.scriptarr.raven.support.FakeRavenBrokerClient;
 import com.scriptarr.raven.support.ScriptarrLogger;
 import org.junit.jupiter.api.Test;
@@ -15,6 +16,7 @@ import java.util.UUID;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -37,7 +39,7 @@ class LibraryServiceTest {
         FakeRavenBrokerClient brokerClient = new FakeRavenBrokerClient();
         ScriptarrLogger logger = mock(ScriptarrLogger.class);
         when(logger.getDownloadsRoot()).thenReturn(tempDir);
-        LibraryService service = new LibraryService(brokerClient, logger);
+        LibraryService service = new LibraryService(brokerClient, new RavenSettingsService(brokerClient, logger, List.of()), logger);
 
         Path workingRoot = tempDir.resolve("downloading").resolve("manhwa").resolve("Solo_Leveling");
         Path downloadRoot = tempDir.resolve("downloaded").resolve("manhwa").resolve("Solo_Leveling");
@@ -86,7 +88,7 @@ class LibraryServiceTest {
         FakeRavenBrokerClient brokerClient = new FakeRavenBrokerClient();
         ScriptarrLogger logger = mock(ScriptarrLogger.class);
         when(logger.getDownloadsRoot()).thenReturn(tempDir);
-        LibraryService service = new LibraryService(brokerClient, logger);
+        LibraryService service = new LibraryService(brokerClient, new RavenSettingsService(brokerClient, logger, List.of()), logger);
 
         Path titleFolder = tempDir.resolve("downloaded").resolve("webtoon").resolve("Tower_of_God");
         Files.createDirectories(titleFolder);
@@ -107,12 +109,92 @@ class LibraryServiceTest {
         assertTrue(title.chapters().getFirst().archivePath().endsWith(".cbz"));
     }
 
+    /**
+     * Verify Raven rescans chapter archives with the configured naming template
+     * instead of falling back to the first number in the file name.
+     *
+     * @param tempDir temporary test directory
+     * @throws Exception when the test fixture cannot be prepared
+     */
+    @Test
+    void rescanDownloadedFilesHonorsConfiguredChapterTemplate(@TempDir Path tempDir) throws Exception {
+        FakeRavenBrokerClient brokerClient = new FakeRavenBrokerClient();
+        brokerClient.setSetting("raven.naming", Map.of(
+            "chapterTemplate", "{title} v{volume_padded} - {chapter_padded}.cbz",
+            "pageTemplate", "{chapter_padded}_p{page}{ext}",
+            "chapterPad", 3,
+            "pagePad", 2,
+            "volumePad", 2
+        ));
+        ScriptarrLogger logger = mock(ScriptarrLogger.class);
+        when(logger.getDownloadsRoot()).thenReturn(tempDir);
+        LibraryService service = new LibraryService(brokerClient, new RavenSettingsService(brokerClient, logger, List.of()), logger);
+
+        Path titleFolder = tempDir.resolve("downloaded").resolve("comic").resolve("Blacksad");
+        Files.createDirectories(titleFolder);
+        writeArchive(titleFolder.resolve("Blacksad v07 - 001.cbz"));
+
+        service.rescanDownloadedFiles();
+        List<LibraryTitle> titles = service.listTitles();
+
+        assertEquals(1, titles.size());
+        assertEquals("1", titles.getFirst().chapters().getFirst().chapterNumber());
+    }
+
+    /**
+     * Verify Raven sorts archive pages with the configured page template so
+     * custom file names still render in the correct order.
+     *
+     * @param tempDir temporary test directory
+     * @throws Exception when the test fixture cannot be prepared
+     */
+    @Test
+    void renderReaderPageSortsTemplateNamedPages(@TempDir Path tempDir) throws Exception {
+        FakeRavenBrokerClient brokerClient = new FakeRavenBrokerClient();
+        brokerClient.setSetting("raven.naming", Map.of(
+            "chapterTemplate", "{title} c{chapter_padded}.cbz",
+            "pageTemplate", "{chapter_padded}_p{page}{ext}",
+            "chapterPad", 3,
+            "pagePad", 2,
+            "volumePad", 2
+        ));
+        ScriptarrLogger logger = mock(ScriptarrLogger.class);
+        when(logger.getDownloadsRoot()).thenReturn(tempDir);
+        LibraryService service = new LibraryService(brokerClient, new RavenSettingsService(brokerClient, logger, List.of()), logger);
+
+        Path titleFolder = tempDir.resolve("downloaded").resolve("manga").resolve("Blue_Box");
+        Files.createDirectories(titleFolder);
+        Path archive = writeArchive(titleFolder.resolve("Blue Box c001.cbz"), Map.of(
+            "001_p10.jpg", new byte[]{10},
+            "001_p2.jpg", new byte[]{2},
+            "001_p1.jpg", new byte[]{1}
+        ));
+        LibraryTitle title = service.recordDownloadedTitle(
+            "Blue Box",
+            "Manga",
+            "https://weebcentral.com/series/blue-box",
+            "",
+            null,
+            List.of(new LibraryChapter("", "Chapter 1", "1", 3, null, true, archive.toString(), "")),
+            titleFolder,
+            titleFolder
+        );
+
+        assertArrayEquals(new byte[]{2}, service.renderReaderPage(title.id(), title.chapters().getFirst().id(), 1).bytes());
+    }
+
     private Path writeArchive(Path archivePath) throws IOException {
+        return writeArchive(archivePath, Map.of("001.jpg", new byte[]{1, 2, 3}));
+    }
+
+    private Path writeArchive(Path archivePath, Map<String, byte[]> entries) throws IOException {
         Files.createDirectories(archivePath.getParent());
         try (ZipOutputStream zip = new ZipOutputStream(Files.newOutputStream(archivePath))) {
-            zip.putNextEntry(new ZipEntry("001.jpg"));
-            zip.write(new byte[]{1, 2, 3});
-            zip.closeEntry();
+            for (Map.Entry<String, byte[]> entry : entries.entrySet()) {
+                zip.putNextEntry(new ZipEntry(entry.getKey()));
+                zip.write(entry.getValue());
+                zip.closeEntry();
+            }
         }
         return archivePath;
     }

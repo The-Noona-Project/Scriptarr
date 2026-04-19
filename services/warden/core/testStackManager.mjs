@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 
 import {
+  DEFAULT_LOCALAI_CONTAINER_NAME,
   DEFAULT_TEST_MOON_PORT,
   DEFAULT_TEST_STACK_ID,
   DEFAULT_TEST_WARDEN_PORT,
@@ -16,6 +17,7 @@ import {resolveServicePlan} from "../config/servicePlan.mjs";
 import {ensureScriptarrStorageFolders, resolveEphemeralTestDataRoot, resolveTestStateDirectory} from "../filesystem/storageLayout.mjs";
 import {
   containerExists,
+  inspectDockerContainer,
   listContainersByLabel,
   removeDockerContainer,
   removeDockerNetwork,
@@ -159,6 +161,7 @@ export const buildTestStackEnvironment = ({
  *   resolveImage?: typeof resolveServiceImage,
  *   dockerOps?: {
  *     containerExists: typeof containerExists,
+ *     inspectDockerContainer: typeof inspectDockerContainer,
  *     listContainersByLabel: typeof listContainersByLabel,
  *     removeDockerContainer: typeof removeDockerContainer,
  *     removeDockerNetwork: typeof removeDockerNetwork,
@@ -190,6 +193,7 @@ export const createTestStackManager = ({
   resolveImage = resolveServiceImage,
   dockerOps = {
     containerExists,
+    inspectDockerContainer,
     listContainersByLabel,
     removeDockerContainer,
     removeDockerNetwork,
@@ -198,6 +202,29 @@ export const createTestStackManager = ({
   },
   fetchImpl = fetch
 } = {}) => {
+  const isContainerAttachedToNetwork = (inspect, networkName) => {
+    const networks = inspect?.NetworkSettings?.Networks;
+    if (!networks || typeof networks !== "object") {
+      return false;
+    }
+    return Object.keys(networks).includes(networkName);
+  };
+
+  const resolveOwnedLocalAiContainer = async ({stackId, managedNetworkName}) => {
+    const labeledContainers = await dockerOps.listContainersByLabel("scriptarr.stack-id", stackId);
+    const labeledLocalAi = labeledContainers.find((container) => container.name === DEFAULT_LOCALAI_CONTAINER_NAME);
+    if (labeledLocalAi) {
+      return labeledLocalAi.name;
+    }
+
+    const inspect = await dockerOps.inspectDockerContainer(DEFAULT_LOCALAI_CONTAINER_NAME);
+    if (inspect && isContainerAttachedToNetwork(inspect, managedNetworkName)) {
+      return DEFAULT_LOCALAI_CONTAINER_NAME;
+    }
+
+    return null;
+  };
+
   const cleanupOrphanedStackContainers = async (stackId) => {
     const built = buildTestStackEnvironment({env, stackId});
     const runtimePlan = resolvePlan({
@@ -205,10 +232,15 @@ export const createTestStackManager = ({
       containerNamePrefix: `scriptarr-test-${built.stackId}`
     });
     const discovered = await dockerOps.listContainersByLabel("scriptarr.stack-id", built.stackId);
+    const localAiContainerName = await resolveOwnedLocalAiContainer({
+      stackId: built.stackId,
+      managedNetworkName: runtimePlan.managedNetworkName
+    });
     const fallbackNames = [
       ...runtimePlan.services.map((service) => service.containerName),
-      built.wardenContainerName
-    ];
+      built.wardenContainerName,
+      localAiContainerName
+    ].filter(Boolean);
     const names = [...new Set([
       ...discovered.map((container) => container.name),
       ...fallbackNames
@@ -351,8 +383,17 @@ export const createTestStackManager = ({
       throw error;
     }
 
+    const localAiContainerName = await resolveOwnedLocalAiContainer({
+      stackId: state.stackId,
+      managedNetworkName: state.managedNetworkName
+    });
+
     for (const service of state.services || []) {
       await dockerOps.removeDockerContainer(service.containerName, {ignoreMissing: true});
+    }
+
+    if (localAiContainerName) {
+      await dockerOps.removeDockerContainer(localAiContainerName, {ignoreMissing: true});
     }
 
     if (state.warden?.containerName) {
@@ -376,6 +417,7 @@ export const createTestStackManager = ({
       managedNetworkName: state.managedNetworkName,
       removedContainers: [
         ...(state.services || []).map((service) => service.containerName),
+        localAiContainerName,
         state.warden?.containerName
       ].filter(Boolean),
       removedDataRoot: Boolean(state.removeDataRootOnStop && state.dataRoot)

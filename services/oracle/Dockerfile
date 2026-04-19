@@ -1,17 +1,16 @@
-FROM node:24-slim
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
-COPY package.json package-lock.json ./
-COPY packages/scriptarr-logging ./packages/scriptarr-logging
-COPY services/oracle/package.json services/oracle/package.json
+COPY services/oracle/requirements.txt ./requirements.txt
 
-RUN npm install --workspace services/oracle --include-workspace-root=false
+RUN python -m pip install --no-cache-dir --disable-pip-version-check -r requirements.txt
 
-COPY services/oracle ./services/oracle
-
-WORKDIR /app/services/oracle
+COPY services/oracle ./
 
 EXPOSE 3001
 
-CMD ["npm", "start"]
+CMD ["python", "server.py"]

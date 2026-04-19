@@ -17,6 +17,9 @@ Raven is Scriptarr's Java download, library, metadata, and VPN-aware download en
 - Keep Raven on Sage's internal broker routes for first-party shared state. Raven should not call Vault directly.
 - Keep Raven's dynamic library type labels and the managed `downloading/<type>/... -> downloaded/<type>/...` storage
   lifecycle intact unless product requirements explicitly change.
+- Keep chapter/page naming configurable only through the Sage-backed `raven.naming` setting. Title-folder naming stays
+  Raven-owned and compatible with rescans unless product requirements explicitly expand that contract.
+- Keep VPN-backed downloads fail-closed when Raven VPN is enabled and Raven cannot safely confirm or establish the tunnel.
 - Old Noona Raven and Komf code are reference material only. Port behavior intentionally, but do not restore Selenium
   or browser-driven scraping.
 - Manual metadata overrides are admin-visible contracts and should stay documented.

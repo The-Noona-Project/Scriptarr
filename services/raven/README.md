@@ -21,3 +21,20 @@ Raven stores dynamic library type labels and slugs from the source when availabl
 new catalog entries, and keeps route shapes stable for Moon. The current metadata set includes MangaDex, AniList,
 MangaUpdates, optional MyAnimeList, and optional ComicVine, with provider matching filtered by the title's stored
 library type.
+
+Raven also supports a Sage-backed `raven.naming` setting for the safe subset of the old download naming schema:
+
+- `chapterTemplate`
+- `pageTemplate`
+- `chapterPad`
+- `pagePad`
+- `volumePad`
+
+Title-folder naming stays unchanged so rescans remain compatible with Raven's current durable catalog and managed
+storage roots. Chapter archives default to Scriptarr-style `c001` naming with optional volume omission when no
+volume data exists, and page names default to padded numeric files like `001.jpg`.
+
+When Raven VPN is enabled through Moon admin, downloads now fail closed if Raven cannot safely load the settings,
+resolve the requested PIA profile, or complete the OpenVPN handshake. Raven still uses the existing simplified
+enable/region/credentials admin contract, but the runtime now refreshes stale PIA profiles, reconnects on region
+changes, and uses short-lived credential files with `--auth-nocache`.

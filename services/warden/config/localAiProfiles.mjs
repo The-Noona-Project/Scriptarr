@@ -7,23 +7,27 @@ import {execFileSync} from "node:child_process";
 const PROFILE_MAP = Object.freeze({
   cpu: {
     key: "cpu",
-    image: "localai/localai:latest",
-    reason: "No supported GPU acceleration detected; using the CPU image."
+    image: "localai/localai:latest-aio-cpu",
+    reason: "No supported GPU acceleration detected; using the LocalAI AIO CPU image.",
+    runtimeArgs: []
   },
   nvidia: {
     key: "nvidia",
-    image: "localai/localai:latest-gpu-nvidia-cuda-12",
-    reason: "Detected an NVIDIA GPU; using the CUDA 12 LocalAI image."
+    image: "localai/localai:latest-aio-gpu-nvidia-cuda-12",
+    reason: "Detected an NVIDIA GPU; using the LocalAI AIO CUDA 12 image.",
+    runtimeArgs: ["--gpus", "all"]
   },
   intel: {
     key: "intel",
-    image: "localai/localai:latest-gpu-intel",
-    reason: "Detected an Intel GPU; using the Intel LocalAI image."
+    image: "localai/localai:latest-aio-gpu-intel",
+    reason: "Detected an Intel GPU; using the LocalAI AIO Intel image.",
+    runtimeArgs: ["--device", "/dev/dri", "--group-add", "video"]
   },
   amd: {
     key: "amd",
-    image: "localai/localai:latest-gpu-hipblas",
-    reason: "Detected an AMD GPU; using the HIPBLAS LocalAI image."
+    image: "localai/localai:latest-aio-gpu-hipblas",
+    reason: "Detected an AMD GPU; using the LocalAI AIO HIPBLAS image.",
+    runtimeArgs: ["--device", "/dev/kfd", "--device", "/dev/dri", "--group-add", "video"]
   }
 });
 

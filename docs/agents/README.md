@@ -21,6 +21,9 @@ Architecture invariants:
 - Sage is the only supported first-party internal HTTP broker.
 - Raven stores in-flight downloads under `downloading/<type>/...` and promotes completed library content into
   `downloaded/<type>/...`.
+- Oracle is now a FastAPI Python service that keeps the same Sage-facing wire contract.
+- Warden-managed LocalAI presets use the LocalAI AIO images and must wait for readiness before surfacing success.
+- Raven VPN fails closed when enabled, and the internal `raven.naming` setting now controls chapter and page naming.
 
 ## Service Index
 

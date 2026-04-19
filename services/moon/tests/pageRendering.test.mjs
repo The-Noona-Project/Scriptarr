@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {renderOverviewPage} from "../apps/admin/assets/pages/overviewPage.js";
+import {renderSettingsPage} from "../apps/admin/assets/pages/settingsPage.js";
 import {loadBrowsePage, renderBrowsePage} from "../apps/user/assets/pages/browsePage.js";
 import {renderHomePage} from "../apps/user/assets/pages/homePage.js";
 
@@ -87,4 +88,32 @@ test("admin overview renders an empty focus section when the library has no titl
   assert.match(html, /Focus titles/);
   assert.match(html, /Library is empty/);
   assert.match(html, /Moon will surface focus titles here after Raven imports real series/);
+});
+
+test("settings page describes LocalAI AIO presets and runtime readiness", () => {
+  const html = renderSettingsPage({
+    ok: true,
+    payload: {
+      ravenVpn: {},
+      metadataProviders: {providers: []},
+      oracle: {
+        provider: "localai",
+        model: "",
+        localAiProfileKey: "nvidia",
+        localAiCustomImage: ""
+      },
+      warden: {
+        installed: true,
+        running: true,
+        ready: false
+      }
+    }
+  });
+
+  assert.match(html, /LocalAI AIO preset/);
+  assert.match(html, /NVIDIA CUDA 12 AIO/);
+  assert.match(html, /latest-aio-gpu-nvidia-cuda-12/);
+  assert.match(html, /still starting/);
+  assert.match(html, /Install LocalAI AIO image/);
+  assert.match(html, /value="gpt-4"/);
 });
