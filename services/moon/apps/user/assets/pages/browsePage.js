@@ -18,7 +18,8 @@ export const loadBrowsePage = async ({api, searchParams}) => {
     return {...result, query, mediaType};
   }
 
-  const titles = (result.payload?.titles || []).filter((title) => {
+  const allTitles = result.payload?.titles || [];
+  const titles = allTitles.filter((title) => {
     const matchesType = mediaType ? String(title.mediaType || "").toLowerCase() === mediaType : true;
     const haystack = [title.title, title.author, ...(title.tags || []), ...(title.aliases || [])].join(" ").toLowerCase();
     return matchesType && (!query || haystack.includes(query));
@@ -29,7 +30,8 @@ export const loadBrowsePage = async ({api, searchParams}) => {
     status: 200,
     payload: {titles},
     query,
-    mediaType
+    mediaType,
+    libraryEmpty: allTitles.length === 0
   };
 };
 
@@ -43,6 +45,12 @@ export const renderBrowsePage = (result) => {
   if (!result.ok) {
     return renderEmptyState("Browse unavailable", result.payload?.error || "Moon needs a session before it can load the library.");
   }
+
+  const titles = result.payload?.titles || [];
+  const emptyTitle = result.libraryEmpty ? "Library is empty" : "No titles match";
+  const emptyBody = result.libraryEmpty
+    ? "No titles have been imported into Scriptarr yet. This view will stay empty until Raven has real titles to surface."
+    : "Try a broader search or clear the current media-type filter.";
 
   return `
     <section class="panel-section">
@@ -65,12 +73,12 @@ export const renderBrowsePage = (result) => {
     </section>
     <section class="library-shelf">
       <div class="card-grid">
-        ${(result.payload?.titles || []).length
-          ? (result.payload.titles || []).map((title) => renderSeriesCard({
+        ${titles.length
+          ? titles.map((title) => renderSeriesCard({
             ...title,
             href: `/title/${title.id}`
           })).join("")
-          : renderEmptyState("No titles match", "Try a broader search or clear the current media-type filter.")}
+          : renderEmptyState(emptyTitle, emptyBody)}
       </div>
     </section>
   `;

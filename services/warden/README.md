@@ -28,13 +28,17 @@ Warden also ships the Docker-backed test stack used by repo contributors:
 - required persistent folders:
   - `warden/logs -> /var/log/scriptarr`
   - `warden/runtime -> /var/lib/scriptarr`
+- recommended Linux/Unraid bind:
+  - `<data-root> -> <data-root>`
 - supported runtime: start Warden, let Warden create and reconcile Moon, Vault, Sage, Raven, Portal, Oracle, and
   optional managed MySQL
+- Docker health checks: Warden and the managed containers report `healthy` through Docker once each `/health` endpoint
+  or MySQL readiness check passes
 - test runtime: `npm run docker:test` starts a containerized Warden first and only publishes the Warden API so the
   helper can verify health
 
 ## Runtime APIs
 
 - `/api/bootstrap`: static service plan, install mode, callback URL, and storage contract
-- `/api/runtime`: Warden self status plus live managed-service runtime details
+- `/api/runtime`: Warden self status plus live managed-service runtime details, with sensitive env values redacted
 - `/health`: service health, Docker socket availability, and latest reconcile summary

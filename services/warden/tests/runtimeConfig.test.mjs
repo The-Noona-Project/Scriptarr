@@ -4,7 +4,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import {resolveWardenRuntimeSnapshot} from "../config/runtimeConfig.mjs";
+import {resolveWardenRuntimeSnapshot, sanitizeWardenRuntimeSnapshot} from "../config/runtimeConfig.mjs";
 
 test("warden runtime snapshot carries self runtime status and managed service health", () => {
   const runtime = resolveWardenRuntimeSnapshot({
@@ -41,4 +41,26 @@ test("warden runtime snapshot carries self runtime status and managed service he
   assert.equal(runtime.warden.attachedToManagedNetwork, true);
   assert.equal(runtime.managedServices[0].containerName, "scriptarr-test-demo-moon");
   assert.equal(runtime.managedServices[0].health, "healthy");
+});
+
+test("sanitized warden runtime snapshot redacts secrets while preserving topology", () => {
+  const runtime = sanitizeWardenRuntimeSnapshot(resolveWardenRuntimeSnapshot({
+    env: {
+      SCRIPTARR_NETWORK_NAME: "scriptarr-network-test-demo",
+      SCRIPTARR_STACK_MODE: "test",
+      SCRIPTARR_WARDEN_CONTAINER_NAME: "scriptarr-test-demo-warden",
+      SCRIPTARR_MYSQL_URL: "mysql://vault-user:vault-password@db.example.com:3306/scriptarr",
+      SCRIPTARR_DISCORD_CLIENT_SECRET: "discord-secret",
+      DISCORD_TOKEN: "discord-bot-token"
+    }
+  }));
+
+  const serialized = JSON.stringify(runtime);
+  assert.equal(runtime.discordTokenConfigured, true);
+  assert.equal(runtime.mysql.user, "vault-user");
+  assert.equal(runtime.mysql.passwordConfigured, true);
+  assert.equal(runtime.services.find((service) => service.name === "scriptarr-vault").env.SCRIPTARR_MYSQL_PASSWORD, "[redacted]");
+  assert.equal(runtime.services.find((service) => service.name === "scriptarr-sage").env.DISCORD_TOKEN, "[redacted]");
+  assert.equal(runtime.services.find((service) => service.name === "scriptarr-sage").env.SCRIPTARR_DISCORD_CLIENT_SECRET, "[redacted]");
+  assert.doesNotMatch(serialized, /vault-password|discord-secret|discord-bot-token/);
 });

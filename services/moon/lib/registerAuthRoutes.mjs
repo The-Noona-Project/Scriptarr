@@ -33,11 +33,12 @@ const toQueryString = (query) => {
  * @param {import("express").Express} app
  * @param {{
  *   config: {sageBaseUrl: string, sessionCookieName: string},
- *   getSessionToken: (request: import("express").Request) => string
+ *   getSessionToken: (request: import("express").Request) => string,
+ *   logger?: {warn: Function}
  * }} options
  * @returns {void}
  */
-export const registerAuthRoutes = (app, {config, getSessionToken}) => {
+export const registerAuthRoutes = (app, {config, getSessionToken, logger}) => {
   const proxyToSage = (req, targetPath, options = {}) => proxyJson({
     baseUrl: config.sageBaseUrl,
     path: targetPath,
@@ -73,6 +74,10 @@ export const registerAuthRoutes = (app, {config, getSessionToken}) => {
     const result = await proxyToSage(req, `/api/auth/discord/callback${query ? `?${query}` : ""}`);
 
     if (result.status >= 400 || !result.payload?.token) {
+      logger?.warn("Discord login failed in Moon callback route.", {
+        status: result.status,
+        error: result.payload?.error || "Unknown error"
+      });
       res.status(result.status).send(`<pre>Discord login failed: ${result.payload?.error || "Unknown error"}</pre>`);
       return;
     }

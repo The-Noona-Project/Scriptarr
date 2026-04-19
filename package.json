@@ -4,6 +4,7 @@
   "private": true,
   "description": "Scriptarr 3.0 greenfield monorepo.",
   "workspaces": [
+    "packages/*",
     "services/warden",
     "services/vault",
     "services/sage",

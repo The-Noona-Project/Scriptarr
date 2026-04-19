@@ -42,6 +42,7 @@ Recommended container contract:
 - required persistent mounts:
   - `<data-root>/warden/logs:/var/log/scriptarr`
   - `<data-root>/warden/runtime:/var/lib/scriptarr`
+- recommended Linux/Unraid bind: `<data-root>:<data-root>`
 - required env: `SCRIPTARR_DATA_ROOT`, `SUPERUSER_ID`, `DISCORD_TOKEN`, `SCRIPTARR_MYSQL_URL`
 - optional env: `SCRIPTARR_PUBLIC_BASE_URL`, Discord OAuth vars, MySQL fallback vars
 - normal installs should not publish the Warden port; Moon remains the default public first-party surface
@@ -52,6 +53,7 @@ Example shape:
 docker run -d \
   --name scriptarr-warden \
   -v /var/run/docker.sock:/var/run/docker.sock \
+  -v <data-root>:<data-root> \
   -v <data-root>/warden/logs:/var/log/scriptarr \
   -v <data-root>/warden/runtime:/var/lib/scriptarr \
   -e SCRIPTARR_DATA_ROOT=<data-root> \
@@ -66,6 +68,10 @@ If you run Docker Desktop on Windows, `SCRIPTARR_DATA_ROOT` can still be a Windo
 `C:\ScriptarrData`. Warden translates that host path when it reconciles sibling containers from inside its Linux
 container.
 
+On Linux and Unraid, binding `<data-root>` back into the Warden container at the same absolute path lets Warden create
+the full storage tree directly before it starts the sibling services. Unraid installs can also save this container as a
+user template after the first successful boot if you want to reuse the same contract later.
+
 ## Install Shape
 
 Warden now boots an almost full Scriptarr stack on first install:
@@ -79,7 +85,12 @@ Warden now boots an almost full Scriptarr stack on first install:
 - Oracle
 
 There is no setup wizard. The stack should reach a minimal usable state with sensible defaults, and the remaining work
-is finished in Moon admin.
+is finished in Moon admin. Warden's first-boot logs now call out when it creates, recreates, or auto-pulls the managed
+service images so you can follow reconciliation progress from one place. Warden and the managed containers also publish
+Docker health checks so Docker Desktop, `docker ps`, and Unraid can show `healthy` once each service finishes booting.
+
+Fresh installs no longer include seeded demo series. Moon's user and admin library views stay empty until Raven has
+real imported titles to expose.
 
 ## MySQL Contract
 
@@ -101,6 +112,9 @@ URL. Use the callback URL surfaced by the stack when configuring the Discord app
 Example callback shape:
 
 `https://your-scriptarr-host.example.com/api/moon/auth/discord/callback`
+
+Moon's bootstrap surface should also show the configured first-owner Discord id before the first claim. If it does not,
+double-check that `SUPERUSER_ID` was passed into Warden correctly.
 
 ## Network Topology
 

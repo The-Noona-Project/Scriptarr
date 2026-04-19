@@ -2,7 +2,7 @@
  * @file Scriptarr Warden module: services/warden/core/createWardenRuntime.mjs.
  */
 import {resolveDiscordCallbackUrl} from "../config/servicePlan.mjs";
-import {resolveWardenRuntimeSnapshot, resolveWardenServerConfig} from "../config/runtimeConfig.mjs";
+import {resolveWardenRuntimeSnapshot, resolveWardenServerConfig, sanitizeWardenRuntimeSnapshot} from "../config/runtimeConfig.mjs";
 import {createLogger} from "../logging/createLogger.mjs";
 import {createLocalAiRuntime} from "./localAiRuntime.mjs";
 import {createManagedStackRuntime} from "./managedStackRuntime.mjs";
@@ -50,12 +50,14 @@ export const createWardenRuntime = ({env = process.env} = {}) => {
     logger: createLogger("WARDEN_STACK", {env})
   });
 
-  const getRuntime = async () =>
+  const buildRuntimeSnapshot = async () =>
     resolveWardenRuntimeSnapshot({
       env,
       localAiStatus: localAi.getStatus(),
       runtimeStatus: await managedStack.refreshStatus()
     });
+
+  const getRuntime = async () => sanitizeWardenRuntimeSnapshot(await buildRuntimeSnapshot());
 
   return {
     config,
@@ -68,7 +70,7 @@ export const createWardenRuntime = ({env = process.env} = {}) => {
         localAiStatus: localAi.getStatus(),
         runtimeStatus: managedStack.getStatusSnapshot()
       });
-      return {
+      return sanitizeWardenRuntimeSnapshot({
         installMode: runtime.installMode,
         stackMode: runtime.stackMode,
         managedNetworkName: runtime.managedNetworkName,
@@ -82,7 +84,7 @@ export const createWardenRuntime = ({env = process.env} = {}) => {
           image: service.image,
           containerName: service.containerName
         }))
-      };
+      });
     },
     getStorageLayout: () => resolveWardenRuntimeSnapshot({
       env,

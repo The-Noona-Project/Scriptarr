@@ -10,6 +10,7 @@
     "test": "npm run lint:docs && node --test tests/**/*.test.mjs"
   },
   "dependencies": {
+    "@scriptarr/logging": "file:../../packages/scriptarr-logging",
     "express": "^5.1.0"
   }
 }

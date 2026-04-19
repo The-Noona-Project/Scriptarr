@@ -40,7 +40,7 @@ export const renderLibraryPage = (result) => {
           escapeHtml(formatDate(title.metadataMatchedAt))
         ]),
         emptyTitle: "Library is empty",
-        emptyBody: "Add a title from the search page or import an existing path."
+        emptyBody: "No real titles have been imported yet. This index will stay empty until Raven has real library ingest."
       })}
     </section>
   `;

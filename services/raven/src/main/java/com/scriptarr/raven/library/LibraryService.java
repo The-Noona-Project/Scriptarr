@@ -3,10 +3,9 @@ package com.scriptarr.raven.library;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.List;
-import java.util.Map;
 
 /**
- * Seeded Scriptarr Raven library projection used by Moon while the wider 3.0 stack fills in.
+ * In-memory Scriptarr Raven library projection.
  */
 public final class LibraryService {
     private final List<LibraryTitle> titles;
@@ -21,87 +20,12 @@ public final class LibraryService {
     }
 
     /**
-     * Build the seeded library scaffold used by the current 3.0 preview stack.
+     * Build the empty library projection used before Raven imports real titles.
      *
-     * @return seeded library projection
+     * @return empty library projection
      */
-    public static LibraryService seedDefault() {
-        return new LibraryService(List.of(
-            new LibraryTitle(
-                "dan-da-dan",
-                "Dandadan",
-                "manga",
-                "watching",
-                "166",
-                "#ff6a3d",
-                "Aliens, yokai, and impossible speed colliding in a loud, kinetic shonen rhythm.",
-                "2021",
-                166,
-                6,
-                "Yukinobu Tatsu",
-                List.of("action", "paranormal", "comedy"),
-                List.of("Dan Da Dan"),
-                "mangadex",
-                "2026-04-18T00:00:00.000Z",
-                List.of(Map.of("title", "Sakamoto Days", "relation", "For fans of")), 
-                List.of(
-                    new LibraryChapter("dandadan-c161", "Chapter 161", "161", 12, "2026-03-10", true),
-                    new LibraryChapter("dandadan-c162", "Chapter 162", "162", 14, "2026-03-17", true),
-                    new LibraryChapter("dandadan-c163", "Chapter 163", "163", 13, "2026-03-24", true),
-                    new LibraryChapter("dandadan-c164", "Chapter 164", "164", 11, "2026-03-31", true),
-                    new LibraryChapter("dandadan-c165", "Chapter 165", "165", 15, "2026-04-07", true),
-                    new LibraryChapter("dandadan-c166", "Chapter 166", "166", 16, "2026-04-14", true)
-                )
-            ),
-            new LibraryTitle(
-                "sakamoto-days",
-                "Sakamoto Days",
-                "manga",
-                "active",
-                "209",
-                "#e4d7b8",
-                "A retired legend trying to stay domestic while the underworld keeps knocking on the door.",
-                "2020",
-                209,
-                5,
-                "Yuto Suzuki",
-                List.of("action", "assassin", "comedy"),
-                List.of("Sakamoto Days"),
-                "mangadex",
-                "2026-04-17T00:00:00.000Z",
-                List.of(Map.of("title", "Dandadan", "relation", "Trending with")),
-                List.of(
-                    new LibraryChapter("sakamoto-c205", "Chapter 205", "205", 18, "2026-03-09", true),
-                    new LibraryChapter("sakamoto-c206", "Chapter 206", "206", 19, "2026-03-16", true),
-                    new LibraryChapter("sakamoto-c207", "Chapter 207", "207", 17, "2026-03-23", true),
-                    new LibraryChapter("sakamoto-c208", "Chapter 208", "208", 20, "2026-03-30", true),
-                    new LibraryChapter("sakamoto-c209", "Chapter 209", "209", 18, "2026-04-06", true)
-                )
-            ),
-            new LibraryTitle(
-                "blacksad",
-                "Blacksad",
-                "comic",
-                "completed",
-                "Vol. 7",
-                "#5a7184",
-                "A noir detective comic with painterly pages and a colder, slower reading cadence.",
-                "2000",
-                7,
-                3,
-                "Juan Díaz Canales · Juanjo Guarnido",
-                List.of("comic", "noir", "detective"),
-                List.of("Blacksad"),
-                "comicvine",
-                "2026-04-12T00:00:00.000Z",
-                List.of(Map.of("title", "Canary", "relation", "Same creators")),
-                List.of(
-                    new LibraryChapter("blacksad-v05", "Volume 5", "5", 28, "2026-02-11", true),
-                    new LibraryChapter("blacksad-v06", "Volume 6", "6", 31, "2026-02-28", true),
-                    new LibraryChapter("blacksad-v07", "Volume 7", "7", 34, "2026-03-18", true)
-                )
-            )
-        ));
+    public static LibraryService empty() {
+        return new LibraryService(List.of());
     }
 
     /**
@@ -169,7 +93,7 @@ public final class LibraryService {
     }
 
     /**
-     * Render a synthetic SVG preview page for Moon's reader flow.
+     * Render a fallback SVG reader page for Raven-managed chapter content.
      *
      * @param titleId title id to resolve
      * @param chapterId chapter id to resolve
@@ -196,9 +120,9 @@ public final class LibraryService {
               <text x="120" y="340" fill="#ffffff" font-family="Space Grotesk, Arial, sans-serif" font-size="96" font-weight="700">%s</text>
               <text x="120" y="430" fill="rgba(255,255,255,0.86)" font-family="IBM Plex Sans, Arial, sans-serif" font-size="44">%s</text>
               <text x="120" y="510" fill="rgba(255,255,255,0.64)" font-family="IBM Plex Sans, Arial, sans-serif" font-size="32">Page %d of %d</text>
-              <text x="120" y="650" fill="rgba(255,255,255,0.92)" font-family="IBM Plex Sans, Arial, sans-serif" font-size="56" font-weight="700">Moon native reader preview</text>
-              <text x="120" y="740" fill="rgba(255,255,255,0.72)" font-family="IBM Plex Sans, Arial, sans-serif" font-size="34">This Scriptarr scaffold page is being rendered directly from Raven so Moon can ship its reader flow now.</text>
-              <text x="120" y="820" fill="rgba(255,255,255,0.72)" font-family="IBM Plex Sans, Arial, sans-serif" font-size="34">Downloader-to-library archive playback can replace this generated art once the full ingest path is ready.</text>
+              <text x="120" y="650" fill="rgba(255,255,255,0.92)" font-family="IBM Plex Sans, Arial, sans-serif" font-size="56" font-weight="700">Moon native reader fallback</text>
+              <text x="120" y="740" fill="rgba(255,255,255,0.72)" font-family="IBM Plex Sans, Arial, sans-serif" font-size="34">This Scriptarr reader page is being generated by Raven because chapter page assets are not available yet.</text>
+              <text x="120" y="820" fill="rgba(255,255,255,0.72)" font-family="IBM Plex Sans, Arial, sans-serif" font-size="34">Real imported chapter art can replace this fallback output once Raven ingest is wired into the library flow.</text>
               <circle cx="960" cy="430" r="150" fill="rgba(255,255,255,0.08)" />
               <circle cx="960" cy="430" r="94" fill="rgba(255,255,255,0.18)" />
               <text x="960" y="450" text-anchor="middle" fill="#ffffff" font-family="Space Grotesk, Arial, sans-serif" font-size="88" font-weight="700">%d</text>

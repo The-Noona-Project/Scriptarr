@@ -8,6 +8,13 @@ const normalizeString = (value) => String(value ?? "").trim();
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+const flushBufferedLine = (buffer, onLine) => {
+  const remaining = normalizeString(buffer);
+  if (remaining && typeof onLine === "function") {
+    onLine(remaining);
+  }
+};
+
 /**
  * Run a Docker CLI command and capture its output.
  *
@@ -15,11 +22,22 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
  * @param {{
  *   cwd?: string,
  *   stdinText?: string | null,
- *   stdio?: "inherit" | "pipe"
+ *   stdio?: "inherit" | "pipe",
+ *   onStdoutLine?: (line: string) => void,
+ *   onStderrLine?: (line: string) => void
  * }} [options]
  * @returns {Promise<{stdout: string, stderr: string}>}
  */
-export const runDocker = (args, {cwd = process.cwd(), stdinText = null, stdio = "pipe"} = {}) => new Promise((resolve, reject) => {
+export const runDocker = (
+  args,
+  {
+    cwd = process.cwd(),
+    stdinText = null,
+    stdio = "pipe",
+    onStdoutLine,
+    onStderrLine
+  } = {}
+) => new Promise((resolve, reject) => {
   const child = spawn("docker", args, {
     cwd,
     shell: false,
@@ -28,16 +46,38 @@ export const runDocker = (args, {cwd = process.cwd(), stdinText = null, stdio = 
 
   let stdout = "";
   let stderr = "";
+  let stdoutBuffer = "";
+  let stderrBuffer = "";
 
   if (stdio !== "inherit" && child.stdout) {
     child.stdout.on("data", (chunk) => {
-      stdout += String(chunk);
+      const text = String(chunk);
+      stdout += text;
+      stdoutBuffer += text;
+
+      const lines = stdoutBuffer.split(/\r?\n/);
+      stdoutBuffer = lines.pop() || "";
+      for (const line of lines) {
+        if (typeof onStdoutLine === "function" && normalizeString(line)) {
+          onStdoutLine(normalizeString(line));
+        }
+      }
     });
   }
 
   if (stdio !== "inherit" && child.stderr) {
     child.stderr.on("data", (chunk) => {
-      stderr += String(chunk);
+      const text = String(chunk);
+      stderr += text;
+      stderrBuffer += text;
+
+      const lines = stderrBuffer.split(/\r?\n/);
+      stderrBuffer = lines.pop() || "";
+      for (const line of lines) {
+        if (typeof onStderrLine === "function" && normalizeString(line)) {
+          onStderrLine(normalizeString(line));
+        }
+      }
     });
   }
 
@@ -47,7 +87,12 @@ export const runDocker = (args, {cwd = process.cwd(), stdinText = null, stdio = 
     child.stdin.end(stdinText);
   }
 
-  child.on("exit", (code) => {
+  child.on("close", (code) => {
+    if (stdio !== "inherit") {
+      flushBufferedLine(stdoutBuffer, onStdoutLine);
+      flushBufferedLine(stderrBuffer, onStderrLine);
+    }
+
     if (code === 0) {
       resolve({stdout, stderr});
       return;
@@ -190,13 +235,15 @@ export const removeDockerContainer = async (containerName, {ignoreMissing = true
  * Ensure a named Docker network exists.
  *
  * @param {string} networkName
- * @returns {Promise<void>}
+ * @returns {Promise<{created: boolean}>}
  */
 export const ensureDockerNetwork = async (networkName) => {
   try {
     await runDocker(["network", "inspect", networkName]);
+    return {created: false};
   } catch {
     await runDocker(["network", "create", networkName]);
+    return {created: true};
   }
 };
 
@@ -229,8 +276,17 @@ export const removeDockerNetwork = async (networkName, {ignoreMissing = true} = 
  *   networkAliases?: string[],
  *   mounts?: Array<{hostPath: string, containerPath: string | null}>,
  *   publishedPorts?: Array<{hostPort: number, containerPort: number}>,
+ *   healthCheck?: {
+ *     command: string,
+ *     interval?: string,
+ *     timeout?: string,
+ *     startPeriod?: string,
+ *     retries?: number
+ *   },
  *   labels?: Record<string, string>,
- *   extraHosts?: string[]
+ *   extraHosts?: string[],
+ *   restartPolicy?: string,
+ *   logger?: {info: Function, warn: Function}
  * }} descriptor
  * @returns {Promise<void>}
  */
@@ -242,9 +298,11 @@ export const runDetachedContainer = async ({
   networkAliases = [],
   mounts = [],
   publishedPorts = [],
+  healthCheck = null,
   labels = {},
   extraHosts = [],
-  restartPolicy = "no"
+  restartPolicy = "no",
+  logger
 }) => {
   const args = ["run", "-d", "--name", name];
 
@@ -283,8 +341,52 @@ export const runDetachedContainer = async ({
     args.push("-p", `${publishedPort.hostPort}:${publishedPort.containerPort}`);
   }
 
+  if (healthCheck?.command) {
+    args.push("--health-cmd", healthCheck.command);
+    if (healthCheck.interval) {
+      args.push("--health-interval", healthCheck.interval);
+    }
+    if (healthCheck.timeout) {
+      args.push("--health-timeout", healthCheck.timeout);
+    }
+    if (healthCheck.startPeriod) {
+      args.push("--health-start-period", healthCheck.startPeriod);
+    }
+    if (Number.isInteger(healthCheck.retries) && healthCheck.retries > 0) {
+      args.push("--health-retries", String(healthCheck.retries));
+    }
+  }
+
   args.push(image);
-  await runDocker(args);
+  const missingImage = !(await imageExists(image));
+
+  if (missingImage && logger) {
+    logger.info("Docker image is missing locally. Allowing docker run to pull it on demand.", {
+      container: name,
+      image
+    });
+  }
+
+  await runDocker(args, {
+    onStdoutLine: missingImage && logger
+      ? (line) => {
+        logger.info("Docker run output.", {
+          container: name,
+          image,
+          output: line
+        });
+      }
+      : undefined,
+    onStderrLine: missingImage && logger
+      ? (line) => {
+        logger.info("Docker pull progress.", {
+          container: name,
+          image,
+          output: line
+        });
+      }
+      : undefined
+  });
 };
 
 /**

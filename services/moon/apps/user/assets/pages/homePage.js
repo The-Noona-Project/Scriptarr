@@ -72,10 +72,12 @@ export const renderHomePage = (result) => {
         </div>
       </div>
       <div class="card-grid">
-        ${latestTitles.map((title) => renderSeriesCard({
-          ...title,
-          href: `/title/${title.id}`
-        })).join("")}
+        ${latestTitles.length
+          ? latestTitles.map((title) => renderSeriesCard({
+            ...title,
+            href: `/title/${title.id}`
+          })).join("")
+          : renderEmptyState("Library is empty", "No titles have been imported into Scriptarr yet. Moon will stay empty here until Raven has real titles to serve.")}
       </div>
     </section>
     <section class="content-grid two-up">

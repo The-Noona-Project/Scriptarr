@@ -1,4 +1,5 @@
 import express from "express";
+import {createLogger} from "@scriptarr/logging";
 import {resolveMoonConfig} from "./config.mjs";
 import {parseCookies} from "./cookies.mjs";
 import {registerAuthRoutes} from "./registerAuthRoutes.mjs";
@@ -12,12 +13,15 @@ import {registerPageRoutes} from "./registerPageRoutes.mjs";
  * Moon remains a single runtime that serves two distinct browser programs:
  * the forward-facing reader UI at `/` and the Arr-style admin UI at `/admin`.
  *
+ * @param {{
+ *   logger?: {info: Function, warn: Function}
+ * }} [options]
  * @returns {Promise<{
  *   app: import("express").Express,
- *   config: ReturnType<typeof resolveMoonConfig>
- * }>}
+  *   config: ReturnType<typeof resolveMoonConfig>
+  * }>}
  */
-export const createMoonApp = async () => {
+export const createMoonApp = async ({logger = createLogger("MOON")} = {}) => {
   const config = resolveMoonConfig();
   const app = express();
 
@@ -39,10 +43,14 @@ export const createMoonApp = async () => {
     });
   });
 
-  registerAuthRoutes(app, {config, getSessionToken});
+  registerAuthRoutes(app, {config, getSessionToken, logger});
   registerLegacyApiRoutes(app, {config, getSessionToken});
   registerMoonV3ProxyRoutes(app, {config, getSessionToken});
   registerPageRoutes(app);
+
+  logger.info("Moon app initialized.", {
+    sageBaseUrl: config.sageBaseUrl
+  });
 
   return {app, config};
 };

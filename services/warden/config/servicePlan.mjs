@@ -24,6 +24,20 @@ import {buildScriptarrStorageLayout, resolveScriptarrDataRoot} from "../filesyst
 
 const normalizeString = (value) => String(value ?? "").trim();
 
+const DEFAULT_HTTP_HEALTH_CHECK = Object.freeze({
+  interval: "15s",
+  timeout: "5s",
+  startPeriod: "15s",
+  retries: 5
+});
+
+const DEFAULT_MYSQL_HEALTH_CHECK = Object.freeze({
+  interval: "10s",
+  timeout: "5s",
+  startPeriod: "30s",
+  retries: 10
+});
+
 const resolvePort = (value, fallback) => {
   const parsed = Number.parseInt(normalizeString(value), 10);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
@@ -79,6 +93,22 @@ const resolveFolderMounts = (layout, serviceName, keys) =>
   keys
     .map((key) => layout.services?.[serviceName]?.[key] || null)
     .filter(Boolean);
+
+const buildNodeHttpHealthCheck = (port) => ({
+  command: `node -e "fetch('http://127.0.0.1:${port}/health',{signal:AbortSignal.timeout(4000)}).then((response)=>{if(!response.ok){process.exit(1);}}).catch(()=>process.exit(1));"`,
+  ...DEFAULT_HTTP_HEALTH_CHECK
+});
+
+const buildCurlHttpHealthCheck = (port, {startPeriod = "25s"} = {}) => ({
+  command: `curl -fsS http://127.0.0.1:${port}/health > /dev/null || exit 1`,
+  ...DEFAULT_HTTP_HEALTH_CHECK,
+  startPeriod
+});
+
+const buildMysqlHealthCheck = () => ({
+  command: "mysqladmin ping -h 127.0.0.1 -u\"$MYSQL_USER\" -p\"$MYSQL_PASSWORD\" --silent || exit 1",
+  ...DEFAULT_MYSQL_HEALTH_CHECK
+});
 
 /**
  * Resolve Moon's public-facing base URL.
@@ -151,6 +181,13 @@ export const resolveStackMode = ({env = process.env} = {}) =>
  *     mounts: Array<{hostPath: string, containerPath: string | null}>,
  *     networkAliases: string[],
  *     publishedPorts: Array<{hostPort: number, containerPort: number}>,
+ *     healthCheck?: {
+ *       command: string,
+ *       interval?: string,
+ *       timeout?: string,
+ *       startPeriod?: string,
+ *       retries?: number
+ *     },
  *     containerPort: number
  *   }>,
  *   storageLayout: ReturnType<typeof buildScriptarrStorageLayout>
@@ -194,6 +231,7 @@ export const resolveServicePlan = ({env = process.env, containerNamePrefix = ""}
       mounts: resolveFolderMounts(storageLayout, "scriptarr-mysql", ["data"]),
       networkAliases: ["scriptarr-mysql"],
       publishedPorts: [],
+      healthCheck: buildMysqlHealthCheck(),
       containerPort: mysql.port
     });
   }
@@ -206,11 +244,13 @@ export const resolveServicePlan = ({env = process.env, containerNamePrefix = ""}
       SCRIPTARR_VAULT_DRIVER: env.SCRIPTARR_VAULT_DRIVER || "mysql",
       ...mysqlEnv,
       SCRIPTARR_SERVICE_TOKENS: JSON.stringify(serviceTokens),
-      SCRIPTARR_VAULT_PORT: String(vaultPort)
+      SCRIPTARR_VAULT_PORT: String(vaultPort),
+      SUPERUSER_ID: env.SUPERUSER_ID || ""
     },
     mounts: resolveFolderMounts(storageLayout, "scriptarr-vault", ["logs"]),
     networkAliases: ["scriptarr-vault"],
     publishedPorts: [],
+    healthCheck: buildNodeHttpHealthCheck(vaultPort),
     containerPort: vaultPort
   });
 
@@ -238,6 +278,7 @@ export const resolveServicePlan = ({env = process.env, containerNamePrefix = ""}
     mounts: resolveFolderMounts(storageLayout, "scriptarr-sage", ["logs"]),
     networkAliases: ["scriptarr-sage"],
     publishedPorts: [],
+    healthCheck: buildNodeHttpHealthCheck(sagePort),
     containerPort: sagePort
   });
 
@@ -252,6 +293,7 @@ export const resolveServicePlan = ({env = process.env, containerNamePrefix = ""}
     mounts: resolveFolderMounts(storageLayout, "scriptarr-moon", ["logs"]),
     networkAliases: ["scriptarr-moon"],
     publishedPorts: [{hostPort: moonPublicPort, containerPort: moonPort}],
+    healthCheck: buildNodeHttpHealthCheck(moonPort),
     containerPort: moonPort
   });
 
@@ -262,11 +304,13 @@ export const resolveServicePlan = ({env = process.env, containerNamePrefix = ""}
     env: {
       SCRIPTARR_VAULT_BASE_URL: `http://scriptarr-vault:${vaultPort}`,
       SCRIPTARR_SERVICE_TOKEN: serviceTokens["scriptarr-raven"],
-      SCRIPTARR_RAVEN_DATA_ROOT: "/downloads"
+      SCRIPTARR_RAVEN_DATA_ROOT: "/downloads",
+      SCRIPTARR_RAVEN_LOG_DIR: "/app/logs"
     },
     mounts: resolveFolderMounts(storageLayout, "scriptarr-raven", ["downloads", "logs"]),
     networkAliases: ["scriptarr-raven"],
     publishedPorts: [],
+    healthCheck: buildCurlHttpHealthCheck(ravenPort, {startPeriod: "25s"}),
     containerPort: ravenPort
   });
 
@@ -283,6 +327,7 @@ export const resolveServicePlan = ({env = process.env, containerNamePrefix = ""}
     mounts: resolveFolderMounts(storageLayout, "scriptarr-portal", ["logs"]),
     networkAliases: ["scriptarr-portal"],
     publishedPorts: [],
+    healthCheck: buildNodeHttpHealthCheck(portalPort),
     containerPort: portalPort
   });
 
@@ -301,6 +346,7 @@ export const resolveServicePlan = ({env = process.env, containerNamePrefix = ""}
     mounts: resolveFolderMounts(storageLayout, "scriptarr-oracle", ["logs"]),
     networkAliases: ["scriptarr-oracle"],
     publishedPorts: [],
+    healthCheck: buildNodeHttpHealthCheck(oraclePort),
     containerPort: oraclePort
   });
 

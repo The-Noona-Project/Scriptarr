@@ -105,21 +105,25 @@ export const renderOverviewPage = (result) => {
             <h2>Focus titles</h2>
           </div>
         </div>
-        <div class="stack-list">
-          ${titles.map((title) => `
-            <article class="list-card">
-              <div class="list-card-head">
-                <div>
-                  <strong>${escapeHtml(title.title)}</strong>
-                  <span>${escapeHtml(title.author || "Unknown creator")}</span>
-                </div>
-                ${renderStatusBadge(title.status)}
-              </div>
-              <p>${escapeHtml(title.summary || "No summary yet.")}</p>
-              ${renderChipList(title.tags)}
-            </article>
-          `).join("")}
-        </div>
+        ${titles.length
+          ? `
+            <div class="stack-list">
+              ${titles.map((title) => `
+                <article class="list-card">
+                  <div class="list-card-head">
+                    <div>
+                      <strong>${escapeHtml(title.title)}</strong>
+                      <span>${escapeHtml(title.author || "Unknown creator")}</span>
+                    </div>
+                    ${renderStatusBadge(title.status)}
+                  </div>
+                  <p>${escapeHtml(title.summary || "No summary yet.")}</p>
+                  ${renderChipList(title.tags)}
+                </article>
+              `).join("")}
+            </div>
+          `
+          : renderEmptyState("Library is empty", "Moon will surface focus titles here after Raven imports real series.")}
       </section>
     </section>
   `;

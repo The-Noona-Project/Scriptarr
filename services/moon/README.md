@@ -14,3 +14,6 @@ Moon 3.0 also includes a native reader flow with:
 
 Admin routes follow the Arr-style operations model, including library, add/import, calendar, activity, wanted,
 requests, users, settings, and system sections under `/admin`.
+
+Fresh installs intentionally show empty library states until Raven has real imported titles to surface, and the admin
+program now ships in a dark-only theme by default.

@@ -148,7 +148,7 @@ public class RavenController {
     ) {
         byte[] payload = libraryService.renderReaderPage(titleId, chapterId, pageIndex);
         if (payload == null) {
-            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("error", "Reader page not found."));
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).build();
         }
         return ResponseEntity.ok()
             .contentType(MediaType.parseMediaType("image/svg+xml"))

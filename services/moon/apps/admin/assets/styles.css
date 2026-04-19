@@ -1,23 +1,23 @@
 :root {
-  --admin-bg: #f3f1ec;
-  --admin-sidebar: #16191d;
-  --admin-sidebar-line: rgba(255, 255, 255, 0.08);
-  --admin-surface: #fbfaf7;
-  --admin-panel: #ffffff;
-  --admin-panel-soft: #f5f2eb;
-  --admin-line: rgba(28, 33, 38, 0.12);
-  --admin-ink: #1b1f23;
-  --admin-muted: #69717a;
+  --admin-bg: #081018;
+  --admin-sidebar: #0b1117;
+  --admin-sidebar-line: rgba(165, 184, 201, 0.12);
+  --admin-surface: #0f1820;
+  --admin-panel: #121d26;
+  --admin-panel-soft: #18232d;
+  --admin-line: rgba(165, 184, 201, 0.16);
+  --admin-ink: #edf3f8;
+  --admin-muted: #93a4b4;
   --admin-accent: #de5d29;
   --admin-accent-soft: rgba(222, 93, 41, 0.12);
-  --admin-good: #1f8f66;
-  --admin-good-soft: rgba(31, 143, 102, 0.14);
-  --admin-warn: #c28119;
-  --admin-warn-soft: rgba(194, 129, 25, 0.14);
-  --admin-bad: #c74343;
-  --admin-bad-soft: rgba(199, 67, 67, 0.14);
+  --admin-good: #52c692;
+  --admin-good-soft: rgba(82, 198, 146, 0.16);
+  --admin-warn: #f0ba57;
+  --admin-warn-soft: rgba(240, 186, 87, 0.16);
+  --admin-bad: #ff8f8f;
+  --admin-bad-soft: rgba(255, 143, 143, 0.16);
   --admin-radius: 18px;
-  --admin-shadow: 0 18px 48px rgba(16, 18, 20, 0.08);
+  --admin-shadow: 0 22px 52px rgba(0, 0, 0, 0.28);
 }
 
 * {
@@ -27,9 +27,11 @@
 body {
   margin: 0;
   min-height: 100vh;
+  color-scheme: dark;
   background:
-    radial-gradient(circle at top right, rgba(222, 93, 41, 0.08), transparent 28%),
-    linear-gradient(180deg, #f5f2ec 0%, #efebe4 100%);
+    radial-gradient(circle at top right, rgba(222, 93, 41, 0.16), transparent 28%),
+    radial-gradient(circle at bottom left, rgba(98, 192, 176, 0.12), transparent 24%),
+    linear-gradient(180deg, #091119 0%, #060c12 100%);
   color: var(--admin-ink);
   font-family: "IBM Plex Sans", sans-serif;
 }
@@ -52,7 +54,7 @@ button {
 }
 
 .admin-sidebar {
-  background: linear-gradient(180deg, #171a1e 0%, #111417 100%);
+  background: linear-gradient(180deg, var(--admin-sidebar) 0%, #0a0f15 100%);
   color: #f8f7f4;
   padding: 28px 20px;
   border-right: 1px solid var(--admin-sidebar-line);
@@ -140,7 +142,7 @@ button {
   align-items: flex-start;
   gap: 24px;
   padding: 22px 24px;
-  background: rgba(255, 255, 255, 0.72);
+  background: rgba(10, 17, 24, 0.82);
   border: 1px solid var(--admin-line);
   border-radius: 24px;
   backdrop-filter: blur(12px);
@@ -211,7 +213,7 @@ button {
 }
 
 .ghost-button {
-  background: white;
+  background: var(--admin-panel-soft);
   color: var(--admin-ink);
 }
 
@@ -284,7 +286,7 @@ button {
 }
 
 .panel-section {
-  background: rgba(255, 255, 255, 0.74);
+  background: rgba(10, 17, 24, 0.84);
   border: 1px solid var(--admin-line);
   border-radius: 24px;
   padding: 22px;
@@ -339,7 +341,7 @@ button {
   overflow-x: auto;
   border: 1px solid var(--admin-line);
   border-radius: 18px;
-  background: white;
+  background: var(--admin-panel);
 }
 
 .data-table {
@@ -361,7 +363,7 @@ button {
   font-size: 0.82rem;
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  background: var(--admin-panel-soft);
+  background: rgba(255, 255, 255, 0.04);
 }
 
 .data-table tbody tr:last-child td {
@@ -441,7 +443,7 @@ button {
   border: 1px solid var(--admin-line);
   border-radius: 14px;
   padding: 12px 14px;
-  background: white;
+  background: var(--admin-panel-soft);
   color: var(--admin-ink);
 }
 
@@ -478,7 +480,7 @@ button {
   padding: 16px;
   border: 1px solid var(--admin-line);
   border-radius: 18px;
-  background: white;
+  background: var(--admin-panel-soft);
 }
 
 .provider-card span {

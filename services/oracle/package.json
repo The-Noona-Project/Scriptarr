@@ -9,6 +9,7 @@
     "test": "node --test tests/**/*.test.mjs"
   },
   "dependencies": {
+    "@scriptarr/logging": "file:../../packages/scriptarr-logging",
     "@langchain/openai": "^0.6.13",
     "express": "^5.1.0"
   }

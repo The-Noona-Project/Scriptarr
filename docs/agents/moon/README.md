@@ -26,3 +26,4 @@
   - `/myrequests`
   - `/following`
 - Moon stays responsible for browser-safe proxying into Sage. Browsers should not call Raven, Warden, Vault, Portal, or Oracle directly.
+- Moon should show honest empty states when Raven has no imported titles, and `/admin` should stay dark by default.

@@ -1,6 +1,7 @@
 /**
  * @file Scriptarr Warden module: services/warden/config/runtimeConfig.mjs.
  */
+import {sanitizeStructuredData} from "@scriptarr/logging";
 import {
   DEFAULT_DOCKER_SOCKET_PATH,
   DEFAULT_NETWORK_NAME,
@@ -77,4 +78,13 @@ export const resolveWardenRuntimeSnapshot = ({env = process.env, localAiStatus =
     managedServices: runtimeStatus?.managedServices || []
   };
 };
+
+/**
+ * Redact secrets from the runtime snapshot before Warden exposes it through
+ * its public API routes and Moon admin surfaces.
+ *
+ * @param {ReturnType<typeof resolveWardenRuntimeSnapshot> | Record<string, unknown>} snapshot
+ * @returns {Record<string, unknown>}
+ */
+export const sanitizeWardenRuntimeSnapshot = (snapshot) => sanitizeStructuredData(snapshot);
 

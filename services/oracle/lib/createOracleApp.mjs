@@ -1,4 +1,5 @@
 import express from "express";
+import {createLogger} from "@scriptarr/logging";
 import {resolveOracleConfig} from "./config.mjs";
 import {createOracleClient} from "./oracleClient.mjs";
 import {readScriptarrStatus} from "./readStatus.mjs";
@@ -17,7 +18,7 @@ const probeLocalAi = async (runtime) => {
   }
 };
 
-export const createOracleApp = async () => {
+export const createOracleApp = async ({logger = createLogger("ORACLE")} = {}) => {
   const config = resolveOracleConfig();
   const vaultClient = createVaultClient(config);
   const app = express();
@@ -59,6 +60,7 @@ export const createOracleApp = async () => {
   app.post("/api/chat", async (req, res) => {
     const message = String(req.body.message || "").trim();
     if (!message) {
+      logger.warn("Oracle chat request was missing a message.");
       res.status(400).json({error: "message is required."});
       return;
     }
@@ -99,6 +101,10 @@ export const createOracleApp = async () => {
     try {
       const localAiAvailable = runtime.provider !== "localai" || await probeLocalAi(runtime);
       if (!localAiAvailable) {
+        logger.warn("Oracle fell back because LocalAI was unavailable.", {
+          provider: runtime.provider,
+          localAiBaseUrl: runtime.localAiBaseUrl
+        });
         res.json({
           ok: true,
           degraded: true,
@@ -119,6 +125,10 @@ export const createOracleApp = async () => {
         status
       });
     } catch (error) {
+      logger.error("Oracle fell back after chat generation failed.", {
+        provider: runtime.provider,
+        error
+      });
       res.json({
         ok: true,
         degraded: true,
@@ -127,6 +137,10 @@ export const createOracleApp = async () => {
         error: error instanceof Error ? error.message : String(error)
       });
     }
+  });
+
+  logger.info("Oracle app initialized.", {
+    persona: config.noonaPersonaName
   });
 
   return {app, config};

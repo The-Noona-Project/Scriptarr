@@ -14,18 +14,47 @@ process.env.SUPERUSER_ID = "owner-1";
 const {createVaultApp} = await import("../../vault/lib/createVaultApp.mjs");
 const {createSageApp} = await import("../lib/createSageApp.mjs");
 
+const defaultLibraryTitle = Object.freeze({
+  id: "dan-da-dan",
+  title: "Dandadan",
+  mediaType: "manga",
+  status: "watching",
+  latestChapter: "166",
+  coverAccent: "#ff6a3d",
+  summary: "Aliens and yokai.",
+  releaseLabel: "2021",
+  chapterCount: 166,
+  chaptersDownloaded: 6,
+  author: "Yukinobu Tatsu",
+  tags: ["action"],
+  aliases: ["Dan Da Dan"],
+  metadataProvider: "mangadex",
+  metadataMatchedAt: "2026-04-18T00:00:00.000Z",
+  relations: [],
+  chapters: [{
+    id: "dandadan-c166",
+    label: "Chapter 166",
+    chapterNumber: "166",
+    pageCount: 16,
+    releaseDate: "2026-04-14",
+    available: true
+  }]
+});
+
 /**
  * Create a small dependency stub for Sage's Raven, Warden, Portal, and Oracle
  * calls so the Moon v3 broker routes can be tested in isolation.
  *
+ * @param {{libraryTitles?: Array<Record<string, unknown>>}} [options]
  * @returns {Promise<{server: http.Server, calls: Record<string, number>}>}
  */
-const createDependencyStub = () => {
+const createDependencyStub = ({libraryTitles = [defaultLibraryTitle]} = {}) => {
   const calls = {
     health: 0,
     bootstrap: 0,
     runtime: 0
   };
+  const libraryById = new Map(libraryTitles.map((title) => [title.id, title]));
 
   const server = http.createServer((request, response) => {
     if (request.url === "/health") {
@@ -67,65 +96,20 @@ const createDependencyStub = () => {
 
     if (request.url === "/v1/library") {
       response.writeHead(200, {"Content-Type": "application/json"});
-      response.end(JSON.stringify({
-        titles: [{
-          id: "dan-da-dan",
-          title: "Dandadan",
-          mediaType: "manga",
-          status: "watching",
-          latestChapter: "166",
-          coverAccent: "#ff6a3d",
-          summary: "Aliens and yokai.",
-          releaseLabel: "2021",
-          chapterCount: 166,
-          chaptersDownloaded: 6,
-          author: "Yukinobu Tatsu",
-          tags: ["action"],
-          aliases: ["Dan Da Dan"],
-          metadataProvider: "mangadex",
-          metadataMatchedAt: "2026-04-18T00:00:00.000Z",
-          relations: [],
-          chapters: [{
-            id: "dandadan-c166",
-            label: "Chapter 166",
-            chapterNumber: "166",
-            pageCount: 16,
-            releaseDate: "2026-04-14",
-            available: true
-          }]
-        }]
-      }));
+      response.end(JSON.stringify({titles: libraryTitles}));
       return;
     }
 
-    if (request.url === "/v1/library/dan-da-dan") {
+    if (request.url?.startsWith("/v1/library/")) {
+      const titleId = decodeURIComponent(String(request.url).replace("/v1/library/", ""));
+      const title = libraryById.get(titleId);
+      if (!title) {
+        response.writeHead(404, {"Content-Type": "application/json"});
+        response.end(JSON.stringify({error: "Title not found."}));
+        return;
+      }
       response.writeHead(200, {"Content-Type": "application/json"});
-      response.end(JSON.stringify({
-        id: "dan-da-dan",
-        title: "Dandadan",
-        mediaType: "manga",
-        status: "watching",
-        latestChapter: "166",
-        coverAccent: "#ff6a3d",
-        summary: "Aliens and yokai.",
-        releaseLabel: "2021",
-        chapterCount: 166,
-        chaptersDownloaded: 6,
-        author: "Yukinobu Tatsu",
-        tags: ["action"],
-        aliases: ["Dan Da Dan"],
-        metadataProvider: "mangadex",
-        metadataMatchedAt: "2026-04-18T00:00:00.000Z",
-        relations: [],
-        chapters: [{
-          id: "dandadan-c166",
-          label: "Chapter 166",
-          chapterNumber: "166",
-          pageCount: 16,
-          releaseDate: "2026-04-14",
-          available: true
-        }]
-      }));
+      response.end(JSON.stringify(title));
       return;
     }
 
@@ -284,6 +268,52 @@ test("sage claims the first owner and moderates requests", async () => {
   assert.ok(dependencyStub.calls.health >= 1);
   assert.ok(dependencyStub.calls.bootstrap >= 1);
   assert.ok(dependencyStub.calls.runtime >= 1);
+
+  sageServer.close();
+  vaultServer.close();
+  dependencyStub.server.close();
+});
+
+test("sage keeps Moon library routes empty when Raven has no imported titles", async () => {
+  const {app: vaultApp} = await createVaultApp();
+  const vaultServer = vaultApp.listen(0);
+  const vaultPort = vaultServer.address().port;
+
+  const dependencyStub = await createDependencyStub({libraryTitles: []});
+  dependencyStub.server.listen(0);
+  const dependencyPort = dependencyStub.server.address().port;
+
+  process.env.SCRIPTARR_VAULT_BASE_URL = `http://127.0.0.1:${vaultPort}`;
+  process.env.SCRIPTARR_WARDEN_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_PORTAL_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_ORACLE_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_RAVEN_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+
+  const {app: sageApp} = await createSageApp();
+  const sageServer = sageApp.listen(0);
+  const sagePort = sageServer.address().port;
+  const baseUrl = `http://127.0.0.1:${sagePort}`;
+
+  const ownerClaim = await fetch(`${baseUrl}/api/auth/claim`, {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({discordUserId: "owner-1", username: "Owner"})
+  }).then((response) => response.json());
+
+  const headers = {
+    "Authorization": `Bearer ${ownerClaim.token}`
+  };
+
+  const legacyLibrary = await fetch(`${baseUrl}/api/library`, {headers}).then((response) => response.json());
+  assert.deepEqual(legacyLibrary.library, []);
+
+  const moonLibrary = await fetch(`${baseUrl}/api/moon-v3/user/library`, {headers}).then((response) => response.json());
+  assert.deepEqual(moonLibrary, {titles: []});
+
+  const overview = await fetch(`${baseUrl}/api/moon-v3/admin/overview`, {headers}).then((response) => response.json());
+  assert.equal(overview.counts.titles, 0);
+  assert.equal(overview.counts.missingChapters, 0);
+  assert.equal(overview.counts.metadataGaps, 0);
 
   sageServer.close();
   vaultServer.close();

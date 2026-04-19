@@ -5,6 +5,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.client.TestRestTemplate;
 import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 
 import java.util.List;
 import java.util.Map;
@@ -44,5 +46,40 @@ class RavenApplicationTests {
 
         Map<?, ?> vpn = (Map<?, ?>) payload.get("vpn");
         assertEquals(false, vpn.get("enabled"));
+    }
+
+    /**
+     * Verify Raven starts with an empty library and reader routes stay honest
+     * about missing titles.
+     */
+    @Test
+    void libraryStartsEmptyAndReaderRoutesReturnNotFound() {
+        Map<?, ?> payload = restTemplate.getForObject("http://127.0.0.1:" + port + "/v1/library", Map.class);
+        List<?> titles = (List<?>) payload.get("titles");
+        assertTrue(titles.isEmpty());
+
+        ResponseEntity<String> titleResponse = restTemplate.getForEntity(
+            "http://127.0.0.1:" + port + "/v1/library/missing-title",
+            String.class
+        );
+        assertEquals(HttpStatus.NOT_FOUND, titleResponse.getStatusCode());
+
+        ResponseEntity<String> manifestResponse = restTemplate.getForEntity(
+            "http://127.0.0.1:" + port + "/v1/reader/missing-title",
+            String.class
+        );
+        assertEquals(HttpStatus.NOT_FOUND, manifestResponse.getStatusCode());
+
+        ResponseEntity<String> chapterResponse = restTemplate.getForEntity(
+            "http://127.0.0.1:" + port + "/v1/reader/missing-title/chapter-1",
+            String.class
+        );
+        assertEquals(HttpStatus.NOT_FOUND, chapterResponse.getStatusCode());
+
+        ResponseEntity<String> pageResponse = restTemplate.getForEntity(
+            "http://127.0.0.1:" + port + "/v1/reader/missing-title/chapter-1/page/0",
+            String.class
+        );
+        assertEquals(HttpStatus.NOT_FOUND, pageResponse.getStatusCode());
     }
 }

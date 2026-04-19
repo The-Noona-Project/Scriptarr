@@ -1,0 +1,14 @@
+{
+  "name": "@scriptarr/logging",
+  "version": "3.0.0",
+  "private": true,
+  "type": "module",
+  "main": "index.mjs",
+  "exports": "./index.mjs",
+  "scripts": {
+    "test": "node --test tests/**/*.test.mjs"
+  },
+  "dependencies": {
+    "chalk": "^5.6.2"
+  }
+}

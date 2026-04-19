@@ -1,14 +1,29 @@
 /**
  * @file Scriptarr Sage module: services/sage/server.mjs.
  */
+import {createLogger} from "@scriptarr/logging";
 import {createSageApp} from "./lib/createSageApp.mjs";
 
-const {app, config} = await createSageApp();
+const logger = createLogger("SAGE");
+let app;
 
-if (process.env.NODE_ENV !== "test") {
-  app.listen(config.port, () => {
-    console.log(`scriptarr-sage listening on ${config.port}`);
-  });
+try {
+  const built = await createSageApp({logger});
+  app = built.app;
+
+  if (process.env.NODE_ENV !== "test") {
+    const server = app.listen(built.config.port, () => {
+      logger.info("Sage listening.", {
+        port: built.config.port
+      });
+    });
+    server.on("error", (error) => {
+      logger.error("Sage listener failed.", {error});
+    });
+  }
+} catch (error) {
+  logger.error("Sage failed to start.", {error});
+  throw error;
 }
 
 export default app;

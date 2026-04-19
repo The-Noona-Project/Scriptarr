@@ -153,6 +153,7 @@ const withPermission = (requirePermission, permission, handler) => async (req, r
  * @param {import("express").Express} app
  * @param {{
  *   config: Record<string, string>,
+ *   logger?: {warn: Function},
  *   vaultClient: ReturnType<import("./vaultClient.mjs").createVaultClient>,
  *   requireUser: ReturnType<import("./auth.mjs").requireSession>,
  *   requirePermission: (permission: string) => import("express").RequestHandler,
@@ -165,6 +166,7 @@ const withPermission = (requirePermission, permission, handler) => async (req, r
  */
 export const registerMoonV3Routes = (app, {
   config,
+  logger,
   vaultClient,
   requireUser,
   requirePermission,
@@ -496,6 +498,10 @@ export const registerMoonV3Routes = (app, {
 
   app.post("/api/moon-v3/user/requests", withUser(requireUser, async (req, res) => {
     if (!hasPermission(req.user, "create_requests")) {
+      logger?.warn("Moon v3 request creation denied by policy.", {
+        discordUserId: req.user.discordUserId,
+        title: req.body?.title
+      });
       res.status(403).json({error: "You cannot create requests."});
       return;
     }

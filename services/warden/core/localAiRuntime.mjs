@@ -148,7 +148,8 @@ export const createLocalAiRuntime = ({env = process.env, logger}) => {
         env: {},
         networkName: managedNetworkName,
         networkAliases: ["scriptarr-localai"],
-        publishedPorts: [{hostPort: publishedPort, containerPort: DEFAULT_LOCALAI_PORT}]
+        publishedPorts: [{hostPort: publishedPort, containerPort: DEFAULT_LOCALAI_PORT}],
+        logger
       });
       mark({
         installed: true,

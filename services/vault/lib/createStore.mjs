@@ -2,6 +2,15 @@ import mysql from "mysql2/promise";
 
 const nowIso = () => new Date().toISOString();
 const randomToken = (prefix) => `${prefix}_${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
+const parseJsonColumn = (value, fallback = null) => {
+  if (value == null) {
+    return fallback;
+  }
+  if (typeof value === "string") {
+    return JSON.parse(value);
+  }
+  return value;
+};
 
 const defaultPermissionsForRole = (role) => {
   switch (role) {
@@ -228,7 +237,7 @@ const createMysqlStore = (config) => {
     username: row.username,
     avatarUrl: row.avatar_url,
     role: row.role_name,
-    permissions: JSON.parse(row.permissions_json),
+    permissions: parseJsonColumn(row.permissions_json, []),
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString()
   });
@@ -298,7 +307,7 @@ const createMysqlStore = (config) => {
     async getSetting(key) {
       const [rows] = await pool.query("SELECT * FROM settings WHERE setting_key = ? LIMIT 1", [key]);
       return rows[0]
-        ? {key: rows[0].setting_key, value: JSON.parse(rows[0].setting_value), updatedAt: rows[0].updated_at.toISOString()}
+        ? {key: rows[0].setting_key, value: parseJsonColumn(rows[0].setting_value), updatedAt: rows[0].updated_at.toISOString()}
         : null;
     },
     async setSecret(key, value) {
@@ -312,7 +321,7 @@ const createMysqlStore = (config) => {
     async getSecret(key) {
       const [rows] = await pool.query("SELECT * FROM secrets WHERE secret_key = ? LIMIT 1", [key]);
       return rows[0]
-        ? {key: rows[0].secret_key, value: JSON.parse(rows[0].secret_value), updatedAt: rows[0].updated_at.toISOString()}
+        ? {key: rows[0].secret_key, value: parseJsonColumn(rows[0].secret_value), updatedAt: rows[0].updated_at.toISOString()}
         : null;
     },
     async listRequests() {
@@ -326,7 +335,7 @@ const createMysqlStore = (config) => {
         requestedBy: row.requested_by,
         status: row.status_name,
         moderatorComment: row.moderator_comment,
-        timeline: JSON.parse(row.timeline_json),
+        timeline: parseJsonColumn(row.timeline_json, []),
         createdAt: row.created_at.toISOString(),
         updatedAt: row.updated_at.toISOString()
       }));
@@ -355,7 +364,7 @@ const createMysqlStore = (config) => {
         requestedBy: row.requested_by,
         status: row.status_name,
         moderatorComment: row.moderator_comment,
-        timeline: JSON.parse(row.timeline_json),
+        timeline: parseJsonColumn(row.timeline_json, []),
         createdAt: row.created_at.toISOString(),
         updatedAt: row.updated_at.toISOString()
       };
@@ -365,7 +374,7 @@ const createMysqlStore = (config) => {
       if (!rows[0]) {
         return null;
       }
-      const timeline = JSON.parse(rows[0].timeline_json);
+      const timeline = parseJsonColumn(rows[0].timeline_json, []);
       timeline.push({
         type: review.status,
         message: review.comment || `Request ${review.status}.`,
@@ -388,7 +397,7 @@ const createMysqlStore = (config) => {
         requestedBy: row.requested_by,
         status: row.status_name,
         moderatorComment: row.moderator_comment,
-        timeline: JSON.parse(row.timeline_json),
+        timeline: parseJsonColumn(row.timeline_json, []),
         createdAt: row.created_at.toISOString(),
         updatedAt: row.updated_at.toISOString()
       };
@@ -409,7 +418,7 @@ const createMysqlStore = (config) => {
         discordUserId: row.discord_user_id,
         chapterLabel: row.chapter_label,
         positionRatio: row.position_ratio,
-        bookmark: row.bookmark_json ? JSON.parse(row.bookmark_json) : null,
+        bookmark: parseJsonColumn(row.bookmark_json),
         updatedAt: row.updated_at.toISOString()
       }));
     }

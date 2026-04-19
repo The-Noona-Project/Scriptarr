@@ -1,4 +1,5 @@
 import express from "express";
+import {createLogger} from "@scriptarr/logging";
 import {resolvePortalConfig} from "./config.mjs";
 import {createVaultClient} from "./vaultClient.mjs";
 
@@ -9,7 +10,7 @@ const commandCatalog = Object.freeze([
   {name: "chat", description: "Talk to Noona through Oracle and LocalAI."}
 ]);
 
-export const createPortalApp = async () => {
+export const createPortalApp = async ({logger = createLogger("PORTAL")} = {}) => {
   const config = resolvePortalConfig();
   const vault = createVaultClient(config);
   const app = express();
@@ -42,6 +43,10 @@ export const createPortalApp = async () => {
     const username = String(req.body.username || "").trim() || "Discord Reader";
     const title = String(req.body.title || "").trim();
     if (!discordUserId || !title) {
+      logger.warn("Discord request payload was incomplete.", {
+        discordUserIdPresent: Boolean(discordUserId),
+        titlePresent: Boolean(title)
+      });
       res.status(400).json({error: "discordUserId and title are required."});
       return;
     }
@@ -71,6 +76,10 @@ export const createPortalApp = async () => {
       body: JSON.stringify({message: req.body.message})
     });
     res.status(response.status).json(await response.json());
+  });
+
+  logger.info("Portal app initialized.", {
+    discordReady: Boolean(config.discordToken)
   });
 
   return {app, config};

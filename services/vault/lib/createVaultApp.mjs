@@ -1,11 +1,12 @@
 import express from "express";
+import {createLogger} from "@scriptarr/logging";
 import {resolveVaultConfig} from "./config.mjs";
 import {serviceAuth} from "./serviceAuth.mjs";
 import {createStore} from "./createStore.mjs";
 
 const requireJson = express.json();
 
-export const createVaultApp = async () => {
+export const createVaultApp = async ({logger = createLogger("VAULT")} = {}) => {
   const config = resolveVaultConfig();
   const store = createStore(config);
   await store.init();
@@ -41,6 +42,9 @@ export const createVaultApp = async () => {
   app.get("/api/service/users/by-discord/:discordUserId", async (req, res) => {
     const user = await store.getUserByDiscordId(req.params.discordUserId);
     if (!user) {
+      logger.warn("Discord user lookup missed.", {
+        discordUserId: req.params.discordUserId
+      });
       res.status(404).json({error: "User not found."});
       return;
     }
@@ -54,6 +58,9 @@ export const createVaultApp = async () => {
   app.get("/api/service/sessions/:token", async (req, res) => {
     const user = await store.getUserForSession(req.params.token);
     if (!user) {
+      logger.warn("Session lookup missed.", {
+        token: req.params.token
+      });
       res.status(404).json({error: "Session not found."});
       return;
     }
@@ -89,6 +96,9 @@ export const createVaultApp = async () => {
   app.post("/api/service/requests/:id/review", requireJson, async (req, res) => {
     const reviewed = await store.reviewRequest(req.params.id, req.body);
     if (!reviewed) {
+      logger.warn("Request review target was not found.", {
+        requestId: req.params.id
+      });
       res.status(404).json({error: "Request not found."});
       return;
     }
@@ -101,6 +111,10 @@ export const createVaultApp = async () => {
 
   app.get("/api/service/progress/:discordUserId", async (req, res) => {
     res.json(await store.getProgressByUser(req.params.discordUserId));
+  });
+
+  logger.info("Vault app initialized.", {
+    driver: config.driver
   });
 
   return {app, config, store};

@@ -1,4 +1,4 @@
-# Scriptarr 3.0
+# Scriptarr
 
 Scriptarr is a self-hosted manga and comics stack rebuilt for 3.0. `Noona` now only refers to the Discord bot and AI
 persona while the product, services, storage, images, and docs all use Scriptarr naming.
@@ -34,8 +34,13 @@ Published images target `docker.darkmatterservers.com/the-noona-project/scriptar
 
 The supported runtime install path is to manually start only `scriptarr-warden`. Warden runs as its own container with
 the Docker socket bind plus its `warden/logs` and `warden/runtime` mounts, then reconciles Moon, Vault, Sage, Raven,
-Portal, Oracle, and optional managed MySQL for you. See [ServerAdmin.md](ServerAdmin.md) for the full container
+Portal, Oracle, and optional managed MySQL for you. On Linux and Unraid hosts, also bind the full
+`SCRIPTARR_DATA_ROOT` path back into the container at the same absolute path so Warden can prepare the storage tree
+directly while it reconciles the sibling containers. See [ServerAdmin.md](ServerAdmin.md) for the full container
 contract and the recommended `docker run` shape.
+
+Fresh installs no longer seed demo titles into Moon or Raven. The user and admin library views stay empty until Raven
+has real imported titles to surface.
 
 For end-to-end Docker verification, use:
 
@@ -45,14 +50,18 @@ For end-to-end Docker verification, use:
 ## First Boot
 
 1. Start the `scriptarr-warden` container with the Docker socket bind, `SUPERUSER_ID`, and the host data root Warden
-   should use for managed service storage.
+   should use for managed service storage. On Linux and Unraid, also bind that host data root back into the container
+   at the same path.
 2. Provide the Discord bot token as `DISCORD_TOKEN`.
 3. Set `SCRIPTARR_MYSQL_URL` to `SELFHOST` for managed MySQL or to `mysql://...` for an external database.
 4. Optionally set `SCRIPTARR_MYSQL_USER` if you want to override the managed app user or supply a username that is
    missing from the external MySQL URL.
-5. Open Moon and use the admin claim flow.
-6. Copy the callback URL surfaced by Warden or Moon into the Discord developer portal.
-7. Finish integrations, library, metadata, VPN, Oracle, and moderation settings in Moon admin.
+5. Watch the Warden logs while it reconciles the sibling containers. First boot now surfaces when Docker is creating or
+   downloading the managed images.
+   Docker health checks now report `healthy` for Warden plus the managed services once each container settles.
+6. Open Moon, confirm the bootstrap surface shows the configured first owner id, and use the admin claim flow.
+7. Copy the callback URL surfaced by Warden or Moon into the Discord developer portal.
+8. Finish integrations, library, metadata, VPN, Oracle, and moderation settings in Moon admin.
 
 ## Key Contracts
 

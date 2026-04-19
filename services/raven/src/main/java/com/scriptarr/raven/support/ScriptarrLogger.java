@@ -23,6 +23,12 @@ import java.util.stream.Stream;
  */
 @Service
 public class ScriptarrLogger implements InitializingBean {
+    private static final String ANSI_RESET = "\u001B[0m";
+    private static final String ANSI_CYAN_BRIGHT = "\u001B[96m";
+    private static final String ANSI_GREEN_BRIGHT = "\u001B[92m";
+    private static final String ANSI_YELLOW_BRIGHT = "\u001B[93m";
+    private static final String ANSI_RED_BRIGHT = "\u001B[91m";
+    private static final String ANSI_GRAY = "\u001B[90m";
     private static final String LATEST_LOG = "latest.log";
     private static final int MAX_LOGS = 5;
     private static final DateTimeFormatter FILE_FORMAT = DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss");
@@ -33,6 +39,7 @@ public class ScriptarrLogger implements InitializingBean {
     private Path logsRoot;
     private BufferedWriter writer;
     private boolean debugEnabled;
+    private boolean ansiEnabled;
 
     /**
      * Initialize the downloads root, log rotation, and active log writer.
@@ -42,6 +49,7 @@ public class ScriptarrLogger implements InitializingBean {
     @Override
     public void afterPropertiesSet() throws Exception {
         debugEnabled = parseDebug(System.getenv("DEBUG"));
+        ansiEnabled = parseAnsiEnabled();
         downloadsRoot = resolveDownloadsRoot();
         logsRoot = resolveLogsRoot(downloadsRoot);
         Files.createDirectories(downloadsRoot);
@@ -168,20 +176,22 @@ public class ScriptarrLogger implements InitializingBean {
     }
 
     private synchronized void write(String level, String tag, String message, String detail) {
-        StringBuilder line = new StringBuilder()
+        String plainLine = new StringBuilder()
             .append(LocalDateTime.now().format(LINE_FORMAT))
             .append(" [").append(level).append("]")
             .append(" [").append(sanitize(tag)).append("] ")
-            .append(sanitize(message));
+            .append(sanitize(message))
+            .toString();
         if (detail != null && !detail.isBlank()) {
-            line.append(" | ").append(sanitize(detail));
+            plainLine = plainLine + " | " + sanitize(detail);
         }
-        String rendered = line + System.lineSeparator();
-        System.out.print(rendered);
+        String consoleLine = renderConsoleLine(plainLine, level, sanitize(tag)) + System.lineSeparator();
+        String fileLine = plainLine + System.lineSeparator();
+        System.out.print(consoleLine);
 
         if (writer != null) {
             try {
-                writer.write(rendered);
+                writer.write(fileLine);
                 writer.flush();
             } catch (IOException ignored) {
                 writer = null;
@@ -241,6 +251,49 @@ public class ScriptarrLogger implements InitializingBean {
             case "1", "true", "yes", "on" -> true;
             default -> false;
         };
+    }
+
+    private boolean parseAnsiEnabled() {
+        String noColor = System.getenv("NO_COLOR");
+        if (noColor != null && !noColor.isBlank()) {
+            return false;
+        }
+
+        String configured = System.getenv("SCRIPTARR_RAVEN_COLOR");
+        if (configured == null || configured.isBlank()) {
+            return true;
+        }
+
+        return switch (configured.trim().toLowerCase(Locale.ROOT)) {
+            case "0", "false", "no", "off" -> false;
+            default -> true;
+        };
+    }
+
+    private String renderConsoleLine(String line, String level, String tag) {
+        if (!ansiEnabled) {
+            return line;
+        }
+
+        String levelColor = switch (level) {
+            case "DEBUG" -> ANSI_GRAY;
+            case "INFO" -> ANSI_GREEN_BRIGHT;
+            case "WARN" -> ANSI_YELLOW_BRIGHT;
+            case "ERROR" -> ANSI_RED_BRIGHT;
+            default -> "";
+        };
+
+        String withLevel = replaceFirstExact(line, "[" + level + "]", levelColor + "[" + level + "]" + ANSI_RESET);
+        return replaceFirstExact(withLevel, "[" + tag + "]", ANSI_CYAN_BRIGHT + "[" + tag + "]" + ANSI_RESET);
+    }
+
+    private String replaceFirstExact(String input, String search, String replacement) {
+        int index = input.indexOf(search);
+        if (index < 0) {
+            return input;
+        }
+
+        return input.substring(0, index) + replacement + input.substring(index + search.length());
     }
 
     private String sanitize(String value) {

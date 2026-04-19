@@ -25,6 +25,15 @@ import {toDockerDesktopHostPath} from "../filesystem/storageLayout.mjs";
 
 const normalizeString = (value) => String(value ?? "").trim();
 
+const DURATION_UNITS_IN_NANOSECONDS = Object.freeze({
+  ns: 1n,
+  us: 1000n,
+  ms: 1000000n,
+  s: 1000000000n,
+  m: 60000000000n,
+  h: 3600000000000n
+});
+
 const normalizeMapEntries = (entries) =>
   Object.entries(entries || {})
     .map(([key, value]) => [key, String(value)])
@@ -76,6 +85,92 @@ const sameList = (left, right) =>
 const includesAll = (actual, desired) => desired.every((entry) => actual.includes(entry));
 
 const resolveRestartPolicy = (descriptor) => descriptor.restartPolicy || "no";
+
+const toNanoseconds = (value) => {
+  const normalized = normalizeString(value).toLowerCase();
+  if (!normalized) {
+    return null;
+  }
+
+  const match = normalized.match(/^(\d+)(ns|us|ms|s|m|h)$/);
+  if (!match) {
+    return null;
+  }
+
+  const [, amount, unit] = match;
+  return BigInt(amount) * DURATION_UNITS_IN_NANOSECONDS[unit];
+};
+
+const desiredHealthCheckFor = (descriptor) => {
+  if (!descriptor?.healthCheck?.command) {
+    return null;
+  }
+
+  return {
+    command: normalizeString(descriptor.healthCheck.command),
+    interval: toNanoseconds(descriptor.healthCheck.interval),
+    timeout: toNanoseconds(descriptor.healthCheck.timeout),
+    startPeriod: toNanoseconds(descriptor.healthCheck.startPeriod),
+    retries: Number.isInteger(descriptor.healthCheck.retries) ? descriptor.healthCheck.retries : null
+  };
+};
+
+const actualHealthCheckFor = (inspect) => {
+  const healthCheck = inspect?.Config?.Healthcheck;
+  if (!healthCheck || !Array.isArray(healthCheck.Test) || healthCheck.Test[0] === "NONE") {
+    return null;
+  }
+
+  const command = healthCheck.Test[0] === "CMD-SHELL"
+    ? normalizeString(healthCheck.Test.slice(1).join(" "))
+    : normalizeString(healthCheck.Test.join(" "));
+
+  return {
+    command,
+    interval: typeof healthCheck.Interval === "bigint"
+      ? healthCheck.Interval
+      : BigInt(Number(healthCheck.Interval || 0)),
+    timeout: typeof healthCheck.Timeout === "bigint"
+      ? healthCheck.Timeout
+      : BigInt(Number(healthCheck.Timeout || 0)),
+    startPeriod: typeof healthCheck.StartPeriod === "bigint"
+      ? healthCheck.StartPeriod
+      : BigInt(Number(healthCheck.StartPeriod || 0)),
+    retries: Number.isInteger(healthCheck.Retries) ? healthCheck.Retries : Number(healthCheck.Retries || 0)
+  };
+};
+
+const sameHealthCheck = (actual, desired) => {
+  if (!desired) {
+    return true;
+  }
+
+  if (!actual) {
+    return false;
+  }
+
+  if (actual.command !== desired.command) {
+    return false;
+  }
+
+  if (desired.interval != null && actual.interval !== desired.interval) {
+    return false;
+  }
+
+  if (desired.timeout != null && actual.timeout !== desired.timeout) {
+    return false;
+  }
+
+  if (desired.startPeriod != null && actual.startPeriod !== desired.startPeriod) {
+    return false;
+  }
+
+  if (desired.retries != null && actual.retries !== desired.retries) {
+    return false;
+  }
+
+  return true;
+};
 
 const managedLabelsFor = ({serviceName, stackMode, stackId}) => ({
   "scriptarr.managed-by": DEFAULT_WARDEN_NETWORK_ALIAS,
@@ -237,6 +332,10 @@ export const createManagedStackRuntime = ({env = process.env, logger}) => {
       reasons.push("network");
     }
 
+    if (!sameHealthCheck(actualHealthCheckFor(inspect), desiredHealthCheckFor(descriptor))) {
+      reasons.push("healthCheck");
+    }
+
     if (normalizeString(inspect?.HostConfig?.RestartPolicy?.Name || "no") !== resolveRestartPolicy(descriptor)) {
       reasons.push("restartPolicy");
     }
@@ -258,6 +357,10 @@ export const createManagedStackRuntime = ({env = process.env, logger}) => {
     const aliases = actualAliasesFor(inspect, managedNetworkName);
 
     if (!attachedNetworks.includes(managedNetworkName)) {
+      logger.info("Attaching Warden to the managed Docker network.", {
+        container: inspect.Name?.replace(/^\//, "") || selfContainerName,
+        network: managedNetworkName
+      });
       await connectContainerToNetwork({
         containerName: inspect.Name?.replace(/^\//, "") || selfContainerName,
         networkName: managedNetworkName,
@@ -268,6 +371,11 @@ export const createManagedStackRuntime = ({env = process.env, logger}) => {
 
     if (!aliases.includes(DEFAULT_WARDEN_NETWORK_ALIAS)) {
       const resolvedName = inspect.Name?.replace(/^\//, "") || selfContainerName;
+      logger.info("Reattaching Warden to refresh its managed network alias.", {
+        container: resolvedName,
+        network: managedNetworkName,
+        alias: DEFAULT_WARDEN_NETWORK_ALIAS
+      });
       await disconnectContainerFromNetwork({
         containerName: resolvedName,
         networkName: managedNetworkName
@@ -283,6 +391,11 @@ export const createManagedStackRuntime = ({env = process.env, logger}) => {
   const reconcileDescriptor = async (descriptor) => {
     const inspect = await inspectDockerContainer(descriptor.containerName);
     if (!inspect) {
+      logger.info("Creating missing managed container.", {
+        service: descriptor.name,
+        container: descriptor.containerName,
+        image: descriptor.image
+      });
       await runDetachedContainer({
         name: descriptor.containerName,
         image: descriptor.image,
@@ -291,8 +404,14 @@ export const createManagedStackRuntime = ({env = process.env, logger}) => {
         networkAliases: descriptor.networkAliases,
         mounts: descriptor.mounts,
         publishedPorts: descriptor.publishedPorts,
+        healthCheck: descriptor.healthCheck,
         labels: descriptor.labels,
-        restartPolicy: descriptor.restartPolicy
+        restartPolicy: descriptor.restartPolicy,
+        logger
+      });
+      logger.info("Managed container created.", {
+        service: descriptor.name,
+        container: descriptor.containerName
       });
       return buildServiceStatus({
         descriptor,
@@ -302,6 +421,10 @@ export const createManagedStackRuntime = ({env = process.env, logger}) => {
 
     const labels = inspect?.Config?.Labels || {};
     if (labels["scriptarr.managed-by"] !== DEFAULT_WARDEN_NETWORK_ALIAS) {
+      logger.warn("Managed service name is already occupied by an unmanaged container.", {
+        service: descriptor.name,
+        container: descriptor.containerName
+      });
       return buildServiceStatus({
         descriptor,
         inspect,
@@ -311,6 +434,11 @@ export const createManagedStackRuntime = ({env = process.env, logger}) => {
 
     const driftReasons = compareDescriptor(inspect, descriptor);
     if (driftReasons.length > 0) {
+      logger.warn("Recreating managed container because configuration drift was detected.", {
+        service: descriptor.name,
+        container: descriptor.containerName,
+        driftReasons: driftReasons.join(",")
+      });
       await removeDockerContainer(descriptor.containerName, {ignoreMissing: false});
       await runDetachedContainer({
         name: descriptor.containerName,
@@ -320,8 +448,14 @@ export const createManagedStackRuntime = ({env = process.env, logger}) => {
         networkAliases: descriptor.networkAliases,
         mounts: descriptor.mounts,
         publishedPorts: descriptor.publishedPorts,
+        healthCheck: descriptor.healthCheck,
         labels: descriptor.labels,
-        restartPolicy: descriptor.restartPolicy
+        restartPolicy: descriptor.restartPolicy,
+        logger
+      });
+      logger.info("Managed container recreated.", {
+        service: descriptor.name,
+        container: descriptor.containerName
       });
       return buildServiceStatus({
         descriptor,
@@ -330,7 +464,18 @@ export const createManagedStackRuntime = ({env = process.env, logger}) => {
     }
 
     if (!inspect?.State?.Running) {
+      logger.info("Starting stopped managed container.", {
+        service: descriptor.name,
+        container: descriptor.containerName
+      });
       await startDockerContainer(descriptor.containerName);
+    }
+
+    if (inspect?.State?.Running && driftReasons.length === 0) {
+      logger.debug("Managed container already matches the desired state.", {
+        service: descriptor.name,
+        container: descriptor.containerName
+      });
     }
 
     return buildServiceStatus({
@@ -346,6 +491,10 @@ export const createManagedStackRuntime = ({env = process.env, logger}) => {
         continue;
       }
       if (!plannedNames.has(container.name)) {
+        logger.info("Removing stale managed container.", {
+          container: container.name,
+          image: container.image
+        });
         await removeDockerContainer(container.name, {ignoreMissing: true});
       }
     }
@@ -388,6 +537,7 @@ export const createManagedStackRuntime = ({env = process.env, logger}) => {
     state.socketAvailable = await dockerSocketAvailable();
     if (!state.socketAvailable) {
       state.lastError = "Docker socket is unavailable.";
+      logger.warn("Docker socket is unavailable. Warden cannot reconcile the managed stack.");
       await refreshStatus();
       return;
     }
@@ -396,7 +546,16 @@ export const createManagedStackRuntime = ({env = process.env, logger}) => {
     const descriptors = plan.services.map(desiredDescriptorFor);
 
     try {
-      await ensureDockerNetwork(managedNetworkName);
+      logger.info("Reconciling managed Scriptarr stack.", {
+        stackMode,
+        network: managedNetworkName,
+        serviceCount: descriptors.length
+      });
+      const networkResult = await ensureDockerNetwork(managedNetworkName);
+      logger.info("Managed Docker network is ready.", {
+        network: managedNetworkName,
+        created: networkResult.created
+      });
       await ensureSelfNetworkAttachment();
 
       const statuses = [];
@@ -407,6 +566,9 @@ export const createManagedStackRuntime = ({env = process.env, logger}) => {
             containerName: descriptor.containerName,
             password: plan.mysql.password
           });
+          logger.info("Managed MySQL is ready.", {
+            container: descriptor.containerName
+          });
         }
       }
 
@@ -416,6 +578,10 @@ export const createManagedStackRuntime = ({env = process.env, logger}) => {
       state.lastReconciledAt = new Date().toISOString();
       state.lastError = statuses.find((entry) => entry.conflict)?.conflict || null;
       state.initialized = true;
+      logger.info("Managed Scriptarr stack reconciliation completed.", {
+        managedServices: statuses.length,
+        lastError: state.lastError || ""
+      });
     } catch (error) {
       state.lastError = error instanceof Error ? error.message : String(error);
       logger.error("Failed to reconcile the managed Scriptarr stack.", {

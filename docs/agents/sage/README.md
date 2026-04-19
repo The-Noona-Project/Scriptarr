@@ -7,3 +7,4 @@
 - Keep Warden status aggregation split by endpoint contract instead of flattening bootstrap and runtime payloads
   together.
 - Keep full JSDoc on exported Sage `.mjs` source and tests so the ESLint doc gate stays green.
+- Legacy `/api/library` behavior must mirror Raven's real-or-empty library state instead of injecting scaffold titles.

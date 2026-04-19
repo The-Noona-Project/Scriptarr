@@ -21,12 +21,12 @@ public class RavenApplication {
     }
 
     /**
-     * Seed the in-memory library projection used by the current scaffold.
+     * Create the shared in-memory library projection.
      *
      * @return the shared library projection service
      */
     @Bean
     public LibraryService libraryService() {
-        return LibraryService.seedDefault();
+        return LibraryService.empty();
     }
 }

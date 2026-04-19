@@ -2,38 +2,12 @@
  * @file Scriptarr Sage module: services/sage/lib/createSageApp.mjs.
  */
 import express from "express";
+import {createLogger} from "@scriptarr/logging";
 import {resolveSageConfig} from "./config.mjs";
 import {createVaultClient} from "./vaultClient.mjs";
 import {buildCallbackUrl, buildDiscordOauthUrl, exchangeDiscordCode} from "./discordAuth.mjs";
 import {requirePermission, requireSession} from "./auth.mjs";
 import {registerMoonV3Routes} from "./registerMoonV3Routes.mjs";
-
-const readerLibrary = Object.freeze([
-  {
-    id: "dan-da-dan",
-    title: "Dandadan",
-    type: "manga",
-    status: "watching",
-    latestChapter: "166",
-    coverAccent: "#ff6a3d"
-  },
-  {
-    id: "sakamoto-days",
-    title: "Sakamoto Days",
-    type: "manga",
-    status: "active",
-    latestChapter: "209",
-    coverAccent: "#e4d7b8"
-  },
-  {
-    id: "blacksad",
-    title: "Blacksad",
-    type: "comic",
-    status: "completed",
-    latestChapter: "Vol. 7",
-    coverAccent: "#5a7184"
-  }
-]);
 
 const RAVEN_VPN_KEY = "raven.vpn";
 const RAVEN_VPN_PASSWORD_SECRET = "raven.vpn.piaPassword";
@@ -111,6 +85,17 @@ const normalizeString = (value, fallback = "") => {
   const normalized = typeof value === "string" ? value.trim() : "";
   return normalized || fallback;
 };
+
+const normalizeArray = (value) => Array.isArray(value) ? value : [];
+
+const toLegacyLibraryEntry = (title = {}) => ({
+  id: normalizeString(title.id),
+  title: normalizeString(title.title, "Untitled"),
+  type: normalizeString(title.mediaType || title.type, "manga"),
+  status: normalizeString(title.status, "active"),
+  latestChapter: normalizeString(title.latestChapter, "Unknown"),
+  coverAccent: normalizeString(title.coverAccent, "#4f8f88")
+});
 
 const defaultRavenVpnSettings = () => ({
   key: RAVEN_VPN_KEY,
@@ -233,6 +218,15 @@ const syncWardenLocalAiConfig = async (config, oracleSettings) => {
   }));
 };
 
+const loadLegacyLibrary = async (config) => {
+  const result = await serviceJson(config.ravenBaseUrl, "/v1/library");
+  if (!result.ok) {
+    throw new Error(result.payload?.error || `Raven library request failed with status ${result.status}.`);
+  }
+
+  return normalizeArray(result.payload?.titles).map(toLegacyLibraryEntry);
+};
+
 const upsertUserFromDiscord = async ({vaultClient, config, identity}) => {
   const bootstrap = await vaultClient.getBootstrapStatus();
   const existing = await vaultClient.getUserByDiscordId(identity.discordUserId);
@@ -274,9 +268,12 @@ const upsertUserFromDiscord = async ({vaultClient, config, identity}) => {
  * Create the Scriptarr Sage Express application that brokers Moon-facing auth,
  * moderation, settings, and Warden orchestration routes.
  *
+ * @param {{
+ *   logger?: {info: Function, warn: Function, error: Function}
+ * }} [options]
  * @returns {Promise<{app: import("express").Express, config: ReturnType<typeof resolveSageConfig>}>}
  */
-export const createSageApp = async () => {
+export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
   const config = resolveSageConfig();
   const vaultClient = createVaultClient(config);
   const app = express();
@@ -332,6 +329,10 @@ export const createSageApp = async () => {
       const session = await vaultClient.createSession(user.discordUserId);
       res.json({token: session.token, user, callbackUrl: buildCallbackUrl(config)});
     } catch (error) {
+      logger.warn("Owner or user claim failed.", {
+        discordUserId: req.body?.discordUserId,
+        error
+      });
       res.status(403).json({error: error instanceof Error ? error.message : String(error)});
     }
   });
@@ -351,6 +352,11 @@ export const createSageApp = async () => {
       const session = await vaultClient.createSession(user.discordUserId);
       res.json({token: session.token, user});
     } catch (error) {
+      logger.warn("Discord callback login failed.", {
+        codePresent: Boolean(req.query.code),
+        mockDiscordUserId: String(req.query.mockDiscordUserId || "").trim(),
+        error
+      });
       res.status(403).json({error: error instanceof Error ? error.message : String(error)});
     }
   });
@@ -363,11 +369,22 @@ export const createSageApp = async () => {
   });
 
   app.get("/api/library", requireUser, async (req, res) => {
-    const progress = await vaultClient.getProgress(req.user.discordUserId);
-    res.json({
-      library: readerLibrary,
-      progress
-    });
+    try {
+      const [library, progress] = await Promise.all([
+        loadLegacyLibrary(config),
+        vaultClient.getProgress(req.user.discordUserId)
+      ]);
+      res.json({
+        library,
+        progress
+      });
+    } catch (error) {
+      logger.warn("Legacy library load failed.", {
+        discordUserId: req.user.discordUserId,
+        error
+      });
+      res.status(502).json({error: error instanceof Error ? error.message : String(error)});
+    }
   });
 
   app.get("/api/reader/progress", requireUser, async (req, res) => {
@@ -389,6 +406,10 @@ export const createSageApp = async () => {
   app.post("/api/requests", requireUser, async (req, res) => {
     const canCreate = req.user.permissions.includes("create_requests") || req.user.permissions.includes("admin");
     if (!canCreate) {
+      logger.warn("Request creation denied by policy.", {
+        discordUserId: req.user.discordUserId,
+        title: req.body?.title
+      });
       res.status(403).json({error: "You cannot create requests."});
       return;
     }
@@ -410,6 +431,10 @@ export const createSageApp = async () => {
       actor: req.user.username
     });
     if (!reviewed) {
+      logger.warn("Moderation target was not found.", {
+        requestId: req.params.id,
+        actor: req.user.username
+      });
       res.status(404).json({error: "Request not found."});
       return;
     }
@@ -532,6 +557,7 @@ export const createSageApp = async () => {
 
   registerMoonV3Routes(app, {
     config,
+    logger,
     vaultClient,
     requireUser,
     requirePermission: (permission) => requirePermission(vaultClient, permission),
@@ -540,6 +566,10 @@ export const createSageApp = async () => {
     readOracleSettings: () => readOracleSettings(vaultClient),
     serviceJson,
     safeJson
+  });
+
+  logger.info("Sage app initialized.", {
+    publicBaseUrl: config.publicBaseUrl
   });
 
   return {app, config};
