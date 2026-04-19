@@ -135,6 +135,8 @@ export const buildTestStackEnvironment = ({
       SCRIPTARR_WARDEN_PORT: String(DEFAULT_WARDEN_PORT),
       SCRIPTARR_WARDEN_CONTAINER_NAME: wardenContainerName,
       SCRIPTARR_WARDEN_BASE_URL: "http://scriptarr-warden:4001",
+      SCRIPTARR_SAGE_BASE_URL: "http://scriptarr-sage:3004",
+      SCRIPTARR_WARDEN_SERVICE_TOKEN: normalizeString(env.SCRIPTARR_WARDEN_SERVICE_TOKEN) || "warden-dev-token",
       SCRIPTARR_MYSQL_URL: normalizeString(mysqlUrl) || "SELFHOST",
       SCRIPTARR_MYSQL_USER: normalizeString(env.SCRIPTARR_MYSQL_USER) || "scriptarr",
       SCRIPTARR_MYSQL_PASSWORD: normalizeString(env.SCRIPTARR_MYSQL_PASSWORD) || "scriptarr-dev-password",

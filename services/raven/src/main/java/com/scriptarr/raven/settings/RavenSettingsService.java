@@ -15,7 +15,7 @@ import java.util.Map;
 import java.util.Optional;
 
 /**
- * Loads Raven settings from Vault and merges them with local defaults.
+ * Loads Raven settings through Sage and merges them with local defaults.
  */
 @Service
 public class RavenSettingsService {
@@ -23,7 +23,7 @@ public class RavenSettingsService {
     private static final String VPN_PASSWORD_KEY = "raven.vpn.piaPassword";
     private static final String PROVIDERS_KEY = "raven.metadata.providers";
 
-    private final RavenVaultClient vaultClient;
+    private final RavenBrokerClient brokerClient;
     private final ScriptarrLogger logger;
     private final List<MetadataProvider> providers;
 
@@ -36,12 +36,12 @@ public class RavenSettingsService {
     /**
      * Create the settings service.
      *
-     * @param vaultClient Vault client used for shared settings and secrets
+     * @param brokerClient Sage-backed broker client used for shared settings and secrets
      * @param logger shared Raven logger
      * @param providers discovered metadata providers
      */
-    public RavenSettingsService(RavenVaultClient vaultClient, ScriptarrLogger logger, List<MetadataProvider> providers) {
-        this.vaultClient = vaultClient;
+    public RavenSettingsService(RavenBrokerClient brokerClient, ScriptarrLogger logger, List<MetadataProvider> providers) {
+        this.brokerClient = brokerClient;
         this.logger = logger;
         this.providers = List.copyOf(providers);
     }
@@ -53,8 +53,8 @@ public class RavenSettingsService {
      */
     public RavenVpnSettings getVpnSettings() {
         try {
-            JsonNode settingsNode = Optional.ofNullable(vaultClient.getSetting(VPN_KEY).get("value")).orElse(null);
-            JsonNode passwordNode = Optional.ofNullable(vaultClient.getSecret(VPN_PASSWORD_KEY).get("value")).orElse(null);
+            JsonNode settingsNode = Optional.ofNullable(brokerClient.getSetting(VPN_KEY).get("value")).orElse(null);
+            JsonNode passwordNode = Optional.ofNullable(brokerClient.getSecret(VPN_PASSWORD_KEY).get("value")).orElse(null);
             boolean enabled = settingsNode != null && settingsNode.path("enabled").asBoolean(false);
             String region = settingsNode != null ? normalize(settingsNode.path("region").asText("us_california"), "us_california") : "us_california";
             String piaUsername = settingsNode != null ? normalize(settingsNode.path("piaUsername").asText(""), "") : "";
@@ -74,7 +74,7 @@ public class RavenSettingsService {
     public List<Map<String, Object>> getMetadataProviderSettings() {
         Map<String, JsonNode> configuredById = new HashMap<>();
         try {
-            JsonNode settingsNode = Optional.ofNullable(vaultClient.getSetting(PROVIDERS_KEY).get("value")).orElse(null);
+            JsonNode settingsNode = Optional.ofNullable(brokerClient.getSetting(PROVIDERS_KEY).get("value")).orElse(null);
             if (settingsNode != null && settingsNode.path("providers").isArray()) {
                 for (JsonNode providerNode : settingsNode.path("providers")) {
                     configuredById.put(normalize(providerNode.path("id").asText(""), ""), providerNode);

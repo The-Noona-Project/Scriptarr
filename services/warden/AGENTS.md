@@ -17,6 +17,8 @@ for the host hardware, and exposes manual LocalAI lifecycle actions after instal
   narrower test or preview scope explicitly changes the name.
 - Warden requires a Docker socket bind and should reconcile the rest of the managed Scriptarr containers from inside its
   own container.
+- Warden owns the managed service env contract and should inject Sage broker settings for first-party internal HTTP
+  instead of reviving direct Vault, Oracle, or Warden cross-calls in sibling services.
 - Do not pull or start LocalAI during first boot.
 - Keep the public MySQL contract URL-first. Internal split MySQL envs are derived outputs, not first-class admin
   inputs.
@@ -28,5 +30,6 @@ for the host hardware, and exposes manual LocalAI lifecycle actions after instal
   for contributors and agents.
 - Keep Moon -> Sage -> Warden managed-service updates scoped to the sibling first-party services. Warden and MySQL stay
   manual unless the product requirements explicitly change.
+- Keep Warden update jobs durable through the shared broker instead of leaving them in process-local memory only.
 - If service boot order, network topology, LocalAI image selection, first-boot auth, or Docker test mode changes,
   update the Warden docs.

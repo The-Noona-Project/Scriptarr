@@ -3,17 +3,17 @@
 Scriptarr is a self-hosted manga and comics stack rebuilt for 3.0. `Noona` now only refers to the Discord bot and AI
 persona while the product, services, storage, images, and docs all use Scriptarr naming.
 
-Warden bootstraps the stack, Moon is the user and admin surface, Sage is the browser-safe broker, Vault owns shared
-MySQL-backed state, Raven handles downloads plus metadata, Portal handles Discord, and Oracle provides optional
-read-only AI chat.
+Warden bootstraps the stack, Moon is the user and admin surface, Sage is the browser-safe and first-party internal
+broker, Vault owns shared MySQL-backed state plus cache or job brokerage, Raven handles downloads plus metadata, Portal
+handles Discord, and Oracle provides optional read-only AI chat.
 
 ## Service Map
 
 - `scriptarr-warden`: bootstraps the stack, parses the URL-first MySQL contract, owns `scriptarr-network`, and exposes
   manual LocalAI install or start actions
 - `scriptarr-mysql`: durable shared datastore for Scriptarr when `SCRIPTARR_MYSQL_URL=SELFHOST`
-- `scriptarr-vault`: auth, permissions, settings, secrets, cache, requests, sessions, and progress broker
-- `scriptarr-sage`: Moon-facing auth and orchestration broker
+- `scriptarr-vault`: auth, permissions, settings, secrets, cache, requests, sessions, progress, and generic job broker
+- `scriptarr-sage`: Moon-facing auth plus the only supported first-party internal HTTP broker
 - `scriptarr-moon`: same-origin user app at `/`, native reader routes under `/reader/*`, and Arr-style admin app at `/admin`
 - `scriptarr-raven`: Spring Boot Java 24 downloader, library, metadata, and PIA/OpenVPN-aware download engine
 - `scriptarr-portal`: Discord onboarding, requests, notifications, subscriptions, and Oracle bridge
@@ -41,6 +41,8 @@ contract and the recommended `docker run` shape.
 
 Fresh installs no longer seed demo titles into Moon or Raven. The user and admin library views stay empty until Raven
 has real imported titles to surface.
+Raven now stages active work under `downloading/<type>/...` and promotes completed library content into
+`downloaded/<type>/...` inside the Raven downloads tree.
 
 For end-to-end Docker verification, use:
 
@@ -71,6 +73,9 @@ For end-to-end Docker verification, use:
   directly.
 - Users can create and track requests in Moon and Discord, but Raven only receives approved work.
 - Vault is the only supported broker to the shared MySQL database.
+- Sage is the supported internal HTTP hop between first-party services. Direct internal exceptions are limited to
+  Vault -> MySQL, Warden -> Docker or host runtime, Oracle -> OpenAI or LocalAI, and Raven -> external source,
+  metadata, or VPN providers.
 - Warden owns one shared internal Docker network named `scriptarr-network`. Moon is the only first-party service
   exposed publicly by default.
 - Warden is not published publicly by default outside the test stack. Admins should talk to the stack through Moon

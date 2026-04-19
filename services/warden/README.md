@@ -3,6 +3,9 @@
 Warden bootstraps Scriptarr, owns the shared internal `scriptarr-network`, parses the URL-first MySQL contract, derives
 the Discord callback URL, and selects the appropriate LocalAI image profile for the host hardware.
 
+Warden is also responsible for injecting the internal service topology that keeps first-party HTTP behind Sage. Raven,
+Portal, and Oracle now receive Sage broker settings instead of direct first-party base URLs.
+
 The supported install shape is to run Warden as its own Docker container and let it reconcile the other first-party
 containers through the Docker socket. Outside test mode, Warden should not be published publicly; Moon remains the
 default public first-party surface.
@@ -42,7 +45,7 @@ Warden also ships the Docker-backed test stack used by repo contributors:
 
 - `/api/bootstrap`: static service plan, install mode, callback URL, and storage contract
 - `/api/runtime`: Warden self status plus live managed-service runtime details, with sensitive env values redacted
-- `/api/updates`: current managed-service image state plus the latest in-memory update job
+- `/api/updates`: current managed-service image state plus the latest broker-backed update job snapshot
 - `/api/updates/check`: pull-first update check for the managed sibling services
 - `/api/updates/install`: asynchronous managed-service install or restart flow for the sibling services
 - `/health`: service health, Docker socket availability, and latest reconcile summary

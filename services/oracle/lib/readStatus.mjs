@@ -1,12 +1,6 @@
-export const readScriptarrStatus = async (config) => {
+export const readScriptarrStatus = async (sageClient) => {
   try {
-    const response = await fetch(`${config.wardenBaseUrl}/api/bootstrap`, {
-      signal: AbortSignal.timeout(1200)
-    });
-    if (!response.ok) {
-      throw new Error(`Warden status failed with ${response.status}`);
-    }
-    const payload = await response.json();
+    const payload = await sageClient.getBootstrapStatus();
     return {
       ok: true,
       callbackUrl: payload.callbackUrl,

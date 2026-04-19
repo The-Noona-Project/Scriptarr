@@ -1,7 +1,22 @@
+import {randomUUID} from "node:crypto";
+
 import mysql from "mysql2/promise";
+import {createCachedStore} from "./createCachedStore.mjs";
 
 const nowIso = () => new Date().toISOString();
 const randomToken = (prefix) => `${prefix}_${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
+const toMysqlDateTime = (value, fallback = null) => {
+  if (!value) {
+    return fallback;
+  }
+
+  const date = value instanceof Date ? value : new Date(String(value));
+  if (Number.isNaN(date.getTime())) {
+    return fallback;
+  }
+
+  return date.toISOString().replace("T", " ").replace("Z", "").slice(0, 23);
+};
 const parseJsonColumn = (value, fallback = null) => {
   if (value == null) {
     return fallback;
@@ -25,6 +40,8 @@ const normalizeRavenTitle = (title, chapters = []) => ({
   id: title.id,
   title: title.title,
   mediaType: title.mediaType || "manga",
+  libraryTypeLabel: title.libraryTypeLabel || title.mediaType || "manga",
+  libraryTypeSlug: title.libraryTypeSlug || title.mediaType || "manga",
   status: title.status || "active",
   latestChapter: title.latestChapter || "",
   coverAccent: title.coverAccent || "#4f8f88",
@@ -40,8 +57,51 @@ const normalizeRavenTitle = (title, chapters = []) => ({
   relations: Array.isArray(title.relations) ? title.relations : [],
   sourceUrl: title.sourceUrl || "",
   coverUrl: title.coverUrl || "",
+  workingRoot: title.workingRoot || "",
   downloadRoot: title.downloadRoot || "",
   chapters: sortRavenChapters(chapters)
+});
+
+const sortVaultJobs = (jobs) => [...jobs].sort((left, right) =>
+  String(right.updatedAt || right.createdAt || "").localeCompare(String(left.updatedAt || left.createdAt || ""))
+);
+const sortVaultJobTasks = (tasks) => [...tasks].sort((left, right) => {
+  const leftOrder = Number.parseInt(String(left.sortOrder || 0), 10) || 0;
+  const rightOrder = Number.parseInt(String(right.sortOrder || 0), 10) || 0;
+  if (leftOrder !== rightOrder) {
+    return leftOrder - rightOrder;
+  }
+  return String(left.updatedAt || left.createdAt || "").localeCompare(String(right.updatedAt || right.createdAt || ""));
+});
+const normalizeVaultJob = (job = {}) => ({
+  jobId: String(job.jobId || randomUUID()),
+  kind: String(job.kind || "generic"),
+  ownerService: String(job.ownerService || "scriptarr"),
+  status: String(job.status || "queued"),
+  label: String(job.label || ""),
+  requestedBy: String(job.requestedBy || ""),
+  payload: job.payload && typeof job.payload === "object" ? job.payload : {},
+  result: job.result && typeof job.result === "object" ? job.result : {},
+  createdAt: String(job.createdAt || nowIso()),
+  startedAt: job.startedAt || null,
+  finishedAt: job.finishedAt || null,
+  updatedAt: String(job.updatedAt || nowIso())
+});
+const normalizeVaultJobTask = (jobId, task = {}) => ({
+  taskId: String(task.taskId || randomUUID()),
+  jobId: String(jobId),
+  taskKey: String(task.taskKey || ""),
+  label: String(task.label || task.taskKey || ""),
+  status: String(task.status || "queued"),
+  message: String(task.message || ""),
+  percent: Number.parseInt(String(task.percent || 0), 10) || 0,
+  sortOrder: Number.parseInt(String(task.sortOrder || 0), 10) || 0,
+  payload: task.payload && typeof task.payload === "object" ? task.payload : {},
+  result: task.result && typeof task.result === "object" ? task.result : {},
+  createdAt: String(task.createdAt || nowIso()),
+  startedAt: task.startedAt || null,
+  finishedAt: task.finishedAt || null,
+  updatedAt: String(task.updatedAt || nowIso())
 });
 
 const defaultPermissionsForRole = (role) => {
@@ -56,6 +116,12 @@ const defaultPermissionsForRole = (role) => {
   }
 };
 
+const createConflictError = (message, code) => {
+  const error = new Error(message);
+  error.code = code;
+  return error;
+};
+
 const createMemoryStore = () => {
   const state = {
     users: new Map(),
@@ -68,6 +134,8 @@ const createMemoryStore = () => {
     ravenChapters: new Map(),
     ravenDownloadTasks: new Map(),
     ravenMetadataMatches: new Map(),
+    jobs: new Map(),
+    jobTasks: new Map(),
     requestSeq: 1
   };
 
@@ -89,6 +157,12 @@ const createMemoryStore = () => {
       };
     },
     async upsertDiscordUser({discordUserId, username, avatarUrl, role, permissions, claimOwner = false}) {
+      const owner = Array.from(state.users.values()).find((user) => user.role === "owner");
+      if (claimOwner && owner && owner.discordUserId !== discordUserId) {
+        const error = new Error("Owner already claimed.");
+        error.code = "OWNER_ALREADY_CLAIMED";
+        throw error;
+      }
       const existing = state.users.get(discordUserId);
       const nextRole = role || existing?.role || (claimOwner ? "owner" : "member");
       const next = {
@@ -152,6 +226,7 @@ const createMemoryStore = () => {
       const request = {
         id,
         status: "pending",
+        revision: 1,
         timeline: [
           {
             type: "created",
@@ -172,9 +247,14 @@ const createMemoryStore = () => {
       if (!existing) {
         return null;
       }
+      const expectedRevision = review.expectedRevision ?? review.revision;
+      if (expectedRevision != null && Number(expectedRevision) !== Number(existing.revision || 1)) {
+        throw createConflictError("Request revision conflict.", "REQUEST_REVISION_CONFLICT");
+      }
       existing.status = review.status;
       existing.moderatorComment = review.comment || "";
       existing.updatedAt = nowIso();
+      existing.revision = Number.parseInt(String(existing.revision || 1), 10) + 1;
       existing.timeline.push({
         type: review.status,
         message: review.comment || `Request ${review.status}.`,
@@ -245,6 +325,40 @@ const createMemoryStore = () => {
       };
       state.ravenMetadataMatches.set(titleId, entry);
       return entry;
+    },
+    async listJobs(filters = {}) {
+      return sortVaultJobs(Array.from(state.jobs.values()).filter((job) =>
+        (!filters.ownerService || job.ownerService === filters.ownerService)
+        && (!filters.kind || job.kind === filters.kind)
+        && (!filters.status || job.status === filters.status)
+      ));
+    },
+    async getJob(jobId) {
+      return state.jobs.get(jobId) || null;
+    },
+    async upsertJob(job) {
+      const normalized = normalizeVaultJob({
+        ...(state.jobs.get(job.jobId) || {}),
+        ...job,
+        updatedAt: nowIso()
+      });
+      state.jobs.set(normalized.jobId, normalized);
+      return normalized;
+    },
+    async listJobTasks(filters = {}) {
+      return sortVaultJobTasks(Array.from(state.jobTasks.values()).filter((task) =>
+        (!filters.jobId || task.jobId === filters.jobId)
+        && (!filters.status || task.status === filters.status)
+      ));
+    },
+    async upsertJobTask(jobId, task) {
+      const normalized = normalizeVaultJobTask(jobId, {
+        ...(state.jobTasks.get(task.taskId) || {}),
+        ...task,
+        updatedAt: nowIso()
+      });
+      state.jobTasks.set(normalized.taskId, normalized);
+      return normalized;
     }
   };
 };
@@ -260,6 +374,22 @@ const createMysqlStore = (config) => {
   });
 
   const init = async () => {
+    const ignoreKnownAlterError = async (sql) => {
+      try {
+        await pool.query(sql);
+      } catch (error) {
+        const message = String(error?.message || "");
+        if (
+          message.includes("Duplicate column name")
+          || message.includes("Duplicate key name")
+          || message.includes("already exists")
+        ) {
+          return;
+        }
+        throw error;
+      }
+    };
+
     await pool.query(`
       CREATE TABLE IF NOT EXISTS users (
         discord_user_id VARCHAR(64) PRIMARY KEY,
@@ -296,6 +426,7 @@ const createMysqlStore = (config) => {
         status_name VARCHAR(32) NOT NULL,
         moderator_comment TEXT NULL,
         timeline_json JSON NOT NULL,
+        revision_number INT NOT NULL DEFAULT 1,
         created_at DATETIME NOT NULL,
         updated_at DATETIME NOT NULL
       )
@@ -323,6 +454,8 @@ const createMysqlStore = (config) => {
         title_id VARCHAR(191) PRIMARY KEY,
         title VARCHAR(255) NOT NULL,
         media_type VARCHAR(64) NOT NULL,
+        library_type_label VARCHAR(255) NULL,
+        library_type_slug VARCHAR(191) NULL,
         status_name VARCHAR(64) NOT NULL,
         latest_chapter VARCHAR(64) NULL,
         cover_accent VARCHAR(32) NULL,
@@ -338,6 +471,7 @@ const createMysqlStore = (config) => {
         metadata_matched_at DATETIME NULL,
         source_url TEXT NULL,
         cover_url TEXT NULL,
+        working_root TEXT NULL,
         download_root TEXT NULL,
         updated_at DATETIME NOT NULL
       )
@@ -381,6 +515,45 @@ const createMysqlStore = (config) => {
         updated_at DATETIME NOT NULL
       )
     `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS vault_jobs (
+        job_id VARCHAR(191) PRIMARY KEY,
+        job_kind VARCHAR(128) NOT NULL,
+        owner_service VARCHAR(128) NOT NULL,
+        status_name VARCHAR(64) NOT NULL,
+        label_text VARCHAR(255) NULL,
+        requested_by VARCHAR(255) NULL,
+        payload_json JSON NOT NULL,
+        result_json JSON NOT NULL,
+        created_at DATETIME NOT NULL,
+        started_at DATETIME NULL,
+        finished_at DATETIME NULL,
+        updated_at DATETIME NOT NULL
+      )
+    `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS vault_job_tasks (
+        task_id VARCHAR(191) PRIMARY KEY,
+        job_id VARCHAR(191) NOT NULL,
+        task_key VARCHAR(191) NULL,
+        label_text VARCHAR(255) NULL,
+        status_name VARCHAR(64) NOT NULL,
+        message_text TEXT NULL,
+        percent_value INT NOT NULL DEFAULT 0,
+        sort_order INT NOT NULL DEFAULT 0,
+        payload_json JSON NOT NULL,
+        result_json JSON NOT NULL,
+        created_at DATETIME NOT NULL,
+        started_at DATETIME NULL,
+        finished_at DATETIME NULL,
+        updated_at DATETIME NOT NULL,
+        INDEX idx_vault_job_tasks_job (job_id)
+      )
+    `);
+    await ignoreKnownAlterError("ALTER TABLE requests ADD COLUMN revision_number INT NOT NULL DEFAULT 1");
+    await ignoreKnownAlterError("ALTER TABLE raven_titles ADD COLUMN library_type_label VARCHAR(255) NULL");
+    await ignoreKnownAlterError("ALTER TABLE raven_titles ADD COLUMN library_type_slug VARCHAR(191) NULL");
+    await ignoreKnownAlterError("ALTER TABLE raven_titles ADD COLUMN working_root TEXT NULL");
   };
 
   const toUser = (row) => ({
@@ -408,6 +581,8 @@ const createMysqlStore = (config) => {
     id: row.title_id,
     title: row.title,
     mediaType: row.media_type,
+    libraryTypeLabel: row.library_type_label,
+    libraryTypeSlug: row.library_type_slug,
     status: row.status_name,
     latestChapter: row.latest_chapter,
     coverAccent: row.cover_accent,
@@ -423,8 +598,66 @@ const createMysqlStore = (config) => {
     relations: parseJsonColumn(row.relations_json, []),
     sourceUrl: row.source_url,
     coverUrl: row.cover_url,
+    workingRoot: row.working_root,
     downloadRoot: row.download_root
   }, chapters);
+  const toRequest = (row) => ({
+    id: row.id,
+    source: row.source,
+    title: row.title,
+    requestType: row.request_type,
+    notes: row.notes,
+    requestedBy: row.requested_by,
+    status: row.status_name,
+    moderatorComment: row.moderator_comment,
+    timeline: parseJsonColumn(row.timeline_json, []),
+    revision: Number.parseInt(String(row.revision_number || 1), 10) || 1,
+    createdAt: row.created_at.toISOString(),
+    updatedAt: row.updated_at.toISOString()
+  });
+  const toVaultJob = (row) => normalizeVaultJob({
+    jobId: row.job_id,
+    kind: row.job_kind,
+    ownerService: row.owner_service,
+    status: row.status_name,
+    label: row.label_text,
+    requestedBy: row.requested_by,
+    payload: parseJsonColumn(row.payload_json, {}),
+    result: parseJsonColumn(row.result_json, {}),
+    createdAt: row.created_at.toISOString(),
+    startedAt: row.started_at ? row.started_at.toISOString() : null,
+    finishedAt: row.finished_at ? row.finished_at.toISOString() : null,
+    updatedAt: row.updated_at.toISOString()
+  });
+  const toVaultJobTask = (row) => normalizeVaultJobTask(row.job_id, {
+    taskId: row.task_id,
+    taskKey: row.task_key,
+    label: row.label_text,
+    status: row.status_name,
+    message: row.message_text,
+    percent: row.percent_value,
+    sortOrder: row.sort_order,
+    payload: parseJsonColumn(row.payload_json, {}),
+    result: parseJsonColumn(row.result_json, {}),
+    createdAt: row.created_at.toISOString(),
+    startedAt: row.started_at ? row.started_at.toISOString() : null,
+    finishedAt: row.finished_at ? row.finished_at.toISOString() : null,
+    updatedAt: row.updated_at.toISOString()
+  });
+  const withTransaction = async (handler) => {
+    const connection = await pool.getConnection();
+    try {
+      await connection.beginTransaction();
+      const result = await handler(connection);
+      await connection.commit();
+      return result;
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
+    }
+  };
 
   return {
     driver: "mysql",
@@ -443,15 +676,24 @@ const createMysqlStore = (config) => {
       };
     },
     async upsertDiscordUser({discordUserId, username, avatarUrl, role, permissions, claimOwner = false}) {
-      const [existingRows] = await pool.query("SELECT * FROM users WHERE discord_user_id = ?", [discordUserId]);
-      const nextRole = role || existingRows[0]?.role_name || (claimOwner ? "owner" : "member");
-      const nextPermissions = permissions?.length ? permissions : defaultPermissionsForRole(nextRole);
-      await pool.query(`
-        INSERT INTO users (discord_user_id, username, avatar_url, role_name, permissions_json, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, NOW(), NOW())
-        ON DUPLICATE KEY UPDATE username = VALUES(username), avatar_url = VALUES(avatar_url), role_name = VALUES(role_name),
-        permissions_json = VALUES(permissions_json), updated_at = NOW()
-      `, [discordUserId, username, avatarUrl || null, nextRole, JSON.stringify(nextPermissions)]);
+      await withTransaction(async (connection) => {
+        const [existingRows] = await connection.query("SELECT * FROM users WHERE discord_user_id = ? LIMIT 1 FOR UPDATE", [discordUserId]);
+        const existing = existingRows[0];
+        const [ownerRows] = await connection.query("SELECT discord_user_id FROM users WHERE role_name = 'owner' LIMIT 1 FOR UPDATE");
+        const ownerDiscordUserId = ownerRows[0]?.discord_user_id || null;
+        if (claimOwner && ownerDiscordUserId && ownerDiscordUserId !== discordUserId) {
+          throw createConflictError("Owner already claimed.", "OWNER_ALREADY_CLAIMED");
+        }
+
+        const nextRole = role || existing?.role_name || (claimOwner ? "owner" : "member");
+        const nextPermissions = permissions?.length ? permissions : defaultPermissionsForRole(nextRole);
+        await connection.query(`
+          INSERT INTO users (discord_user_id, username, avatar_url, role_name, permissions_json, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, NOW(), NOW())
+          ON DUPLICATE KEY UPDATE username = VALUES(username), avatar_url = VALUES(avatar_url), role_name = VALUES(role_name),
+          permissions_json = VALUES(permissions_json), updated_at = NOW()
+        `, [discordUserId, username, avatarUrl || null, nextRole, JSON.stringify(nextPermissions)]);
+      });
       return this.getUserByDiscordId(discordUserId);
     },
     async getUserByDiscordId(discordUserId) {
@@ -510,19 +752,7 @@ const createMysqlStore = (config) => {
     },
     async listRequests() {
       const [rows] = await pool.query("SELECT * FROM requests ORDER BY created_at DESC");
-      return rows.map((row) => ({
-        id: row.id,
-        source: row.source,
-        title: row.title,
-        requestType: row.request_type,
-        notes: row.notes,
-        requestedBy: row.requested_by,
-        status: row.status_name,
-        moderatorComment: row.moderator_comment,
-        timeline: parseJsonColumn(row.timeline_json, []),
-        createdAt: row.created_at.toISOString(),
-        updatedAt: row.updated_at.toISOString()
-      }));
+      return rows.map(toRequest);
     },
     async createRequest(payload) {
       const timeline = [
@@ -534,57 +764,43 @@ const createMysqlStore = (config) => {
         }
       ];
       const [result] = await pool.query(`
-        INSERT INTO requests (source, title, request_type, notes, requested_by, status_name, moderator_comment, timeline_json, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, 'pending', '', ?, NOW(), NOW())
+        INSERT INTO requests (
+          source, title, request_type, notes, requested_by, status_name, moderator_comment, timeline_json,
+          revision_number, created_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, 'pending', '', ?, 1, NOW(), NOW())
       `, [payload.source, payload.title, payload.requestType, payload.notes || "", payload.requestedBy, JSON.stringify(timeline)]);
       const [rows] = await pool.query("SELECT * FROM requests WHERE id = ?", [result.insertId]);
-      const row = rows[0];
-      return {
-        id: row.id,
-        source: row.source,
-        title: row.title,
-        requestType: row.request_type,
-        notes: row.notes,
-        requestedBy: row.requested_by,
-        status: row.status_name,
-        moderatorComment: row.moderator_comment,
-        timeline: parseJsonColumn(row.timeline_json, []),
-        createdAt: row.created_at.toISOString(),
-        updatedAt: row.updated_at.toISOString()
-      };
+      return toRequest(rows[0]);
     },
     async reviewRequest(id, review) {
-      const [rows] = await pool.query("SELECT * FROM requests WHERE id = ? LIMIT 1", [id]);
-      if (!rows[0]) {
-        return null;
-      }
-      const timeline = parseJsonColumn(rows[0].timeline_json, []);
-      timeline.push({
-        type: review.status,
-        message: review.comment || `Request ${review.status}.`,
-        at: nowIso(),
-        actor: review.actor
+      const expectedRevision = review.expectedRevision ?? review.revision;
+      return withTransaction(async (connection) => {
+        const [rows] = await connection.query("SELECT * FROM requests WHERE id = ? LIMIT 1 FOR UPDATE", [id]);
+        if (!rows[0]) {
+          return null;
+        }
+        const current = rows[0];
+        const currentRevision = Number.parseInt(String(current.revision_number || 1), 10) || 1;
+        if (expectedRevision != null && Number(expectedRevision) !== currentRevision) {
+          throw createConflictError("Request revision conflict.", "REQUEST_REVISION_CONFLICT");
+        }
+
+        const timeline = parseJsonColumn(current.timeline_json, []);
+        timeline.push({
+          type: review.status,
+          message: review.comment || `Request ${review.status}.`,
+          at: nowIso(),
+          actor: review.actor
+        });
+        await connection.query(`
+          UPDATE requests
+          SET status_name = ?, moderator_comment = ?, timeline_json = ?, revision_number = ?, updated_at = NOW()
+          WHERE id = ?
+        `, [review.status, review.comment || "", JSON.stringify(timeline), currentRevision + 1, id]);
+        const [updated] = await connection.query("SELECT * FROM requests WHERE id = ? LIMIT 1", [id]);
+        return toRequest(updated[0]);
       });
-      await pool.query(`
-        UPDATE requests
-        SET status_name = ?, moderator_comment = ?, timeline_json = ?, updated_at = NOW()
-        WHERE id = ?
-      `, [review.status, review.comment || "", JSON.stringify(timeline), id]);
-      const [updated] = await pool.query("SELECT * FROM requests WHERE id = ? LIMIT 1", [id]);
-      const row = updated[0];
-      return {
-        id: row.id,
-        source: row.source,
-        title: row.title,
-        requestType: row.request_type,
-        notes: row.notes,
-        requestedBy: row.requested_by,
-        status: row.status_name,
-        moderatorComment: row.moderator_comment,
-        timeline: parseJsonColumn(row.timeline_json, []),
-        createdAt: row.created_at.toISOString(),
-        updatedAt: row.updated_at.toISOString()
-      };
     },
     async upsertProgress(entry) {
       await pool.query(`
@@ -632,14 +848,16 @@ const createMysqlStore = (config) => {
     async upsertRavenTitle(title) {
       await pool.query(`
         INSERT INTO raven_titles (
-          title_id, title, media_type, status_name, latest_chapter, cover_accent, summary, release_label,
+          title_id, title, media_type, library_type_label, library_type_slug, status_name, latest_chapter, cover_accent, summary, release_label,
           chapter_count, chapters_downloaded, author_name, tags_json, aliases_json, relations_json,
-          metadata_provider, metadata_matched_at, source_url, cover_url, download_root, updated_at
+          metadata_provider, metadata_matched_at, source_url, cover_url, working_root, download_root, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
         ON DUPLICATE KEY UPDATE
           title = VALUES(title),
           media_type = VALUES(media_type),
+          library_type_label = VALUES(library_type_label),
+          library_type_slug = VALUES(library_type_slug),
           status_name = VALUES(status_name),
           latest_chapter = VALUES(latest_chapter),
           cover_accent = VALUES(cover_accent),
@@ -655,12 +873,15 @@ const createMysqlStore = (config) => {
           metadata_matched_at = VALUES(metadata_matched_at),
           source_url = VALUES(source_url),
           cover_url = VALUES(cover_url),
+          working_root = VALUES(working_root),
           download_root = VALUES(download_root),
           updated_at = NOW()
       `, [
         title.id,
         title.title,
         title.mediaType || "manga",
+        title.libraryTypeLabel || title.mediaType || "manga",
+        title.libraryTypeSlug || title.mediaType || "manga",
         title.status || "active",
         title.latestChapter || "",
         title.coverAccent || "#4f8f88",
@@ -676,32 +897,35 @@ const createMysqlStore = (config) => {
         title.metadataMatchedAt || null,
         title.sourceUrl || null,
         title.coverUrl || null,
+        title.workingRoot || null,
         title.downloadRoot || null
       ]);
       return this.getRavenTitle(title.id);
     },
     async replaceRavenChapters(titleId, chapters) {
-      await pool.query("DELETE FROM raven_chapters WHERE title_id = ?", [titleId]);
-      for (const chapter of sortRavenChapters(Array.isArray(chapters) ? chapters : [])) {
-        await pool.query(`
-          INSERT INTO raven_chapters (
-            title_id, chapter_id, label_name, chapter_number, page_count, release_date, is_available, archive_path, source_url, updated_at
-          )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
-        `, [
-          titleId,
-          chapter.id,
-          chapter.label || chapter.id,
-          chapter.chapterNumber || null,
-          Number.parseInt(String(chapter.pageCount || 0), 10) || 0,
-          chapter.releaseDate || null,
-          chapter.available === false ? 0 : 1,
-          chapter.archivePath || null,
-          chapter.sourceUrl || null
-        ]);
-      }
-      const [rows] = await pool.query("SELECT * FROM raven_chapters WHERE title_id = ?", [titleId]);
-      return rows.map(toRavenChapter);
+      return withTransaction(async (connection) => {
+        await connection.query("DELETE FROM raven_chapters WHERE title_id = ?", [titleId]);
+        for (const chapter of sortRavenChapters(Array.isArray(chapters) ? chapters : [])) {
+          await connection.query(`
+            INSERT INTO raven_chapters (
+              title_id, chapter_id, label_name, chapter_number, page_count, release_date, is_available, archive_path, source_url, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+          `, [
+            titleId,
+            chapter.id,
+            chapter.label || chapter.id,
+            chapter.chapterNumber || null,
+            Number.parseInt(String(chapter.pageCount || 0), 10) || 0,
+            chapter.releaseDate || null,
+            chapter.available === false ? 0 : 1,
+            chapter.archivePath || null,
+            chapter.sourceUrl || null
+          ]);
+        }
+        const [rows] = await connection.query("SELECT * FROM raven_chapters WHERE title_id = ?", [titleId]);
+        return rows.map(toRavenChapter);
+      });
     },
     async listRavenDownloadTasks() {
       const [rows] = await pool.query("SELECT * FROM raven_download_tasks ORDER BY queued_at DESC");
@@ -793,8 +1017,129 @@ const createMysqlStore = (config) => {
         JSON.stringify(value.details || {})
       ]);
       return this.getRavenMetadataMatch(titleId);
+    },
+    async listJobs(filters = {}) {
+      const params = [];
+      const clauses = [];
+      if (filters.ownerService) {
+        clauses.push("owner_service = ?");
+        params.push(filters.ownerService);
+      }
+      if (filters.kind) {
+        clauses.push("job_kind = ?");
+        params.push(filters.kind);
+      }
+      if (filters.status) {
+        clauses.push("status_name = ?");
+        params.push(filters.status);
+      }
+      const whereSql = clauses.length ? ` WHERE ${clauses.join(" AND ")}` : "";
+      const [rows] = await pool.query(
+        `SELECT * FROM vault_jobs${whereSql} ORDER BY updated_at DESC, created_at DESC`,
+        params
+      );
+      return rows.map(toVaultJob);
+    },
+    async getJob(jobId) {
+      const [rows] = await pool.query("SELECT * FROM vault_jobs WHERE job_id = ? LIMIT 1", [jobId]);
+      return rows[0] ? toVaultJob(rows[0]) : null;
+    },
+    async upsertJob(job) {
+      const normalized = normalizeVaultJob(job);
+      await pool.query(`
+        INSERT INTO vault_jobs (
+          job_id, job_kind, owner_service, status_name, label_text, requested_by, payload_json, result_json,
+          created_at, started_at, finished_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON DUPLICATE KEY UPDATE
+          job_kind = VALUES(job_kind),
+          owner_service = VALUES(owner_service),
+          status_name = VALUES(status_name),
+          label_text = VALUES(label_text),
+          requested_by = VALUES(requested_by),
+          payload_json = VALUES(payload_json),
+          result_json = VALUES(result_json),
+          created_at = VALUES(created_at),
+          started_at = VALUES(started_at),
+          finished_at = VALUES(finished_at),
+          updated_at = VALUES(updated_at)
+      `, [
+        normalized.jobId,
+        normalized.kind,
+        normalized.ownerService,
+        normalized.status,
+        normalized.label || null,
+        normalized.requestedBy || null,
+        JSON.stringify(normalized.payload || {}),
+        JSON.stringify(normalized.result || {}),
+        toMysqlDateTime(normalized.createdAt, toMysqlDateTime(nowIso())),
+        toMysqlDateTime(normalized.startedAt),
+        toMysqlDateTime(normalized.finishedAt),
+        toMysqlDateTime(normalized.updatedAt, toMysqlDateTime(nowIso()))
+      ]);
+      return this.getJob(normalized.jobId);
+    },
+    async listJobTasks(filters = {}) {
+      const params = [];
+      const clauses = [];
+      if (filters.jobId) {
+        clauses.push("job_id = ?");
+        params.push(filters.jobId);
+      }
+      if (filters.status) {
+        clauses.push("status_name = ?");
+        params.push(filters.status);
+      }
+      const whereSql = clauses.length ? ` WHERE ${clauses.join(" AND ")}` : "";
+      const [rows] = await pool.query(
+        `SELECT * FROM vault_job_tasks${whereSql} ORDER BY sort_order ASC, updated_at ASC, created_at ASC`,
+        params
+      );
+      return rows.map(toVaultJobTask);
+    },
+    async upsertJobTask(jobId, task) {
+      const normalized = normalizeVaultJobTask(jobId, task);
+      await pool.query(`
+        INSERT INTO vault_job_tasks (
+          task_id, job_id, task_key, label_text, status_name, message_text, percent_value, sort_order,
+          payload_json, result_json, created_at, started_at, finished_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON DUPLICATE KEY UPDATE
+          job_id = VALUES(job_id),
+          task_key = VALUES(task_key),
+          label_text = VALUES(label_text),
+          status_name = VALUES(status_name),
+          message_text = VALUES(message_text),
+          percent_value = VALUES(percent_value),
+          sort_order = VALUES(sort_order),
+          payload_json = VALUES(payload_json),
+          result_json = VALUES(result_json),
+          created_at = VALUES(created_at),
+          started_at = VALUES(started_at),
+          finished_at = VALUES(finished_at),
+          updated_at = VALUES(updated_at)
+      `, [
+        normalized.taskId,
+        normalized.jobId,
+        normalized.taskKey || null,
+        normalized.label || null,
+        normalized.status,
+        normalized.message || null,
+        normalized.percent,
+        normalized.sortOrder,
+        JSON.stringify(normalized.payload || {}),
+        JSON.stringify(normalized.result || {}),
+        toMysqlDateTime(normalized.createdAt, toMysqlDateTime(nowIso())),
+        toMysqlDateTime(normalized.startedAt),
+        toMysqlDateTime(normalized.finishedAt),
+        toMysqlDateTime(normalized.updatedAt, toMysqlDateTime(nowIso()))
+      ]);
+      const [rows] = await pool.query("SELECT * FROM vault_job_tasks WHERE task_id = ? LIMIT 1", [normalized.taskId]);
+      return rows[0] ? toVaultJobTask(rows[0]) : null;
     }
   };
 };
 
-export const createStore = (config) => config.driver === "mysql" ? createMysqlStore(config) : createMemoryStore();
+export const createStore = (config) => createCachedStore(config.driver === "mysql" ? createMysqlStore(config) : createMemoryStore());

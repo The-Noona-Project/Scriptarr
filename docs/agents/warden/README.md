@@ -21,4 +21,6 @@
 - Warden's public bootstrap and runtime APIs must redact secrets before Moon or other operators consume them.
 - The managed-service update path lives behind Moon -> Sage -> Warden and only targets the sibling first-party
   services. Warden and MySQL are informational or manual in the current product scope.
+- Warden should inject Sage broker settings into Portal, Oracle, and Raven instead of direct first-party base URLs.
+- Update jobs should be mirrored into the shared broker as durable jobs and job tasks, not left as Warden-only memory.
 - Keep full JSDoc on exported Warden `.mjs` source and tests so the ESLint doc gate stays green.

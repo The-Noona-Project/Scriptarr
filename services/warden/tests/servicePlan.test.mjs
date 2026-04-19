@@ -23,6 +23,9 @@ test("service plan exposes the fixed Scriptarr network and selfhost mysql by def
   assert.equal(plan.services.find((service) => service.name === "scriptarr-moon").publishedPorts[0].hostPort, 3000);
   assert.equal(plan.services.find((service) => service.name === "scriptarr-vault").env.SUPERUSER_ID, "owner-1");
   assert.equal(plan.services.find((service) => service.name === "scriptarr-raven").env.SCRIPTARR_RAVEN_LOG_DIR, "/app/logs");
+  assert.equal(plan.services.find((service) => service.name === "scriptarr-raven").env.SCRIPTARR_SAGE_BASE_URL, "http://scriptarr-sage:3004");
+  assert.equal(plan.services.find((service) => service.name === "scriptarr-portal").env.SCRIPTARR_SAGE_BASE_URL, "http://scriptarr-sage:3004");
+  assert.equal(plan.services.find((service) => service.name === "scriptarr-oracle").env.SCRIPTARR_SAGE_BASE_URL, "http://scriptarr-sage:3004");
   assert.match(plan.services.find((service) => service.name === "scriptarr-mysql").healthCheck.command, /mysqladmin ping/);
   assert.match(plan.services.find((service) => service.name === "scriptarr-moon").healthCheck.command, /127\.0\.0\.1:3000\/health/);
   assert.match(plan.services.find((service) => service.name === "scriptarr-raven").healthCheck.command, /curl -fsS http:\/\/127\.0\.0\.1:8080\/health/);
@@ -43,6 +46,7 @@ test("service plan omits managed mysql for external mysql urls", () => {
   assert.equal(plan.services.some((service) => service.name === "scriptarr-mysql"), false);
   assert.equal(plan.services.find((service) => service.name === "scriptarr-vault").env.SCRIPTARR_MYSQL_HOST, "db.example.com");
   assert.equal(plan.services.find((service) => service.name === "scriptarr-sage").env.SCRIPTARR_WARDEN_BASE_URL, "http://host.docker.internal:4101");
+  assert.equal(plan.services.find((service) => service.name === "scriptarr-sage").env.SCRIPTARR_SERVICE_TOKENS.includes("\"scriptarr-raven\""), true);
   assert.match(plan.services.find((service) => service.name === "scriptarr-vault").containerName, /^scriptarr-test-demo-vault$/);
   assert.match(plan.services.find((service) => service.name === "scriptarr-vault").healthCheck.command, /127\.0\.0\.1:3005\/health/);
 });

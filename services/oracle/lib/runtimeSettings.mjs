@@ -22,10 +22,10 @@ const normalizeString = (value, fallback = "") => {
   return normalized || fallback;
 };
 
-export const resolveOracleRuntimeSettings = async ({config, vaultClient}) => {
+export const resolveOracleRuntimeSettings = async ({config, sageClient}) => {
   const [settingsResponse, secretResponse] = await Promise.all([
-    vaultClient.getSetting(ORACLE_SETTINGS_KEY),
-    vaultClient.getSecret(ORACLE_OPENAI_API_KEY_SECRET)
+    sageClient.getSetting(ORACLE_SETTINGS_KEY),
+    sageClient.getSecret(ORACLE_OPENAI_API_KEY_SECRET)
   ]);
 
   const settings = settingsResponse?.value || {};
@@ -49,4 +49,3 @@ export const resolveOracleRuntimeSettings = async ({config, vaultClient}) => {
     apiKey: normalizeString(settings.provider, "openai") === "localai" ? config.localAiApiKey : openAiApiKey
   };
 };
-

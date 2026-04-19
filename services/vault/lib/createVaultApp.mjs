@@ -5,6 +5,19 @@ import {serviceAuth} from "./serviceAuth.mjs";
 import {createStore} from "./createStore.mjs";
 
 const requireJson = express.json();
+const sendStoreError = (logger, res, error, context = {}) => {
+  if (error?.code === "OWNER_ALREADY_CLAIMED") {
+    logger.warn("Owner claim was rejected because an owner already exists.", context);
+    res.status(409).json({error: "Owner already claimed.", code: error.code});
+    return true;
+  }
+  if (error?.code === "REQUEST_REVISION_CONFLICT") {
+    logger.warn("Request review revision conflict.", context);
+    res.status(409).json({error: "Request revision conflict.", code: error.code});
+    return true;
+  }
+  return false;
+};
 
 export const createVaultApp = async ({logger = createLogger("VAULT")} = {}) => {
   const config = resolveVaultConfig();
@@ -31,8 +44,15 @@ export const createVaultApp = async ({logger = createLogger("VAULT")} = {}) => {
   app.use("/api/service", auth);
 
   app.post("/api/service/users/upsert-discord", requireJson, async (req, res) => {
-    const user = await store.upsertDiscordUser(req.body);
-    res.json(user);
+    try {
+      const user = await store.upsertDiscordUser(req.body);
+      res.json(user);
+    } catch (error) {
+      if (sendStoreError(logger, res, error, {discordUserId: req.body?.discordUserId})) {
+        return;
+      }
+      throw error;
+    }
   });
 
   app.get("/api/service/users", async (_req, res) => {
@@ -94,15 +114,22 @@ export const createVaultApp = async ({logger = createLogger("VAULT")} = {}) => {
   });
 
   app.post("/api/service/requests/:id/review", requireJson, async (req, res) => {
-    const reviewed = await store.reviewRequest(req.params.id, req.body);
-    if (!reviewed) {
-      logger.warn("Request review target was not found.", {
-        requestId: req.params.id
-      });
-      res.status(404).json({error: "Request not found."});
-      return;
+    try {
+      const reviewed = await store.reviewRequest(req.params.id, req.body);
+      if (!reviewed) {
+        logger.warn("Request review target was not found.", {
+          requestId: req.params.id
+        });
+        res.status(404).json({error: "Request not found."});
+        return;
+      }
+      res.json(reviewed);
+    } catch (error) {
+      if (sendStoreError(logger, res, error, {requestId: req.params.id})) {
+        return;
+      }
+      throw error;
     }
-    res.json(reviewed);
   });
 
   app.post("/api/service/progress", requireJson, async (req, res) => {
@@ -155,6 +182,44 @@ export const createVaultApp = async ({logger = createLogger("VAULT")} = {}) => {
 
   app.put("/api/service/raven/metadata-matches/:titleId", requireJson, async (req, res) => {
     res.json(await store.setRavenMetadataMatch(req.params.titleId, req.body || {}));
+  });
+
+  app.get("/api/service/jobs", async (req, res) => {
+    res.json(await store.listJobs({
+      ownerService: req.query.ownerService ? String(req.query.ownerService) : undefined,
+      kind: req.query.kind ? String(req.query.kind) : undefined,
+      status: req.query.status ? String(req.query.status) : undefined
+    }));
+  });
+
+  app.get("/api/service/jobs/:jobId", async (req, res) => {
+    const job = await store.getJob(req.params.jobId);
+    if (!job) {
+      res.status(404).json({error: "Job not found."});
+      return;
+    }
+    res.json(job);
+  });
+
+  app.put("/api/service/jobs/:jobId", requireJson, async (req, res) => {
+    res.json(await store.upsertJob({
+      ...req.body,
+      jobId: req.params.jobId
+    }));
+  });
+
+  app.get("/api/service/jobs/:jobId/tasks", async (req, res) => {
+    res.json(await store.listJobTasks({
+      jobId: req.params.jobId,
+      status: req.query.status ? String(req.query.status) : undefined
+    }));
+  });
+
+  app.put("/api/service/jobs/:jobId/tasks/:taskId", requireJson, async (req, res) => {
+    res.json(await store.upsertJobTask(req.params.jobId, {
+      ...req.body,
+      taskId: req.params.taskId
+    }));
   });
 
   logger.info("Vault app initialized.", {

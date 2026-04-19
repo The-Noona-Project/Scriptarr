@@ -34,8 +34,12 @@ Read this before editing Scriptarr.
 ## Workflow Notes
 
 - Browsers should stay behind Moon. Do not casually add browser calls to internal services.
-- Vault is the supported broker for shared MySQL-backed state.
+- Vault is the only supported broker and the only first-party service allowed to touch the shared MySQL database.
+- First-party service-to-service HTTP must go through Sage. Direct exceptions are limited to Vault -> MySQL, Warden ->
+  Docker or host runtime, Oracle -> OpenAI or LocalAI, and Raven -> external source, metadata, and VPN providers.
 - Requests created in Moon and Discord must converge on one moderated flow.
+- Raven stores active downloads under `downloading/<type>/...` and promotes completed library content into
+  `downloaded/<type>/...`.
 - LocalAI is optional to overall platform health; degrade safely when AI dependencies are unavailable.
 - Prefer Docker-based verification for cross-service work. `npm run docker:healthcheck` is the default smoke path for
   agents and contributors, while `npm run docker:test` remains the deeper end-to-end flow. `npm run docker:test:teardown`

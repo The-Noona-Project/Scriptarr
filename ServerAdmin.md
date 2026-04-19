@@ -92,6 +92,8 @@ Docker health checks so Docker Desktop, `docker ps`, and Unraid can show `health
 
 Fresh installs no longer include seeded demo series. Moon's user and admin library views stay empty until Raven has
 real imported titles to expose.
+Vault now fronts shared MySQL state with its own cache-first broker layer, and first-party service-to-service HTTP is
+expected to flow through Sage instead of bypassing the broker topology.
 
 ## MySQL Contract
 
@@ -128,6 +130,9 @@ Warden manages one shared internal Docker network named `scriptarr-network`.
 - LocalAI joins the same internal network when an admin installs or starts it later from Moon admin.
 - Outside the Docker test flow, Warden itself should stay unpublished unless you are doing a deliberate internal debug
   session.
+- First-party services should not reach across the stack directly. Sage is the supported internal HTTP broker, with
+  direct exceptions limited to Vault -> MySQL, Warden -> Docker or host runtime, Oracle -> OpenAI or LocalAI, and
+  Raven -> external source, metadata, or VPN providers.
 
 ## LocalAI Behavior
 
@@ -218,6 +223,11 @@ Warden's own container mounts are:
 
 - `warden/logs -> /var/log/scriptarr`
 - `warden/runtime -> /var/lib/scriptarr`
+
+Raven's download tree now uses a two-stage layout under `raven/downloads/`:
+
+- `downloading/<type-slug>/<title-folder>/...` for active or incomplete work
+- `downloaded/<type-slug>/<title-folder>/...` for completed promoted library content
 
 ## Docker Test Workflow
 

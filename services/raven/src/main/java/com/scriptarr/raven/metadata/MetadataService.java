@@ -2,9 +2,11 @@ package com.scriptarr.raven.metadata;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.scriptarr.raven.library.LibraryNaming;
+import com.scriptarr.raven.library.LibraryTitle;
 import com.scriptarr.raven.library.LibraryService;
 import com.scriptarr.raven.settings.RavenSettingsService;
-import com.scriptarr.raven.settings.RavenVaultClient;
+import com.scriptarr.raven.settings.RavenBrokerClient;
 import com.scriptarr.raven.support.ScriptarrLogger;
 import org.springframework.stereotype.Service;
 
@@ -19,6 +21,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -30,7 +33,7 @@ import java.util.Map;
 public class MetadataService {
     private final List<MetadataProvider> providers;
     private final RavenSettingsService settingsService;
-    private final RavenVaultClient vaultClient;
+    private final RavenBrokerClient brokerClient;
     private final LibraryService libraryService;
     private final ScriptarrLogger logger;
     private final HttpClient httpClient = HttpClient.newBuilder()
@@ -43,20 +46,20 @@ public class MetadataService {
      *
      * @param providers discovered metadata providers
      * @param settingsService shared Raven settings service
-     * @param vaultClient Vault-backed Raven persistence client
+     * @param brokerClient Sage-backed Raven persistence client
      * @param libraryService Raven library service
      * @param logger shared Raven logger
      */
     public MetadataService(
         List<MetadataProvider> providers,
         RavenSettingsService settingsService,
-        RavenVaultClient vaultClient,
+        RavenBrokerClient brokerClient,
         LibraryService libraryService,
         ScriptarrLogger logger
     ) {
         this.providers = List.copyOf(providers);
         this.settingsService = settingsService;
-        this.vaultClient = vaultClient;
+        this.brokerClient = brokerClient;
         this.libraryService = libraryService;
         this.logger = logger;
     }
@@ -78,7 +81,21 @@ public class MetadataService {
      * @return aggregated provider results
      */
     public List<Map<String, Object>> search(String name, String requestedProvider) {
+        return search(name, requestedProvider, null);
+    }
+
+    /**
+     * Search enabled metadata providers for a series, optionally constrained by
+     * a Raven library title's stored type.
+     *
+     * @param name series name to search
+     * @param requestedProvider optional provider filter
+     * @param libraryId optional Raven library id to resolve for type-aware filtering
+     * @return aggregated provider results
+     */
+    public List<Map<String, Object>> search(String name, String requestedProvider, String libraryId) {
         List<Map<String, Object>> results = new ArrayList<>();
+        LibraryTitle title = libraryId == null || libraryId.isBlank() ? null : libraryService.findTitle(libraryId);
         for (Map<String, Object> provider : describeProviders()) {
             String providerId = String.valueOf(provider.get("id"));
             boolean enabled = Boolean.TRUE.equals(provider.get("enabled"));
@@ -86,6 +103,9 @@ public class MetadataService {
                 continue;
             }
             if (requestedProvider != null && !requestedProvider.isBlank() && !providerId.equalsIgnoreCase(requestedProvider.trim())) {
+                continue;
+            }
+            if (!providerSupportsLibraryType(provider, title)) {
                 continue;
             }
             try {
@@ -119,31 +139,42 @@ public class MetadataService {
         try {
             Map<String, Object> details = seriesDetails(provider, providerSeriesId);
             String matchedAt = Instant.now().toString();
-            vaultClient.putMetadataMatch(effectiveTitleId, Map.of(
+            LibraryTitle title = libraryService.findTitle(effectiveTitleId);
+            if (title != null && !providerSupportsLibraryType(provider, title)) {
+                return Map.of(
+                    "ok", false,
+                    "provider", provider,
+                    "providerSeriesId", providerSeriesId,
+                    "libraryId", effectiveTitleId,
+                    "error", "Provider " + provider + " does not support Raven type " + resolveTypeScope(title) + "."
+                );
+            }
+
+            brokerClient.putMetadataMatch(effectiveTitleId, Map.of(
                 "provider", provider,
                 "providerSeriesId", providerSeriesId,
                 "details", details
             ));
             libraryService.applyMetadata(effectiveTitleId, provider, matchedAt, normalizeAppliedMetadata(details));
-            return Map.of(
-                "ok", true,
-                "provider", provider,
-                "providerSeriesId", providerSeriesId,
-                "seriesId", seriesId,
-                "libraryId", effectiveTitleId,
-                "matchedAt", matchedAt,
-                "details", details,
-                "message", "Raven applied the selected metadata match."
-            );
+            Map<String, Object> response = new LinkedHashMap<>();
+            response.put("ok", true);
+            response.put("provider", provider);
+            response.put("providerSeriesId", providerSeriesId);
+            response.put("seriesId", seriesId);
+            response.put("libraryId", effectiveTitleId);
+            response.put("matchedAt", matchedAt);
+            response.put("details", details);
+            response.put("message", "Raven applied the selected metadata match.");
+            return response;
         } catch (Exception error) {
             logger.warn("METADATA", "Metadata identify failed.", error.getMessage());
-            return Map.of(
-                "ok", false,
-                "provider", provider,
-                "providerSeriesId", providerSeriesId,
-                "libraryId", effectiveTitleId,
-                "error", error.getMessage()
-            );
+            Map<String, Object> response = new LinkedHashMap<>();
+            response.put("ok", false);
+            response.put("provider", provider);
+            response.put("providerSeriesId", providerSeriesId);
+            response.put("libraryId", effectiveTitleId);
+            response.put("error", firstNonBlank(error.getMessage(), error.getClass().getSimpleName()));
+            return response;
         }
     }
 
@@ -463,5 +494,56 @@ public class MetadataService {
     private JsonNode sendJson(HttpRequest request) throws IOException, InterruptedException {
         HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
         return objectMapper.readTree(response.body());
+    }
+
+    private boolean providerSupportsLibraryType(Map<String, Object> providerSettings, LibraryTitle title) {
+        if (providerSettings == null || providerSettings.isEmpty()) {
+            return false;
+        }
+        return providerSupportsLibraryType(String.valueOf(providerSettings.get("id")), title);
+    }
+
+    private boolean providerSupportsLibraryType(String providerId, LibraryTitle title) {
+        if (title == null) {
+            return true;
+        }
+
+        MetadataProvider provider = providers.stream()
+            .filter((entry) -> entry.id().equalsIgnoreCase(providerId))
+            .findFirst()
+            .orElse(null);
+        if (provider == null) {
+            return true;
+        }
+
+        List<String> supportedScopes = provider.scopes().stream()
+            .map((entry) -> entry == null ? "" : entry.trim().toLowerCase(Locale.ROOT))
+            .toList();
+        String typeScope = resolveTypeScope(title);
+        if (typeScope == null || typeScope.isBlank()) {
+            return true;
+        }
+        if (supportedScopes.contains(typeScope)) {
+            return true;
+        }
+        return "manga".equals(typeScope) && (supportedScopes.contains("webtoon") || supportedScopes.contains("manga"));
+    }
+
+    private String resolveTypeScope(LibraryTitle title) {
+        String rawType = firstNonBlank(title.libraryTypeSlug(), title.libraryTypeLabel());
+        if (rawType.isBlank()) {
+            rawType = firstNonBlank(title.mediaType(), "manga");
+        }
+        String normalized = LibraryNaming.normalizeTypeSlug(rawType);
+        return switch (normalized) {
+            case "comic" -> "comic";
+            case "webtoon" -> "webtoon";
+            case "manhwa", "manhua", "manga", "oel" -> "manga";
+            default -> "manga";
+        };
+    }
+
+    private String firstNonBlank(String primary, String fallback) {
+        return primary != null && !primary.isBlank() ? primary : (fallback == null ? "" : fallback);
     }
 }

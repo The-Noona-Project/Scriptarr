@@ -3,7 +3,7 @@ import {createLogger} from "@scriptarr/logging";
 import {resolveOracleConfig} from "./config.mjs";
 import {createOracleClient} from "./oracleClient.mjs";
 import {readScriptarrStatus} from "./readStatus.mjs";
-import {createVaultClient} from "./vaultClient.mjs";
+import {createSageClient} from "./sageClient.mjs";
 import {resolveOracleRuntimeSettings} from "./runtimeSettings.mjs";
 
 const probeLocalAi = async (runtime) => {
@@ -20,14 +20,14 @@ const probeLocalAi = async (runtime) => {
 
 export const createOracleApp = async ({logger = createLogger("ORACLE")} = {}) => {
   const config = resolveOracleConfig();
-  const vaultClient = createVaultClient(config);
+  const sageClient = createSageClient(config);
   const app = express();
   app.use(express.json());
 
   app.get("/health", async (_req, res) => {
     const [status, runtime] = await Promise.all([
-      readScriptarrStatus(config),
-      resolveOracleRuntimeSettings({config, vaultClient})
+      readScriptarrStatus(sageClient),
+      resolveOracleRuntimeSettings({config, sageClient})
     ]);
     res.json({
       ok: true,
@@ -44,8 +44,8 @@ export const createOracleApp = async ({logger = createLogger("ORACLE")} = {}) =>
 
   app.get("/api/status", async (_req, res) => {
     const [status, runtime] = await Promise.all([
-      readScriptarrStatus(config),
-      resolveOracleRuntimeSettings({config, vaultClient})
+      readScriptarrStatus(sageClient),
+      resolveOracleRuntimeSettings({config, sageClient})
     ]);
     res.json({
       ...status,
@@ -66,8 +66,8 @@ export const createOracleApp = async ({logger = createLogger("ORACLE")} = {}) =>
     }
 
     const [status, runtime] = await Promise.all([
-      readScriptarrStatus(config),
-      resolveOracleRuntimeSettings({config, vaultClient})
+      readScriptarrStatus(sageClient),
+      resolveOracleRuntimeSettings({config, sageClient})
     ]);
     if (/status|health|boot|callback/i.test(message)) {
       res.json({

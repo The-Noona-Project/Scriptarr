@@ -10,6 +10,8 @@ public record LibraryTitle(
     String id,
     String title,
     String mediaType,
+    String libraryTypeLabel,
+    String libraryTypeSlug,
     String status,
     String latestChapter,
     String coverAccent,
@@ -25,6 +27,7 @@ public record LibraryTitle(
     List<Map<String, String>> relations,
     String sourceUrl,
     String coverUrl,
+    String workingRoot,
     String downloadRoot,
     List<LibraryChapter> chapters
 ) {

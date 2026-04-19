@@ -2,10 +2,17 @@
 
 - Raven stays Java-first and now runs on Spring Boot with a Java 24 toolchain.
 - Raven owns downloader, library, metadata, PIA/OpenVPN download support, and provider orchestration.
+- Raven must not call Vault directly anymore. Shared settings, secrets, titles, chapters, metadata matches, and task
+  snapshots all flow through Sage's internal broker routes.
 - Launch defaults keep MangaDex enabled first, with AniList, MangaUpdates, MyAnimeList, and ComicVine following the
   configured priority and credential gates.
 - Keep full JavaDoc on Raven main and test Java sources and let `gradlew check` fail when doc coverage regresses.
 - Fresh installs must not reintroduce demo titles; Raven's default library state is empty until real ingest exists.
+- Raven library storage now uses dynamic source-backed type labels and the managed folder lifecycle:
+  - `/downloads/downloading/<type-slug>/<title-folder>`
+  - `/downloads/downloaded/<type-slug>/<title-folder>`
+- New Raven catalog entries should use opaque durable ids instead of title slugs. Treat title ids as opaque route
+  parameters everywhere outside Raven's internals.
 - Raven parity notes from the old Noona services:
   - keep WeebCentral search, title detail scrape, chapter scrape, and page image resolution
   - keep download task persistence across restarts

@@ -44,6 +44,7 @@ const resolvePort = (value, fallback) => {
 };
 
 const defaultTokenMap = (env = process.env) => ({
+  "scriptarr-warden": env.SCRIPTARR_WARDEN_SERVICE_TOKEN || "warden-dev-token",
   "scriptarr-vault": env.SCRIPTARR_VAULT_SERVICE_TOKEN || "vault-dev-token",
   "scriptarr-sage": env.SCRIPTARR_SAGE_SERVICE_TOKEN || "sage-dev-token",
   "scriptarr-moon": env.SCRIPTARR_MOON_SERVICE_TOKEN || "moon-dev-token",
@@ -266,6 +267,7 @@ export const resolveServicePlan = ({env = process.env, containerNamePrefix = ""}
       SCRIPTARR_RAVEN_BASE_URL: `http://scriptarr-raven:${ravenPort}`,
       SCRIPTARR_PUBLIC_BASE_URL: publicBaseUrl,
       SCRIPTARR_SERVICE_TOKEN: serviceTokens["scriptarr-sage"],
+      SCRIPTARR_SERVICE_TOKENS: JSON.stringify(serviceTokens),
       SCRIPTARR_DISCORD_CALLBACK_URL: callbackUrl,
       SCRIPTARR_SAGE_PORT: String(sagePort),
       SUPERUSER_ID: env.SUPERUSER_ID || "",
@@ -302,7 +304,7 @@ export const resolveServicePlan = ({env = process.env, containerNamePrefix = ""}
     containerName: resolveContainerName("scriptarr-raven", resolvedContainerNamePrefix),
     image: resolveServiceImage("scriptarr-raven", {env}),
     env: {
-      SCRIPTARR_VAULT_BASE_URL: `http://scriptarr-vault:${vaultPort}`,
+      SCRIPTARR_SAGE_BASE_URL: `http://scriptarr-sage:${sagePort}`,
       SCRIPTARR_SERVICE_TOKEN: serviceTokens["scriptarr-raven"],
       SCRIPTARR_RAVEN_DATA_ROOT: "/downloads",
       SCRIPTARR_RAVEN_LOG_DIR: "/app/logs"
@@ -319,8 +321,8 @@ export const resolveServicePlan = ({env = process.env, containerNamePrefix = ""}
     containerName: resolveContainerName("scriptarr-portal", resolvedContainerNamePrefix),
     image: resolveServiceImage("scriptarr-portal", {env}),
     env: {
-      SCRIPTARR_VAULT_BASE_URL: `http://scriptarr-vault:${vaultPort}`,
-      SCRIPTARR_ORACLE_BASE_URL: `http://scriptarr-oracle:${oraclePort}`,
+      SCRIPTARR_SAGE_BASE_URL: `http://scriptarr-sage:${sagePort}`,
+      SCRIPTARR_SERVICE_TOKEN: serviceTokens["scriptarr-portal"],
       SCRIPTARR_PORTAL_PORT: String(portalPort),
       DISCORD_TOKEN: env.DISCORD_TOKEN || ""
     },
@@ -336,10 +338,9 @@ export const resolveServicePlan = ({env = process.env, containerNamePrefix = ""}
     containerName: resolveContainerName("scriptarr-oracle", resolvedContainerNamePrefix),
     image: resolveServiceImage("scriptarr-oracle", {env}),
     env: {
-      SCRIPTARR_VAULT_BASE_URL: `http://scriptarr-vault:${vaultPort}`,
+      SCRIPTARR_SAGE_BASE_URL: `http://scriptarr-sage:${sagePort}`,
       SCRIPTARR_SERVICE_TOKEN: serviceTokens["scriptarr-oracle"],
       SCRIPTARR_LOCALAI_BASE_URL: localAiBaseUrl,
-      SCRIPTARR_WARDEN_BASE_URL: wardenBaseUrlForServices,
       SCRIPTARR_ORACLE_PORT: String(oraclePort),
       SCRIPTARR_NOONA_PERSONA_NAME: env.SCRIPTARR_NOONA_PERSONA_NAME || DEFAULT_NOONA_PERSONA_NAME
     },

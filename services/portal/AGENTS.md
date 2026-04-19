@@ -11,3 +11,4 @@ Portal handles Discord onboarding, requests, notifications, subscriptions, and t
 - Do not reintroduce Kavita or Komf dependencies.
 - Moon and Discord requests must converge on one moderated request flow.
 - Oracle integration is read-only for v1 status lookup plus chat.
+- Portal must send first-party internal HTTP through Sage. Do not add direct Vault, Warden, Raven, or Oracle calls here.

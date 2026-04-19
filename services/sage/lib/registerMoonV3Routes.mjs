@@ -204,8 +204,8 @@ export const registerMoonV3Routes = (app, {
   };
 
   const loadTasks = async () => {
-    const payload = await fetchRavenJson("/v1/downloads/tasks");
-    return normalizeArray(payload).map((task) => ({
+    const ravenPayload = await fetchRavenJson("/v1/downloads/tasks");
+    const ravenTasks = normalizeArray(ravenPayload).map((task) => ({
       taskId: normalizeString(task.taskId),
       titleName: normalizeString(task.titleName),
       titleUrl: normalizeString(task.titleUrl),
@@ -217,6 +217,29 @@ export const registerMoonV3Routes = (app, {
       queuedAt: parseIso(task.queuedAt),
       updatedAt: parseIso(task.updatedAt)
     }));
+    const jobs = normalizeArray(await vaultClient.listJobs()).filter((job) =>
+      ["scriptarr-warden", "scriptarr-raven"].includes(normalizeString(job.ownerService))
+    );
+    const brokerTasksNested = await Promise.all(jobs.map(async (job) =>
+      normalizeArray(await vaultClient.listJobTasks(job.jobId)).map((task) => ({
+        taskId: normalizeString(task.taskId),
+        jobId: normalizeString(job.jobId),
+        titleName: normalizeString(task.label || job.label || job.kind, "Background job"),
+        titleUrl: "",
+        requestType: normalizeString(job.kind, "job"),
+        requestedBy: normalizeString(job.ownerService || task.requestedBy || "scriptarr"),
+        status: normalizeString(task.status || job.status, "queued"),
+        message: normalizeString(task.message || job.label || "Background task updated."),
+        percent: Number.parseInt(String(task.percent || 0), 10) || 0,
+        queuedAt: parseIso(task.createdAt || job.createdAt),
+        updatedAt: parseIso(task.updatedAt || job.updatedAt)
+      }))
+    ));
+    const brokerTasks = brokerTasksNested.flat();
+
+    return [...ravenTasks, ...brokerTasks].sort((left, right) =>
+      Date.parse(right.updatedAt || right.queuedAt || "") - Date.parse(left.updatedAt || left.queuedAt || "")
+    );
   };
 
   const loadServiceStatus = async () => {

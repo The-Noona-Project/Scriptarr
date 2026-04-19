@@ -215,14 +215,16 @@ public class RavenController {
      *
      * @param name series name to search
      * @param provider optional provider filter
+     * @param libraryId optional Raven library id used for type-aware filtering
      * @return aggregated metadata matches
      */
     @GetMapping("/v1/metadata/search")
     public List<Map<String, Object>> searchMetadata(
         @RequestParam("name") String name,
-        @RequestParam(value = "provider", required = false) String provider
+        @RequestParam(value = "provider", required = false) String provider,
+        @RequestParam(value = "libraryId", required = false) String libraryId
     ) {
-        return metadataService.search(name, provider);
+        return metadataService.search(name, provider, libraryId);
     }
 
     /**

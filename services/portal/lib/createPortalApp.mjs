@@ -1,7 +1,7 @@
 import express from "express";
 import {createLogger} from "@scriptarr/logging";
 import {resolvePortalConfig} from "./config.mjs";
-import {createVaultClient} from "./vaultClient.mjs";
+import {createSageClient} from "./sageClient.mjs";
 
 const commandCatalog = Object.freeze([
   {name: "request", description: "Create a moderated Scriptarr request from Discord."},
@@ -12,7 +12,7 @@ const commandCatalog = Object.freeze([
 
 export const createPortalApp = async ({logger = createLogger("PORTAL")} = {}) => {
   const config = resolvePortalConfig();
-  const vault = createVaultClient(config);
+  const sage = createSageClient(config);
   const app = express();
   app.use(express.json());
 
@@ -51,14 +51,18 @@ export const createPortalApp = async ({logger = createLogger("PORTAL")} = {}) =>
       return;
     }
 
-    await vault.upsertDiscordUser({
+    const userResult = await sage.upsertDiscordUser({
       discordUserId,
       username,
       avatarUrl: req.body.avatarUrl || null,
       role: "member"
     });
+    if (!userResult.ok) {
+      res.status(userResult.status).json(userResult.payload);
+      return;
+    }
 
-    const request = await vault.createRequest({
+    const request = await sage.createRequest({
       source: "discord",
       title,
       requestType: req.body.requestType || "manga",
@@ -66,16 +70,12 @@ export const createPortalApp = async ({logger = createLogger("PORTAL")} = {}) =>
       requestedBy: discordUserId
     });
 
-    res.status(201).json(request);
+    res.status(request.status).json(request.payload);
   });
 
   app.post("/api/chat", async (req, res) => {
-    const response = await fetch(`${config.oracleBaseUrl}/api/chat`, {
-      method: "POST",
-      headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({message: req.body.message})
-    });
-    res.status(response.status).json(await response.json());
+    const response = await sage.chat({message: req.body.message});
+    res.status(response.status).json(response.payload);
   });
 
   logger.info("Portal app initialized.", {

@@ -15,6 +15,13 @@ Verification defaults:
   Warden plus Moon, and tears the stack down unless `--keep-running` is set.
 - `npm run docker:test` is the heavier end-to-end path for flows that need a live stack beyond health convergence.
 
+Architecture invariants:
+
+- Vault is the only first-party service allowed to touch MySQL directly.
+- Sage is the only supported first-party internal HTTP broker.
+- Raven stores in-flight downloads under `downloading/<type>/...` and promotes completed library content into
+  `downloaded/<type>/...`.
+
 ## Service Index
 
 - [Warden](warden/README.md)

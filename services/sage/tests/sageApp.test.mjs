@@ -7,7 +7,13 @@ import http from "node:http";
 
 process.env.NODE_ENV = "test";
 process.env.SCRIPTARR_VAULT_DRIVER = "memory";
-process.env.SCRIPTARR_SERVICE_TOKENS = JSON.stringify({"scriptarr-sage": "sage-dev-token"});
+process.env.SCRIPTARR_SERVICE_TOKENS = JSON.stringify({
+  "scriptarr-sage": "sage-dev-token",
+  "scriptarr-portal": "portal-dev-token",
+  "scriptarr-oracle": "oracle-dev-token",
+  "scriptarr-raven": "raven-dev-token",
+  "scriptarr-warden": "warden-dev-token"
+});
 process.env.SCRIPTARR_SERVICE_TOKEN = "sage-dev-token";
 process.env.SUPERUSER_ID = "owner-1";
 
@@ -93,6 +99,30 @@ const createDependencyStub = ({libraryTitles = [defaultLibraryTitle]} = {}) => {
           attachedToManagedNetwork: true
         }
       }));
+      return;
+    }
+
+    if (request.url === "/api/status") {
+      response.writeHead(200, {"Content-Type": "application/json"});
+      response.end(JSON.stringify({
+        ok: true,
+        source: "oracle-status-broker"
+      }));
+      return;
+    }
+
+    if (request.url === "/api/chat" && request.method === "POST") {
+      let body = "";
+      request.on("data", (chunk) => {
+        body += chunk;
+      });
+      request.on("end", () => {
+        response.writeHead(200, {"Content-Type": "application/json"});
+        response.end(JSON.stringify({
+          ok: true,
+          reply: `stubbed:${JSON.parse(body || "{}").message || ""}`
+        }));
+      });
       return;
     }
 
@@ -385,6 +415,96 @@ test("sage no longer exposes a dev-session claim endpoint", async () => {
   });
 
   assert.equal(response.status, 404);
+
+  sageServer.close();
+  vaultServer.close();
+  dependencyStub.server.close();
+});
+
+test("sage brokers service-to-service routes with internal service auth", async () => {
+  const {app: vaultApp} = await createVaultApp();
+  const vaultServer = vaultApp.listen(0);
+  const vaultPort = vaultServer.address().port;
+
+  const dependencyStub = await createDependencyStub();
+  dependencyStub.server.listen(0);
+  const dependencyPort = dependencyStub.server.address().port;
+
+  process.env.SCRIPTARR_VAULT_BASE_URL = `http://127.0.0.1:${vaultPort}`;
+  process.env.SCRIPTARR_WARDEN_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_PORTAL_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_ORACLE_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_RAVEN_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+
+  const {app: sageApp} = await createSageApp();
+  const sageServer = sageApp.listen(0);
+  const sagePort = sageServer.address().port;
+  const baseUrl = `http://127.0.0.1:${sagePort}`;
+
+  const portalHeaders = {
+    "Authorization": "Bearer portal-dev-token",
+    "Content-Type": "application/json"
+  };
+  const oracleHeaders = {
+    "Authorization": "Bearer oracle-dev-token",
+    "Content-Type": "application/json"
+  };
+  const ravenHeaders = {
+    "Authorization": "Bearer raven-dev-token",
+    "Content-Type": "application/json"
+  };
+
+  const createdUser = await fetch(`${baseUrl}/api/internal/vault/users/upsert-discord`, {
+    method: "POST",
+    headers: portalHeaders,
+    body: JSON.stringify({
+      discordUserId: "discord-123",
+      username: "Portal User",
+      role: "member"
+    })
+  }).then((response) => response.json());
+  assert.equal(createdUser.discordUserId, "discord-123");
+
+  const request = await fetch(`${baseUrl}/api/internal/vault/requests`, {
+    method: "POST",
+    headers: portalHeaders,
+    body: JSON.stringify({
+      source: "discord",
+      title: "The Fable",
+      requestType: "manga",
+      requestedBy: "discord-123"
+    })
+  }).then((response) => response.json());
+  assert.equal(request.title, "The Fable");
+
+  const oracleStatus = await fetch(`${baseUrl}/api/internal/warden/bootstrap`, {
+    headers: oracleHeaders
+  }).then((response) => response.json());
+  assert.equal(oracleStatus.managedNetworkName, "scriptarr-network-bootstrap");
+
+  const oracleChat = await fetch(`${baseUrl}/api/internal/oracle/chat`, {
+    method: "POST",
+    headers: portalHeaders,
+    body: JSON.stringify({message: "hello"})
+  }).then((response) => response.json());
+  assert.equal(oracleChat.reply, "stubbed:hello");
+
+  const ravenJob = await fetch(`${baseUrl}/api/internal/jobs/raven-job-1`, {
+    method: "PUT",
+    headers: ravenHeaders,
+    body: JSON.stringify({
+      kind: "download",
+      ownerService: "scriptarr-raven",
+      status: "queued",
+      label: "Raven download"
+    })
+  }).then((response) => response.json());
+  assert.equal(ravenJob.jobId, "raven-job-1");
+
+  const forbidden = await fetch(`${baseUrl}/api/internal/jobs/raven-job-1`, {
+    headers: portalHeaders
+  });
+  assert.equal(forbidden.status, 403);
 
   sageServer.close();
   vaultServer.close();

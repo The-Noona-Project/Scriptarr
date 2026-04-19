@@ -1,5 +1,6 @@
 package com.scriptarr.raven.downloader;
 
+import com.scriptarr.raven.library.LibraryNaming;
 import com.scriptarr.raven.support.ScriptarrLogger;
 import org.jsoup.Connection;
 import org.jsoup.Jsoup;
@@ -284,19 +285,7 @@ public class TitleScraper {
         }
 
         String cleaned = trimmed.replaceFirst("(?i)^Type:?\\s*", "").replaceAll("\\s+", " ").trim();
-        if (cleaned.isBlank()) {
-            return null;
-        }
-
-        String lower = cleaned.toLowerCase(Locale.ROOT);
-        return switch (lower) {
-            case "manga", "managa" -> "manga";
-            case "manhwa" -> "manhwa";
-            case "manhua" -> "manhua";
-            case "webtoon" -> "webtoon";
-            case "comic" -> "comic";
-            default -> "manga";
-        };
+        return cleaned.isBlank() ? null : LibraryNaming.normalizeTypeLabel(cleaned);
     }
 
     private String extractSummary(Document doc) {

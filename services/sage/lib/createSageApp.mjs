@@ -8,6 +8,8 @@ import {createVaultClient} from "./vaultClient.mjs";
 import {buildCallbackUrl, buildDiscordOauthUrl, exchangeDiscordCode} from "./discordAuth.mjs";
 import {requirePermission, requireSession} from "./auth.mjs";
 import {registerMoonV3Routes} from "./registerMoonV3Routes.mjs";
+import {createServiceAuth} from "./serviceAuth.mjs";
+import {registerInternalBrokerRoutes} from "./registerInternalBrokerRoutes.mjs";
 
 const RAVEN_VPN_KEY = "raven.vpn";
 const RAVEN_VPN_PASSWORD_SECRET = "raven.vpn.piaPassword";
@@ -287,6 +289,7 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
   const vaultClient = createVaultClient(config);
   const app = express();
   const requireUser = requireSession(vaultClient);
+  const requireService = createServiceAuth(config);
 
   app.use(express.json());
 
@@ -560,6 +563,13 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
       }
     });
     res.status(result.status).json(result.payload);
+  });
+
+  registerInternalBrokerRoutes(app, {
+    config,
+    vaultClient,
+    requireService,
+    serviceJson
   });
 
   registerMoonV3Routes(app, {

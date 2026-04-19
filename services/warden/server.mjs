@@ -7,7 +7,6 @@ const {app, config, logger, runtime} = createWardenApp();
 
 if (process.env.NODE_ENV !== "test") {
   try {
-    await runtime.initialize();
     const server = app.listen(config.port, config.host, () => {
       logger.info("Warden listening.", {
         port: config.port,
@@ -17,6 +16,9 @@ if (process.env.NODE_ENV !== "test") {
     });
     server.on("error", (error) => {
       logger.error("Warden listener failed.", {error});
+    });
+    void runtime.initialize().catch((error) => {
+      logger.error("Warden initialization failed.", {error});
     });
   } catch (error) {
     logger.error("Warden failed to start.", {error});

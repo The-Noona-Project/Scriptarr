@@ -12,3 +12,4 @@ Oracle is the Noona AI persona for Scriptarr, backed by LangChain JS with OpenAI
 - Oracle degradation must not make the rest of Scriptarr unhealthy.
 - Keep Oracle off by default on fresh installs.
 - Keep LocalAI communication OpenAI-compatible so Warden-selected images stay swappable.
+- Route Oracle's first-party Scriptarr HTTP through Sage; do not add direct Vault or Warden calls here.

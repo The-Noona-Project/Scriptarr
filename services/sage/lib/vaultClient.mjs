@@ -18,6 +18,30 @@ const json = async (response) => {
   }
 };
 
+const buildHttpError = (status, payload, context) => {
+  const detail = payload?.error || payload?.raw || `HTTP ${status}`;
+  const error = new Error(`${context}: ${detail}`);
+  error.status = status;
+  error.payload = payload;
+  return error;
+};
+
+const requestJson = async (baseUrl, headers, path, {method = "GET", body, allowStatuses = [], context = "Vault request failed"} = {}) => {
+  const response = await fetch(`${baseUrl}${path}`, {
+    method,
+    headers,
+    body: body == null ? undefined : JSON.stringify(body)
+  });
+  const payload = await json(response);
+  if (!response.ok && !allowStatuses.includes(response.status)) {
+    throw buildHttpError(response.status, payload, context);
+  }
+  return {
+    status: response.status,
+    payload
+  };
+};
+
 /**
  * Build Sage's Vault client facade for settings, sessions, requests, and user
  * mutations.
@@ -147,6 +171,102 @@ export const createVaultClient = (config) => {
         body: JSON.stringify(payload)
       });
       return json(response);
+    },
+    async listRavenTitles() {
+      const {payload} = await requestJson(baseUrl, headers, "/api/service/raven/titles", {
+        context: "Failed to list Raven titles from Vault"
+      });
+      return payload;
+    },
+    async getRavenTitle(titleId) {
+      const {status, payload} = await requestJson(baseUrl, headers, `/api/service/raven/titles/${encodeURIComponent(titleId)}`, {
+        allowStatuses: [404],
+        context: "Failed to load a Raven title from Vault"
+      });
+      return status === 404 ? null : payload;
+    },
+    async upsertRavenTitle(titleId, payload) {
+      return (await requestJson(baseUrl, headers, `/api/service/raven/titles/${encodeURIComponent(titleId)}`, {
+        method: "PUT",
+        body: payload,
+        context: "Failed to upsert a Raven title in Vault"
+      })).payload;
+    },
+    async replaceRavenChapters(titleId, chapters) {
+      return (await requestJson(baseUrl, headers, `/api/service/raven/titles/${encodeURIComponent(titleId)}/chapters`, {
+        method: "PUT",
+        body: {chapters},
+        context: "Failed to replace Raven chapters in Vault"
+      })).payload;
+    },
+    async listRavenDownloadTasks() {
+      return (await requestJson(baseUrl, headers, "/api/service/raven/download-tasks", {
+        context: "Failed to list Raven download tasks from Vault"
+      })).payload;
+    },
+    async upsertRavenDownloadTask(taskId, payload) {
+      return (await requestJson(baseUrl, headers, `/api/service/raven/download-tasks/${encodeURIComponent(taskId)}`, {
+        method: "PUT",
+        body: payload,
+        context: "Failed to upsert a Raven download task in Vault"
+      })).payload;
+    },
+    async getRavenMetadataMatch(titleId) {
+      return (await requestJson(baseUrl, headers, `/api/service/raven/metadata-matches/${encodeURIComponent(titleId)}`, {
+        context: "Failed to load a Raven metadata match from Vault"
+      })).payload;
+    },
+    async setRavenMetadataMatch(titleId, payload) {
+      return (await requestJson(baseUrl, headers, `/api/service/raven/metadata-matches/${encodeURIComponent(titleId)}`, {
+        method: "PUT",
+        body: payload,
+        context: "Failed to store a Raven metadata match in Vault"
+      })).payload;
+    },
+    async listJobs(filters = {}) {
+      const searchParams = new URLSearchParams();
+      for (const [key, value] of Object.entries(filters)) {
+        if (value != null && value !== "") {
+          searchParams.set(key, String(value));
+        }
+      }
+      const suffix = searchParams.size ? `?${searchParams.toString()}` : "";
+      return (await requestJson(baseUrl, headers, `/api/service/jobs${suffix}`, {
+        context: "Failed to list broker jobs from Vault"
+      })).payload;
+    },
+    async getJob(jobId) {
+      const {status, payload} = await requestJson(baseUrl, headers, `/api/service/jobs/${encodeURIComponent(jobId)}`, {
+        allowStatuses: [404],
+        context: "Failed to load a broker job from Vault"
+      });
+      return status === 404 ? null : payload;
+    },
+    async upsertJob(jobId, payload) {
+      return (await requestJson(baseUrl, headers, `/api/service/jobs/${encodeURIComponent(jobId)}`, {
+        method: "PUT",
+        body: payload,
+        context: "Failed to upsert a broker job in Vault"
+      })).payload;
+    },
+    async listJobTasks(jobId, filters = {}) {
+      const searchParams = new URLSearchParams();
+      for (const [key, value] of Object.entries(filters)) {
+        if (value != null && value !== "") {
+          searchParams.set(key, String(value));
+        }
+      }
+      const suffix = searchParams.size ? `?${searchParams.toString()}` : "";
+      return (await requestJson(baseUrl, headers, `/api/service/jobs/${encodeURIComponent(jobId)}/tasks${suffix}`, {
+        context: "Failed to list broker job tasks from Vault"
+      })).payload;
+    },
+    async upsertJobTask(jobId, taskId, payload) {
+      return (await requestJson(baseUrl, headers, `/api/service/jobs/${encodeURIComponent(jobId)}/tasks/${encodeURIComponent(taskId)}`, {
+        method: "PUT",
+        body: payload,
+        context: "Failed to upsert a broker job task in Vault"
+      })).payload;
     }
   };
 };

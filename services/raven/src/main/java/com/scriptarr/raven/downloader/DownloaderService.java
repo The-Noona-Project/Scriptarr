@@ -1,10 +1,12 @@
 package com.scriptarr.raven.downloader;
 
+import com.scriptarr.raven.library.LibraryChapter;
+import com.scriptarr.raven.library.LibraryNaming;
+import com.scriptarr.raven.library.LibraryService;
+import com.scriptarr.raven.library.LibraryTitle;
+import com.scriptarr.raven.settings.RavenBrokerClient;
 import com.scriptarr.raven.support.ScriptarrLogger;
 import com.scriptarr.raven.vpn.VpnService;
-import com.scriptarr.raven.library.LibraryChapter;
-import com.scriptarr.raven.library.LibraryService;
-import com.scriptarr.raven.settings.RavenVaultClient;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import org.springframework.stereotype.Service;
@@ -17,14 +19,15 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Locale;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
@@ -33,10 +36,15 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
 /**
- * Serialized Raven download queue that scrapes chapters and stores CBZ archives.
+ * Serialized Raven download queue that scrapes chapters, stages them under the
+ * downloading root, and promotes completed titles into the downloaded root.
  */
 @Service
 public class DownloaderService {
+    private static final String DOWNLOADING_FOLDER_NAME = "downloading";
+    private static final String DOWNLOADED_FOLDER_NAME = "downloaded";
+    private static final String DOWNLOAD_JOB_KIND = "download";
+
     private final Map<String, Map<String, Object>> tasks = new ConcurrentHashMap<>();
     private final ExecutorService queueWorker = Executors.newSingleThreadExecutor();
     private final HttpClient httpClient = HttpClient.newBuilder()
@@ -47,7 +55,7 @@ public class DownloaderService {
     private final SourceFinder sourceFinder;
     private final VpnService vpnService;
     private final LibraryService libraryService;
-    private final RavenVaultClient vaultClient;
+    private final RavenBrokerClient brokerClient;
     private final ScriptarrLogger logger;
 
     /**
@@ -57,7 +65,7 @@ public class DownloaderService {
      * @param sourceFinder scraper used to resolve page image URLs
      * @param vpnService VPN coordinator for optional protected downloads
      * @param libraryService library projection and persistence service
-     * @param vaultClient Vault-backed Raven persistence client
+     * @param brokerClient Sage-backed broker client for Raven state
      * @param logger shared Raven logger
      */
     public DownloaderService(
@@ -65,14 +73,14 @@ public class DownloaderService {
         SourceFinder sourceFinder,
         VpnService vpnService,
         LibraryService libraryService,
-        RavenVaultClient vaultClient,
+        RavenBrokerClient brokerClient,
         ScriptarrLogger logger
     ) {
         this.titleScraper = titleScraper;
         this.sourceFinder = sourceFinder;
         this.vpnService = vpnService;
         this.libraryService = libraryService;
-        this.vaultClient = vaultClient;
+        this.brokerClient = brokerClient;
         this.logger = logger;
     }
 
@@ -83,7 +91,7 @@ public class DownloaderService {
     @PostConstruct
     public void restorePersistedTasks() {
         try {
-            var payload = vaultClient.listDownloadTasks();
+            var payload = brokerClient.listDownloadTasks();
             if (payload == null || !payload.isArray()) {
                 return;
             }
@@ -91,6 +99,7 @@ public class DownloaderService {
             payload.forEach((node) -> {
                 Map<String, Object> task = new LinkedHashMap<>();
                 task.put("taskId", node.path("taskId").asText(""));
+                task.put("jobId", node.path("jobId").asText(node.path("taskId").asText("")));
                 task.put("titleId", node.path("titleId").asText(""));
                 task.put("titleName", node.path("titleName").asText(""));
                 task.put("titleUrl", node.path("titleUrl").asText(""));
@@ -101,6 +110,11 @@ public class DownloaderService {
                 task.put("percent", node.path("percent").asInt(0));
                 task.put("queuedAt", node.path("queuedAt").asText(Instant.now().toString()));
                 task.put("updatedAt", node.path("updatedAt").asText(Instant.now().toString()));
+                copyIfPresent(node, task, "libraryTypeLabel");
+                copyIfPresent(node, task, "libraryTypeSlug");
+                copyIfPresent(node, task, "workingRoot");
+                copyIfPresent(node, task, "downloadRoot");
+
                 String taskId = String.valueOf(task.get("taskId"));
                 if (taskId.isBlank()) {
                     return;
@@ -145,7 +159,8 @@ public class DownloaderService {
         String taskId = "task_" + UUID.randomUUID().toString().replace("-", "");
         Map<String, Object> task = new LinkedHashMap<>();
         task.put("taskId", taskId);
-        task.put("titleId", libraryService.slugifyTitleId(request.titleName()));
+        task.put("jobId", taskId);
+        task.put("titleId", "");
         task.put("titleName", request.titleName());
         task.put("titleUrl", request.titleUrl());
         task.put("requestType", request.requestType());
@@ -154,6 +169,9 @@ public class DownloaderService {
         task.put("message", "Queued for Raven download.");
         task.put("percent", 0);
         task.put("queuedAt", Instant.now().toString());
+        task.put("updatedAt", Instant.now().toString());
+        task.put("libraryTypeLabel", LibraryNaming.normalizeTypeLabel(request.requestType()));
+        task.put("libraryTypeSlug", LibraryNaming.normalizeTypeSlug(request.requestType()));
         tasks.put(taskId, task);
         persistTask(taskId);
 
@@ -169,6 +187,7 @@ public class DownloaderService {
     public List<Map<String, Object>> snapshot() {
         return tasks.values().stream()
             .sorted(Comparator.comparing(entry -> String.valueOf(entry.get("queuedAt")), Comparator.reverseOrder()))
+            .map(Map::copyOf)
             .toList();
     }
 
@@ -207,34 +226,45 @@ public class DownloaderService {
                 throw new IllegalStateException("No chapters were found for the requested title URL.");
             }
             TitleDetails details = titleScraper.getTitleDetails(request.titleUrl());
+            String typeLabel = resolveLibraryTypeLabel(request, details);
+            String typeSlug = LibraryNaming.normalizeTypeSlug(typeLabel);
+            Path workingRoot = resolveTitleRoot(DOWNLOADING_FOLDER_NAME, request.titleName(), typeSlug);
+            Path finalRoot = resolveTitleRoot(DOWNLOADED_FOLDER_NAME, request.titleName(), typeSlug);
 
-            Path titleRoot = resolveTitleRoot(request);
-            Files.createDirectories(titleRoot);
+            rememberRoots(taskId, typeLabel, typeSlug, workingRoot, finalRoot);
+            Files.createDirectories(workingRoot);
 
             int total = chapters.size();
+            Map<String, String> sourceByChapter = new LinkedHashMap<>();
             for (int index = 0; index < chapters.size(); index++) {
                 Map<String, String> chapter = chapters.get(index);
-                Path archivePath = downloadChapter(titleRoot, request, chapter);
-                libraryService.recordDownloadedChapter(
-                    request.titleName(),
-                    request.requestType(),
-                    request.titleUrl(),
-                    null,
-                    details,
-                    new LibraryChapter(
-                        chapterId(request, chapter),
-                        chapterLabel(chapter),
-                        chapter.getOrDefault("chapter_number", String.valueOf(index + 1)),
-                        countArchiveEntries(archivePath),
-                        null,
-                        true,
-                        archivePath.toString(),
-                        chapter.get("href")
-                    ),
-                    archivePath
-                );
-                int percent = Math.max(10, (int) (((index + 1) / (double) total) * 100));
-                update(taskId, "running", "Downloaded chapter " + chapter.get("chapter_number") + ".", percent);
+                Path archivePath = downloadChapter(workingRoot, request, chapter);
+                String chapterNumber = normalizeStoredChapterNumber(chapter.getOrDefault("chapter_number", String.valueOf(index + 1)));
+                sourceByChapter.put(chapterNumber, chapter.get("href"));
+                int percent = Math.max(10, (int) (((index + 1) / (double) total) * 90));
+                update(taskId, "running", "Downloaded chapter " + chapterNumber + ".", percent);
+            }
+
+            promoteTitleFolder(workingRoot, finalRoot);
+            LibraryTitle title = libraryService.recordDownloadedTitle(
+                request.titleName(),
+                typeLabel,
+                request.titleUrl(),
+                null,
+                details,
+                buildLibraryChapters(finalRoot, sourceByChapter),
+                workingRoot,
+                finalRoot
+            );
+            if (title != null) {
+                Map<String, Object> task = tasks.get(taskId);
+                if (task != null) {
+                    task.put("titleId", title.id());
+                    task.put("libraryTypeLabel", title.libraryTypeLabel());
+                    task.put("libraryTypeSlug", title.libraryTypeSlug());
+                    task.put("workingRoot", title.workingRoot());
+                    task.put("downloadRoot", title.downloadRoot());
+                }
             }
 
             update(taskId, "completed", "Raven download completed.", 100);
@@ -250,8 +280,8 @@ public class DownloaderService {
             throw new IllegalStateException("No chapter pages were found for " + chapter.get("href"));
         }
 
-        String chapterNumber = chapter.getOrDefault("chapter_number", "0");
-        String archiveName = sanitizeFileName(request.titleName()) + "_c" + chapterNumber + ".cbz";
+        String chapterNumber = normalizeStoredChapterNumber(chapter.getOrDefault("chapter_number", "0"));
+        String archiveName = LibraryNaming.sanitizeTitleFolder(request.titleName()) + "_c" + chapterNumber + ".cbz";
         Path archivePath = titleRoot.resolve(archiveName);
 
         try (ZipOutputStream zip = new ZipOutputStream(Files.newOutputStream(archivePath))) {
@@ -267,6 +297,29 @@ public class DownloaderService {
         }
         logger.info("DOWNLOAD", "Saved chapter archive.", "file=" + archivePath.getFileName());
         return archivePath;
+    }
+
+    private List<LibraryChapter> buildLibraryChapters(Path finalRoot, Map<String, String> sourceByChapter) throws IOException {
+        try (var archives = Files.list(finalRoot)) {
+            return archives
+                .filter(Files::isRegularFile)
+                .filter((path) -> path.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".cbz"))
+                .sorted()
+                .map((path) -> {
+                    String chapterNumber = extractChapterNumber(path.getFileName().toString());
+                    return new LibraryChapter(
+                        "",
+                        "Chapter " + chapterNumber,
+                        chapterNumber,
+                        countArchiveEntries(path),
+                        null,
+                        true,
+                        path.toString(),
+                        sourceByChapter.getOrDefault(chapterNumber, null)
+                    );
+                })
+                .toList();
+        }
     }
 
     private byte[] downloadImage(String imageUrl) throws IOException, InterruptedException {
@@ -294,36 +347,180 @@ public class DownloaderService {
         persistTask(taskId);
     }
 
+    private void rememberRoots(String taskId, String typeLabel, String typeSlug, Path workingRoot, Path finalRoot) {
+        Map<String, Object> task = tasks.get(taskId);
+        if (task == null) {
+            return;
+        }
+        task.put("libraryTypeLabel", typeLabel);
+        task.put("libraryTypeSlug", typeSlug);
+        task.put("workingRoot", workingRoot.toString());
+        task.put("downloadRoot", finalRoot.toString());
+        persistTask(taskId);
+    }
+
     private void persistTask(String taskId) {
         Map<String, Object> task = tasks.get(taskId);
         if (task == null) {
             return;
         }
         try {
-            vaultClient.putDownloadTask(taskId, task);
+            brokerClient.putDownloadTask(taskId, task);
+            String jobId = String.valueOf(task.getOrDefault("jobId", taskId));
+            brokerClient.putJob(jobId, buildJobPayload(jobId, task));
+            brokerClient.putJobTask(jobId, jobTaskId(jobId), buildJobTaskPayload(jobId, task));
         } catch (Exception error) {
             logger.warn("DOWNLOAD", "Failed to persist a Raven task snapshot.", error.getMessage());
         }
     }
 
-    private Path resolveTitleRoot(DownloadRequest request) {
-        String mediaType = request.requestType() == null || request.requestType().isBlank()
-            ? "manga"
-            : request.requestType().trim().toLowerCase(Locale.ROOT);
+    private Map<String, Object> buildJobPayload(String jobId, Map<String, Object> task) {
+        String status = String.valueOf(task.getOrDefault("status", "queued"));
+        String queuedAt = String.valueOf(task.getOrDefault("queuedAt", Instant.now().toString()));
+        String updatedAt = String.valueOf(task.getOrDefault("updatedAt", queuedAt));
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("jobId", jobId);
+        payload.put("kind", DOWNLOAD_JOB_KIND);
+        payload.put("ownerService", "scriptarr-raven");
+        payload.put("status", status);
+        payload.put("label", "Download " + task.getOrDefault("titleName", "Untitled"));
+        payload.put("requestedBy", String.valueOf(task.getOrDefault("requestedBy", "scriptarr")));
+        payload.put("payload", Map.of(
+            "titleName", String.valueOf(task.getOrDefault("titleName", "")),
+            "titleUrl", String.valueOf(task.getOrDefault("titleUrl", "")),
+            "requestType", String.valueOf(task.getOrDefault("requestType", "manga")),
+            "libraryTypeLabel", String.valueOf(task.getOrDefault("libraryTypeLabel", "")),
+            "libraryTypeSlug", String.valueOf(task.getOrDefault("libraryTypeSlug", ""))
+        ));
+        payload.put("result", Map.of(
+            "titleId", String.valueOf(task.getOrDefault("titleId", "")),
+            "workingRoot", String.valueOf(task.getOrDefault("workingRoot", "")),
+            "downloadRoot", String.valueOf(task.getOrDefault("downloadRoot", "")),
+            "message", String.valueOf(task.getOrDefault("message", ""))
+        ));
+        payload.put("createdAt", queuedAt);
+        payload.put("startedAt", "queued".equals(status) ? null : queuedAt);
+        payload.put("finishedAt", isTerminalStatus(status) ? updatedAt : null);
+        payload.put("updatedAt", updatedAt);
+        return payload;
+    }
+
+    private Map<String, Object> buildJobTaskPayload(String jobId, Map<String, Object> task) {
+        String status = String.valueOf(task.getOrDefault("status", "queued"));
+        String queuedAt = String.valueOf(task.getOrDefault("queuedAt", Instant.now().toString()));
+        String updatedAt = String.valueOf(task.getOrDefault("updatedAt", queuedAt));
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("taskId", jobTaskId(jobId));
+        payload.put("jobId", jobId);
+        payload.put("taskKey", "download");
+        payload.put("label", "Download " + task.getOrDefault("titleName", "Untitled"));
+        payload.put("status", status);
+        payload.put("message", String.valueOf(task.getOrDefault("message", "")));
+        payload.put("percent", task.getOrDefault("percent", 0));
+        payload.put("sortOrder", 0);
+        payload.put("payload", Map.of(
+            "titleName", String.valueOf(task.getOrDefault("titleName", "")),
+            "titleUrl", String.valueOf(task.getOrDefault("titleUrl", "")),
+            "requestType", String.valueOf(task.getOrDefault("requestType", "manga"))
+        ));
+        payload.put("result", Map.of(
+            "titleId", String.valueOf(task.getOrDefault("titleId", "")),
+            "workingRoot", String.valueOf(task.getOrDefault("workingRoot", "")),
+            "downloadRoot", String.valueOf(task.getOrDefault("downloadRoot", ""))
+        ));
+        payload.put("createdAt", queuedAt);
+        payload.put("startedAt", "queued".equals(status) ? null : queuedAt);
+        payload.put("finishedAt", isTerminalStatus(status) ? updatedAt : null);
+        payload.put("updatedAt", updatedAt);
+        return payload;
+    }
+
+    private String jobTaskId(String jobId) {
+        return jobId + "_download";
+    }
+
+    private boolean isTerminalStatus(String status) {
+        return "completed".equals(status) || "failed".equals(status);
+    }
+
+    private Path resolveTitleRoot(String stateFolder, String titleName, String typeSlug) {
         return logger.getDownloadsRoot()
-            .resolve(mediaType)
-            .resolve(sanitizeFileName(request.titleName()));
+            .resolve(stateFolder)
+            .resolve(typeSlug)
+            .resolve(LibraryNaming.sanitizeTitleFolder(titleName));
     }
 
-    private String chapterId(DownloadRequest request, Map<String, String> chapter) {
-        return libraryService.slugifyTitleId(request.titleName())
-            + "-c"
-            + chapter.getOrDefault("chapter_number", "0").replace('.', '-');
+    private void promoteTitleFolder(Path sourceFolder, Path targetFolder) throws IOException {
+        if (sourceFolder == null || targetFolder == null) {
+            return;
+        }
+
+        Path normalizedSource = sourceFolder.normalize();
+        Path normalizedTarget = targetFolder.normalize();
+        if (normalizedSource.equals(normalizedTarget) || !Files.exists(normalizedSource) || !Files.isDirectory(normalizedSource)) {
+            return;
+        }
+
+        Path targetParent = normalizedTarget.getParent();
+        if (targetParent != null) {
+            Files.createDirectories(targetParent);
+        }
+
+        if (!Files.exists(normalizedTarget)) {
+            Files.move(normalizedSource, normalizedTarget, StandardCopyOption.REPLACE_EXISTING);
+        } else {
+            moveDirectoryContents(normalizedSource, normalizedTarget);
+            Files.deleteIfExists(normalizedSource);
+        }
+
+        pruneEmptyManagedParents(normalizedSource.getParent(), logger.getDownloadsRoot().resolve(DOWNLOADING_FOLDER_NAME).normalize());
     }
 
-    private String chapterLabel(Map<String, String> chapter) {
-        String chapterNumber = chapter.getOrDefault("chapter_number", "0");
-        return "Chapter " + chapterNumber;
+    private void moveDirectoryContents(Path sourceFolder, Path targetFolder) throws IOException {
+        Files.createDirectories(targetFolder);
+
+        List<Path> children;
+        try (var stream = Files.list(sourceFolder)) {
+            children = stream.toList();
+        }
+
+        for (Path child : children) {
+            Path targetChild = targetFolder.resolve(child.getFileName().toString());
+            if (Files.isDirectory(child)) {
+                moveDirectoryContents(child, targetChild);
+                Files.deleteIfExists(child);
+                continue;
+            }
+
+            Files.move(child, targetChild, StandardCopyOption.REPLACE_EXISTING);
+        }
+    }
+
+    private void pruneEmptyManagedParents(Path folder, Path stopRoot) {
+        Path current = folder;
+        while (current != null && current.startsWith(stopRoot) && !current.equals(stopRoot)) {
+            try (var stream = Files.list(current)) {
+                if (stream.findAny().isPresent()) {
+                    break;
+                }
+            } catch (Exception ignored) {
+                break;
+            }
+
+            try {
+                Files.deleteIfExists(current);
+            } catch (IOException ignored) {
+                break;
+            }
+            current = current.getParent();
+        }
+    }
+
+    private String resolveLibraryTypeLabel(DownloadRequest request, TitleDetails details) {
+        if (details != null && details.type() != null && !details.type().isBlank()) {
+            return LibraryNaming.normalizeTypeLabel(details.type());
+        }
+        return LibraryNaming.normalizeTypeLabel(request.requestType());
     }
 
     private int countArchiveEntries(Path archivePath) {
@@ -334,8 +531,25 @@ public class DownloaderService {
         }
     }
 
-    private String sanitizeFileName(String value) {
-        return value == null ? "scriptarr-title" : value.replaceAll("[^\\p{Alnum}._-]+", "_").replaceAll("_+", "_");
+    private String extractChapterNumber(String fileName) {
+        String normalized = fileName.replaceFirst("(?i)\\.cbz$", "");
+        java.util.regex.Matcher matcher = java.util.regex.Pattern.compile("(?i)(?:chapter|c|_c)([0-9]+(?:\\.[0-9]+)?)").matcher(normalized);
+        if (matcher.find()) {
+            return normalizeStoredChapterNumber(matcher.group(1));
+        }
+        matcher = java.util.regex.Pattern.compile("([0-9]+(?:\\.[0-9]+)?)").matcher(normalized);
+        return matcher.find() ? normalizeStoredChapterNumber(matcher.group(1)) : String.valueOf(Math.abs(fileName.hashCode()));
+    }
+
+    private String normalizeStoredChapterNumber(String value) {
+        if (value == null || value.isBlank()) {
+            return "0";
+        }
+        try {
+            return new java.math.BigDecimal(value.trim()).stripTrailingZeros().toPlainString();
+        } catch (NumberFormatException ignored) {
+            return value.trim();
+        }
     }
 
     private String resolveExtension(String url, String fallback) {
@@ -343,10 +557,16 @@ public class DownloaderService {
         if (dotIndex < 0 || dotIndex >= url.length() - 1) {
             return fallback;
         }
-        String extension = url.substring(dotIndex + 1).toLowerCase();
+        String extension = url.substring(dotIndex + 1).toLowerCase(Locale.ROOT);
         if (extension.contains("?")) {
             extension = extension.substring(0, extension.indexOf('?'));
         }
         return extension.isBlank() ? fallback : extension;
+    }
+
+    private void copyIfPresent(com.fasterxml.jackson.databind.JsonNode node, Map<String, Object> target, String field) {
+        if (node.hasNonNull(field) && !node.path(field).asText("").isBlank()) {
+            target.put(field, node.path(field).asText(""));
+        }
     }
 }
