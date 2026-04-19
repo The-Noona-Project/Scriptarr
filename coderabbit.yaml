@@ -1,0 +1,46 @@
+name: Scriptarr 3.0
+description: AI review profile for the Scriptarr 3.0 greenfield monorepo.
+language: javascript
+ai_reviewer: true
+lint: false
+test_detection: true
+commit_message_analysis: true
+pull_request_summary: true
+pr_reviewer: true
+pr_commentary: true
+issue_commentary: true
+
+paths:
+  include:
+    - services/
+    - docs/
+    - scripts/
+  exclude:
+    - node_modules/
+    - .git/
+    - coverage/
+    - dist/
+    - build/
+
+comment_style:
+  concise: false
+  emoji: false
+  tone: friendly
+
+rules:
+  max_comments: 20
+  min_code_diff: 3
+  pr_size_limit: 2500
+  require_tests: true
+  block_merge_on_errors: false
+
+notifications:
+  on_success: comment
+  on_failure: comment
+
+pr_checklist:
+  - Scriptarr naming and branding are consistent
+  - No direct browser calls bypass Moon to internal services
+  - Auth and permission changes are covered by tests
+  - AI and Discord flows degrade safely when dependencies are unavailable
+  - Public docs and AGENTS docs are updated with contract changes
