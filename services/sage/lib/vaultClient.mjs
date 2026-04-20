@@ -55,11 +55,13 @@ const requestJson = async (baseUrl, headers, path, {method = "GET", body, allowS
  *   createSession: (discordUserId: string) => Promise<any>,
  *   getSessionUser: (token: string) => Promise<any>,
  *   listRequests: () => Promise<any>,
+ *   getRequest: (id: string | number) => Promise<any>,
  *   getSetting: (key: string) => Promise<any>,
  *   setSetting: (key: string, value: unknown) => Promise<any>,
  *   getSecret: (key: string) => Promise<any>,
  *   setSecret: (key: string, value: unknown) => Promise<any>,
  *   createRequest: (payload: Record<string, unknown>) => Promise<any>,
+ *   updateRequest: (id: string | number, payload: Record<string, unknown>) => Promise<any>,
  *   reviewRequest: (id: string | number, payload: Record<string, unknown>) => Promise<any>,
  *   getProgress: (discordUserId: string) => Promise<any>,
  *   upsertProgress: (payload: Record<string, unknown>) => Promise<any>
@@ -109,10 +111,16 @@ export const createVaultClient = (config) => {
       return response.status === 404 ? null : json(response);
     },
     async listRequests() {
-      const response = await fetch(`${baseUrl}/api/service/requests`, {
-        headers
+      return (await requestJson(baseUrl, headers, "/api/service/requests", {
+        context: "Failed to list requests from Vault"
+      })).payload;
+    },
+    async getRequest(id) {
+      const {status, payload} = await requestJson(baseUrl, headers, `/api/service/requests/${encodeURIComponent(id)}`, {
+        allowStatuses: [404],
+        context: "Failed to load a request from Vault"
       });
-      return json(response);
+      return status === 404 ? null : payload;
     },
     async getSetting(key) {
       const response = await fetch(`${baseUrl}/api/service/settings/${encodeURIComponent(key)}`, {
@@ -143,20 +151,29 @@ export const createVaultClient = (config) => {
       return json(response);
     },
     async createRequest(payload) {
-      const response = await fetch(`${baseUrl}/api/service/requests`, {
+      return (await requestJson(baseUrl, headers, "/api/service/requests", {
         method: "POST",
-        headers,
-        body: JSON.stringify(payload)
+        body: payload,
+        context: "Failed to create a request in Vault"
+      })).payload;
+    },
+    async updateRequest(id, payload) {
+      const {status, payload: responsePayload} = await requestJson(baseUrl, headers, `/api/service/requests/${encodeURIComponent(id)}`, {
+        method: "PATCH",
+        body: payload,
+        allowStatuses: [404],
+        context: "Failed to update a request in Vault"
       });
-      return json(response);
+      return status === 404 ? null : responsePayload;
     },
     async reviewRequest(id, payload) {
-      const response = await fetch(`${baseUrl}/api/service/requests/${encodeURIComponent(id)}/review`, {
+      const {status, payload: responsePayload} = await requestJson(baseUrl, headers, `/api/service/requests/${encodeURIComponent(id)}/review`, {
         method: "POST",
-        headers,
-        body: JSON.stringify(payload)
+        body: payload,
+        allowStatuses: [404],
+        context: "Failed to review a request in Vault"
       });
-      return response.status === 404 ? null : json(response);
+      return status === 404 ? null : responsePayload;
     },
     async getProgress(discordUserId) {
       const response = await fetch(`${baseUrl}/api/service/progress/${encodeURIComponent(discordUserId)}`, {

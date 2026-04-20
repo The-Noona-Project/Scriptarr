@@ -38,3 +38,17 @@ When Raven VPN is enabled through Moon admin, downloads now fail closed if Raven
 resolve the requested PIA profile, or complete the OpenVPN handshake. Raven still uses the existing simplified
 enable/region/credentials admin contract, but the runtime now refreshes stale PIA profiles, reconnects on region
 changes, and uses short-lived credential files with `--auth-nocache`.
+
+Raven's request intake is now provider-based on the download side. Enabled metadata providers run first, Raven expands
+aliases from those results, then the enabled download-provider registry checks site-specific scrapers for a concrete
+match. This release ships only the WeebCentral provider, but the registry contract is now in place for future sites.
+Raven now also treats cover art as first-class title metadata, carries it through intake, queue state, and library
+records, and exposes the same imagery Moon and Portal reuse in their UIs and embeds.
+
+Download completion now waits for both file promotion and brokered catalog persistence before a task can reach `100%`.
+If catalog persistence fails, Raven marks the task failed instead of leaving it stuck at `90%`. On boot, Raven also
+rescans the existing `downloaded/<type>/...` tree to backfill missing catalog rows from already-finished archives.
+
+Raven still runs one title at a time for provider and VPN safety, but page fetches inside a title now use bounded
+concurrency, preserve archive ordering, skip already-written files on retry, and collapse duplicate restorable tasks
+for the same logical request during recovery.

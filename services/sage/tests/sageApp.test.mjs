@@ -22,6 +22,12 @@ const {createSageApp} = await import("../lib/createSageApp.mjs");
 
 const originalFetch = globalThis.fetch;
 
+const closeServer = (server) => new Promise((resolve, reject) => {
+  server?.closeIdleConnections?.();
+  server?.closeAllConnections?.();
+  server?.close((error) => error ? reject(error) : resolve());
+});
+
 const defaultLibraryTitle = Object.freeze({
   id: "dan-da-dan",
   title: "Dandadan",
@@ -69,7 +75,9 @@ const createDependencyStub = ({libraryTitles = [defaultLibraryTitle]} = {}) => {
   const calls = {
     health: 0,
     bootstrap: 0,
-    runtime: 0
+    runtime: 0,
+    queue: 0,
+    bulkQueue: 0
   };
   const libraryById = new Map(libraryTitles.map((title) => [title.id, title]));
   const buildReaderManifest = (title) => ({
@@ -103,6 +111,46 @@ const createDependencyStub = ({libraryTitles = [defaultLibraryTitle]} = {}) => {
       calls.health += 1;
       response.writeHead(200, {"Content-Type": "application/json"});
       response.end(JSON.stringify({ok: true, service: "scriptarr-warden-health", dockerSocketAvailable: true}));
+      return;
+    }
+
+    if (request.url === "/api/commands") {
+      response.writeHead(200, {"Content-Type": "application/json"});
+      response.end(JSON.stringify({
+        commands: [
+          {name: "ding", description: "Bot health"},
+          {name: "request", description: "Create a request"},
+          {name: "subscribe", description: "Follow a title"}
+        ]
+      }));
+      return;
+    }
+
+    if (request.url === "/api/runtime/discord/reload" && request.method === "POST") {
+      response.writeHead(200, {"Content-Type": "application/json"});
+      response.end(JSON.stringify({
+        ok: true,
+        mode: "ready",
+        connected: true,
+        registeredGuildId: "guild-123"
+      }));
+      return;
+    }
+
+    if (request.url === "/api/onboarding/test" && request.method === "POST") {
+      let body = "";
+      request.on("data", (chunk) => {
+        body += chunk;
+      });
+      request.on("end", () => {
+        const payload = JSON.parse(body || "{}");
+        response.writeHead(200, {"Content-Type": "application/json"});
+        response.end(JSON.stringify({
+          ok: true,
+          channelId: payload?.settings?.onboarding?.channelId || "",
+          rendered: payload?.rendered || "Welcome to Scriptarr, CaptainPax!"
+        }));
+      });
       return;
     }
 
@@ -221,6 +269,92 @@ const createDependencyStub = ({libraryTitles = [defaultLibraryTitle]} = {}) => {
       return;
     }
 
+    if (request.url?.startsWith("/v1/intake/search?query=")) {
+      const query = new URL(`http://stub${request.url}`).searchParams.get("query") || "";
+      response.writeHead(200, {"Content-Type": "application/json"});
+      response.end(JSON.stringify({
+        query,
+        results: [{
+          metadataProviderId: "mangadex",
+          providerSeriesId: "md-1",
+          canonicalTitle: "Dandadan",
+          aliases: ["Dan Da Dan"],
+          type: "webtoon",
+          metadata: {
+            provider: "mangadex",
+            providerSeriesId: "md-1",
+            title: "Dandadan",
+            summary: "Aliens and yokai.",
+            aliases: ["Dan Da Dan"],
+            type: "webtoon"
+          },
+          download: {
+            providerId: "weebcentral",
+            providerName: "WeebCentral",
+            titleName: "Dandadan",
+            titleUrl: "https://weebcentral.com/series/dan-da-dan",
+            requestType: "webtoon",
+            libraryTypeLabel: "Webtoon",
+            libraryTypeSlug: "webtoon"
+          },
+          availability: "available",
+          titleUrl: "https://weebcentral.com/series/dan-da-dan"
+        }]
+      }));
+      return;
+    }
+
+    if (request.url === "/v1/downloads/queue" && request.method === "POST") {
+      let body = "";
+      request.on("data", (chunk) => {
+        body += chunk;
+      });
+      request.on("end", () => {
+        calls.queue += 1;
+        const payload = JSON.parse(body || "{}");
+        response.writeHead(202, {"Content-Type": "application/json"});
+        response.end(JSON.stringify({
+          taskId: "task-queued-1",
+          jobId: "job-queued-1",
+          status: "queued",
+          titleName: payload.titleName,
+          titleUrl: payload.titleUrl,
+          requestId: payload.requestId || ""
+        }));
+      });
+      return;
+    }
+
+    if (request.url === "/v1/downloads/bulk-queue" && request.method === "POST") {
+      let body = "";
+      request.on("data", (chunk) => {
+        body += chunk;
+      });
+      request.on("end", () => {
+        calls.bulkQueue += 1;
+        const payload = JSON.parse(body || "{}");
+        response.writeHead(202, {"Content-Type": "application/json"});
+        response.end(JSON.stringify({
+          status: "queued",
+          message: "Queued 1 title(s) for download.",
+          filters: {
+            type: payload.type || "",
+            nsfw: payload.nsfw === true,
+            titlePrefix: payload.titlePrefix || ""
+          },
+          pagesScanned: 1,
+          matchedCount: 1,
+          queuedCount: 1,
+          skippedActiveCount: 0,
+          failedCount: 0,
+          queuedTitles: ["Dandadan"],
+          skippedActiveTitles: [],
+          failedTitles: []
+        }));
+      });
+      return;
+    }
+
     if (request.url === "/api/localai/status") {
       response.writeHead(200, {"Content-Type": "application/json"});
       response.end(JSON.stringify({installed: false, running: false}));
@@ -308,9 +442,20 @@ test("sage signs in the first owner through the Discord callback and moderates r
       "Authorization": `Bearer ${ownerClaim.token}`
     },
     body: JSON.stringify({
-      title: "Dandadan",
-      requestType: "manga",
-      notes: "Need the latest chapters."
+      query: "dandadan",
+      requestType: "webtoon",
+      notes: "Need the latest chapters.",
+      selectedMetadata: {
+        provider: "mangadex",
+        providerSeriesId: "md-1",
+        title: "Dandadan"
+      },
+      selectedDownload: {
+        providerId: "weebcentral",
+        titleName: "Dandadan",
+        titleUrl: "https://weebcentral.com/series/dan-da-dan",
+        requestType: "webtoon"
+      }
     })
   }).then((response) => response.json());
 
@@ -328,7 +473,9 @@ test("sage signs in the first owner through the Discord callback and moderates r
     })
   }).then((response) => response.json());
 
-  assert.equal(reviewed.status, "approved");
+  assert.equal(reviewed.status, "queued");
+  assert.equal(reviewed.details.selectedDownload.providerId, "weebcentral");
+  assert.equal(dependencyStub.calls.queue, 1);
 
   const oracleSettings = await fetch(`${baseUrl}/api/admin/settings/oracle`, {
     headers: {
@@ -409,9 +556,9 @@ test("sage signs in the first owner through the Discord callback and moderates r
   assert.ok(dependencyStub.calls.bootstrap >= 1);
   assert.ok(dependencyStub.calls.runtime >= 1);
 
-  sageServer.close();
-  vaultServer.close();
-  dependencyStub.server.close();
+  await closeServer(sageServer);
+  await closeServer(vaultServer);
+  await closeServer(dependencyStub.server);
 });
 
 test("sage keeps Moon library routes empty when Raven has no imported titles", async () => {
@@ -455,9 +602,9 @@ test("sage keeps Moon library routes empty when Raven has no imported titles", a
   assert.equal(overview.counts.missingChapters, 0);
   assert.equal(overview.counts.metadataGaps, 0);
 
-  sageServer.close();
-  vaultServer.close();
-  dependencyStub.server.close();
+  await closeServer(sageServer);
+  await closeServer(vaultServer);
+  await closeServer(dependencyStub.server);
 });
 
 test("sage round-trips Moon branding and exposes typed Moon reader payloads", async () => {
@@ -582,9 +729,92 @@ test("sage round-trips Moon branding and exposes typed Moon reader payloads", as
   assert.equal(home.latestTitles[0].libraryTypeSlug, "webtoon");
   assert.equal(home.latestTitles[0].libraryTypeLabel, "Webtoon");
 
-  sageServer.close();
-  vaultServer.close();
-  dependencyStub.server.close();
+  await closeServer(sageServer);
+  await closeServer(vaultServer);
+  await closeServer(dependencyStub.server);
+});
+
+test("sage round-trips brokered Portal Discord settings and exposes them in admin settings", async () => {
+  const {app: vaultApp} = await createVaultApp();
+  const vaultServer = vaultApp.listen(0);
+  const vaultPort = vaultServer.address().port;
+
+  const dependencyStub = await createDependencyStub();
+  dependencyStub.server.listen(0);
+  const dependencyPort = dependencyStub.server.address().port;
+
+  process.env.SCRIPTARR_VAULT_BASE_URL = `http://127.0.0.1:${vaultPort}`;
+  process.env.SCRIPTARR_WARDEN_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_PORTAL_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_ORACLE_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_RAVEN_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_DISCORD_CLIENT_ID = "discord-client-id";
+  process.env.SCRIPTARR_DISCORD_CLIENT_SECRET = "discord-client-secret";
+  process.env.SCRIPTARR_DISCORD_TOKEN = "discord-bot-token";
+
+  installDiscordFetchStub();
+
+  const {app: sageApp} = await createSageApp();
+  const sageServer = sageApp.listen(0);
+  const sagePort = sageServer.address().port;
+  const baseUrl = `http://127.0.0.1:${sagePort}`;
+
+  const ownerClaim = await signInViaDiscord(baseUrl);
+  const headers = {
+    "Authorization": `Bearer ${ownerClaim.token}`,
+    "Content-Type": "application/json"
+  };
+
+  const savedDiscord = await fetch(`${baseUrl}/api/admin/settings/portal/discord`, {
+    method: "PUT",
+    headers,
+    body: JSON.stringify({
+      guildId: "guild-123",
+      superuserId: "owner-1",
+      onboarding: {
+        channelId: "channel-456",
+        template: "Welcome to {siteName}, {username}!"
+      },
+      commands: {
+        request: {
+          enabled: true,
+          roleId: "role-request"
+        },
+        subscribe: {
+          enabled: false,
+          roleId: "role-sub"
+        }
+      }
+    })
+  }).then((response) => response.json());
+
+  assert.equal(savedDiscord.guildId, "guild-123");
+  assert.equal(savedDiscord.superuserId, "owner-1");
+  assert.equal(savedDiscord.commands.request.roleId, "role-request");
+  assert.equal(savedDiscord.commands.subscribe.enabled, false);
+  assert.equal(savedDiscord.runtime.authConfigured, true);
+  assert.equal(savedDiscord.runtime.botTokenConfigured, true);
+
+  const onboardingPreview = await fetch(`${baseUrl}/api/admin/settings/portal/discord/onboarding/test`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      username: "CaptainPax"
+    })
+  }).then((response) => response.json());
+  assert.equal(onboardingPreview.rendered, "Welcome to Scriptarr, CaptainPax!");
+
+  const aggregatedSettings = await fetch(`${baseUrl}/api/moon-v3/admin/settings`, {
+    headers: {
+      "Authorization": `Bearer ${ownerClaim.token}`
+    }
+  }).then((response) => response.json());
+  assert.equal(aggregatedSettings.discord.guildId, "guild-123");
+  assert.equal(aggregatedSettings.discord.commands.request.roleId, "role-request");
+
+  await closeServer(sageServer);
+  await closeServer(vaultServer);
+  await closeServer(dependencyStub.server);
 });
 
 test("sage no longer exposes a dev-session claim endpoint", async () => {
@@ -613,9 +843,9 @@ test("sage no longer exposes a dev-session claim endpoint", async () => {
 
   assert.equal(response.status, 404);
 
-  sageServer.close();
-  vaultServer.close();
-  dependencyStub.server.close();
+  await closeServer(sageServer);
+  await closeServer(vaultServer);
+  await closeServer(dependencyStub.server);
 });
 
 test("sage defaults a blank LocalAI model to an AIO-friendly alias", async () => {
@@ -664,9 +894,9 @@ test("sage defaults a blank LocalAI model to an AIO-friendly alias", async () =>
   assert.equal(oracleSettings.provider, "localai");
   assert.equal(oracleSettings.model, "gpt-4");
 
-  sageServer.close();
-  vaultServer.close();
-  dependencyStub.server.close();
+  await closeServer(sageServer);
+  await closeServer(vaultServer);
+  await closeServer(dependencyStub.server);
 });
 
 test("sage brokers service-to-service routes with internal service auth", async () => {
@@ -725,6 +955,74 @@ test("sage brokers service-to-service routes with internal service auth", async 
   }).then((response) => response.json());
   assert.equal(request.title, "The Fable");
 
+  const portalDiscordConfig = await fetch(`${baseUrl}/api/internal/portal/discord-config`, {
+    headers: portalHeaders
+  }).then((response) => response.json());
+  assert.equal(portalDiscordConfig.discord.guildId, "");
+  assert.equal(portalDiscordConfig.commandCatalog.some((entry) => entry.id === "downloadall"), true);
+
+  const librarySearch = await fetch(`${baseUrl}/api/internal/portal/library/search?query=dandadan`, {
+    headers: portalHeaders
+  }).then((response) => response.json());
+  assert.equal(librarySearch.results[0].title, "Dandadan");
+  assert.match(librarySearch.results[0].moonTitleUrl, /\/title\/webtoon\/dan-da-dan$/);
+
+  const intakeSearch = await fetch(`${baseUrl}/api/internal/portal/intake/search?query=dandadan`, {
+    headers: portalHeaders
+  }).then((response) => response.json());
+  assert.equal(intakeSearch.results[0].availability, "available");
+
+  const discordRequest = await fetch(`${baseUrl}/api/internal/portal/requests`, {
+    method: "POST",
+    headers: portalHeaders,
+    body: JSON.stringify({
+      source: "discord",
+      requestedBy: "discord-123",
+      query: "dandadan",
+      selectedMetadata: {
+        provider: "mangadex",
+        providerSeriesId: "md-1",
+        title: "Dandadan"
+      },
+      selectedDownload: {
+        providerId: "weebcentral",
+        titleName: "Dandadan",
+        titleUrl: "https://weebcentral.com/series/dan-da-dan",
+        requestType: "webtoon"
+      }
+    })
+  }).then((response) => response.json());
+  assert.equal(discordRequest.status, "pending");
+  assert.equal(discordRequest.details.selectedDownload.providerId, "weebcentral");
+
+  const following = await fetch(`${baseUrl}/api/internal/portal/following`, {
+    method: "POST",
+    headers: portalHeaders,
+    body: JSON.stringify({
+      discordUserId: "discord-123",
+      titleId: "dan-da-dan",
+      title: "Dandadan",
+      latestChapter: "166",
+      mediaType: "webtoon",
+      libraryTypeLabel: "Webtoon",
+      libraryTypeSlug: "webtoon"
+    })
+  }).then((response) => response.json());
+  assert.equal(following.following[0].libraryTypeSlug, "webtoon");
+
+  const bulkQueue = await fetch(`${baseUrl}/api/internal/portal/raven/bulk-queue`, {
+    method: "POST",
+    headers: portalHeaders,
+    body: JSON.stringify({
+      type: "Manga",
+      nsfw: false,
+      titlePrefix: "a",
+      requestedBy: "owner-1"
+    })
+  }).then((response) => response.json());
+  assert.equal(bulkQueue.status, "queued");
+  assert.equal(dependencyStub.calls.bulkQueue, 1);
+
   const oracleStatus = await fetch(`${baseUrl}/api/internal/warden/bootstrap`, {
     headers: oracleHeaders
   }).then((response) => response.json());
@@ -776,8 +1074,8 @@ test("sage brokers service-to-service routes with internal service auth", async 
   });
   assert.equal(forbidden.status, 403);
 
-  sageServer.close();
-  vaultServer.close();
-  dependencyStub.server.close();
+  await closeServer(sageServer);
+  await closeServer(vaultServer);
+  await closeServer(dependencyStub.server);
 });
 

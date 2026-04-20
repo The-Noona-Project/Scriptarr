@@ -5,15 +5,20 @@ import http from "node:http";
 process.env.NODE_ENV = "test";
 
 const {createPortalApp} = await import("../lib/createPortalApp.mjs");
+const {createFollowNotifier} = await import("../lib/followNotifier.mjs");
 
 const withPortalEnv = async (overrides, handler) => {
   const keys = [
     "SCRIPTARR_SAGE_BASE_URL",
     "SCRIPTARR_SERVICE_TOKEN",
     "SCRIPTARR_PORTAL_SERVICE_TOKEN",
-    "SCRIPTARR_VAULT_BASE_URL",
-    "SCRIPTARR_ORACLE_BASE_URL",
-    "DISCORD_TOKEN"
+    "SCRIPTARR_PUBLIC_BASE_URL",
+    "DISCORD_TOKEN",
+    "SCRIPTARR_DISCORD_TOKEN",
+    "SCRIPTARR_DISCORD_CLIENT_ID",
+    "SCRIPTARR_DISCORD_GUILD_ID",
+    "SCRIPTARR_DISCORD_SUPERUSER_ID",
+    "SCRIPTARR_ONBOARDING_TEMPLATE"
   ];
   const previous = new Map(keys.map((key) => [key, process.env[key]]));
 
@@ -51,6 +56,7 @@ const createJsonServer = async (routes) => {
     hits.push({
       method: req.method,
       path: url.pathname,
+      query: Object.fromEntries(url.searchParams),
       headers: req.headers,
       body
     });
@@ -72,121 +78,73 @@ const createJsonServer = async (routes) => {
   return {
     baseUrl: `http://127.0.0.1:${server.address().port}`,
     hits,
-    close: () => new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
+    close: () => new Promise((resolve, reject) => {
+      server.closeAllConnections?.();
+      server.close((error) => error ? reject(error) : resolve());
+    })
   };
 };
 
-const createPortalServer = async () => {
-  const {app} = await createPortalApp();
-  const server = app.listen(0, "127.0.0.1");
+const createPortalServer = async (options = {}) => {
+  const built = await createPortalApp(options);
+  const server = built.app.listen(0, "127.0.0.1");
   await new Promise((resolve) => server.once("listening", resolve));
   return {
     baseUrl: `http://127.0.0.1:${server.address().port}`,
-    close: () => new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
+    runtime: built.runtime,
+    close: async () => {
+      await built.runtime.stop();
+      await new Promise((resolve, reject) => {
+        server.closeAllConnections?.();
+        server.close((error) => error ? reject(error) : resolve());
+      });
+    }
   };
 };
 
-test("portal exposes the new Discord command catalog", async () => {
+test("portal HTTP surface covers command inventory, request routing, chat routing, and onboarding helpers", async () => {
   await withPortalEnv({}, async () => {
     const portal = await createPortalServer();
-
     try {
-      const payload = await fetch(`${portal.baseUrl}/api/commands`).then((response) => response.json());
-      assert.ok(payload.commands.some((command) => command.name === "chat"));
-      assert.ok(payload.commands.some((command) => command.name === "request"));
-    } finally {
-      await portal.close();
-    }
-  });
-});
-
-test("portal creates Discord requests through Sage's internal broker routes", async () => {
-  const sage = await createJsonServer({
-    "POST /api/internal/vault/users/upsert-discord": async ({req, body}) => {
-      assert.equal(req.headers.authorization, "Bearer portal-service-token");
-      assert.deepEqual(body, {
-        discordUserId: "253987219969146890",
-        username: "CaptainPax",
-        avatarUrl: "https://cdn.example/avatar.png",
-        role: "member"
-      });
-      return {
-        body: {
-          discordUserId: body.discordUserId,
-          username: body.username,
-          role: body.role
-        }
-      };
-    },
-    "POST /api/internal/vault/requests": async ({req, body}) => {
-      assert.equal(req.headers.authorization, "Bearer portal-service-token");
-      assert.deepEqual(body, {
-        source: "discord",
-        title: "Dandadan",
-        requestType: "manga",
-        notes: "Please add this",
-        requestedBy: "253987219969146890"
-      });
-      return {
-        status: 201,
-        body: {
-          id: "req_123",
-          ...body,
-          status: "pending"
-        }
-      };
-    }
-  });
-
-  await withPortalEnv({
-    SCRIPTARR_SAGE_BASE_URL: sage.baseUrl,
-    SCRIPTARR_SERVICE_TOKEN: "portal-service-token",
-    SCRIPTARR_VAULT_BASE_URL: "http://127.0.0.1:65500",
-    SCRIPTARR_ORACLE_BASE_URL: "http://127.0.0.1:65501"
-  }, async () => {
-    const portal = await createPortalServer();
-
-    try {
-      const response = await fetch(`${portal.baseUrl}/api/requests/from-discord`, {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({
-          discordUserId: "253987219969146890",
-          username: "CaptainPax",
-          avatarUrl: "https://cdn.example/avatar.png",
-          title: "Dandadan",
-          requestType: "manga",
-          notes: "Please add this"
-        })
-      });
-
-      assert.equal(response.status, 201);
-      assert.deepEqual(await response.json(), {
-        id: "req_123",
-        source: "discord",
-        title: "Dandadan",
-        requestType: "manga",
-        notes: "Please add this",
-        requestedBy: "253987219969146890",
-        status: "pending"
-      });
+      const runtime = await fetch(`${portal.baseUrl}/api/runtime`).then((response) => response.json());
+      assert.equal(runtime.mode, "disabled");
+      assert.equal(runtime.connected, false);
       assert.deepEqual(
-        sage.hits.map((hit) => hit.path),
-        [
-          "/api/internal/vault/users/upsert-discord",
-          "/api/internal/vault/requests"
-        ]
+        runtime.commands.map((command) => command.name),
+        ["ding", "status", "chat", "search", "request", "subscribe", "downloadall"]
       );
     } finally {
       await portal.close();
     }
   });
 
-  await sage.close();
-});
-
-test("portal routes chat through Sage's Oracle broker route", async () => {
-  const sage = await createJsonServer({
+  const richSage = await createJsonServer({
+    "GET /api/internal/portal/discord/settings": async () => ({
+      body: {
+        guildId: "guild-1",
+        superuserId: "owner-1",
+        onboarding: {
+          channelId: "channel-1",
+          template: "Welcome to Scriptarr, {username}."
+        },
+        commands: {
+          request: {enabled: true, roleId: "role-request"}
+        }
+      }
+    }),
+    "POST /api/internal/vault/users/upsert-discord": async ({body}) => ({body}),
+    "POST /api/internal/portal/requests/from-discord": async ({req, body}) => {
+      assert.equal(req.headers.authorization, "Bearer portal-service-token");
+      assert.equal(body.discordUserId, "253987219969146890");
+      return {
+        status: 201,
+        body: {
+          id: "req_123",
+          title: "Dandadan",
+          status: "pending"
+        }
+      };
+    },
     "POST /api/internal/oracle/chat": async ({req, body}) => {
       assert.equal(req.headers.authorization, "Bearer portal-service-token");
       assert.deepEqual(body, {message: "how is scriptarr doing?"});
@@ -200,32 +158,173 @@ test("portal routes chat through Sage's Oracle broker route", async () => {
   });
 
   await withPortalEnv({
-    SCRIPTARR_SAGE_BASE_URL: sage.baseUrl,
+    SCRIPTARR_SAGE_BASE_URL: richSage.baseUrl,
     SCRIPTARR_SERVICE_TOKEN: "portal-service-token",
-    SCRIPTARR_ORACLE_BASE_URL: "http://127.0.0.1:65501"
+    SCRIPTARR_PUBLIC_BASE_URL: "https://pax-kun.com"
   }, async () => {
     const portal = await createPortalServer();
-
     try {
-      const response = await fetch(`${portal.baseUrl}/api/chat`, {
+      const commands = await fetch(`${portal.baseUrl}/api/commands`).then((response) => response.json());
+      assert.equal(commands.discord.mode, "disabled");
+      assert.ok(commands.commands.some((command) => command.name === "request"));
+
+      const requestResponse = await fetch(`${portal.baseUrl}/api/requests/from-discord`, {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({
+          discordUserId: "253987219969146890",
+          username: "CaptainPax",
+          query: "Dandadan",
+          selectedMetadata: {
+            provider: "mangadex",
+            providerSeriesId: "md-1",
+            title: "Dandadan"
+          },
+          selectedDownload: {
+            providerId: "weebcentral",
+            titleUrl: "https://weebcentral.example/dandadan",
+            requestType: "manga"
+          }
+        })
+      });
+      assert.equal(requestResponse.status, 201);
+      assert.deepEqual(await requestResponse.json(), {
+        id: "req_123",
+        title: "Dandadan",
+        status: "pending"
+      });
+
+      const chatResponse = await fetch(`${portal.baseUrl}/api/chat`, {
         method: "POST",
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify({message: "how is scriptarr doing?"})
       });
+      assert.equal(chatResponse.status, 200);
+      assert.equal((await chatResponse.json()).reply, "Noona says the stack looks healthy.");
 
-      assert.equal(response.status, 200);
-      assert.deepEqual(await response.json(), {
-        ok: true,
-        reply: "Noona says the stack looks healthy."
+      const render = await fetch(`${portal.baseUrl}/api/onboarding/render`, {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({username: "CaptainPax"})
+      }).then((response) => response.json());
+      assert.equal(render.rendered, "Welcome to Scriptarr, CaptainPax.");
+
+      const onboardingTest = await fetch(`${portal.baseUrl}/api/onboarding/test`, {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({username: "CaptainPax"})
       });
-      assert.deepEqual(
-        sage.hits.map((hit) => hit.path),
-        ["/api/internal/oracle/chat"]
-      );
+      assert.equal(onboardingTest.status, 409);
+      assert.match((await onboardingTest.json()).error, /not connected/i);
     } finally {
       await portal.close();
     }
   });
 
-  await sage.close();
+  await richSage.close();
+
+  const legacySage = await createJsonServer({
+    "GET /api/internal/portal/discord/settings": async () => ({body: {commands: {}}}),
+    "POST /api/internal/vault/users/upsert-discord": async ({body}) => ({body}),
+    "POST /api/internal/vault/requests": async ({body}) => ({
+      status: 201,
+      body: {
+        id: "req_legacy",
+        ...body,
+        status: "pending"
+      }
+    })
+  });
+
+  await withPortalEnv({
+    SCRIPTARR_SAGE_BASE_URL: legacySage.baseUrl,
+    SCRIPTARR_SERVICE_TOKEN: "portal-service-token"
+  }, async () => {
+    const portal = await createPortalServer();
+    try {
+      const response = await fetch(`${portal.baseUrl}/api/requests/from-discord`, {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({
+          discordUserId: "discord-123",
+          username: "Reader",
+          title: "Blacksad",
+          notes: "legacy path"
+        })
+      });
+
+      assert.equal(response.status, 201);
+      assert.equal((await response.json()).id, "req_legacy");
+    } finally {
+      await portal.close();
+    }
+  });
+
+  await legacySage.close();
+});
+
+test("portal notifier delivers follow and request completion DMs once", async () => {
+  const sent = [];
+  const acknowledged = [];
+  const ackedIds = new Set();
+  const notifier = createFollowNotifier({
+    pollMs: 5,
+    logger: {error() {}},
+    discord: {
+      async sendDirectMessage(discordUserId, payload) {
+        sent.push({discordUserId, payload});
+      }
+    },
+    sage: {
+      async listFollowNotifications() {
+        return {
+          ok: true,
+          payload: {
+            notifications: ackedIds.has("follow-1") ? [] : [{
+              id: "follow-1",
+              discordUserId: "user-1",
+              titleName: "Dandadan",
+              titleUrl: "https://pax-kun.com/title/webtoon/dan-da-dan",
+              coverUrl: "https://images.example/dandadan.jpg"
+            }]
+          }
+        };
+      },
+      async acknowledgeFollowNotification(notificationId) {
+        ackedIds.add(notificationId);
+        acknowledged.push(`follow:${notificationId}`);
+        return {ok: true};
+      },
+      async listRequestNotifications() {
+        return {
+          ok: true,
+          payload: {
+            notifications: ackedIds.has("request-1") ? [] : [{
+              id: "request-1",
+              requestId: "request-1",
+              discordUserId: "user-1",
+              titleName: "Solo Leveling",
+              titleUrl: "https://pax-kun.com/title/manhwa/solo-leveling",
+              coverUrl: "https://images.example/solo.jpg"
+            }]
+          }
+        };
+      },
+      async acknowledgeRequestNotification(requestId) {
+        ackedIds.add(requestId);
+        acknowledged.push(`request:${requestId}`);
+        return {ok: true};
+      }
+    }
+  });
+
+  notifier.start();
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  notifier.stop();
+
+  assert.equal(sent.length >= 2, true);
+  assert.ok(sent.some((entry) => entry.payload?.content.includes("Dandadan")));
+  assert.ok(sent.some((entry) => entry.payload?.content.includes("Solo Leveling")));
+  assert.ok(sent.some((entry) => entry.payload?.embeds?.[0]?.image?.url === "https://images.example/solo.jpg"));
+  assert.deepEqual(acknowledged.sort(), ["follow:follow-1", "request:request-1"]);
 });

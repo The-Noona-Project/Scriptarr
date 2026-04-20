@@ -6,6 +6,7 @@ import {registerAuthRoutes} from "./registerAuthRoutes.mjs";
 import {registerLegacyApiRoutes} from "./registerLegacyApiRoutes.mjs";
 import {registerMoonV3ProxyRoutes} from "./registerMoonV3ProxyRoutes.mjs";
 import {registerPageRoutes} from "./registerPageRoutes.mjs";
+import {registerPublicApiRoutes} from "./registerPublicApiRoutes.mjs";
 
 /**
  * Build the Scriptarr Moon HTTP application.
@@ -46,6 +47,7 @@ export const createMoonApp = async ({logger = createLogger("MOON")} = {}) => {
   registerAuthRoutes(app, {config, getSessionToken, logger});
   registerLegacyApiRoutes(app, {config, getSessionToken});
   registerMoonV3ProxyRoutes(app, {config, getSessionToken});
+  registerPublicApiRoutes(app, {config});
   registerPageRoutes(app, {config});
 
   logger.info("Moon app initialized.", {

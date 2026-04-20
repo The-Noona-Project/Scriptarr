@@ -6,6 +6,8 @@
   snapshots all flow through Sage's internal broker routes.
 - Launch defaults keep MangaDex enabled first, with AniList, MangaUpdates, MyAnimeList, and ComicVine following the
   configured priority and credential gates.
+- Download-provider selection is now explicit. Raven intake should search enabled metadata providers first, expand
+  aliases from those matches, then run enabled site-specific download providers in registry order.
 - Keep full JavaDoc on Raven main and test Java sources and let `gradlew check` fail when doc coverage regresses.
 - Fresh installs must not reintroduce demo titles; Raven's default library state is empty until real ingest exists.
 - Raven library storage now uses dynamic source-backed type labels and the managed folder lifecycle:
@@ -15,8 +17,15 @@
   an existing tunnel is still valid.
 - Raven chapter and page filenames now come from the brokered `raven.naming` template settings while title-folder
   naming stays stable for rescan compatibility.
+- The brokered `raven.download.providers` setting controls which download providers are enabled and their priority.
+  This release only registers WeebCentral, but new sites should arrive as discrete provider implementations under the
+  registry contract instead of by growing one generic scraper class.
 - New Raven catalog entries should use opaque durable ids instead of title slugs. Treat title ids as opaque route
   parameters everywhere outside Raven's internals.
+- Download tasks should only reach `100%` after file promotion and brokered catalog persistence both succeed. When a
+  persist step fails, fail the task loudly instead of leaving it running at `90%`.
+- Startup recovery should rescan finished `downloaded/<type>/...` content, backfill missing catalog rows, and collapse
+  duplicate restorable tasks so Moon queue views only see one logical download.
 - Raven parity notes from the old Noona services:
   - keep WeebCentral search, title detail scrape, chapter scrape, and page image resolution
   - keep download task persistence across restarts

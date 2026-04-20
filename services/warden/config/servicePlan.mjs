@@ -328,7 +328,11 @@ export const resolveServicePlan = ({env = process.env, containerNamePrefix = ""}
     env: {
       SCRIPTARR_SAGE_BASE_URL: `http://scriptarr-sage:${sagePort}`,
       SCRIPTARR_SERVICE_TOKEN: serviceTokens["scriptarr-portal"],
+      SCRIPTARR_SERVICE_TOKENS: JSON.stringify(serviceTokens),
+      SCRIPTARR_PUBLIC_BASE_URL: publicBaseUrl,
       SCRIPTARR_PORTAL_PORT: String(portalPort),
+      SCRIPTARR_DISCORD_CLIENT_ID: env.SCRIPTARR_DISCORD_CLIENT_ID || "",
+      SCRIPTARR_DISCORD_TOKEN: env.DISCORD_TOKEN || "",
       DISCORD_TOKEN: env.DISCORD_TOKEN || ""
     },
     mounts: resolveFolderMounts(storageLayout, "scriptarr-portal", ["logs"]),

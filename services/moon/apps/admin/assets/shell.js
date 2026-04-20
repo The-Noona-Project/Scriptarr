@@ -1,4 +1,4 @@
-import {escapeHtml} from "./dom.js";
+import {escapeHtml, renderAvatar} from "./dom.js";
 import {getAdminNavigationGroups} from "./routes.js";
 
 /**
@@ -7,7 +7,7 @@ import {getAdminNavigationGroups} from "./routes.js";
  * @param {{
  *   route: import("./routes.js").AdminRoute,
  *   content: string,
- *   user: {username: string, role: string} | null,
+ *   user: {username: string, role: string, avatarUrl?: string | null} | null,
  *   branding?: {siteName?: string} | null,
  *   flash: {tone: string, text: string} | null,
  *   loginUrl: string,
@@ -17,19 +17,30 @@ import {getAdminNavigationGroups} from "./routes.js";
  */
 export const renderAdminShell = ({route, content, user, branding, flash, loginUrl, bootstrap}) => {
   const groups = getAdminNavigationGroups();
+  const identityName = user?.username || "Not signed in";
   const authSummary = user
     ? `
       <div class="identity-card">
-        <div class="identity-kicker">Admin session</div>
-        <strong>${escapeHtml(user.username)}</strong>
-        <span>${escapeHtml(user.role)}</span>
+        <div class="identity-row">
+          ${renderAvatar(user.username, user.avatarUrl, "session-avatar")}
+          <div class="identity-copy">
+            <div class="identity-kicker">Admin session</div>
+            <strong>${escapeHtml(user.username)}</strong>
+            <span>${escapeHtml(user.role)}</span>
+          </div>
+        </div>
       </div>
     `
     : `
       <div class="identity-card">
-        <div class="identity-kicker">Admin session</div>
-        <strong>Not signed in</strong>
-        <span>${bootstrap?.ownerClaimed ? "Use Discord login to sign in." : `First owner: ${escapeHtml(bootstrap?.superuserId || "missing")}`}</span>
+        <div class="identity-row">
+          ${renderAvatar(identityName, null, "session-avatar")}
+          <div class="identity-copy">
+            <div class="identity-kicker">Admin session</div>
+            <strong>Not signed in</strong>
+            <span>${bootstrap?.ownerClaimed ? "Use Discord login to sign in." : `First owner: ${escapeHtml(bootstrap?.superuserId || "missing")}`}</span>
+          </div>
+        </div>
       </div>
     `;
 

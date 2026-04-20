@@ -79,3 +79,11 @@ test("sanitizeStructuredData redacts nested secrets while preserving shape", () 
   assert.equal(payload.services[0].env.DISCORD_TOKEN, "[redacted]");
   assert.equal(payload.services[0].env.SUPERUSER_ID, "owner-1");
 });
+
+test("sanitizeStructuredData preserves useful error text for structured logs", () => {
+  const payload = sanitizeStructuredData({
+    error: new Error("Discord gateway closed with code 4014.")
+  });
+
+  assert.equal(payload.error, "Discord gateway closed with code 4014.");
+});

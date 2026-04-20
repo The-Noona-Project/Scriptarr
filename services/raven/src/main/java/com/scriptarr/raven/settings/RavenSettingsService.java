@@ -23,6 +23,7 @@ public class RavenSettingsService {
     private static final String VPN_PASSWORD_KEY = "raven.vpn.piaPassword";
     private static final String NAMING_KEY = "raven.naming";
     private static final String PROVIDERS_KEY = "raven.metadata.providers";
+    private static final String DOWNLOAD_PROVIDERS_KEY = "raven.download.providers";
 
     private final RavenBrokerClient brokerClient;
     private final ScriptarrLogger logger;
@@ -149,6 +150,48 @@ public class RavenSettingsService {
     }
 
     /**
+     * Load the download provider settings that Moon admin should display.
+     *
+     * @return provider settings sorted by priority
+     */
+    public List<Map<String, Object>> getDownloadProviderSettings() {
+        Map<String, JsonNode> configuredById = new HashMap<>();
+        try {
+            JsonNode settingsNode = Optional.ofNullable(brokerClient.getSetting(DOWNLOAD_PROVIDERS_KEY).get("value")).orElse(null);
+            if (settingsNode != null && settingsNode.path("providers").isArray()) {
+                for (JsonNode providerNode : settingsNode.path("providers")) {
+                    configuredById.put(normalize(providerNode.path("id").asText(""), ""), providerNode);
+                }
+            }
+        } catch (Exception error) {
+            logger.warn("SETTINGS", "Failed to load Raven download provider settings.", error.getMessage());
+        }
+
+        List<Map<String, Object>> normalized = new ArrayList<>();
+        normalized.add(normalizeDownloadProvider("weebcentral", "WeebCentral", List.of("manga", "webtoon", "comic"), true, 10, configuredById.get("weebcentral")));
+        normalized.sort(
+            Comparator
+                .comparingInt((Map<String, Object> entry) -> (Integer) entry.get("priority"))
+                .thenComparing((Map<String, Object> entry) -> String.valueOf(entry.get("name")))
+        );
+        return List.copyOf(normalized);
+    }
+
+    /**
+     * Check whether a specific download provider is enabled.
+     *
+     * @param providerId provider id to resolve
+     * @return {@code true} when the provider is enabled
+     */
+    public boolean isDownloadProviderEnabled(String providerId) {
+        return getDownloadProviderSettings().stream()
+            .filter((entry) -> providerId.equalsIgnoreCase(String.valueOf(entry.get("id"))))
+            .findFirst()
+            .map((entry) -> Boolean.TRUE.equals(entry.get("enabled")))
+            .orElse(false);
+    }
+
+    /**
      * Check whether a specific metadata provider is enabled.
      *
      * @param providerId provider id to resolve
@@ -178,6 +221,27 @@ public class RavenSettingsService {
      */
     public String getMalClientId() {
         return malClientIdEnv == null ? "" : malClientIdEnv.trim();
+    }
+
+    private Map<String, Object> normalizeDownloadProvider(
+        String id,
+        String name,
+        List<String> scopes,
+        boolean defaultEnabled,
+        int defaultPriority,
+        JsonNode configured
+    ) {
+        boolean enabled = configured != null ? configured.path("enabled").asBoolean(defaultEnabled) : defaultEnabled;
+        int priority = configured != null && configured.path("priority").canConvertToInt()
+            ? configured.path("priority").asInt(defaultPriority)
+            : defaultPriority;
+        return new HashMap<>(Map.of(
+            "id", id,
+            "name", name,
+            "scopes", scopes,
+            "enabled", enabled,
+            "priority", priority
+        ));
     }
 
     private String normalize(String value, String fallback) {

@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@scriptarr/logging": "file:../../packages/scriptarr-logging",
+    "discord.js": "^14.19.3",
     "express": "^5.1.0"
   }
 }

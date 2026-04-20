@@ -228,7 +228,7 @@ public class MetadataService {
         List<Map<String, Object>> results = new ArrayList<>();
         for (JsonNode entry : root.path("data")) {
             String id = entry.path("id").asText("");
-            String title = entry.path("attributes").path("title").path("en").asText(id);
+            String title = preferredLocalizedValue(entry.path("attributes").path("title"), id);
             results.add(Map.of(
                 "provider", "mangadex",
                 "providerSeriesId", id,
@@ -249,7 +249,7 @@ public class MetadataService {
         return Map.of(
             "provider", "mangadex",
             "providerSeriesId", providerSeriesId,
-            "title", root.path("attributes").path("title").path("en").asText(providerSeriesId),
+            "title", preferredLocalizedValue(root.path("attributes").path("title"), providerSeriesId),
             "summary", root.path("attributes").path("description").path("en").asText(""),
             "aliases", List.of(),
             "books", List.of()
@@ -545,5 +545,23 @@ public class MetadataService {
 
     private String firstNonBlank(String primary, String fallback) {
         return primary != null && !primary.isBlank() ? primary : (fallback == null ? "" : fallback);
+    }
+
+    private String preferredLocalizedValue(JsonNode localizedNode, String fallback) {
+        if (localizedNode == null || localizedNode.isMissingNode() || localizedNode.isNull()) {
+            return fallback;
+        }
+        String english = localizedNode.path("en").asText("");
+        if (!english.isBlank()) {
+            return english;
+        }
+        var values = localizedNode.elements();
+        while (values.hasNext()) {
+            String value = values.next().asText("");
+            if (!value.isBlank()) {
+                return value;
+            }
+        }
+        return fallback;
     }
 }

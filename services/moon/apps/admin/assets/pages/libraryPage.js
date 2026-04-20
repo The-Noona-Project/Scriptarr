@@ -1,4 +1,4 @@
-import {escapeHtml, renderChipList, renderEmptyState, renderStatusBadge, renderTable} from "../dom.js";
+import {escapeHtml, renderChipList, renderCoverThumb, renderEmptyState, renderStatusBadge, renderTable} from "../dom.js";
 import {formatDate} from "../format.js";
 
 /**
@@ -31,7 +31,7 @@ export const renderLibraryPage = (result) => {
       ${renderTable({
         columns: ["Title", "Type", "Status", "Latest", "Provider", "Coverage", "Matched"],
         rows: (result.payload?.titles || []).map((title) => [
-          `<div class="table-title-cell"><strong>${escapeHtml(title.title)}</strong>${renderChipList(title.tags)}</div>`,
+          `<div class="table-title-cell with-cover-row">${renderCoverThumb(title.coverUrl, title.title)}<div><strong>${escapeHtml(title.title)}</strong>${renderChipList(title.tags)}</div></div>`,
           escapeHtml(title.mediaType),
           renderStatusBadge(title.status),
           escapeHtml(title.latestChapter),

@@ -1,47 +1,110 @@
 import express from "express";
 import {createLogger} from "@scriptarr/logging";
 import {resolvePortalConfig} from "./config.mjs";
+import {createPortalRuntime} from "./portalRuntime.mjs";
 import {createSageClient} from "./sageClient.mjs";
 
-const commandCatalog = Object.freeze([
-  {name: "request", description: "Create a moderated Scriptarr request from Discord."},
-  {name: "subscribe", description: "Subscribe to release notifications for a title."},
-  {name: "status", description: "Ask Noona for read-only Scriptarr status."},
-  {name: "chat", description: "Talk to Noona through Oracle and LocalAI."}
-]);
+const normalizeString = (value, fallback = "") => {
+  const normalized = typeof value === "string" ? value.trim() : "";
+  return normalized || fallback;
+};
 
-export const createPortalApp = async ({logger = createLogger("PORTAL")} = {}) => {
+export const createPortalApp = async ({
+  logger = createLogger("PORTAL"),
+  clientFactory
+} = {}) => {
   const config = resolvePortalConfig();
   const sage = createSageClient(config);
+  const runtime = createPortalRuntime({
+    config,
+    sage,
+    logger,
+    clientFactory
+  });
   const app = express();
   app.use(express.json());
 
+  const runtimeStatePayload = () => {
+    const state = runtime.getState();
+    return {
+      ...state,
+      connectionState: state.connectionState,
+      registeredGuildId: state.registeredGuildId || state.guildId || ""
+    };
+  };
+
   app.get("/health", (_req, res) => {
+    const state = runtimeStatePayload();
     res.json({
       ok: true,
       service: "scriptarr-portal",
-      discord: config.discordToken ? "ready" : "degraded",
-      commands: commandCatalog
+      discord: state.mode,
+      connected: state.connected,
+      authConfigured: state.authConfigured,
+      commands: state.commands,
+      runtime: state
     });
+  });
+
+  app.get("/api/runtime", (_req, res) => {
+    res.json(runtimeStatePayload());
+  });
+
+  app.post("/api/runtime/refresh", async (_req, res) => {
+    await runtime.refreshSettings();
+    res.json(runtimeStatePayload());
+  });
+
+  app.post("/api/runtime/discord/reload", async (_req, res) => {
+    await runtime.refreshSettings();
+    res.json(runtimeStatePayload());
   });
 
   app.get("/api/commands", (_req, res) => {
+    const state = runtimeStatePayload();
     res.json({
-      commands: commandCatalog
+      discord: {
+        mode: state.mode,
+        connectionState: state.connectionState,
+        connected: state.connected,
+        guildId: state.guildId,
+        registeredGuildId: state.registeredGuildId,
+        lastSyncAt: state.lastSyncAt,
+        registeredCount: state.registeredCount,
+        error: state.error,
+        syncError: state.syncError,
+        warning: state.warning,
+        capabilities: state.capabilities
+      },
+      commands: state.commands
     });
   });
 
-  app.post("/api/onboarding/render", (req, res) => {
-    const username = String(req.body.username || "reader");
+  app.post("/api/onboarding/render", async (req, res) => {
+    await runtime.refreshSettings().catch(() => {});
     res.json({
-      rendered: config.onboardingTemplate.replaceAll("{username}", username)
+      rendered: runtime.renderOnboarding(req.body || {})
     });
+  });
+
+  app.post("/api/onboarding/test", async (req, res) => {
+    try {
+      await runtime.refreshSettings().catch(() => {});
+      res.json(await runtime.sendOnboardingTest(req.body || {}));
+    } catch (error) {
+      logger.warn("Portal onboarding test failed.", {error});
+      res.status(409).json({
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
   });
 
   app.post("/api/requests/from-discord", async (req, res) => {
-    const discordUserId = String(req.body.discordUserId || "").trim();
-    const username = String(req.body.username || "").trim() || "Discord Reader";
-    const title = String(req.body.title || "").trim();
+    const discordUserId = normalizeString(req.body?.discordUserId);
+    const username = normalizeString(req.body?.username, "Discord Reader");
+    const title = normalizeString(req.body?.title || req.body?.selectedMetadata?.title);
+    const selectedMetadata = req.body?.selectedMetadata || null;
+    const selectedDownload = req.body?.selectedDownload || null;
     if (!discordUserId || !title) {
       logger.warn("Discord request payload was incomplete.", {
         discordUserIdPresent: Boolean(discordUserId),
@@ -54,7 +117,7 @@ export const createPortalApp = async ({logger = createLogger("PORTAL")} = {}) =>
     const userResult = await sage.upsertDiscordUser({
       discordUserId,
       username,
-      avatarUrl: req.body.avatarUrl || null,
+      avatarUrl: req.body?.avatarUrl || null,
       role: "member"
     });
     if (!userResult.ok) {
@@ -62,25 +125,36 @@ export const createPortalApp = async ({logger = createLogger("PORTAL")} = {}) =>
       return;
     }
 
-    const request = await sage.createRequest({
-      source: "discord",
-      title,
-      requestType: req.body.requestType || "manga",
-      notes: req.body.notes || "",
-      requestedBy: discordUserId
-    });
+    const request = selectedMetadata || selectedDownload
+      ? await sage.createDiscordRequest({
+        source: "discord",
+        discordUserId,
+        username,
+        query: normalizeString(req.body?.query, title),
+        requestType: normalizeString(req.body?.requestType || selectedDownload?.requestType || selectedMetadata?.type, "manga"),
+        notes: normalizeString(req.body?.notes),
+        selectedMetadata,
+        selectedDownload
+      })
+      : await sage.createRequest({
+        source: "discord",
+        title,
+        requestType: normalizeString(req.body?.requestType, "manga"),
+        notes: normalizeString(req.body?.notes),
+        requestedBy: discordUserId
+      });
 
     res.status(request.status).json(request.payload);
   });
 
   app.post("/api/chat", async (req, res) => {
-    const response = await sage.chat({message: req.body.message});
+    const response = await sage.chat({message: req.body?.message});
     res.status(response.status).json(response.payload);
   });
 
   logger.info("Portal app initialized.", {
-    discordReady: Boolean(config.discordToken)
+    discordConfigured: Boolean(config.discordToken && config.discordClientId)
   });
 
-  return {app, config};
+  return {app, config, runtime};
 };

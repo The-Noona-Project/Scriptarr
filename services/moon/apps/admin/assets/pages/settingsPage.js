@@ -24,7 +24,7 @@ export const renderSettingsPage = (result) => {
     return renderEmptyState("Settings unavailable", result.payload?.error || "Unable to load admin settings.");
   }
 
-  const {ravenVpn = {}, metadataProviders = {}, oracle = {}, branding = {}, warden = {}} = result.payload || {};
+  const {ravenVpn = {}, metadataProviders = {}, downloadProviders = {}, oracle = {}, branding = {}, warden = {}} = result.payload || {};
   const oracleProvider = oracle.provider === "localai" ? "localai" : "openai";
   const oracleModel = oracle.model || fallbackModelForProvider(oracleProvider);
   const localAiState = [
@@ -112,6 +112,38 @@ export const renderSettingsPage = (result) => {
           </div>
           <p class="field-note">MangaDex stays on by default. AniList and ComicVine are available when you want wider metadata coverage.</p>
           <button class="solid-button" type="submit">Save provider order</button>
+        </form>
+      </section>
+      <section class="panel-section">
+        <div class="section-heading">
+          <div>
+            <span class="section-kicker">Downloads</span>
+            <h2>Download providers</h2>
+          </div>
+        </div>
+        <form id="download-provider-form" class="settings-form">
+          <div class="provider-stack">
+            ${(downloadProviders.providers || []).map((provider) => `
+              <article class="provider-card" data-download-provider-id="${escapeHtml(provider.id)}">
+                <div>
+                  <strong>${escapeHtml(provider.name)}</strong>
+                  <span>${escapeHtml((provider.scopes || []).join(", "))}</span>
+                </div>
+                <div class="provider-controls">
+                  <label class="switch-row compact">
+                    <input type="checkbox" data-download-provider-enabled ${provider.enabled ? "checked" : ""}>
+                    <span>Enabled</span>
+                  </label>
+                  <label class="compact-field">
+                    <span>Priority</span>
+                    <input type="number" min="1" step="1" data-download-provider-priority value="${escapeHtml(provider.priority)}">
+                  </label>
+                </div>
+              </article>
+            `).join("")}
+          </div>
+          <p class="field-note">WeebCentral is the only download provider right now, but this setting keeps the intake and matching pipeline ready for more sites later.</p>
+          <button class="solid-button" type="submit">Save download providers</button>
         </form>
       </section>
     </div>
@@ -226,6 +258,18 @@ export const enhanceSettingsPage = async (root, {api, rerender, setFlash}) => {
     }));
     const result = await api.put("/api/moon/admin/settings/raven/metadata", {providers});
     setFlash(result.ok ? "good" : "bad", result.ok ? "Metadata provider order saved." : result.payload?.error || "Unable to save provider settings.");
+    await rerender();
+  });
+
+  root.querySelector("#download-provider-form")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const providers = Array.from(root.querySelectorAll("[data-download-provider-id]")).map((node) => ({
+      id: node.dataset.downloadProviderId,
+      enabled: node.querySelector("[data-download-provider-enabled]")?.checked,
+      priority: Number.parseInt(node.querySelector("[data-download-provider-priority]")?.value || "0", 10)
+    }));
+    const result = await api.put("/api/moon/admin/settings/raven/download-providers", {providers});
+    setFlash(result.ok ? "good" : "bad", result.ok ? "Download provider settings saved." : result.payload?.error || "Unable to save download provider settings.");
     await rerender();
   });
 

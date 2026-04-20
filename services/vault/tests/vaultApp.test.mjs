@@ -6,7 +6,7 @@ process.env.SCRIPTARR_SERVICE_TOKENS = JSON.stringify({"scriptarr-sage": "sage-d
 
 const {createVaultApp} = await import("../lib/createVaultApp.mjs");
 
-test("vault exposes bootstrap status and request moderation flow", async () => {
+test("vault exposes bootstrap status and request intake lifecycle", async () => {
   const {app} = await createVaultApp();
   const server = app.listen(0);
   const {port} = server.address();
@@ -28,24 +28,48 @@ test("vault exposes bootstrap status and request moderation flow", async () => {
       title: "Dandadan",
       requestType: "manga",
       notes: "Please add volume extras",
-      requestedBy: "123"
+      requestedBy: "123",
+      details: {
+        query: "dandadan",
+        selectedMetadata: {
+          provider: "mangadex",
+          providerSeriesId: "md-1",
+          title: "Dandadan"
+        },
+        selectedDownload: null,
+        availability: "unavailable"
+      }
     })
   }).then((response) => response.json());
 
-  assert.equal(request.status, "pending");
+  assert.equal(request.status, "unavailable");
+  assert.equal(request.details.query, "dandadan");
+  assert.equal(request.timeline.at(-1).type, "unavailable");
 
-  const reviewed = await fetch(`${baseUrl}/api/service/requests/${request.id}/review`, {
-    method: "POST",
+  const updated = await fetch(`${baseUrl}/api/service/requests/${request.id}`, {
+    method: "PATCH",
     headers,
     body: JSON.stringify({
-      status: "approved",
-      comment: "Queued for Raven after moderation.",
+      status: "queued",
+      detailsMerge: {
+        selectedDownload: {
+          providerId: "weebcentral",
+          titleUrl: "https://weebcentral.com/series/abc",
+          titleName: "Dandadan"
+        },
+        availability: "available",
+        jobId: "job-1",
+        taskId: "task-1"
+      },
+      eventType: "queued",
       actor: "owner"
     })
   }).then((response) => response.json());
 
-  assert.equal(reviewed.status, "approved");
-  assert.equal(reviewed.timeline.at(-1).actor, "owner");
+  assert.equal(updated.status, "queued");
+  assert.equal(updated.details.jobId, "job-1");
+  assert.equal(updated.details.taskId, "task-1");
+  assert.equal(updated.timeline.at(-1).actor, "owner");
 
   const setting = await fetch(`${baseUrl}/api/service/settings/oracle.settings`, {
     method: "PUT",
@@ -129,6 +153,104 @@ test("vault persists generic jobs and job tasks through the service API", async 
   server.close();
 });
 
+test("vault stores brokered portal discord settings and user-scoped follow state", async () => {
+  const {app} = await createVaultApp();
+  const server = app.listen(0);
+  const {port} = server.address();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const headers = {
+    "Authorization": "Bearer sage-dev-token",
+    "Content-Type": "application/json"
+  };
+
+  const discordSettings = await fetch(`${baseUrl}/api/service/settings/portal.discord`, {
+    method: "PUT",
+    headers,
+    body: JSON.stringify({
+      value: {
+        guildId: "guild-123",
+        superuserId: "owner-1",
+        onboarding: {
+          channelId: "channel-456",
+          template: "Welcome to {siteName}, {username}!"
+        },
+        commands: {
+          request: {
+            enabled: true,
+            roleId: "role-request"
+          }
+        }
+      }
+    })
+  }).then((response) => response.json());
+
+  assert.equal(discordSettings.value.guildId, "guild-123");
+  assert.equal(discordSettings.value.onboarding.channelId, "channel-456");
+
+  const following = await fetch(`${baseUrl}/api/service/settings/moon.following.discord-123`, {
+    method: "PUT",
+    headers,
+    body: JSON.stringify({
+      value: [{
+        titleId: "dan-da-dan",
+        title: "Dandadan",
+        libraryTypeSlug: "webtoon"
+      }]
+    })
+  }).then((response) => response.json());
+
+  assert.equal(following.value[0].titleId, "dan-da-dan");
+
+  const loadedFollowing = await fetch(`${baseUrl}/api/service/settings/moon.following.discord-123`, {
+    headers
+  }).then((response) => response.json());
+  assert.equal(loadedFollowing.value[0].libraryTypeSlug, "webtoon");
+
+  server.close();
+});
+
+test("vault persists Raven titles with cover and managed roots", async () => {
+  const {app} = await createVaultApp();
+  const server = app.listen(0);
+  const {port} = server.address();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const headers = {
+    "Authorization": "Bearer sage-dev-token",
+    "Content-Type": "application/json"
+  };
+
+  const title = await fetch(`${baseUrl}/api/service/raven/titles/title-1`, {
+    method: "PUT",
+    headers,
+    body: JSON.stringify({
+      id: "title-1",
+      title: "Solo Leveling: Ragnarok",
+      mediaType: "manhwa",
+      libraryTypeLabel: "Manhwa",
+      libraryTypeSlug: "manhwa",
+      status: "active",
+      latestChapter: "46",
+      chapterCount: 46,
+      chaptersDownloaded: 46,
+      coverUrl: "https://cdn.example.com/solo.jpg",
+      workingRoot: "/downloads/downloading/manhwa/Solo_Leveling_Ragnarok",
+      downloadRoot: "/downloads/downloaded/manhwa/Solo_Leveling_Ragnarok"
+    })
+  }).then((response) => response.json());
+
+  assert.equal(title.id, "title-1");
+  assert.equal(title.coverUrl, "https://cdn.example.com/solo.jpg");
+  assert.equal(title.downloadRoot, "/downloads/downloaded/manhwa/Solo_Leveling_Ragnarok");
+
+  const listed = await fetch(`${baseUrl}/api/service/raven/titles`, {
+    headers
+  }).then((response) => response.json());
+  assert.equal(listed.length, 1);
+  assert.equal(listed[0].workingRoot, "/downloads/downloading/manhwa/Solo_Leveling_Ragnarok");
+
+  server.close();
+});
+
 test("vault returns conflicts for duplicate owner claims and stale request revisions", async () => {
   const {app} = await createVaultApp();
   const server = app.listen(0);
@@ -174,24 +296,23 @@ test("vault returns conflicts for duplicate owner claims and stale request revis
     })
   }).then((response) => response.json());
 
-  const approved = await fetch(`${baseUrl}/api/service/requests/${request.id}/review`, {
-    method: "POST",
+  const updated = await fetch(`${baseUrl}/api/service/requests/${request.id}`, {
+    method: "PATCH",
     headers,
     body: JSON.stringify({
-      status: "approved",
-      comment: "Approved once.",
+      status: "queued",
+      eventType: "queued",
       actor: "owner-1",
       revision: request.revision
     })
   });
-  assert.equal(approved.status, 200);
+  assert.equal(updated.status, 200);
 
-  const stale = await fetch(`${baseUrl}/api/service/requests/${request.id}/review`, {
-    method: "POST",
+  const stale = await fetch(`${baseUrl}/api/service/requests/${request.id}`, {
+    method: "PATCH",
     headers,
     body: JSON.stringify({
       status: "denied",
-      comment: "This should conflict.",
       actor: "owner-1",
       revision: request.revision
     })

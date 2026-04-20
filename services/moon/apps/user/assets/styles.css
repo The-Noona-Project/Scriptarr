@@ -297,9 +297,40 @@ button {
   display: flex;
   flex-direction: column;
   justify-content: end;
+  gap: 10px;
   color: inherit;
   text-decoration: none;
   background: linear-gradient(180deg, transparent 0%, rgba(0, 0, 0, 0.44) 100%);
+}
+
+.series-card-art,
+.detail-cover-art,
+.request-cover-art {
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.05);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(255, 255, 255, 0.72);
+  font-family: "Space Grotesk", sans-serif;
+  font-weight: 700;
+}
+
+.series-card-art img,
+.detail-cover-art img,
+.request-cover-art img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.series-card-art {
+  width: 92px;
+  height: 132px;
+  border-radius: 18px;
+  margin-bottom: auto;
+  box-shadow: 0 18px 36px rgba(0, 0, 0, 0.28);
 }
 
 .series-card-kicker {
@@ -349,6 +380,25 @@ button {
   gap: 6px;
 }
 
+.list-card-head.with-cover {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: start;
+}
+
+.list-card-copy {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.request-cover-art {
+  width: 64px;
+  height: 92px;
+  border-radius: 16px;
+}
+
 .chapter-row {
   text-decoration: none;
   color: inherit;
@@ -396,7 +446,7 @@ button {
 
 .detail-hero {
   display: grid;
-  grid-template-columns: 1.3fr auto;
+  grid-template-columns: auto minmax(0, 1.2fr) auto;
   gap: 18px;
   padding: 28px;
   border: 1px solid var(--user-line);
@@ -404,6 +454,18 @@ button {
   background:
     radial-gradient(circle at top right, color-mix(in srgb, var(--detail-accent, var(--user-accent)) 44%, transparent), transparent 38%),
     linear-gradient(165deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.02));
+}
+
+.detail-art-shell {
+  display: grid;
+  align-items: start;
+}
+
+.detail-cover-art {
+  width: min(240px, 32vw);
+  aspect-ratio: 2 / 3;
+  border-radius: 28px;
+  box-shadow: 0 22px 60px rgba(0, 0, 0, 0.32);
 }
 
 .chip-row {
@@ -526,6 +588,10 @@ button {
   .content-grid.two-up,
   .reader-layout {
     grid-template-columns: 1fr;
+  }
+
+  .detail-cover-art {
+    width: min(220px, 48vw);
   }
 }
 
@@ -994,6 +1060,10 @@ body.moon-user {
 
   .reader-title {
     font-size: clamp(1.7rem, 8vw, 2.6rem);
+  }
+
+  .list-card-head.with-cover {
+    grid-template-columns: auto minmax(0, 1fr);
   }
 
   .reader-preference-grid,

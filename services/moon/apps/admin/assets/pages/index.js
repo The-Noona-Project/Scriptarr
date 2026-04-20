@@ -1,6 +1,8 @@
 import {loadActivityPage, renderActivityPage} from "./activityPage.js";
 import {enhanceAddPage, loadAddPage, renderAddPage} from "./addPage.js";
+import {enhanceApiPage, loadApiPage, renderApiPage} from "./apiPage.js";
 import {loadCalendarPage, renderCalendarPage} from "./calendarPage.js";
+import {enhanceDiscordPage, loadDiscordPage, renderDiscordPage} from "./discordPage.js";
 import {loadImportPage, renderImportPage} from "./importPage.js";
 import {loadLibraryPage, renderLibraryPage} from "./libraryPage.js";
 import {loadOverviewPage, renderOverviewPage} from "./overviewPage.js";
@@ -36,7 +38,9 @@ const pageModules = {
   "wanted-metadata": {load: loadWantedPage, render: renderWantedPage},
   requests: {load: loadRequestsPage, render: renderRequestsPage, enhance: enhanceRequestsPage},
   users: {load: loadUsersPage, render: renderUsersPage},
+  discord: {load: loadDiscordPage, render: renderDiscordPage, enhance: enhanceDiscordPage},
   settings: {load: loadSettingsPage, render: renderSettingsPage, enhance: enhanceSettingsPage},
+  "system-api": {load: loadApiPage, render: renderApiPage, enhance: enhanceApiPage},
   "system-status": {load: loadSystemPage, render: renderSystemPage, enhance: enhanceSystemPage},
   "system-tasks": {load: loadSystemPage, render: renderSystemPage, enhance: enhanceSystemPage},
   "system-updates": {load: loadSystemPage, render: renderSystemPage, enhance: enhanceSystemPage},

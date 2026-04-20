@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
+import {matchAdminRoute} from "../apps/admin/assets/routes.js";
 import {
   buildLibraryPath,
   buildReaderPath,
@@ -71,5 +72,27 @@ test("legacy title and reader routes remain accepted as backward-compatible shim
       typeSlug: ""
     },
     legacy: true
+  });
+});
+
+test("admin routes include the dedicated Discord settings page", () => {
+  assert.deepEqual(matchAdminRoute("/admin/discord"), {
+    id: "discord",
+    path: "/admin/discord",
+    title: "Discord",
+    description: "Guild workflow settings, slash-command access, onboarding, and Portal runtime status.",
+    navLabel: "Discord",
+    group: "System"
+  });
+});
+
+test("admin routes include the public API page", () => {
+  assert.deepEqual(matchAdminRoute("/admin/system/api"), {
+    id: "system-api",
+    path: "/admin/system/api",
+    title: "API",
+    description: "Public Moon API access, admin automation key, and Swagger docs.",
+    navLabel: "API",
+    group: "System"
   });
 });

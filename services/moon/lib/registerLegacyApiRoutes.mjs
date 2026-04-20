@@ -86,6 +86,19 @@ export const registerLegacyApiRoutes = (app, {config, getSessionToken}) => {
     res.status(result.status).json(result.payload);
   });
 
+  app.get("/api/moon/admin/settings/raven/download-providers", async (req, res) => {
+    const result = await proxyToSage(req, "/api/admin/settings/raven/download-providers");
+    res.status(result.status).json(result.payload);
+  });
+
+  app.put("/api/moon/admin/settings/raven/download-providers", async (req, res) => {
+    const result = await proxyToSage(req, "/api/admin/settings/raven/download-providers", {
+      method: "PUT",
+      body: req.body
+    });
+    res.status(result.status).json(result.payload);
+  });
+
   app.get("/api/moon/admin/settings/oracle", async (req, res) => {
     const result = await proxyToSage(req, "/api/admin/settings/oracle");
     res.status(result.status).json(result.payload);
@@ -104,9 +117,51 @@ export const registerLegacyApiRoutes = (app, {config, getSessionToken}) => {
     res.status(result.status).json(result.payload);
   });
 
+  app.get("/api/moon/admin/settings/portal/discord", async (req, res) => {
+    const result = await proxyToSage(req, "/api/admin/settings/portal/discord");
+    res.status(result.status).json(result.payload);
+  });
+
+  app.put("/api/moon/admin/settings/portal/discord", async (req, res) => {
+    const result = await proxyToSage(req, "/api/admin/settings/portal/discord", {
+      method: "PUT",
+      body: req.body
+    });
+    res.status(result.status).json(result.payload);
+  });
+
+  app.post("/api/moon/admin/settings/portal/discord/onboarding/test", async (req, res) => {
+    const result = await proxyToSage(req, "/api/admin/settings/portal/discord/onboarding/test", {
+      method: "POST",
+      body: req.body
+    });
+    res.status(result.status).json(result.payload);
+  });
+
   app.put("/api/moon/admin/settings/moon/branding", async (req, res) => {
     const result = await proxyToSage(req, "/api/admin/settings/moon/branding", {
       method: "PUT",
+      body: req.body
+    });
+    res.status(result.status).json(result.payload);
+  });
+
+  app.get("/api/moon/admin/settings/moon/public-api", async (req, res) => {
+    const result = await proxyToSage(req, "/api/admin/settings/moon/public-api");
+    res.status(result.status).json(result.payload);
+  });
+
+  app.put("/api/moon/admin/settings/moon/public-api", async (req, res) => {
+    const result = await proxyToSage(req, "/api/admin/settings/moon/public-api", {
+      method: "PUT",
+      body: req.body
+    });
+    res.status(result.status).json(result.payload);
+  });
+
+  app.post("/api/moon/admin/settings/moon/public-api/key", async (req, res) => {
+    const result = await proxyToSage(req, "/api/admin/settings/moon/public-api/key", {
+      method: "POST",
       body: req.body
     });
     res.status(result.status).json(result.payload);

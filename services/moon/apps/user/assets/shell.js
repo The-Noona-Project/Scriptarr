@@ -21,7 +21,6 @@ export const renderUserShell = ({route, content, user, branding, loginUrl, boots
     <header class="user-topbar">
       <div class="brand-area">
         <a class="brand-lockup" href="/" data-link>
-          <span class="brand-kicker">Moon Reader</span>
           <strong class="brand-name">${escapeHtml(branding?.siteName || "Scriptarr")}</strong>
         </a>
         <p class="brand-copy">${escapeHtml(route.description)}</p>

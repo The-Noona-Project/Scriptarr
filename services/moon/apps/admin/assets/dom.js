@@ -56,6 +56,61 @@ export const renderEmptyState = (title, body) => `
 `;
 
 /**
+ * Render a small title-cover thumbnail when art is available.
+ *
+ * @param {string | null | undefined} url
+ * @param {string | null | undefined} title
+ * @param {string} [className]
+ * @returns {string}
+ */
+export const renderCoverThumb = (url, title, className = "cover-thumb") => {
+  const normalizedUrl = String(url || "").trim();
+  if (!normalizedUrl) {
+    return `<span class="${escapeHtml(`${className} is-empty`)}" aria-hidden="true">${escapeHtml((title || "?").trim().slice(0, 1) || "?")}</span>`;
+  }
+
+  return `
+    <span class="${escapeHtml(className)}">
+      <img src="${escapeHtml(normalizedUrl)}" alt="${escapeHtml(title || "Title cover")}" loading="lazy" referrerpolicy="no-referrer">
+    </span>
+  `;
+};
+
+const resolveInitials = (value) => {
+  const words = String(value || "")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  if (!words.length) {
+    return "?";
+  }
+  return words
+    .slice(0, 2)
+    .map((word) => word.slice(0, 1).toUpperCase())
+    .join("");
+};
+
+/**
+ * Render a compact avatar with a Discord image or initials fallback.
+ *
+ * @param {string | null | undefined} name
+ * @param {string | null | undefined} url
+ * @param {string} [className]
+ * @returns {string}
+ */
+export const renderAvatar = (name, url, className = "session-avatar") => {
+  const normalizedUrl = String(url || "").trim();
+  const initials = resolveInitials(name);
+  return normalizedUrl
+    ? `
+      <span class="${escapeHtml(`${className} has-image`)}" aria-hidden="true">
+        <img src="${escapeHtml(normalizedUrl)}" alt="${escapeHtml(name || "Discord avatar")}" loading="lazy" referrerpolicy="no-referrer">
+      </span>
+    `
+    : `<span class="${escapeHtml(`${className} is-fallback`)}" aria-hidden="true">${escapeHtml(initials)}</span>`;
+};
+
+/**
  * Render a dense admin data table.
  *
  * @param {{
@@ -87,8 +142,10 @@ export const renderTable = ({columns, rows, emptyTitle = "No rows", emptyBody = 
 
 export default {
   escapeHtml,
+  renderAvatar,
   renderChip,
   renderChipList,
+  renderCoverThumb,
   renderEmptyState,
   renderStatusBadge,
   renderTable

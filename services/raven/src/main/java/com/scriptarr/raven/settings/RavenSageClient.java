@@ -44,6 +44,16 @@ public class RavenSageClient implements RavenBrokerClient {
     }
 
     @Override
+    public JsonNode getRequest(String requestId) throws IOException, InterruptedException {
+        return get("/api/internal/vault/requests/" + encode(requestId));
+    }
+
+    @Override
+    public JsonNode patchRequest(String requestId, Map<String, Object> payload) throws IOException, InterruptedException {
+        return patch("/api/internal/vault/requests/" + encode(requestId), payload);
+    }
+
+    @Override
     public JsonNode listLibraryTitles() throws IOException, InterruptedException {
         return get("/api/internal/vault/raven/titles");
     }
@@ -137,6 +147,21 @@ public class RavenSageClient implements RavenBrokerClient {
             .header("Authorization", "Bearer " + serviceToken)
             .header("Content-Type", "application/json")
             .PUT(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(payload)))
+            .build();
+        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+        if (response.body() == null || response.body().isBlank()) {
+            return objectMapper.createObjectNode();
+        }
+        return objectMapper.readTree(response.body());
+    }
+
+    private JsonNode patch(String path, Map<String, Object> payload) throws IOException, InterruptedException {
+        HttpRequest request = HttpRequest.newBuilder()
+            .uri(URI.create(trimBaseUrl() + path))
+            .timeout(Duration.ofSeconds(10))
+            .header("Authorization", "Bearer " + serviceToken)
+            .header("Content-Type", "application/json")
+            .method("PATCH", HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(payload)))
             .build();
         HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
         if (response.body() == null || response.body().isBlank()) {

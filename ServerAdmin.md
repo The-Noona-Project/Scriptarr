@@ -94,6 +94,11 @@ Fresh installs no longer include seeded demo series. Moon's user and admin libra
 real imported titles to expose.
 Vault now fronts shared MySQL state with its own cache-first broker layer, and first-party service-to-service HTTP is
 expected to flow through Sage instead of bypassing the broker topology.
+Moon requests and admin add-title now run through one intake flow: search query, enabled metadata providers, enabled
+download providers, saved match snapshot, then moderation or immediate queueing depending on who submitted it.
+Raven now only marks download work complete after the promoted files also persist into the brokered catalog, and it
+rescans the existing `downloaded/<type>/...` tree on boot so already-finished archives can repopulate Moon's library
+without forcing a re-download.
 
 ## MySQL Contract
 
@@ -169,9 +174,15 @@ temporarily unavailable.
 - verify Discord auth and callback settings
 - configure libraries and storage paths
 - manage request moderation
+- review metadata-first request matches, re-resolve unavailable requests, and approve concrete Raven download targets
+- manage the Discord bot workflow in `/admin/discord`, including guild id, onboarding channel or template, DM
+  superuser id, and per-command role mapping
 - configure Raven VPN credentials and region for PIA/OpenVPN-backed downloads
 - review Raven metadata providers, with MangaDex enabled by default
+- review Raven download providers, with WeebCentral enabled by default
 - set the Moon site name branding that powers headers, document titles, and install metadata
+- manage the trusted public Moon automation API from `/admin/system/api`, including enable state, admin key rotation,
+  and Swagger/OpenAPI links
 - check or install managed Scriptarr service updates from `/admin/system/updates`
 - configure Oracle and optional LocalAI runtime settings
 - manage users, roles, and permissions
@@ -210,9 +221,55 @@ Common admin routes:
 - `/admin/requests`
 - `/admin/users`
 - `/admin/settings`
+- `/admin/discord`
 - `/admin/system/*`
 
 Legacy Moon paths such as `/downloads`, `/settings`, and `/setupwizard` now redirect into the new admin routes.
+
+## Discord Bot Workflow
+
+Moon admin now owns the Discord workflow settings that Portal uses at runtime:
+
+- guild id for slash-command scoping
+- DM superuser id for the private `downloadall` command
+- onboarding channel id and message template
+- per-command enable toggles and required Discord role ids
+
+The current Discord command set is:
+
+- `/ding`
+- `/status`
+- `/chat`
+- `/search`
+- `/request`
+- `/subscribe`
+- DM-only `downloadall`
+
+Blank role ids mean any member in the configured guild can use that slash command. `downloadall` ignores guild roles
+and only checks the configured DM superuser id.
+Portal also sends one completion DM to the requester when a request-linked Raven download finishes and the requester
+has a Discord id on file.
+Portal now prefers a minimal Discord runtime when privileged intents are unavailable. Slash commands and DM handling
+can stay online while onboarding is marked degraded, and `/admin/discord` will show the last meaningful runtime or
+command-sync error instead of only a generic disconnected state.
+
+## Public Moon API
+
+Moon now serves a trusted automation API and same-origin Swagger docs:
+
+- docs: `/api/public/docs`
+- raw OpenAPI: `/api/public/openapi.json`
+- search: `GET /api/public/v1/search?q=...`
+- create request: `POST /api/public/v1/requests`
+- request status: `GET /api/public/v1/requests/<requestId>`
+
+Search is public. Create and status calls require `X-Scriptarr-Api-Key`, which Moon admin now manages from
+`/admin/system/api`. Scriptarr stores only the hashed form of that key in Vault and only reveals the plaintext value
+when the admin generates or regenerates it.
+
+External API requests are intended for trusted automation. Scriptarr rejects them when the selected result is NSFW,
+already present in the library, already pending or running, or lacks an enabled download target. Accepted external API
+requests enter Raven at the lowest priority behind the normal browser and Discord request flows.
 
 ## Storage Layout
 
@@ -244,6 +301,8 @@ Raven's download tree now uses a two-stage layout under `raven/downloads/`:
 
 Raven also supports internal chapter and page naming templates through the brokered `raven.naming` setting. This pass
 keeps title-folder naming unchanged so rescans remain compatible with the current library model.
+Request records now persist the original search query, selected metadata snapshot, selected download snapshot, and any
+linked Raven job or task ids so Moon admin can moderate or retry the exact saved target later.
 
 ## Docker Test Workflow
 

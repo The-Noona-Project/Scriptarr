@@ -1,4 +1,4 @@
-import {escapeHtml, renderChipList, renderEmptyState} from "../dom.js";
+import {escapeHtml, renderChipList, renderCoverArt, renderEmptyState} from "../dom.js";
 import {buildReaderPathForTitle, buildTitlePathForTitle} from "../routes.js";
 
 /**
@@ -29,6 +29,9 @@ export const renderTitlePage = (result) => {
 
   return `
     <section class="detail-hero" style="--detail-accent:${escapeHtml(title.coverAccent || "#de6d3a")}">
+      <div class="detail-art-shell">
+        ${renderCoverArt(title.coverUrl, title.title, "detail-cover-art")}
+      </div>
       <div class="detail-copy">
         <span class="section-kicker">${escapeHtml(title.libraryTypeLabel || title.mediaType || "manga")}</span>
         <h1>${escapeHtml(title.title)}</h1>

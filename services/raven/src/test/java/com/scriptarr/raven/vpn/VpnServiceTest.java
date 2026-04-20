@@ -315,6 +315,16 @@ class VpnServiceTest {
         }
 
         @Override
+        public JsonNode getRequest(String requestId) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public JsonNode patchRequest(String requestId, Map<String, Object> payload) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
         public JsonNode listLibraryTitles() {
             throw new UnsupportedOperationException();
         }

@@ -46,6 +46,27 @@ export const renderEmptyState = (title, body) => `
 `;
 
 /**
+ * Render title cover art when available.
+ *
+ * @param {string | null | undefined} url
+ * @param {string | null | undefined} title
+ * @param {string} [className]
+ * @returns {string}
+ */
+export const renderCoverArt = (url, title, className = "cover-art") => {
+  const normalizedUrl = String(url || "").trim();
+  if (!normalizedUrl) {
+    return `<span class="${escapeHtml(`${className} is-empty`)}" aria-hidden="true">${escapeHtml((title || "?").trim().slice(0, 1) || "?")}</span>`;
+  }
+
+  return `
+    <span class="${escapeHtml(className)}">
+      <img src="${escapeHtml(normalizedUrl)}" alt="${escapeHtml(title || "Title cover")}" loading="lazy" referrerpolicy="no-referrer">
+    </span>
+  `;
+};
+
+/**
  * Render a reusable series card.
  *
  * @param {{
@@ -63,6 +84,7 @@ export const renderEmptyState = (title, body) => `
 export const renderSeriesCard = (card) => `
   <article class="series-card" style="--accent:${escapeHtml(card.coverAccent || "#de6d3a")}">
     <a class="series-card-link" href="${escapeHtml(card.href || buildTitlePath(card.libraryTypeSlug || card.mediaType || "manga", card.id))}" data-link>
+      ${renderCoverArt(card.coverUrl, card.title, "series-card-art")}
       <span class="series-card-kicker">${escapeHtml(card.latestChapter || "Library")}</span>
       <strong>${escapeHtml(card.title)}</strong>
       <p>${escapeHtml(card.summary || card.author || "Open the series details.")}</p>
@@ -75,6 +97,7 @@ export default {
   escapeHtml,
   renderChip,
   renderChipList,
+  renderCoverArt,
   renderEmptyState,
   renderSeriesCard
 };

@@ -147,14 +147,33 @@ export const createCachedStore = (
     async listRequests() {
       return readThrough("requests:list", () => baseStore.listRequests());
     },
+    async getRequest(id) {
+      return readThrough(`request:${id}`, () => baseStore.getRequest(id));
+    },
     async createRequest(payload) {
       const request = await baseStore.createRequest(payload);
       invalidate("requests:list");
+      writeEntry(`request:${request.id}`, request);
+      return request;
+    },
+    async updateRequest(id, payload) {
+      const request = await baseStore.updateRequest(id, payload);
+      invalidate("requests:list");
+      if (request) {
+        writeEntry(`request:${request.id}`, request);
+      } else {
+        invalidate(`request:${id}`);
+      }
       return request;
     },
     async reviewRequest(id, payload) {
       const request = await baseStore.reviewRequest(id, payload);
       invalidate("requests:list");
+      if (request) {
+        writeEntry(`request:${request.id}`, request);
+      } else {
+        invalidate(`request:${id}`);
+      }
       return request;
     },
     async upsertProgress(payload) {

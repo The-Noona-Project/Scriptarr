@@ -1,4 +1,4 @@
-import {escapeHtml, renderEmptyState, renderStatusBadge, renderTable} from "../dom.js";
+import {escapeHtml, renderCoverThumb, renderEmptyState, renderStatusBadge, renderTable} from "../dom.js";
 import {formatDate, formatPercent} from "../format.js";
 
 /**
@@ -59,7 +59,7 @@ export const renderActivityPage = (result) => {
       escapeHtml(formatDate(entry.updatedAt, {includeTime: true}))
     ])
     : (result.payload?.tasks || []).map((task) => [
-      `<strong>${escapeHtml(task.titleName)}</strong>`,
+      `<div class="table-title-cell with-cover-row">${renderCoverThumb(task.coverUrl, task.titleName)}<div><strong>${escapeHtml(task.titleName)}</strong><span class="muted-copy">${escapeHtml(task.actor || task.requestedBy || "scriptarr")}</span></div></div>`,
       escapeHtml(task.requestType),
       renderStatusBadge(task.status),
       escapeHtml(formatPercent(task.percent)),

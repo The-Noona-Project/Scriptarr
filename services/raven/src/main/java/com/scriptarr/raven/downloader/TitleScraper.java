@@ -28,6 +28,7 @@ import java.util.regex.Pattern;
 @Component
 public class TitleScraper {
     private static final String SOURCE_BASE_URL = "https://weebcentral.com";
+    private static final int ADVANCED_SEARCH_PAGE_LIMIT = 32;
     private static final String USER_AGENT =
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
 
@@ -68,6 +69,108 @@ public class TitleScraper {
             logger.warn("SCRAPER", "Search request failed.", error.getMessage());
             return List.of();
         }
+    }
+
+    /**
+     * Normalize a title so Raven can compare DM title prefixes consistently.
+     *
+     * @param rawTitle raw title text
+     * @return normalized comparable title or {@code null}
+     */
+    public String normalizePrefixComparableTitle(String rawTitle) {
+        if (rawTitle == null) {
+            return null;
+        }
+
+        String trimmed = rawTitle.trim();
+        if (trimmed.isBlank()) {
+            return null;
+        }
+
+        int index = 0;
+        while (index < trimmed.length()) {
+            char candidate = trimmed.charAt(index);
+            if (Character.isWhitespace(candidate) || !Character.isLetterOrDigit(candidate)) {
+                index++;
+                continue;
+            }
+            break;
+        }
+
+        String normalized = trimmed.substring(Math.min(index, trimmed.length())).trim();
+        return normalized.isBlank() ? null : normalized;
+    }
+
+    /**
+     * Browse alphabetized titles from WeebCentral's advanced search endpoint.
+     *
+     * @param type exact included content type
+     * @param adultContent whether adult-only titles should be included
+     * @param titlePrefix visible title prefix filter
+     * @return collected bulk browse result
+     */
+    public BulkBrowseResult browseTitlesAlphabetically(String type, boolean adultContent, String titlePrefix) {
+        String normalizedType = normalizeMediaType(type);
+        if (normalizedType == null) {
+            return new BulkBrowseResult(List.of(), 0);
+        }
+
+        String normalizedSearchPrefix = titlePrefix != null ? titlePrefix.trim() : "";
+        String comparableSearchPrefix = normalizePrefixComparableTitle(normalizedSearchPrefix);
+        String lowerSearchPrefix = comparableSearchPrefix != null ? comparableSearchPrefix.toLowerCase(Locale.ROOT) : "";
+
+        List<Map<String, String>> collected = new ArrayList<>();
+        Set<String> seenHrefs = new HashSet<>();
+        int pagesScanned = 0;
+        int offset = 0;
+        boolean hasMore;
+
+        try {
+            do {
+                Document doc = fetchSearchData(Map.of(
+                    "text", normalizedSearchPrefix,
+                    "sort", "Alphabet",
+                    "order", "Ascending",
+                    "official", "Any",
+                    "anime", "Any",
+                    "adult", adultContent ? "True" : "False",
+                    "included_type", normalizedType,
+                    "display_mode", "Full Display",
+                    "limit", String.valueOf(ADVANCED_SEARCH_PAGE_LIMIT),
+                    "offset", String.valueOf(offset)
+                ));
+                pagesScanned++;
+
+                List<Map<String, String>> parsedResults = parseSearchResults(doc);
+                if (parsedResults.isEmpty()) {
+                  break;
+                }
+
+                for (Map<String, String> parsed : parsedResults) {
+                    String href = parsed.get("href");
+                    if (href == null || href.isBlank() || !seenHrefs.add(href)) {
+                        continue;
+                    }
+
+                    String comparableTitle = normalizePrefixComparableTitle(parsed.get("title"));
+                    String lowerTitle = comparableTitle != null ? comparableTitle.toLowerCase(Locale.ROOT) : "";
+                    if (!lowerSearchPrefix.isEmpty() && !lowerTitle.isEmpty() && !lowerTitle.startsWith(lowerSearchPrefix)) {
+                        if (lowerTitle.compareTo(lowerSearchPrefix) > 0) {
+                            return new BulkBrowseResult(collected.isEmpty() ? List.of() : List.copyOf(collected), pagesScanned);
+                        }
+                    }
+
+                    collected.add(new HashMap<>(parsed));
+                }
+
+                hasMore = hasMoreResults(doc);
+                offset += ADVANCED_SEARCH_PAGE_LIMIT;
+            } while (hasMore);
+        } catch (Exception error) {
+            logger.warn("SCRAPER", "Bulk browse request failed.", error.getMessage());
+        }
+
+        return new BulkBrowseResult(collected.isEmpty() ? List.of() : List.copyOf(collected), pagesScanned);
     }
 
     /**
@@ -181,6 +284,14 @@ public class TitleScraper {
         return parsed.isEmpty() ? List.of() : List.copyOf(parsed);
     }
 
+    private boolean hasMoreResults(Document doc) {
+        if (doc == null) {
+            return false;
+        }
+
+        return doc.selectFirst("button[hx-get*=\"/search/data\"][hx-get*=\"offset=\"]") != null;
+    }
+
     /**
      * Fetch rich title details from the upstream source page.
      *
@@ -204,6 +315,7 @@ public class TitleScraper {
                 extractLabeledList(doc, "Associated Name(s)"),
                 extractLabeledValue(doc, "Status"),
                 extractLabeledValue(doc, "Released"),
+                parseBooleanFlag(extractLabeledValue(doc, "Adult Content")),
                 parseBooleanFlag(extractLabeledValue(doc, "Official Translation")),
                 parseBooleanFlag(extractLabeledValue(doc, "Anime Adaptation")),
                 extractRelatedSeries(doc)

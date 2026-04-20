@@ -19,3 +19,13 @@ Moon serves the forward-facing user app at `/` and the admin app at `/admin` fro
 - Keep Discord login as Moon's only first-owner and admin sign-in path. Do not reintroduce dev-session claim flows.
 - Keep Moon HTML uncacheable and its static CSS or JS assets versioned so publishes invalidate stale browser bundles cleanly.
 - Preserve Moon's native reader flows. Do not reintroduce Kavita runtime handoff behavior.
+- Keep user requests and admin add-title on the shared metadata-first intake flow. Moon should submit `query`,
+  `selectedMetadata`, and nullable `selectedDownload` instead of regressing to free-text-only request payloads.
+- `/admin/requests` should keep showing the saved metadata or download snapshots, linked Raven job state, and the
+  resolve path for `unavailable` requests.
+- Keep the trusted public Moon API behind Moon-owned routes. `/api/public/*` and `/admin/system/api` should stay
+  browser-safe, same-origin, and Sage-backed instead of reaching into internal services directly.
+- Public request creation must keep using server-issued selection tokens and preserve the NSFW, already-in-library, and
+  already-active guardrails before low-priority queueing.
+- Keep cover art visible across add-title, requests, queue/history, and library/title surfaces when Raven provides a
+  `coverUrl`.

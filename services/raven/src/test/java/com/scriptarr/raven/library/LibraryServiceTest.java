@@ -57,6 +57,7 @@ class LibraryServiceTest {
                 List.of("Only I Level Up"),
                 "Ongoing",
                 "2018",
+                false,
                 true,
                 true,
                 List.of(Map.of("title", "Solo Leveling: Ragnarok", "relation", "Sequel"))

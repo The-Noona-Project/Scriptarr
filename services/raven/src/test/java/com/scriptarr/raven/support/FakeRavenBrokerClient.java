@@ -66,6 +66,16 @@ public final class FakeRavenBrokerClient implements RavenBrokerClient {
     }
 
     @Override
+    public JsonNode getRequest(String requestId) {
+        return objectMapper.valueToTree(Map.of("error", "Request not found."));
+    }
+
+    @Override
+    public JsonNode patchRequest(String requestId, Map<String, Object> payload) {
+        return objectMapper.valueToTree(payload);
+    }
+
+    @Override
     public JsonNode listLibraryTitles() {
         List<JsonNode> payload = new ArrayList<>();
         for (String titleId : titles.keySet()) {

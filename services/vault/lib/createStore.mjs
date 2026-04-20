@@ -26,6 +26,137 @@ const parseJsonColumn = (value, fallback = null) => {
   }
   return value;
 };
+const cloneJsonValue = (value, fallback = null) => {
+  if (value == null) {
+    return fallback;
+  }
+  return JSON.parse(JSON.stringify(value));
+};
+const normalizeString = (value, fallback = "") => {
+  const normalized = typeof value === "string" ? value.trim() : "";
+  return normalized || fallback;
+};
+const REQUEST_STATUSES = new Set(["pending", "unavailable", "denied", "queued", "downloading", "completed", "failed"]);
+const normalizeRequestStatus = (value, fallback = "pending") => {
+  const normalized = normalizeString(value, fallback).toLowerCase();
+  return REQUEST_STATUSES.has(normalized) ? normalized : fallback;
+};
+const normalizeAvailabilityState = (value, fallback = "unavailable") => {
+  const normalized = normalizeString(value, fallback).toLowerCase();
+  return normalized === "available" ? "available" : "unavailable";
+};
+const normalizeRequestDetails = (value = {}) => {
+  const next = value && typeof value === "object" ? cloneJsonValue(value, {}) : {};
+  next.query = normalizeString(next.query);
+  next.selectedMetadata = next.selectedMetadata && typeof next.selectedMetadata === "object"
+    ? cloneJsonValue(next.selectedMetadata, null)
+    : null;
+  next.selectedDownload = next.selectedDownload && typeof next.selectedDownload === "object"
+    ? cloneJsonValue(next.selectedDownload, null)
+    : null;
+  next.availability = normalizeAvailabilityState(
+    next.availability,
+    next.selectedDownload ? "available" : "unavailable"
+  );
+  next.jobId = normalizeString(next.jobId || next.linkedJobId);
+  next.taskId = normalizeString(next.taskId || next.linkedTaskId);
+  delete next.linkedJobId;
+  delete next.linkedTaskId;
+  return next;
+};
+const mergeRequestDetails = (currentValue, patchValue) => {
+  if (!patchValue || typeof patchValue !== "object") {
+    return normalizeRequestDetails(currentValue);
+  }
+  return normalizeRequestDetails({
+    ...cloneJsonValue(currentValue, {}),
+    ...cloneJsonValue(patchValue, {})
+  });
+};
+const defaultRequestEventMessage = (eventType) => {
+  switch (normalizeString(eventType).toLowerCase()) {
+    case "created":
+      return "Request created.";
+    case "approved":
+      return "Request approved.";
+    case "queued":
+      return "Request queued for Raven.";
+    case "downloading":
+      return "Raven is downloading this title.";
+    case "completed":
+      return "Request completed.";
+    case "failed":
+      return "Request failed.";
+    case "unavailable":
+      return "No enabled download provider matched this request yet.";
+    case "denied":
+      return "Request denied.";
+    default:
+      return "Request updated.";
+  }
+};
+const buildRequestTimelineEntry = ({
+  eventType,
+  message,
+  actor,
+  at = nowIso()
+}) => ({
+  type: normalizeString(eventType, "updated"),
+  message: normalizeString(message, defaultRequestEventMessage(eventType)),
+  at,
+  actor: normalizeString(actor)
+});
+const buildInitialRequestTimeline = ({requestedBy, status}) => {
+  const timeline = [buildRequestTimelineEntry({
+    eventType: "created",
+    actor: requestedBy
+  })];
+  const normalizedStatus = normalizeRequestStatus(status, "pending");
+  if (normalizedStatus === "unavailable") {
+    timeline.push(buildRequestTimelineEntry({
+      eventType: "unavailable",
+      actor: requestedBy
+    }));
+  }
+  return timeline;
+};
+const applyRequestUpdate = (existing, update = {}) => {
+  const next = {
+    ...existing,
+    title: Object.hasOwn(update, "title") ? normalizeString(update.title, existing.title) : existing.title,
+    requestType: Object.hasOwn(update, "requestType") ? normalizeString(update.requestType, existing.requestType) : existing.requestType,
+    notes: Object.hasOwn(update, "notes") ? normalizeString(update.notes) : existing.notes,
+    status: Object.hasOwn(update, "status")
+      ? normalizeRequestStatus(update.status, existing.status || "pending")
+      : normalizeRequestStatus(existing.status, "pending"),
+    moderatorComment: Object.hasOwn(update, "moderatorComment")
+      ? normalizeString(update.moderatorComment)
+      : normalizeString(existing.moderatorComment),
+    details: Object.hasOwn(update, "details")
+      ? normalizeRequestDetails(update.details)
+      : mergeRequestDetails(existing.details, update.detailsMerge),
+    updatedAt: nowIso(),
+    revision: Number.parseInt(String(existing.revision || 1), 10) + 1
+  };
+
+  const nextTimeline = Array.isArray(existing.timeline) ? [...existing.timeline] : [];
+  const requestedEventType = normalizeString(update.eventType);
+  const shouldAppendStatusEvent = Object.hasOwn(update, "status")
+    && next.status !== normalizeRequestStatus(existing.status, "pending")
+    && update.appendStatusEvent !== false;
+  const eventType = requestedEventType || (shouldAppendStatusEvent ? next.status : "");
+
+  if (eventType) {
+    nextTimeline.push(buildRequestTimelineEntry({
+      eventType,
+      message: update.eventMessage || update.comment,
+      actor: update.actor
+    }));
+  }
+
+  next.timeline = nextTimeline;
+  return next;
+};
 
 const sortRavenTitles = (titles) => [...titles].sort((left, right) => String(left.title || "").localeCompare(String(right.title || "")));
 const sortRavenChapters = (chapters) => [...chapters].sort((left, right) => {
@@ -103,6 +234,34 @@ const normalizeVaultJobTask = (jobId, task = {}) => ({
   finishedAt: task.finishedAt || null,
   updatedAt: String(task.updatedAt || nowIso())
 });
+const buildRequestFromPayload = (payload, requestId) => {
+  const status = normalizeRequestStatus(payload.status, payload.selectedDownload || payload.details?.selectedDownload ? "pending" : "unavailable");
+  return {
+    id: requestId,
+    source: normalizeString(payload.source, "moon"),
+    title: normalizeString(payload.title, "Untitled request"),
+    requestType: normalizeString(payload.requestType, "manga"),
+    notes: normalizeString(payload.notes),
+    requestedBy: normalizeString(payload.requestedBy),
+    status,
+    moderatorComment: normalizeString(payload.moderatorComment),
+    details: normalizeRequestDetails(payload.details ?? {
+      query: payload.query,
+      selectedMetadata: payload.selectedMetadata,
+      selectedDownload: payload.selectedDownload,
+      availability: payload.availability,
+      jobId: payload.jobId,
+      taskId: payload.taskId
+    }),
+    revision: 1,
+    timeline: buildInitialRequestTimeline({
+      requestedBy: payload.requestedBy,
+      status
+    }),
+    createdAt: nowIso(),
+    updatedAt: nowIso()
+  };
+};
 
 const defaultPermissionsForRole = (role) => {
   switch (role) {
@@ -221,47 +380,36 @@ const createMemoryStore = () => {
     async listRequests() {
       return Array.from(state.requests.values()).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
     },
+    async getRequest(id) {
+      return state.requests.get(Number(id)) || null;
+    },
     async createRequest(payload) {
       const id = state.requestSeq++;
-      const request = {
-        id,
-        status: "pending",
-        revision: 1,
-        timeline: [
-          {
-            type: "created",
-            message: "Request created.",
-            at: nowIso(),
-            actor: payload.requestedBy
-          }
-        ],
-        ...payload,
-        createdAt: nowIso(),
-        updatedAt: nowIso()
-      };
+      const request = buildRequestFromPayload(payload, id);
       state.requests.set(id, request);
       return request;
     },
-    async reviewRequest(id, review) {
+    async updateRequest(id, update) {
       const existing = state.requests.get(Number(id));
       if (!existing) {
         return null;
       }
-      const expectedRevision = review.expectedRevision ?? review.revision;
+      const expectedRevision = update.expectedRevision ?? update.revision;
       if (expectedRevision != null && Number(expectedRevision) !== Number(existing.revision || 1)) {
         throw createConflictError("Request revision conflict.", "REQUEST_REVISION_CONFLICT");
       }
-      existing.status = review.status;
-      existing.moderatorComment = review.comment || "";
-      existing.updatedAt = nowIso();
-      existing.revision = Number.parseInt(String(existing.revision || 1), 10) + 1;
-      existing.timeline.push({
-        type: review.status,
-        message: review.comment || `Request ${review.status}.`,
-        at: nowIso(),
-        actor: review.actor
+      const next = applyRequestUpdate(existing, update);
+      state.requests.set(Number(id), next);
+      return next;
+    },
+    async reviewRequest(id, review) {
+      return this.updateRequest(id, {
+        status: review.status,
+        moderatorComment: review.comment || "",
+        comment: review.comment,
+        actor: review.actor,
+        expectedRevision: review.expectedRevision ?? review.revision
       });
-      return existing;
     },
     async upsertProgress(entry) {
       state.progress.set(entry.mediaId, {
@@ -425,6 +573,7 @@ const createMysqlStore = (config) => {
         requested_by VARCHAR(64) NOT NULL,
         status_name VARCHAR(32) NOT NULL,
         moderator_comment TEXT NULL,
+        request_details_json JSON NULL,
         timeline_json JSON NOT NULL,
         revision_number INT NOT NULL DEFAULT 1,
         created_at DATETIME NOT NULL,
@@ -497,11 +646,14 @@ const createMysqlStore = (config) => {
         title_id VARCHAR(191) NULL,
         title_name VARCHAR(255) NOT NULL,
         title_url TEXT NOT NULL,
+        provider_id VARCHAR(128) NULL,
+        request_id BIGINT NULL,
         request_type VARCHAR(64) NOT NULL,
         requested_by VARCHAR(64) NOT NULL,
         status_name VARCHAR(64) NOT NULL,
         message_text TEXT NULL,
         percent_value INT NOT NULL DEFAULT 0,
+        details_json JSON NULL,
         queued_at DATETIME NOT NULL,
         updated_at DATETIME NOT NULL
       )
@@ -550,10 +702,14 @@ const createMysqlStore = (config) => {
         INDEX idx_vault_job_tasks_job (job_id)
       )
     `);
+    await ignoreKnownAlterError("ALTER TABLE requests ADD COLUMN request_details_json JSON NULL AFTER moderator_comment");
     await ignoreKnownAlterError("ALTER TABLE requests ADD COLUMN revision_number INT NOT NULL DEFAULT 1");
     await ignoreKnownAlterError("ALTER TABLE raven_titles ADD COLUMN library_type_label VARCHAR(255) NULL");
     await ignoreKnownAlterError("ALTER TABLE raven_titles ADD COLUMN library_type_slug VARCHAR(191) NULL");
     await ignoreKnownAlterError("ALTER TABLE raven_titles ADD COLUMN working_root TEXT NULL");
+    await ignoreKnownAlterError("ALTER TABLE raven_download_tasks ADD COLUMN provider_id VARCHAR(128) NULL AFTER title_url");
+    await ignoreKnownAlterError("ALTER TABLE raven_download_tasks ADD COLUMN request_id BIGINT NULL AFTER provider_id");
+    await ignoreKnownAlterError("ALTER TABLE raven_download_tasks ADD COLUMN details_json JSON NULL AFTER percent_value");
   };
 
   const toUser = (row) => ({
@@ -610,6 +766,7 @@ const createMysqlStore = (config) => {
     requestedBy: row.requested_by,
     status: row.status_name,
     moderatorComment: row.moderator_comment,
+    details: normalizeRequestDetails(parseJsonColumn(row.request_details_json, {})),
     timeline: parseJsonColumn(row.timeline_json, []),
     revision: Number.parseInt(String(row.revision_number || 1), 10) || 1,
     createdAt: row.created_at.toISOString(),
@@ -754,52 +911,72 @@ const createMysqlStore = (config) => {
       const [rows] = await pool.query("SELECT * FROM requests ORDER BY created_at DESC");
       return rows.map(toRequest);
     },
+    async getRequest(id) {
+      const [rows] = await pool.query("SELECT * FROM requests WHERE id = ? LIMIT 1", [id]);
+      return rows[0] ? toRequest(rows[0]) : null;
+    },
     async createRequest(payload) {
-      const timeline = [
-        {
-          type: "created",
-          message: "Request created.",
-          at: nowIso(),
-          actor: payload.requestedBy
-        }
-      ];
+      const request = buildRequestFromPayload(payload);
       const [result] = await pool.query(`
         INSERT INTO requests (
-          source, title, request_type, notes, requested_by, status_name, moderator_comment, timeline_json,
+          source, title, request_type, notes, requested_by, status_name, moderator_comment, request_details_json, timeline_json,
           revision_number, created_at, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, 'pending', '', ?, 1, NOW(), NOW())
-      `, [payload.source, payload.title, payload.requestType, payload.notes || "", payload.requestedBy, JSON.stringify(timeline)]);
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, NOW(), NOW())
+      `, [
+        request.source,
+        request.title,
+        request.requestType,
+        request.notes || "",
+        request.requestedBy,
+        request.status,
+        request.moderatorComment || "",
+        JSON.stringify(request.details || {}),
+        JSON.stringify(request.timeline || [])
+      ]);
       const [rows] = await pool.query("SELECT * FROM requests WHERE id = ?", [result.insertId]);
       return toRequest(rows[0]);
     },
-    async reviewRequest(id, review) {
-      const expectedRevision = review.expectedRevision ?? review.revision;
+    async updateRequest(id, update) {
+      const expectedRevision = update.expectedRevision ?? update.revision;
       return withTransaction(async (connection) => {
         const [rows] = await connection.query("SELECT * FROM requests WHERE id = ? LIMIT 1 FOR UPDATE", [id]);
         if (!rows[0]) {
           return null;
         }
-        const current = rows[0];
-        const currentRevision = Number.parseInt(String(current.revision_number || 1), 10) || 1;
-        if (expectedRevision != null && Number(expectedRevision) !== currentRevision) {
+
+        const current = toRequest(rows[0]);
+        if (expectedRevision != null && Number(expectedRevision) !== Number(current.revision || 1)) {
           throw createConflictError("Request revision conflict.", "REQUEST_REVISION_CONFLICT");
         }
 
-        const timeline = parseJsonColumn(current.timeline_json, []);
-        timeline.push({
-          type: review.status,
-          message: review.comment || `Request ${review.status}.`,
-          at: nowIso(),
-          actor: review.actor
-        });
+        const next = applyRequestUpdate(current, update);
         await connection.query(`
           UPDATE requests
-          SET status_name = ?, moderator_comment = ?, timeline_json = ?, revision_number = ?, updated_at = NOW()
+          SET title = ?, request_type = ?, notes = ?, status_name = ?, moderator_comment = ?, request_details_json = ?, timeline_json = ?, revision_number = ?, updated_at = NOW()
           WHERE id = ?
-        `, [review.status, review.comment || "", JSON.stringify(timeline), currentRevision + 1, id]);
-        const [updated] = await connection.query("SELECT * FROM requests WHERE id = ? LIMIT 1", [id]);
-        return toRequest(updated[0]);
+        `, [
+          next.title,
+          next.requestType,
+          next.notes || "",
+          next.status,
+          next.moderatorComment || "",
+          JSON.stringify(next.details || {}),
+          JSON.stringify(next.timeline || []),
+          next.revision,
+          id
+        ]);
+        const [updatedRows] = await connection.query("SELECT * FROM requests WHERE id = ? LIMIT 1", [id]);
+        return updatedRows[0] ? toRequest(updatedRows[0]) : null;
+      });
+    },
+    async reviewRequest(id, review) {
+      return this.updateRequest(id, {
+        status: review.status,
+        moderatorComment: review.comment || "",
+        comment: review.comment,
+        actor: review.actor,
+        expectedRevision: review.expectedRevision ?? review.revision
       });
     },
     async upsertProgress(entry) {
@@ -852,7 +1029,7 @@ const createMysqlStore = (config) => {
           chapter_count, chapters_downloaded, author_name, tags_json, aliases_json, relations_json,
           metadata_provider, metadata_matched_at, source_url, cover_url, working_root, download_root, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
         ON DUPLICATE KEY UPDATE
           title = VALUES(title),
           media_type = VALUES(media_type),
@@ -934,11 +1111,14 @@ const createMysqlStore = (config) => {
         titleId: row.title_id,
         titleName: row.title_name,
         titleUrl: row.title_url,
+        providerId: row.provider_id,
+        requestId: row.request_id == null ? "" : String(row.request_id),
         requestType: row.request_type,
         requestedBy: row.requested_by,
         status: row.status_name,
         message: row.message_text,
         percent: row.percent_value,
+        details: parseJsonColumn(row.details_json, {}),
         queuedAt: row.queued_at.toISOString(),
         updatedAt: row.updated_at.toISOString()
       }));
@@ -946,18 +1126,21 @@ const createMysqlStore = (config) => {
     async upsertRavenDownloadTask(task) {
       await pool.query(`
         INSERT INTO raven_download_tasks (
-          task_id, title_id, title_name, title_url, request_type, requested_by, status_name, message_text, percent_value, queued_at, updated_at
+          task_id, title_id, title_name, title_url, provider_id, request_id, request_type, requested_by, status_name, message_text, percent_value, details_json, queued_at, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
         ON DUPLICATE KEY UPDATE
           title_id = VALUES(title_id),
           title_name = VALUES(title_name),
           title_url = VALUES(title_url),
+          provider_id = VALUES(provider_id),
+          request_id = VALUES(request_id),
           request_type = VALUES(request_type),
           requested_by = VALUES(requested_by),
           status_name = VALUES(status_name),
           message_text = VALUES(message_text),
           percent_value = VALUES(percent_value),
+          details_json = VALUES(details_json),
           queued_at = VALUES(queued_at),
           updated_at = NOW()
       `, [
@@ -965,12 +1148,15 @@ const createMysqlStore = (config) => {
         task.titleId || null,
         task.titleName,
         task.titleUrl,
+        task.providerId || null,
+        task.requestId || null,
         task.requestType || "manga",
         task.requestedBy || "scriptarr",
         task.status || "queued",
         task.message || "",
         Number.parseInt(String(task.percent || 0), 10) || 0,
-        task.queuedAt || nowIso()
+        JSON.stringify(task.details || {}),
+        toMysqlDateTime(task.queuedAt, toMysqlDateTime(nowIso()))
       ]);
       const [rows] = await pool.query("SELECT * FROM raven_download_tasks WHERE task_id = ? LIMIT 1", [task.taskId]);
       const row = rows[0];
@@ -979,11 +1165,14 @@ const createMysqlStore = (config) => {
         titleId: row.title_id,
         titleName: row.title_name,
         titleUrl: row.title_url,
+        providerId: row.provider_id,
+        requestId: row.request_id == null ? "" : String(row.request_id),
         requestType: row.request_type,
         requestedBy: row.requested_by,
         status: row.status_name,
         message: row.message_text,
         percent: row.percent_value,
+        details: parseJsonColumn(row.details_json, {}),
         queuedAt: row.queued_at.toISOString(),
         updatedAt: row.updated_at.toISOString()
       };

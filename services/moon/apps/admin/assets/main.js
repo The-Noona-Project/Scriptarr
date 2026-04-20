@@ -10,7 +10,7 @@ const DEFAULT_SITE_NAME = "Scriptarr";
  *
  * @param {ReturnType<import("./api.js").createAdminApi>} api
  * @returns {Promise<{
- *   user: {username: string, role: string} | null,
+ *   user: {username: string, role: string, avatarUrl?: string | null} | null,
  *   loginUrl: string,
  *   bootstrap: {ownerClaimed?: boolean, superuserId?: string} | null,
  *   branding: {siteName?: string}

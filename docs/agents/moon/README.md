@@ -30,6 +30,8 @@
 - The old untyped `/title/:id` and `/reader/:titleId/:chapterId` paths are compatibility shims only. New Moon links
   should emit the typed canonical paths.
 - Moon stays responsible for browser-safe proxying into Sage. Browsers should not call Raven, Warden, Vault, Portal, or Oracle directly.
+- Keep user requests and admin add-title on the shared intake engine. Moon should submit `query`, `selectedMetadata`,
+  and nullable `selectedDownload` instead of regressing to free-text-only request payloads.
 - Moon should show honest empty states when Raven has no imported titles, and `/admin` should stay dark by default.
 - Keep Discord login as the only bootstrap and admin sign-in path. Do not reintroduce claim-dev-session behavior.
 - Keep HTML responses uncached and static admin or user assets versioned so publishes invalidate the browser cache
@@ -39,3 +41,13 @@
 - Reader preferences are now type-aware. Webtoon defaults should stay vertical, other types should stay paged, and user
   overrides should not bleed across title types.
 - `/admin/system/updates` is an actionable Moon surface that checks or starts managed-service update jobs through Sage.
+- `/admin/discord` should surface Portal capability state honestly: command runtime, command sync, onboarding
+  availability, and the last meaningful runtime error should all be visible without forcing the admin to read logs.
+- `/admin/requests` should surface the saved metadata and download snapshots, linked Raven task state, and the resolve
+  path for `unavailable` requests instead of assuming every request is immediately approvable.
+- `/admin/system/api` is the admin control point for Moon's trusted public API. Keep the docs and key-management
+  surfaces same-origin, Sage-backed, and free of direct internal service calls.
+- `/api/public/*` should keep returning `coverUrl`, selection tokens, and the external guardrail metadata that trusted
+  automations need to avoid NSFW, duplicate, or already-active downloads.
+- The signed-in Moon shell should prefer the Discord-backed `avatarUrl` when it exists and fall back to initials
+  instead of leaving the admin identity surface text-only.

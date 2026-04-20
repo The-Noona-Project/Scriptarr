@@ -128,7 +128,7 @@ public final class LibraryService {
             return objectMapper.treeToValue(payload, LibraryTitle.class);
         } catch (Exception error) {
             logger.warn("LIBRARY", "Failed to persist Raven title.", error.getMessage());
-            return title;
+            throw new IllegalStateException("Failed to persist Raven title.", error);
         }
     }
 
@@ -148,7 +148,7 @@ public final class LibraryService {
             return objectMapper.convertValue(payload, CHAPTER_LIST_TYPE);
         } catch (Exception error) {
             logger.warn("LIBRARY", "Failed to persist Raven chapters.", error.getMessage());
-            return chapters;
+            throw new IllegalStateException("Failed to persist Raven chapters.", error);
         }
     }
 
@@ -212,9 +212,35 @@ public final class LibraryService {
             List.copyOf(normalizedChapters)
         );
 
-        upsertTitle(nextTitle);
-        replaceChapters(titleId, normalizedChapters);
-        return nextTitle;
+        LibraryTitle persisted = upsertTitle(nextTitle);
+        List<LibraryChapter> persistedChapters = replaceChapters(titleId, normalizedChapters);
+        return persisted == null
+            ? nextTitle
+            : new LibraryTitle(
+            persisted.id(),
+            persisted.title(),
+            persisted.mediaType(),
+            persisted.libraryTypeLabel(),
+            persisted.libraryTypeSlug(),
+            persisted.status(),
+            persisted.latestChapter(),
+            persisted.coverAccent(),
+            persisted.summary(),
+            persisted.releaseLabel(),
+            persisted.chapterCount(),
+            persisted.chaptersDownloaded(),
+            persisted.author(),
+            persisted.tags(),
+            persisted.aliases(),
+            persisted.metadataProvider(),
+            persisted.metadataMatchedAt(),
+            persisted.relations(),
+            persisted.sourceUrl(),
+            persisted.coverUrl(),
+            persisted.workingRoot(),
+            persisted.downloadRoot(),
+            List.copyOf(persistedChapters)
+        );
     }
 
     /**

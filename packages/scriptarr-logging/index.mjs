@@ -113,6 +113,10 @@ export const sanitizeStructuredData = (value, key = "") => {
     return value.map((entry) => sanitizeStructuredData(entry, key));
   }
 
+  if (value instanceof Error) {
+    return sanitizeRuntimeLeafValue(value);
+  }
+
   if (value && typeof value === "object") {
     return Object.fromEntries(Object.entries(value).map(([entryKey, entryValue]) => [
       entryKey,

@@ -38,8 +38,19 @@ Read this before editing Scriptarr.
 - First-party service-to-service HTTP must go through Sage. Direct exceptions are limited to Vault -> MySQL, Warden ->
   Docker or host runtime, Oracle -> OpenAI or LocalAI, and Raven -> external source, metadata, and VPN providers.
 - Requests created in Moon and Discord must converge on one moderated flow.
+- Moon user requests and Moon admin add-title now share one metadata-first intake flow. Persist the selected metadata
+  and download snapshots so moderation can queue the exact saved Raven target later.
+- Moon also owns the trusted public automation API. Keep external search and request traffic behind Moon's
+  `/api/public/*` routes, store only hashed API keys in Vault through Sage, and preserve the NSFW, duplicate, and
+  lowest-priority guards on external queueing.
+- Portal's Discord runtime is brokered through Moon admin's `/admin/discord` settings page. Keep guild id, onboarding,
+  DM superuser id, and per-command role mapping behind that settings object instead of drifting back to scattered env-only behavior.
+- Portal now sends request completion DMs. Preserve the single-send acknowledgment flow so retries or restarts do not
+  spam the requester.
 - Raven stores active downloads under `downloading/<type>/...` and promotes completed library content into
   `downloaded/<type>/...`.
+- Raven should only report `100%` after promoted files persist into the brokered catalog, and startup recovery should
+  reconcile finished `downloaded/<type>/...` files back into the library if catalog rows are missing.
 - Oracle now lives in `services/oracle` as a Python FastAPI service even though the repo-level test and Docker helpers
   still flow through the npm workspace.
 - Warden's LocalAI presets now target the LocalAI AIO image family, should only report success after readiness, and

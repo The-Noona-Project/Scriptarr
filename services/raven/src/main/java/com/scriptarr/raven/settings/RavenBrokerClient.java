@@ -31,6 +31,27 @@ public interface RavenBrokerClient {
     JsonNode getSecret(String key) throws IOException, InterruptedException;
 
     /**
+     * Load a single moderated request record persisted behind the broker.
+     *
+     * @param requestId stable request id
+     * @return parsed JSON request payload
+     * @throws IOException when the response cannot be read
+     * @throws InterruptedException when the request is interrupted
+     */
+    JsonNode getRequest(String requestId) throws IOException, InterruptedException;
+
+    /**
+     * Persist an update to an existing moderated request record.
+     *
+     * @param requestId stable request id
+     * @param payload request mutation payload
+     * @return parsed JSON response
+     * @throws IOException when the response cannot be read
+     * @throws InterruptedException when the request is interrupted
+     */
+    JsonNode patchRequest(String requestId, Map<String, Object> payload) throws IOException, InterruptedException;
+
+    /**
      * Load every Raven library title persisted behind the broker.
      *
      * @return parsed JSON array payload

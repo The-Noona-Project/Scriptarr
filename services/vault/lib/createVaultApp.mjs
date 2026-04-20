@@ -109,8 +109,39 @@ export const createVaultApp = async ({logger = createLogger("VAULT")} = {}) => {
     res.json(await store.listRequests());
   });
 
+  app.get("/api/service/requests/:id", async (req, res) => {
+    const request = await store.getRequest(req.params.id);
+    if (!request) {
+      logger.warn("Request lookup target was not found.", {
+        requestId: req.params.id
+      });
+      res.status(404).json({error: "Request not found."});
+      return;
+    }
+    res.json(request);
+  });
+
   app.post("/api/service/requests", requireJson, async (req, res) => {
     res.status(201).json(await store.createRequest(req.body));
+  });
+
+  app.patch("/api/service/requests/:id", requireJson, async (req, res) => {
+    try {
+      const updated = await store.updateRequest(req.params.id, req.body || {});
+      if (!updated) {
+        logger.warn("Request update target was not found.", {
+          requestId: req.params.id
+        });
+        res.status(404).json({error: "Request not found."});
+        return;
+      }
+      res.json(updated);
+    } catch (error) {
+      if (sendStoreError(logger, res, error, {requestId: req.params.id})) {
+        return;
+      }
+      throw error;
+    }
   });
 
   app.post("/api/service/requests/:id/review", requireJson, async (req, res) => {

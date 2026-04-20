@@ -182,6 +182,18 @@ button {
 .identity-card {
   padding: 16px;
   display: grid;
+  gap: 10px;
+}
+
+.identity-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.identity-copy {
+  min-width: 0;
+  display: grid;
   gap: 6px;
 }
 
@@ -191,6 +203,34 @@ button {
 
 .identity-card span {
   color: var(--admin-muted);
+}
+
+.session-avatar {
+  width: 52px;
+  height: 52px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  flex: 0 0 auto;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background:
+    radial-gradient(circle at top left, rgba(255, 255, 255, 0.16), transparent 55%),
+    linear-gradient(135deg, rgba(222, 93, 41, 0.9), rgba(98, 192, 176, 0.85));
+  color: white;
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 1rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12);
+}
+
+.session-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
 }
 
 .header-buttons,
@@ -257,6 +297,11 @@ button {
 }
 
 .page-surface {
+  display: grid;
+  gap: 18px;
+}
+
+.page-form {
   display: grid;
   gap: 18px;
 }
@@ -381,6 +426,48 @@ button {
   gap: 8px;
 }
 
+.table-title-cell.with-cover-row,
+.list-card-head.with-cover {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 14px;
+}
+
+.table-title-cell.with-cover-row > div:last-child,
+.list-card-copy {
+  min-width: 0;
+}
+
+.cover-thumb {
+  width: 68px;
+  height: 96px;
+  flex: 0 0 auto;
+  overflow: hidden;
+  border-radius: 16px;
+  border: 1px solid var(--admin-line);
+  background: rgba(255, 255, 255, 0.04);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--admin-muted);
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 1.2rem;
+  font-weight: 700;
+}
+
+.cover-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.cover-thumb.is-empty {
+  background:
+    linear-gradient(160deg, rgba(222, 93, 41, 0.18), rgba(98, 192, 176, 0.08)),
+    rgba(255, 255, 255, 0.04);
+}
+
 .checkbox-cell {
   display: inline-flex;
   align-items: center;
@@ -441,6 +528,14 @@ button {
   background: var(--admin-panel-soft);
 }
 
+.callout.warn {
+  background: var(--admin-warn-soft);
+}
+
+.callout.bad {
+  background: var(--admin-bad-soft);
+}
+
 .toolbar-form,
 .settings-form {
   display: grid;
@@ -454,13 +549,22 @@ button {
 
 .toolbar-form input,
 .settings-form input,
-.settings-form select {
+.settings-form select,
+.settings-form textarea,
+.form-table input,
+.form-table textarea {
   width: 100%;
   border: 1px solid var(--admin-line);
   border-radius: 14px;
   padding: 12px 14px;
   background: var(--admin-panel-soft);
   color: var(--admin-ink);
+}
+
+.settings-form textarea,
+.form-table textarea {
+  resize: vertical;
+  min-height: 140px;
 }
 
 .settings-form.three-column {
@@ -517,6 +621,36 @@ button {
   color: var(--admin-muted);
 }
 
+.api-key-output {
+  margin: 14px 0 0;
+  padding: 14px 16px;
+  overflow-x: auto;
+  border-radius: 16px;
+  border: 1px solid var(--admin-line);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--admin-ink);
+  font-family: "IBM Plex Mono", monospace;
+}
+
+.discord-metric-grid {
+  margin-bottom: 16px;
+}
+
+.discord-preview {
+  min-height: 200px;
+  font-family: "IBM Plex Mono", "IBM Plex Sans", monospace;
+  white-space: pre-wrap;
+}
+
+.form-table input:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.form-table td:last-child {
+  min-width: 260px;
+}
+
 @media (max-width: 1180px) {
   .admin-shell {
     grid-template-columns: 1fr;
@@ -544,6 +678,11 @@ button {
   .provider-card {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .table-title-cell.with-cover-row,
+  .list-card-head.with-cover {
+    grid-template-columns: auto minmax(0, 1fr);
   }
 
   .provider-controls,

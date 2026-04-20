@@ -12,6 +12,7 @@ public record TitleDetails(
     List<String> associatedNames,
     String status,
     String released,
+    Boolean adultContent,
     Boolean officialTranslation,
     Boolean animeAdaptation,
     List<Map<String, String>> relatedSeries

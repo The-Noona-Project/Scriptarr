@@ -1,5 +1,7 @@
-import {escapeHtml, renderChipList, renderEmptyState, renderStatusBadge, renderTable} from "../dom.js";
+import {escapeHtml, renderChipList, renderCoverThumb, renderEmptyState, renderStatusBadge, renderTable} from "../dom.js";
 import {formatDate} from "../format.js";
+
+const normalizeArray = (value) => Array.isArray(value) ? value : [];
 
 /**
  * Load the moderation request queue.
@@ -8,6 +10,32 @@ import {formatDate} from "../format.js";
  * @returns {Promise<import("../api.js").ApiResult>}
  */
 export const loadRequestsPage = ({api}) => api.get("/api/moon/v3/admin/requests");
+
+const renderRequestSourceCell = (entry) => `
+  <div class="stack-list compact-stack">
+    <span>${escapeHtml(entry.source)}</span>
+    <span>${escapeHtml(entry.details?.selectedMetadata?.provider || "metadata")}</span>
+    <span>${escapeHtml(entry.details?.selectedDownload?.providerName || entry.availability || "pending")}</span>
+  </div>
+`;
+
+const renderActionCell = (entry) => {
+  if (entry.status === "pending") {
+    return `<div class="action-row">
+      <button class="solid-button small" type="button" data-review-action="approved" data-request-id="${escapeHtml(entry.id)}">Approve</button>
+      <button class="ghost-button small" type="button" data-review-action="denied" data-request-id="${escapeHtml(entry.id)}">Deny</button>
+    </div>`;
+  }
+
+  if (entry.status === "unavailable") {
+    return `<div class="action-row">
+      <button class="solid-button small" type="button" data-review-action="resolve" data-request-id="${escapeHtml(entry.id)}" data-request-query="${escapeHtml(entry.details?.query || entry.title)}">Resolve</button>
+      <button class="ghost-button small" type="button" data-review-action="denied" data-request-id="${escapeHtml(entry.id)}">Deny</button>
+    </div>`;
+  }
+
+  return renderStatusBadge(entry.status);
+};
 
 /**
  * Render the request moderation page.
@@ -29,20 +57,15 @@ export const renderRequestsPage = (result) => {
         </div>
       </div>
       ${renderTable({
-        columns: ["Title", "Requester", "Source", "Status", "Notes", "Updated", "Actions"],
+        columns: ["Title", "Requester", "Source + match", "Status", "Notes", "Updated", "Actions"],
         rows: (result.payload?.requests || []).map((entry) => [
-          `<div class="table-title-cell"><strong>${escapeHtml(entry.title)}</strong>${renderChipList([entry.requestType])}</div>`,
+          `<div class="table-title-cell with-cover-row">${renderCoverThumb(entry.coverUrl, entry.title)}<div><strong>${escapeHtml(entry.title)}</strong>${renderChipList([entry.requestType, entry.availability])}</div></div>`,
           escapeHtml(entry.requestedBy?.username || entry.requestedBy?.discordUserId || "Unknown"),
-          escapeHtml(entry.source),
+          renderRequestSourceCell(entry),
           renderStatusBadge(entry.status),
-          escapeHtml(entry.notes || "No notes"),
+          escapeHtml(entry.notes || entry.details?.query || "No notes"),
           escapeHtml(formatDate(entry.updatedAt, {includeTime: true})),
-          entry.status === "pending"
-            ? `<div class="action-row">
-                <button class="solid-button small" type="button" data-review-action="approved" data-request-id="${escapeHtml(entry.id)}">Approve</button>
-                <button class="ghost-button small" type="button" data-review-action="denied" data-request-id="${escapeHtml(entry.id)}">Deny</button>
-              </div>`
-            : renderStatusBadge(entry.status)
+          renderActionCell(entry)
         ]),
         emptyTitle: "No requests yet",
         emptyBody: "Moon and Discord requests will appear here once users start filing them."
@@ -65,23 +88,46 @@ export const renderRequestsPage = (result) => {
 export const enhanceRequestsPage = async (root, {api, rerender, setFlash}) => {
   root.querySelectorAll("[data-review-action]").forEach((button) => {
     button.addEventListener("click", async () => {
-      const nextStatus = button.dataset.reviewAction;
+      const action = button.dataset.reviewAction;
+      const requestId = button.dataset.requestId || "";
+
+      if (action === "resolve") {
+        const query = button.dataset.requestQuery || "";
+        const search = await api.get(`/api/moon/v3/admin/add/search?query=${encodeURIComponent(query)}`);
+        const readyMatch = normalizeArray(search.payload?.results).find((entry) => entry.download?.titleUrl);
+        if (!readyMatch) {
+          setFlash("bad", "No concrete download match is available for this request yet.");
+          return;
+        }
+
+        const result = await api.post(`/api/moon/v3/admin/requests/${encodeURIComponent(requestId)}/resolve`, {
+          query,
+          selectedMetadata: readyMatch.metadata,
+          selectedDownload: readyMatch.download
+        });
+        setFlash(result.ok ? "good" : "bad", result.ok
+          ? "Unavailable request resolved and queued."
+          : result.payload?.error || "Unable to resolve the selected request.");
+        await rerender();
+        return;
+      }
+
       const comment = window.prompt(
-        nextStatus === "approved" ? "Approval note for this request:" : "Reason for denying this request:",
-        nextStatus === "approved" ? "Approved from Moon admin." : "Denied from Moon admin."
+        action === "approved" ? "Approval note for this request:" : "Reason for denying this request:",
+        action === "approved" ? "Approved from Moon admin." : "Denied from Moon admin."
       );
 
       if (comment == null) {
         return;
       }
 
-      const result = await api.post(`/api/moon/admin/requests/${encodeURIComponent(button.dataset.requestId || "")}/review`, {
-        status: nextStatus,
+      const result = await api.post(`/api/moon/admin/requests/${encodeURIComponent(requestId)}/review`, {
+        status: action,
         comment
       });
 
       setFlash(result.ok ? "good" : "bad", result.ok
-        ? `Request was marked ${nextStatus}.`
+        ? (action === "approved" ? "Request approved and queued." : "Request was denied.")
         : result.payload?.error || "Unable to update the selected request.");
       await rerender();
     });

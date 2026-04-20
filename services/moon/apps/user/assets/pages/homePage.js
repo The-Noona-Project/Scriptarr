@@ -1,6 +1,6 @@
 import {escapeHtml, renderEmptyState, renderSeriesCard} from "../dom.js";
 import {formatProgress} from "../format.js";
-import {buildReaderPathForTitle, buildTitlePath, buildTitlePathForTitle, resolveTitleTypeSlug} from "../routes.js";
+import {buildReaderPath, buildReaderPathForTitle, buildTitlePath, buildTitlePathForTitle, resolveTitleTypeSlug} from "../routes.js";
 
 /**
  * Load the Moon user home payload.

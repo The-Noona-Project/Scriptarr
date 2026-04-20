@@ -1,6 +1,8 @@
 package com.scriptarr.raven.api;
 
 import com.scriptarr.raven.downloader.DownloadRequest;
+import com.scriptarr.raven.downloader.BulkQueueDownloadResult;
+import com.scriptarr.raven.downloader.DownloadIntakeService;
 import com.scriptarr.raven.downloader.DownloaderService;
 import com.scriptarr.raven.library.ReaderChapterPayload;
 import com.scriptarr.raven.library.ReaderManifest;
@@ -30,6 +32,7 @@ import java.util.Map;
 @RequestMapping
 public class RavenController {
     private final MetadataService metadataService;
+    private final DownloadIntakeService downloadIntakeService;
     private final DownloaderService downloaderService;
     private final VpnService vpnService;
     private final RavenSettingsService settingsService;
@@ -39,6 +42,7 @@ public class RavenController {
      * Create the Raven controller.
      *
      * @param metadataService metadata service
+     * @param downloadIntakeService intake orchestration service
      * @param downloaderService download queue service
      * @param vpnService VPN status service
      * @param settingsService Raven settings service
@@ -46,12 +50,14 @@ public class RavenController {
      */
     public RavenController(
         MetadataService metadataService,
+        DownloadIntakeService downloadIntakeService,
         DownloaderService downloaderService,
         VpnService vpnService,
         RavenSettingsService settingsService,
         LibraryService libraryService
     ) {
         this.metadataService = metadataService;
+        this.downloadIntakeService = downloadIntakeService;
         this.downloaderService = downloaderService;
         this.vpnService = vpnService;
         this.settingsService = settingsService;
@@ -70,7 +76,22 @@ public class RavenController {
             "service", "scriptarr-raven",
             "downloads", downloaderService.stats(),
             "vpn", vpnService.status(),
-            "metadataProviders", settingsService.getMetadataProviderSettings()
+            "metadataProviders", settingsService.getMetadataProviderSettings(),
+            "downloadProviders", settingsService.getDownloadProviderSettings()
+        );
+    }
+
+    /**
+     * Search enabled metadata providers and resolve download availability.
+     *
+     * @param query intake search query
+     * @return normalized intake candidates
+     */
+    @GetMapping("/v1/intake/search")
+    public Map<String, Object> searchIntake(@RequestParam("query") String query) {
+        return Map.of(
+            "query", query == null ? "" : query.trim(),
+            "results", downloadIntakeService.search(query)
         );
     }
 
@@ -185,9 +206,38 @@ public class RavenController {
             titleName,
             titleUrl,
             String.valueOf(body.getOrDefault("requestType", "manga")).trim(),
-            String.valueOf(body.getOrDefault("requestedBy", "scriptarr")).trim()
+            String.valueOf(body.getOrDefault("requestedBy", "scriptarr")).trim(),
+            String.valueOf(body.getOrDefault("providerId", "")).trim(),
+            String.valueOf(body.getOrDefault("requestId", "")).trim(),
+            body.get("selectedMetadata") instanceof Map<?, ?> selectedMetadata ? (Map<String, Object>) selectedMetadata : Map.of(),
+            body.get("selectedDownload") instanceof Map<?, ?> selectedDownload ? (Map<String, Object>) selectedDownload : Map.of(),
+            String.valueOf(body.getOrDefault("priority", "normal")).trim()
         );
-        return ResponseEntity.status(HttpStatus.ACCEPTED).body(downloaderService.queueDownload(request));
+        try {
+            return ResponseEntity.status(HttpStatus.ACCEPTED).body(downloaderService.queueDownload(request));
+        } catch (IllegalStateException error) {
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("error", error.getMessage()));
+        }
+    }
+
+    /**
+     * Queue every provider title matching the supplied DM bulk queue filters.
+     *
+     * @param body bulk queue request payload
+     * @return bulk queue summary payload
+     */
+    @PostMapping("/v1/downloads/bulk-queue")
+    public ResponseEntity<BulkQueueDownloadResult> bulkQueueDownloads(@RequestBody Map<String, Object> body) {
+        BulkQueueDownloadResult result = downloaderService.bulkQueueDownload(
+            String.valueOf(body.getOrDefault("type", "")).trim(),
+            body.get("nsfw") instanceof Boolean nsfw ? nsfw : null,
+            String.valueOf(body.getOrDefault("titlePrefix", "")).trim(),
+            String.valueOf(body.getOrDefault("requestedBy", "scriptarr-portal")).trim()
+        );
+        if (BulkQueueDownloadResult.STATUS_INVALID_REQUEST.equals(result.status())) {
+            return ResponseEntity.badRequest().body(result);
+        }
+        return ResponseEntity.status(HttpStatus.ACCEPTED).body(result);
     }
 
     /**
