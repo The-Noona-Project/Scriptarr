@@ -1,5 +1,104 @@
 import {escapeHtml, renderChipList, renderCoverArt, renderEmptyState} from "../dom.js";
+import {formatDate} from "../format.js";
 import {buildReaderPathForTitle, buildTitlePathForTitle} from "../routes.js";
+
+const chapterSortValue = (value) => {
+  const parsed = Number.parseFloat(String(value || "").trim());
+  return Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY;
+};
+
+const sortAvailableChapters = (chapters) => [...(Array.isArray(chapters) ? chapters : [])]
+  .filter((chapter) => chapter?.available)
+  .sort((left, right) => chapterSortValue(right?.chapterNumber) - chapterSortValue(left?.chapterNumber));
+
+const formatMetadataProvider = (value) => {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!normalized) {
+    return "";
+  }
+
+  if (normalized === "mangadex") {
+    return "MangaDex";
+  }
+  if (normalized === "anilist") {
+    return "AniList";
+  }
+  if (normalized === "mangaupdates") {
+    return "MangaUpdates";
+  }
+  if (normalized === "mal") {
+    return "MyAnimeList";
+  }
+  if (normalized === "comicvine") {
+    return "ComicVine";
+  }
+
+  return normalized
+    .split(/[^a-z0-9]+/i)
+    .filter(Boolean)
+    .map((segment) => segment.slice(0, 1).toUpperCase() + segment.slice(1))
+    .join(" ");
+};
+
+const formatSourceProvider = (sourceUrl) => {
+  const normalized = String(sourceUrl || "").trim();
+  if (!normalized) {
+    return "";
+  }
+
+  try {
+    const {hostname} = new URL(normalized);
+    const host = hostname.toLowerCase();
+    if (host.includes("weebcentral")) {
+      return "WeebCentral";
+    }
+
+    return host
+      .replace(/^www\./, "")
+      .split(".")
+      .slice(0, -1)
+      .join(".")
+      .split(/[^a-z0-9]+/i)
+      .filter(Boolean)
+      .map((segment) => segment.slice(0, 1).toUpperCase() + segment.slice(1))
+      .join(" ");
+  } catch {
+    return "";
+  }
+};
+
+const formatChapterDateLabel = (chapter) => {
+  const formatted = formatDate(chapter?.releaseDate);
+  return formatted === "Unknown" ? "Date unavailable" : formatted;
+};
+
+const buildMetaItems = (title) => {
+  const items = [];
+  if (title?.author) {
+    items.push({label: "Author", value: title.author});
+  }
+
+  const metadataProvider = formatMetadataProvider(title?.metadataProvider);
+  if (metadataProvider) {
+    items.push({label: "Metadata", value: metadataProvider});
+  } else {
+    const sourceProvider = formatSourceProvider(title?.sourceUrl);
+    if (sourceProvider) {
+      items.push({label: "Source", value: sourceProvider});
+    }
+  }
+
+  if (title?.releaseLabel) {
+    items.push({label: "Released", value: title.releaseLabel});
+  }
+
+  if (title?.chapterCount) {
+    items.push({label: "Chapters", value: String(title.chapterCount)});
+  }
+
+  items.push({label: "Latest", value: title?.latestChapter || "Unknown"});
+  return items;
+};
 
 /**
  * Load a Moon title detail payload.
@@ -24,8 +123,9 @@ export const renderTitlePage = (result) => {
   }
 
   const title = result.payload?.title;
-  const availableChapters = (title?.chapters || []).filter((chapter) => chapter.available);
-  const latestChapter = availableChapters[availableChapters.length - 1];
+  const availableChapters = sortAvailableChapters(title?.chapters);
+  const latestChapter = availableChapters[0];
+  const metaItems = buildMetaItems(title);
 
   return `
     <section class="detail-hero" style="--detail-accent:${escapeHtml(title.coverAccent || "#de6d3a")}">
@@ -42,9 +142,9 @@ export const renderTitlePage = (result) => {
         </div>
       </div>
       <div class="detail-meta">
-        <div><span>Author</span><strong>${escapeHtml(title.author || "Unknown")}</strong></div>
-        <div><span>Provider</span><strong>${escapeHtml(title.metadataProvider || "Unmatched")}</strong></div>
-        <div><span>Latest</span><strong>${escapeHtml(title.latestChapter || "Unknown")}</strong></div>
+        ${metaItems.map((item) => `
+          <div><span>${escapeHtml(item.label)}</span><strong>${escapeHtml(item.value)}</strong></div>
+        `).join("")}
       </div>
     </section>
     <section class="content-grid two-up">
@@ -91,7 +191,7 @@ export const renderTitlePage = (result) => {
           <a class="chapter-row" href="${escapeHtml(buildReaderPathForTitle(title, chapter.id))}" data-link>
             <div>
               <strong>${escapeHtml(chapter.label)}</strong>
-              <span>${escapeHtml(chapter.releaseDate || "Unknown date")}</span>
+              <span>${escapeHtml(formatChapterDateLabel(chapter))}</span>
             </div>
             <span>${escapeHtml(chapter.pageCount)} pages</span>
           </a>

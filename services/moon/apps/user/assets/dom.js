@@ -82,13 +82,17 @@ export const renderCoverArt = (url, title, className = "cover-art") => {
  * @returns {string}
  */
 export const renderSeriesCard = (card) => `
-  <article class="series-card" style="--accent:${escapeHtml(card.coverAccent || "#de6d3a")}">
+  <article class="series-card ${String(card.coverUrl || "").trim() ? "has-cover" : "has-fallback"}" style="--accent:${escapeHtml(card.coverAccent || "#de6d3a")}">
     <a class="series-card-link" href="${escapeHtml(card.href || buildTitlePath(card.libraryTypeSlug || card.mediaType || "manga", card.id))}" data-link>
-      ${renderCoverArt(card.coverUrl, card.title, "series-card-art")}
-      <span class="series-card-kicker">${escapeHtml(card.latestChapter || "Library")}</span>
-      <strong>${escapeHtml(card.title)}</strong>
-      <p>${escapeHtml(card.summary || card.author || "Open the series details.")}</p>
-      ${card.progressRatio == null ? "" : `<div class="progress-pill">${escapeHtml(formatProgress(card.progressRatio))} read</div>`}
+      <span class="series-card-media">
+        ${renderCoverArt(card.coverUrl, card.title, "series-card-art")}
+      </span>
+      <div class="series-card-content">
+        <span class="series-card-kicker">${escapeHtml(card.latestChapter || "Library")}</span>
+        <strong>${escapeHtml(card.title)}</strong>
+        <p>${escapeHtml(card.summary || card.author || "Open the series details.")}</p>
+        ${card.progressRatio == null ? "" : `<div class="progress-pill">${escapeHtml(formatProgress(card.progressRatio))} read</div>`}
+      </div>
     </a>
   </article>
 `;

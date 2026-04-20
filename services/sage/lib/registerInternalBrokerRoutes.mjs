@@ -2,10 +2,22 @@
  * @file Scriptarr Sage module: services/sage/lib/registerInternalBrokerRoutes.mjs.
  */
 import {knownPortalDiscordCommands, readPortalDiscordSettings} from "./portalDiscordSettings.mjs";
+import {buildIntakeSelection, evaluateSelectionAgainstGuardState} from "./requestSelectionGuards.mjs";
 
 const normalizeString = (value, fallback = "") => {
   const normalized = typeof value === "string" ? value.trim() : "";
   return normalized || fallback;
+};
+const normalizeScalarString = (value, fallback = "") => {
+  if (typeof value === "string") {
+    const normalized = value.trim();
+    return normalized || fallback;
+  }
+  if (typeof value === "number" || typeof value === "bigint" || typeof value === "boolean") {
+    const normalized = String(value).trim();
+    return normalized || fallback;
+  }
+  return fallback;
 };
 
 const normalizeArray = (value) => Array.isArray(value) ? value : [];
@@ -59,6 +71,13 @@ const normalizeTitleKey = (value) => normalizeString(value)
   .toLowerCase()
   .replace(/[^a-z0-9]+/g, " ")
   .trim();
+const titleIdentityKey = (titleName, typeSlug) => {
+  const normalizedTitle = normalizeTitleKey(titleName);
+  if (!normalizedTitle) {
+    return "";
+  }
+  return `${normalizeTypeSlug(typeSlug)}::${normalizedTitle}`;
+};
 
 const matchesLibraryQuery = (title, query) => {
   const normalizedQuery = normalizeString(query).toLowerCase();
@@ -111,6 +130,20 @@ const createIntakeBackedRequestPayload = (body = {}, requestedBy) => {
       selectedDownload,
       availability: selectedDownload?.titleUrl ? "available" : "unavailable"
     }
+  };
+};
+
+const loadPortalRequestGuardState = async ({config, vaultClient, serviceJson}) => {
+  const [libraryResult, requests, taskResult] = await Promise.all([
+    safeServiceJson(serviceJson(config.ravenBaseUrl, "/v1/library")),
+    vaultClient.listRequests(),
+    safeServiceJson(serviceJson(config.ravenBaseUrl, "/v1/downloads/tasks"))
+  ]);
+
+  return {
+    libraryTitles: normalizeArray(libraryResult.payload?.titles),
+    requests: normalizeArray(requests),
+    tasks: normalizeArray(taskResult.payload)
   };
 };
 
@@ -204,10 +237,61 @@ const buildPortalStatusSummary = async ({config, vaultClient, serviceJson}) => {
 };
 
 const buildFollowNotifications = async ({config, vaultClient, serviceJson}) => {
-  const [users, tasksResponse] = await Promise.all([
+  const [users, tasksResponse, libraryResponse] = await Promise.all([
     vaultClient.listUsers(),
-    safeServiceJson(serviceJson(config.ravenBaseUrl, "/v1/downloads/tasks"))
+    safeServiceJson(serviceJson(config.ravenBaseUrl, "/v1/downloads/tasks")),
+    safeServiceJson(serviceJson(config.ravenBaseUrl, "/v1/library"))
   ]);
+
+  const buildLibraryLookup = (titles = []) => {
+    const byId = new Map();
+    const bySourceUrl = new Map();
+    const byIdentity = new Map();
+
+    for (const title of normalizeArray(titles)) {
+      const titleId = normalizeScalarString(title?.id);
+      if (titleId && !byId.has(titleId)) {
+        byId.set(titleId, title);
+      }
+
+      const sourceUrl = normalizeString(title?.sourceUrl);
+      if (sourceUrl && !bySourceUrl.has(sourceUrl)) {
+        bySourceUrl.set(sourceUrl, title);
+      }
+
+      const primaryIdentity = titleIdentityKey(title?.title, title?.libraryTypeSlug || title?.mediaType);
+      if (primaryIdentity && !byIdentity.has(primaryIdentity)) {
+        byIdentity.set(primaryIdentity, title);
+      }
+      for (const alias of normalizeArray(title?.aliases)) {
+        const aliasIdentity = titleIdentityKey(alias, title?.libraryTypeSlug || title?.mediaType);
+        if (aliasIdentity && !byIdentity.has(aliasIdentity)) {
+          byIdentity.set(aliasIdentity, title);
+        }
+      }
+    }
+
+    return {byId, bySourceUrl, byIdentity};
+  };
+  const libraryLookup = buildLibraryLookup(libraryResponse.ok ? libraryResponse.payload?.titles : []);
+  const resolveLibraryTitle = ({titleId, sourceUrl, titleName, typeSlug}) => {
+    const normalizedTitleId = normalizeScalarString(titleId);
+    if (normalizedTitleId && libraryLookup.byId.has(normalizedTitleId)) {
+      return libraryLookup.byId.get(normalizedTitleId);
+    }
+
+    const normalizedSourceUrl = normalizeString(sourceUrl);
+    if (normalizedSourceUrl && libraryLookup.bySourceUrl.has(normalizedSourceUrl)) {
+      return libraryLookup.bySourceUrl.get(normalizedSourceUrl);
+    }
+
+    const identity = titleIdentityKey(titleName, typeSlug);
+    if (identity && libraryLookup.byIdentity.has(identity)) {
+      return libraryLookup.byIdentity.get(identity);
+    }
+
+    return null;
+  };
 
   const completedTasks = normalizeArray(tasksResponse.payload)
     .filter((task) => normalizeString(task?.status) === "completed")
@@ -232,18 +316,32 @@ const buildFollowNotifications = async ({config, vaultClient, serviceJson}) => {
           continue;
         }
 
+        const matchedTitle = resolveLibraryTitle({
+          titleId: task?.titleId || follow?.titleId,
+          sourceUrl: task?.titleUrl,
+          titleName: task?.titleName || follow?.title,
+          typeSlug: task?.libraryTypeSlug || follow?.libraryTypeSlug || follow?.mediaType
+        });
+        const resolvedTitleId = normalizeScalarString(
+          task?.titleId,
+          normalizeScalarString(follow?.titleId, normalizeScalarString(matchedTitle?.id))
+        );
+        const resolvedTypeSlug = normalizeTypeSlug(
+          task?.libraryTypeSlug || follow?.libraryTypeSlug || follow?.mediaType || matchedTitle?.libraryTypeSlug
+        );
+
         notifications.push({
           id: followNotificationId(discordUserId, taskId),
           discordUserId,
           username: normalizeString(user?.username, "Reader"),
           taskId,
-          titleId: normalizeString(task?.titleId, normalizeString(follow?.titleId)),
+          titleId: resolvedTitleId,
           titleName: normalizeString(task?.titleName, normalizeString(follow?.title, "Untitled")),
-          libraryTypeSlug: normalizeTypeSlug(task?.libraryTypeSlug || follow?.libraryTypeSlug || follow?.mediaType),
+          libraryTypeSlug: resolvedTypeSlug,
           latestChapter: normalizeString(task?.message),
-          coverUrl: normalizeString(task?.coverUrl),
-          titleUrl: normalizeString(task?.titleId)
-            ? `${config.publicBaseUrl}/title/${encodeURIComponent(normalizeTypeSlug(task?.libraryTypeSlug || follow?.libraryTypeSlug || follow?.mediaType))}/${encodeURIComponent(normalizeString(task?.titleId))}`
+          coverUrl: normalizeString(task?.coverUrl, normalizeString(matchedTitle?.coverUrl)),
+          titleUrl: resolvedTitleId
+            ? `${config.publicBaseUrl}/title/${encodeURIComponent(resolvedTypeSlug)}/${encodeURIComponent(resolvedTitleId)}`
             : "",
           sentAt: normalizeString(task?.updatedAt)
         });
@@ -255,23 +353,73 @@ const buildFollowNotifications = async ({config, vaultClient, serviceJson}) => {
 };
 
 const buildRequestCompletionNotifications = async ({config, vaultClient, serviceJson}) => {
-  const [users, requests, tasksResponse] = await Promise.all([
+  const [users, requests, tasksResponse, libraryResponse] = await Promise.all([
     vaultClient.listUsers(),
     vaultClient.listRequests(),
-    safeServiceJson(serviceJson(config.ravenBaseUrl, "/v1/downloads/tasks"))
+    safeServiceJson(serviceJson(config.ravenBaseUrl, "/v1/downloads/tasks")),
+    safeServiceJson(serviceJson(config.ravenBaseUrl, "/v1/library"))
   ]);
 
   const usersByDiscordId = new Map(normalizeArray(users)
-    .map((user) => [normalizeString(user?.discordUserId), user])
+    .map((user) => [normalizeScalarString(user?.discordUserId), user])
     .filter(([discordUserId]) => discordUserId));
+  const buildLibraryLookup = (titles = []) => {
+    const byId = new Map();
+    const bySourceUrl = new Map();
+    const byIdentity = new Map();
+
+    for (const title of normalizeArray(titles)) {
+      const titleId = normalizeScalarString(title?.id);
+      if (titleId && !byId.has(titleId)) {
+        byId.set(titleId, title);
+      }
+
+      const sourceUrl = normalizeString(title?.sourceUrl);
+      if (sourceUrl && !bySourceUrl.has(sourceUrl)) {
+        bySourceUrl.set(sourceUrl, title);
+      }
+
+      const primaryIdentity = titleIdentityKey(title?.title, title?.libraryTypeSlug || title?.mediaType);
+      if (primaryIdentity && !byIdentity.has(primaryIdentity)) {
+        byIdentity.set(primaryIdentity, title);
+      }
+      for (const alias of normalizeArray(title?.aliases)) {
+        const aliasIdentity = titleIdentityKey(alias, title?.libraryTypeSlug || title?.mediaType);
+        if (aliasIdentity && !byIdentity.has(aliasIdentity)) {
+          byIdentity.set(aliasIdentity, title);
+        }
+      }
+    }
+
+    return {byId, bySourceUrl, byIdentity};
+  };
+  const libraryLookup = buildLibraryLookup(libraryResponse.ok ? libraryResponse.payload?.titles : []);
+  const resolveLibraryTitle = ({titleId, sourceUrl, titleName, typeSlug}) => {
+    const normalizedTitleId = normalizeScalarString(titleId);
+    if (normalizedTitleId && libraryLookup.byId.has(normalizedTitleId)) {
+      return libraryLookup.byId.get(normalizedTitleId);
+    }
+
+    const normalizedSourceUrl = normalizeString(sourceUrl);
+    if (normalizedSourceUrl && libraryLookup.bySourceUrl.has(normalizedSourceUrl)) {
+      return libraryLookup.bySourceUrl.get(normalizedSourceUrl);
+    }
+
+    const identity = titleIdentityKey(titleName, typeSlug);
+    if (identity && libraryLookup.byIdentity.has(identity)) {
+      return libraryLookup.byIdentity.get(identity);
+    }
+
+    return null;
+  };
   const completedTasks = normalizeArray(tasksResponse.payload)
     .filter((task) => normalizeString(task?.status) === "completed")
     .sort((left, right) => normalizeString(right?.updatedAt).localeCompare(normalizeString(left?.updatedAt)));
   const tasksByRequestId = new Map();
   const tasksByTaskId = new Map();
   for (const task of completedTasks) {
-    const requestId = normalizeString(task?.requestId);
-    const taskId = normalizeString(task?.taskId);
+    const requestId = normalizeScalarString(task?.requestId);
+    const taskId = normalizeScalarString(task?.taskId);
     if (requestId && !tasksByRequestId.has(requestId)) {
       tasksByRequestId.set(requestId, task);
     }
@@ -284,8 +432,8 @@ const buildRequestCompletionNotifications = async ({config, vaultClient, service
   for (const request of normalizeArray(requests)
     .filter((entry) => normalizeString(entry?.status) === "completed")
     .sort((left, right) => normalizeString(right?.updatedAt).localeCompare(normalizeString(left?.updatedAt)))) {
-    const requestId = normalizeString(request?.id);
-    const requesterDiscordId = normalizeString(request?.requestedBy);
+    const requestId = normalizeScalarString(request?.id);
+    const requesterDiscordId = normalizeScalarString(request?.requestedBy);
     if (!requestId || !requesterDiscordId || !usersByDiscordId.has(requesterDiscordId)) {
       continue;
     }
@@ -296,17 +444,28 @@ const buildRequestCompletionNotifications = async ({config, vaultClient, service
     }
 
     const details = normalizeObject(request?.details, {}) || {};
-    const linkedTask = tasksByRequestId.get(requestId) || tasksByTaskId.get(normalizeString(details.taskId));
+    const linkedTask = tasksByRequestId.get(requestId) || tasksByTaskId.get(normalizeScalarString(details.taskId));
+    const matchedTitle = resolveLibraryTitle({
+      titleId: linkedTask?.titleId || details?.titleId,
+      sourceUrl: linkedTask?.titleUrl || details?.selectedDownload?.titleUrl,
+      titleName: linkedTask?.titleName || request?.title || details?.selectedMetadata?.title || details?.selectedDownload?.titleName,
+      typeSlug: linkedTask?.libraryTypeSlug || details?.selectedDownload?.libraryTypeSlug || request?.requestType
+    });
     const titleName = normalizeString(linkedTask?.titleName, normalizeString(request?.title, "Untitled"));
-    const libraryTypeSlug = normalizeTypeSlug(linkedTask?.libraryTypeSlug || details?.selectedDownload?.libraryTypeSlug || request?.requestType);
-    const titleId = normalizeString(linkedTask?.titleId);
+    const libraryTypeSlug = normalizeTypeSlug(
+      linkedTask?.libraryTypeSlug || details?.selectedDownload?.libraryTypeSlug || matchedTitle?.libraryTypeSlug || request?.requestType
+    );
+    const titleId = normalizeScalarString(linkedTask?.titleId, normalizeScalarString(details?.titleId, normalizeScalarString(matchedTitle?.id)));
     notifications.push({
       id: requestId,
       requestId,
       discordUserId: requesterDiscordId,
       username: normalizeString(usersByDiscordId.get(requesterDiscordId)?.username, "Reader"),
       titleName,
-      coverUrl: normalizeString(linkedTask?.coverUrl, normalizeString(details.coverUrl, normalizeString(details?.selectedDownload?.coverUrl, details?.selectedMetadata?.coverUrl))),
+      coverUrl: normalizeString(
+        linkedTask?.coverUrl,
+        normalizeString(details.coverUrl, normalizeString(details?.selectedDownload?.coverUrl, normalizeString(details?.selectedMetadata?.coverUrl, matchedTitle?.coverUrl)))
+      ),
       titleUrl: titleId
         ? `${config.publicBaseUrl}/title/${encodeURIComponent(libraryTypeSlug)}/${encodeURIComponent(titleId)}`
         : "",
@@ -578,6 +737,22 @@ export const registerInternalBrokerRoutes = (app, {
       return;
     }
 
+    const guard = evaluateSelectionAgainstGuardState(buildIntakeSelection({
+      query: normalizeString(req.body?.query),
+      title: normalizeString(req.body?.title),
+      requestType: normalizeString(req.body?.requestType),
+      selectedMetadata,
+      selectedDownload: normalizeObject(req.body?.selectedDownload)
+    }), await loadPortalRequestGuardState({config, vaultClient, serviceJson}));
+    if (guard.alreadyInLibrary) {
+      res.status(409).json({error: "That title is already in the Scriptarr library."});
+      return;
+    }
+    if (guard.alreadyQueuedOrRequested) {
+      res.status(409).json({error: "That title is already queued or has an active request."});
+      return;
+    }
+
     res.status(201).json(await vaultClient.createRequest(createIntakeBackedRequestPayload(req.body, requestedBy)));
   }));
 
@@ -593,6 +768,22 @@ export const registerInternalBrokerRoutes = (app, {
     const selectedMetadata = normalizeObject(req.body?.selectedMetadata);
     if (!selectedMetadata?.provider || !selectedMetadata?.providerSeriesId) {
       res.status(400).json({error: "selectedMetadata with provider and providerSeriesId is required."});
+      return;
+    }
+
+    const guard = evaluateSelectionAgainstGuardState(buildIntakeSelection({
+      query: normalizeString(req.body?.query),
+      title: normalizeString(req.body?.title),
+      requestType: normalizeString(req.body?.requestType),
+      selectedMetadata,
+      selectedDownload: normalizeObject(req.body?.selectedDownload)
+    }), await loadPortalRequestGuardState({config, vaultClient, serviceJson}));
+    if (guard.alreadyInLibrary) {
+      res.status(409).json({error: "That title is already in the Scriptarr library."});
+      return;
+    }
+    if (guard.alreadyQueuedOrRequested) {
+      res.status(409).json({error: "That title is already queued or has an active request."});
       return;
     }
 

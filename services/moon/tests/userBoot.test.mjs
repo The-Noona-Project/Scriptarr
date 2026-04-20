@@ -99,3 +99,71 @@ test("bootUserApp renders a fallback instead of leaving the user root blank when
   globalThis.document = previousDocument;
   globalThis.window = previousWindow;
 });
+
+test("bootUserApp passes the matched route into page enhancers", async () => {
+  const previousHTMLElement = globalThis.HTMLElement;
+  const previousDocument = globalThis.document;
+  const previousWindow = globalThis.window;
+
+  globalThis.HTMLElement = FakeHTMLElement;
+  globalThis.document = {title: ""};
+  globalThis.window = {
+    location: {
+      pathname: "/browse",
+      search: ""
+    },
+    history: {
+      pushState() {},
+      replaceState() {}
+    },
+    addEventListener() {}
+  };
+
+  const root = new FakeHTMLElement();
+  /** @type {any[]} */
+  const enhanceCalls = [];
+
+  bootUserApp(root, {
+    api: {
+      getAuthStatus: async () => ({ok: true, status: 200, payload: {username: "CaptainPax", role: "owner", permissions: ["admin"]}}),
+      getDiscordUrl: async () => ({ok: true, status: 200, payload: {oauthUrl: "https://discord.example/login"}}),
+      getBootstrapStatus: async () => ({ok: true, status: 200, payload: {ownerClaimed: true, superuserId: "owner-1"}}),
+      getBranding: async () => ({ok: true, status: 200, payload: {siteName: "Pax-Kun"}})
+    },
+    installController: {
+      isAvailable: () => false,
+      prompt: async () => false,
+      subscribe() {
+        return () => {};
+      }
+    },
+    pageRuntime: {
+      loadUserPage: async () => ({ok: true, status: 200, payload: {titles: []}}),
+      renderUserPage: () => "<section>browse</section>",
+      enhanceUserPage: async (_route, _root, context) => {
+        enhanceCalls.push(context);
+      }
+    },
+    routeMatcher: () => ({
+      id: "browse",
+      path: "/browse",
+      title: "Browse",
+      description: "Browse the library by title, type, and metadata.",
+      navLabel: "Browse",
+      params: {}
+    }),
+    registerServiceWorker: async () => {},
+    logger: {
+      error() {}
+    }
+  });
+
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(enhanceCalls.length, 1);
+  assert.equal(enhanceCalls[0].route?.id, "browse");
+
+  globalThis.HTMLElement = previousHTMLElement;
+  globalThis.document = previousDocument;
+  globalThis.window = previousWindow;
+});

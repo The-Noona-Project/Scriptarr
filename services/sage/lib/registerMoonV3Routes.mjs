@@ -2,6 +2,7 @@
  * @file Scriptarr Sage module: services/sage/lib/registerMoonV3Routes.mjs.
  */
 import {hasPermission} from "./auth.mjs";
+import {buildIntakeSelection, evaluateSelectionAgainstGuardState} from "./requestSelectionGuards.mjs";
 
 const defaultReaderPreferences = Object.freeze({
   readingMode: "paged",
@@ -417,6 +418,15 @@ export const registerMoonV3Routes = (app, {
     );
   };
 
+  const loadRequestGuardState = async () => {
+    const [libraryTitles, requests, tasks] = await Promise.all([
+      loadLibrary(),
+      loadRequests(),
+      loadTasks()
+    ]);
+    return {libraryTitles, requests, tasks};
+  };
+
   const fetchIntakeResults = async (query) => {
     const normalizedQuery = normalizeString(query);
     if (!normalizedQuery) {
@@ -518,6 +528,22 @@ export const registerMoonV3Routes = (app, {
     }
 
     const selectedDownload = normalizeObject(req.body?.selectedDownload);
+    const guard = evaluateSelectionAgainstGuardState(buildIntakeSelection({
+      query: normalizeString(req.body?.query),
+      title: normalizeString(req.body?.title),
+      requestType: normalizeString(req.body?.requestType),
+      selectedMetadata,
+      selectedDownload
+    }), await loadRequestGuardState());
+    if (guard.alreadyInLibrary) {
+      res.status(409).json({error: "That title is already in the Scriptarr library."});
+      return;
+    }
+    if (guard.alreadyQueuedOrRequested) {
+      res.status(409).json({error: "That title is already queued or has an active request."});
+      return;
+    }
+
     const request = await vaultClient.createRequest({
       source: "moon-admin",
       title: normalizeString(selectedMetadata.title, req.body?.title || "Untitled request"),
@@ -663,6 +689,22 @@ export const registerMoonV3Routes = (app, {
     const selectedDownload = normalizeObject(req.body?.selectedDownload);
     if (!selectedMetadata?.provider || !selectedMetadata?.providerSeriesId || !selectedDownload?.titleUrl) {
       res.status(400).json({error: "A concrete metadata and download match are required to resolve this request."});
+      return;
+    }
+
+    const guard = evaluateSelectionAgainstGuardState(buildIntakeSelection({
+      query: normalizeString(req.body?.query, existing.details?.query),
+      title: normalizeString(existing.title),
+      requestType: normalizeString(selectedDownload.requestType, existing.requestType),
+      selectedMetadata,
+      selectedDownload
+    }), await loadRequestGuardState(), {ignoreRequestId: req.params.id});
+    if (guard.alreadyInLibrary) {
+      res.status(409).json({error: "That title is already in the Scriptarr library."});
+      return;
+    }
+    if (guard.alreadyQueuedOrRequested) {
+      res.status(409).json({error: "That title is already queued or has an active request."});
       return;
     }
 
@@ -885,6 +927,24 @@ export const registerMoonV3Routes = (app, {
         title: req.body?.title
       });
       res.status(403).json({error: "You cannot create requests."});
+      return;
+    }
+
+    const selectedMetadata = normalizeObject(req.body?.selectedMetadata);
+    const selectedDownload = normalizeObject(req.body?.selectedDownload);
+    const guard = evaluateSelectionAgainstGuardState(buildIntakeSelection({
+      query: normalizeString(req.body?.query),
+      title: normalizeString(req.body?.title),
+      requestType: normalizeString(req.body?.requestType),
+      selectedMetadata,
+      selectedDownload
+    }), await loadRequestGuardState());
+    if (guard.alreadyInLibrary) {
+      res.status(409).json({error: "That title is already in the Scriptarr library."});
+      return;
+    }
+    if (guard.alreadyQueuedOrRequested) {
+      res.status(409).json({error: "That title is already queued or has an active request."});
       return;
     }
 

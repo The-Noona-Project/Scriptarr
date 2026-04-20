@@ -10,6 +10,7 @@ import org.junit.jupiter.api.io.TempDir;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -20,6 +21,7 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -76,6 +78,7 @@ class LibraryServiceTest {
         assertEquals(downloadRoot.toString(), persisted.downloadRoot());
         assertEquals(1, persisted.chapters().size());
         assertEquals("https://weebcentral.com/chapters/solo-1", persisted.chapters().getFirst().sourceUrl());
+        assertNotNull(persisted.chapters().getFirst().releaseDate());
     }
 
     /**
@@ -108,6 +111,7 @@ class LibraryServiceTest {
         assertEquals(titleFolder.toString(), title.downloadRoot());
         assertFalse(title.chapters().isEmpty());
         assertTrue(title.chapters().getFirst().archivePath().endsWith(".cbz"));
+        assertNotNull(title.chapters().getFirst().releaseDate());
     }
 
     /**
@@ -182,6 +186,125 @@ class LibraryServiceTest {
         );
 
         assertArrayEquals(new byte[]{2}, service.renderReaderPage(title.id(), title.chapters().getFirst().id(), 1).bytes());
+    }
+
+    /**
+     * Verify Raven sorts persisted reader manifests newest-first even when the
+     * stored chapter payload order is stale or inconsistent.
+     */
+    @Test
+    void readerManifestSortsChaptersNewestFirst() {
+        FakeRavenBrokerClient brokerClient = new FakeRavenBrokerClient();
+        ScriptarrLogger logger = mock(ScriptarrLogger.class);
+        LibraryService service = new LibraryService(brokerClient, new RavenSettingsService(brokerClient, logger, List.of()), logger);
+
+        brokerClient.setLibraryTitle(new LibraryTitle(
+            "kenja-id",
+            "Kenja no Mago",
+            "manga",
+            "Manga",
+            "manga",
+            "active",
+            "94",
+            "#de6d3a",
+            "",
+            "",
+            2,
+            2,
+            "",
+            List.of(),
+            List.of(),
+            "",
+            null,
+            List.of(),
+            "",
+            "",
+            "/downloads/downloading/manga/Kenja_no_Mago",
+            "/downloads/downloaded/manga/Kenja_no_Mago",
+            List.of(
+                new LibraryChapter("kenja-id-c79", "Chapter 79", "79", 55, Instant.parse("2026-04-18T08:00:00Z").toString(), true, "/downloads/downloaded/manga/Kenja_no_Mago/ch79.cbz", null),
+                new LibraryChapter("kenja-id-c94", "Chapter 94", "94", 52, Instant.parse("2026-04-20T08:00:00Z").toString(), true, "/downloads/downloaded/manga/Kenja_no_Mago/ch94.cbz", null)
+            )
+        ));
+
+        ReaderManifest manifest = service.readerManifest("kenja-id");
+
+        assertNotNull(manifest);
+        assertEquals("kenja-id-c94", manifest.chapters().getFirst().id());
+        assertEquals("kenja-id-c79", manifest.chapters().get(1).id());
+    }
+
+    /**
+     * Verify Raven collapses duplicate title records that point at the same
+     * download root and keeps the richer metadata-backed payload.
+     */
+    @Test
+    void listTitlesCollapsesDuplicateDownloadRoots() {
+        FakeRavenBrokerClient brokerClient = new FakeRavenBrokerClient();
+        ScriptarrLogger logger = mock(ScriptarrLogger.class);
+        LibraryService service = new LibraryService(brokerClient, new RavenSettingsService(brokerClient, logger, List.of()), logger);
+
+        brokerClient.setLibraryTitle(new LibraryTitle(
+            "older-id",
+            "Absolute Duo",
+            "manga",
+            "Manga",
+            "manga",
+            "active",
+            "22",
+            "#de6d3a",
+            "",
+            "",
+            23,
+            23,
+            "",
+            List.of(),
+            List.of(),
+            "",
+            null,
+            List.of(),
+            "",
+            "",
+            "/downloads/downloading/manga/Absolute_Duo",
+            "/downloads/downloaded/manga/Absolute_Duo",
+            List.of(new LibraryChapter("older-id-c22", "Chapter 22", "22", 37, null, true, "/downloads/downloaded/manga/Absolute_Duo/Absolute Duo c022 [Scriptarr].cbz", null))
+        ));
+        brokerClient.setLibraryTitle(new LibraryTitle(
+            "newer-id",
+            "Absolute Duo",
+            "manga",
+            "Manga",
+            "manga",
+            "complete",
+            "22",
+            "#4a78d4",
+            "Metadata-backed summary.",
+            "2013",
+            23,
+            23,
+            "",
+            List.of(),
+            List.of("Absolute Duo"),
+            "mangadex",
+            "2026-04-20T00:00:00Z",
+            List.of(),
+            "https://weebcentral.com/series/absolute-duo",
+            "https://images.example/absolute-duo.jpg",
+            "/downloads/downloading/manga/Absolute_Duo",
+            "/downloads/downloaded/manga/Absolute_Duo",
+            List.of(new LibraryChapter("newer-id-c22", "Chapter 22", "22", 37, null, true, "/downloads/downloaded/manga/Absolute_Duo/Absolute Duo c022 [Scriptarr].cbz", "https://weebcentral.com/chapters/absolute-duo-22"))
+        ));
+
+        List<LibraryTitle> titles = service.listTitles();
+
+        assertEquals(1, titles.size());
+        LibraryTitle canonical = titles.getFirst();
+        assertEquals("newer-id", canonical.id());
+        assertEquals("https://images.example/absolute-duo.jpg", canonical.coverUrl());
+        assertEquals("Metadata-backed summary.", canonical.summary());
+        assertEquals("https://weebcentral.com/series/absolute-duo", canonical.sourceUrl());
+        assertEquals("https://weebcentral.com/chapters/absolute-duo-22", canonical.chapters().getFirst().sourceUrl());
+        assertEquals("newer-id", service.findTitle("older-id").id());
     }
 
     private Path writeArchive(Path archivePath) throws IOException {

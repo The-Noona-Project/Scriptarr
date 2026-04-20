@@ -27,6 +27,40 @@ test("parseDownloadAllCommand preserves the legacy syntax and validation", () =>
   assert.equal(invalid.valid, false);
   assert.match(invalid.errors.join(" "), /type must be one of/i);
   assert.match(invalid.errors.join(" "), /nsfw must be true or false/i);
+
+  const bangPrefixed = parseDownloadAllCommand("!downloadall type:managa nsfw:no titlegroup:\"ab\"");
+  assert.equal(bangPrefixed.valid, true);
+  assert.deepEqual(bangPrefixed.filters, {
+    type: "Manga",
+    nsfw: false,
+    titlePrefix: "ab"
+  });
+});
+
+test("direct message handler replies with the schema for downloadall help", async () => {
+  const replies = [];
+  const handler = createDirectMessageHandler({
+    getSettings: () => ({}),
+    sage: {
+      bulkQueueDownload: async () => {
+        throw new Error("should not run for help");
+      }
+    }
+  });
+
+  const handled = await handler({
+    content: "/downloadall help",
+    author: {id: "111", bot: false},
+    reply: async (payload) => {
+      replies.push(payload);
+      return payload;
+    }
+  });
+
+  assert.equal(handled, true);
+  assert.equal(replies.length, 1);
+  assert.match(replies[0].content, /Use `downloadall type:manga nsfw:false titlegroup:a`/);
+  assert.match(replies[0].content, /Supported `type` values/i);
 });
 
 test("formatBulkQueueSummary includes counts and title sections", () => {
@@ -92,4 +126,59 @@ test("direct message handler gates by superuser and forwards legacy downloadall 
   assert.equal(await handler(allowedMessage), true);
   assert.match(replies[0].content, /Queueing Scriptarr bulk download/);
   assert.match(replies[1].content, /Bulk queue submitted/);
+});
+
+test("direct message handler respects the enabled toggle and surfaces Sage failures", async () => {
+  const replies = [];
+  const disabledHandler = createDirectMessageHandler({
+    getSettings: () => ({
+      superuserId: "253987219969146890",
+      commands: {
+        downloadall: {enabled: false}
+      }
+    }),
+    sage: {
+      bulkQueueDownload: async () => {
+        throw new Error("should not run");
+      }
+    }
+  });
+
+  await disabledHandler({
+    content: "/downloadall type:manga nsfw:false titlegroup:a",
+    author: {id: "253987219969146890", bot: false},
+    reply: async (payload) => {
+      replies.push(payload);
+      return payload;
+    }
+  });
+
+  assert.match(replies[0].content, /currently disabled/i);
+
+  replies.length = 0;
+  const failingHandler = createDirectMessageHandler({
+    getSettings: () => ({superuserId: "253987219969146890"}),
+    sage: {
+      bulkQueueDownload: async () => ({
+        ok: false,
+        status: 503,
+        payload: {
+          error: "Raven bulk queue is unavailable."
+        }
+      })
+    }
+  });
+
+  await failingHandler({
+    content: "/downloadall type:manga nsfw:false titlegroup:a",
+    author: {id: "253987219969146890", bot: false},
+    reply: async (payload) => {
+      replies.push(payload);
+      return payload;
+    }
+  });
+
+  assert.match(replies[0].content, /Queueing Scriptarr bulk download/i);
+  assert.match(replies[1].content, /bulk queue failed/i);
+  assert.match(replies[1].content, /Raven bulk queue is unavailable/i);
 });

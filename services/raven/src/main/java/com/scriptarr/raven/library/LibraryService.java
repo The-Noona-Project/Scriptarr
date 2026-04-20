@@ -85,7 +85,7 @@ public final class LibraryService {
             if (payload == null || !payload.isArray()) {
                 return List.of();
             }
-            return objectMapper.convertValue(payload, TITLE_LIST_TYPE);
+            return dedupeTitles(objectMapper.convertValue(payload, TITLE_LIST_TYPE));
         } catch (Exception error) {
             logger.warn("LIBRARY", "Failed to list Raven titles.", error.getMessage());
             return List.of();
@@ -108,7 +108,15 @@ public final class LibraryService {
             if (payload == null || payload.isMissingNode() || payload.path("error").isTextual()) {
                 return null;
             }
-            return objectMapper.treeToValue(payload, LibraryTitle.class);
+            LibraryTitle resolved = objectMapper.treeToValue(payload, LibraryTitle.class);
+            String identityKey = titleIdentityKey(resolved);
+            if (identityKey.isBlank()) {
+                return resolved;
+            }
+            return listTitles().stream()
+                .filter((candidate) -> identityKey.equals(titleIdentityKey(candidate)))
+                .findFirst()
+                .orElse(resolved);
         } catch (Exception error) {
             logger.warn("LIBRARY", "Failed to load Raven title.", error.getMessage());
             return null;
@@ -333,7 +341,10 @@ public final class LibraryService {
             return null;
         }
 
-        List<LibraryChapter> chapters = Optional.ofNullable(title.chapters()).orElse(List.of()).stream().filter(LibraryChapter::available).toList();
+        List<LibraryChapter> chapters = Optional.ofNullable(title.chapters()).orElse(List.of()).stream()
+            .filter(LibraryChapter::available)
+            .sorted(Comparator.comparing((LibraryChapter entry) -> chapterSortKey(entry.chapterNumber())).reversed())
+            .toList();
         return new ReaderManifest(title, chapters);
     }
 
@@ -523,7 +534,7 @@ public final class LibraryService {
                     "Chapter " + chapterNumber,
                     chapterNumber,
                     countArchivePages(archive),
-                    null,
+                    resolveArchiveTimestamp(archive),
                     true,
                     archive.toString(),
                     null
@@ -573,11 +584,210 @@ public final class LibraryService {
         }
     }
 
+    private String resolveArchiveTimestamp(Path archive) {
+        if (archive == null) {
+            return null;
+        }
+
+        try {
+            return Files.getLastModifiedTime(archive).toInstant().toString();
+        } catch (IOException ignored) {
+            return null;
+        }
+    }
+
     private Path resolveWorkingRoot(Path downloadsRoot, String typeSlug, String titleFolder) {
         if (downloadsRoot == null) {
             return null;
         }
         return downloadsRoot.resolve(DOWNLOADING_FOLDER_NAME).resolve(typeSlug).resolve(titleFolder);
+    }
+
+    private List<LibraryTitle> dedupeTitles(List<LibraryTitle> titles) {
+        Map<String, LibraryTitle> deduped = new LinkedHashMap<>();
+        for (LibraryTitle candidate : Optional.ofNullable(titles).orElse(List.of())) {
+            if (candidate == null) {
+                continue;
+            }
+            String identityKey = titleIdentityKey(candidate);
+            if (identityKey.isBlank()) {
+                deduped.put("id:" + Optional.ofNullable(candidate.id()).orElse(UUID.randomUUID().toString()), candidate);
+                continue;
+            }
+            LibraryTitle existing = deduped.get(identityKey);
+            deduped.put(identityKey, existing == null ? candidate : mergeDuplicateTitles(existing, candidate));
+        }
+        return List.copyOf(deduped.values());
+    }
+
+    private String titleIdentityKey(LibraryTitle title) {
+        if (title == null) {
+            return "";
+        }
+
+        String normalizedRoot = Optional.ofNullable(title.downloadRoot()).orElse("").trim();
+        if (!normalizedRoot.isBlank()) {
+            return "root:" + normalizedRoot;
+        }
+
+        String normalizedSource = Optional.ofNullable(title.sourceUrl()).orElse("").trim();
+        String normalizedType = Optional.ofNullable(title.libraryTypeSlug()).orElse("").trim();
+        if (!normalizedSource.isBlank() && !normalizedType.isBlank()) {
+            return "source:" + normalizedType + ":" + normalizedSource;
+        }
+
+        String normalizedTitle = LibraryNaming.slugifySegment(title.title());
+        if (!normalizedTitle.isBlank() && !normalizedType.isBlank()) {
+            return "title:" + normalizedType + ":" + normalizedTitle;
+        }
+
+        return "";
+    }
+
+    private LibraryTitle mergeDuplicateTitles(LibraryTitle left, LibraryTitle right) {
+        LibraryTitle preferred = titleRichnessScore(right) > titleRichnessScore(left) ? right : left;
+        LibraryTitle secondary = preferred == left ? right : left;
+        List<LibraryChapter> mergedChapters = mergeChapterLists(
+            preferred.id(),
+            Optional.ofNullable(preferred.chapters()).orElse(List.of()),
+            Optional.ofNullable(secondary.chapters()).orElse(List.of())
+        );
+
+        return new LibraryTitle(
+            preferred.id(),
+            firstNonBlank(preferred.title(), secondary.title()),
+            firstNonBlank(preferred.mediaType(), secondary.mediaType()),
+            firstNonBlank(preferred.libraryTypeLabel(), secondary.libraryTypeLabel()),
+            firstNonBlank(preferred.libraryTypeSlug(), secondary.libraryTypeSlug()),
+            firstNonBlank(preferred.status(), secondary.status()),
+            resolveLatestChapter(mergedChapters),
+            firstNonBlank(preferred.coverAccent(), secondary.coverAccent()),
+            preferLongerText(preferred.summary(), secondary.summary()),
+            preferLongerText(preferred.releaseLabel(), secondary.releaseLabel()),
+            maxInt(preferred.chapterCount(), secondary.chapterCount(), mergedChapters.size()),
+            maxInt(preferred.chaptersDownloaded(), secondary.chaptersDownloaded(), mergedChapters.size()),
+            preferLongerText(preferred.author(), secondary.author()),
+            mergeStringLists(preferred.tags(), secondary.tags()),
+            mergeAliases(preferred.aliases(), secondary.aliases()),
+            firstNonBlank(preferred.metadataProvider(), secondary.metadataProvider()),
+            firstNonBlank(preferred.metadataMatchedAt(), secondary.metadataMatchedAt()),
+            chooseRelationList(preferred.relations(), secondary.relations()),
+            firstNonBlank(preferred.sourceUrl(), secondary.sourceUrl()),
+            firstNonBlank(preferred.coverUrl(), secondary.coverUrl()),
+            firstNonBlank(preferred.workingRoot(), secondary.workingRoot()),
+            firstNonBlank(preferred.downloadRoot(), secondary.downloadRoot()),
+            List.copyOf(mergedChapters)
+        );
+    }
+
+    private int titleRichnessScore(LibraryTitle title) {
+        if (title == null) {
+            return 0;
+        }
+
+        int score = 0;
+        if (title.coverUrl() != null && !title.coverUrl().isBlank()) {
+            score += 8;
+        }
+        if (title.sourceUrl() != null && !title.sourceUrl().isBlank()) {
+            score += 6;
+        }
+        if (title.summary() != null && !title.summary().isBlank()) {
+            score += 4;
+        }
+        if (title.releaseLabel() != null && !title.releaseLabel().isBlank()) {
+            score += 2;
+        }
+        if (title.author() != null && !title.author().isBlank()) {
+            score += 2;
+        }
+        if (title.metadataProvider() != null && !title.metadataProvider().isBlank()) {
+            score += 2;
+        }
+        score += Math.min(4, Optional.ofNullable(title.chapters()).orElse(List.of()).size());
+        return score;
+    }
+
+    private List<LibraryChapter> mergeChapterLists(String titleId, List<LibraryChapter> primary, List<LibraryChapter> secondary) {
+        Map<String, LibraryChapter> chaptersByNumber = new LinkedHashMap<>();
+        for (LibraryChapter chapter : Optional.ofNullable(secondary).orElse(List.of())) {
+            String chapterNumber = normalizeStoredChapterNumber(chapter == null ? "" : chapter.chapterNumber());
+            if (!chapterNumber.isBlank()) {
+                chaptersByNumber.put(chapterNumber, chapter);
+            }
+        }
+        for (LibraryChapter chapter : Optional.ofNullable(primary).orElse(List.of())) {
+            String chapterNumber = normalizeStoredChapterNumber(chapter == null ? "" : chapter.chapterNumber());
+            if (chapterNumber.isBlank()) {
+                continue;
+            }
+            LibraryChapter existing = chaptersByNumber.get(chapterNumber);
+            chaptersByNumber.put(
+                chapterNumber,
+                existing == null ? chapter : mergeDuplicateChapter(titleId, existing, chapter)
+            );
+        }
+        return normalizeChapters(titleId, new ArrayList<>(chaptersByNumber.values()));
+    }
+
+    private LibraryChapter mergeDuplicateChapter(String titleId, LibraryChapter left, LibraryChapter right) {
+        LibraryChapter preferred = chapterRichnessScore(right) > chapterRichnessScore(left) ? right : left;
+        LibraryChapter secondary = preferred == left ? right : left;
+        String normalizedChapterNumber = firstNonBlank(preferred.chapterNumber(), secondary.chapterNumber());
+        return new LibraryChapter(
+            firstNonBlank(preferred.id(), firstNonBlank(secondary.id(), chapterId(titleId, normalizedChapterNumber))),
+            firstNonBlank(preferred.label(), secondary.label()),
+            normalizedChapterNumber,
+            maxInt(preferred.pageCount(), secondary.pageCount()),
+            firstNonBlank(preferred.releaseDate(), secondary.releaseDate()),
+            preferred.available() || secondary.available(),
+            firstNonBlank(preferred.archivePath(), secondary.archivePath()),
+            firstNonBlank(preferred.sourceUrl(), secondary.sourceUrl())
+        );
+    }
+
+    private int chapterRichnessScore(LibraryChapter chapter) {
+        if (chapter == null) {
+            return 0;
+        }
+
+        int score = 0;
+        if (chapter.archivePath() != null && !chapter.archivePath().isBlank()) {
+            score += 5;
+        }
+        if (chapter.sourceUrl() != null && !chapter.sourceUrl().isBlank()) {
+            score += 4;
+        }
+        if (chapter.releaseDate() != null && !chapter.releaseDate().isBlank()) {
+            score += 1;
+        }
+        score += Math.max(0, chapter.pageCount());
+        return score;
+    }
+
+    private List<String> mergeStringLists(List<String> primaryValues, List<String> secondaryValues) {
+        List<String> merged = new ArrayList<>(Optional.ofNullable(primaryValues).orElse(List.of()));
+        for (String value : Optional.ofNullable(secondaryValues).orElse(List.of())) {
+            if (value != null && !value.isBlank() && !merged.contains(value)) {
+                merged.add(value);
+            }
+        }
+        return List.copyOf(merged);
+    }
+
+    private List<Map<String, String>> chooseRelationList(List<Map<String, String>> primaryRelations, List<Map<String, String>> secondaryRelations) {
+        if (primaryRelations != null && !primaryRelations.isEmpty()) {
+            return primaryRelations;
+        }
+        return Optional.ofNullable(secondaryRelations).orElse(List.of());
+    }
+
+    private int maxInt(int first, int second) {
+        return Math.max(first, second);
+    }
+
+    private int maxInt(int first, int second, int third) {
+        return Math.max(Math.max(first, second), third);
     }
 
     private LibraryTitle findMatchingTitle(String titleName, String sourceUrl, String typeSlug, Path downloadRoot) {
@@ -786,6 +996,18 @@ public final class LibraryService {
 
     private String stringValue(Object value) {
         return value == null ? "" : String.valueOf(value).trim();
+    }
+
+    private String preferLongerText(String primary, String fallback) {
+        String left = Optional.ofNullable(primary).orElse("").trim();
+        String right = Optional.ofNullable(fallback).orElse("").trim();
+        if (left.isBlank()) {
+            return right;
+        }
+        if (right.isBlank()) {
+            return left;
+        }
+        return right.length() > left.length() ? right : left;
     }
 
     private String firstNonBlank(String primary, String fallback) {

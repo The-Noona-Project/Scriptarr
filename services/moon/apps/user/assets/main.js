@@ -7,15 +7,25 @@ import {createInstallController, registerMoonServiceWorker} from "./pwa.js";
 
 const DEFAULT_SITE_NAME = "Scriptarr";
 
+const canAccessAdmin = (user) => Boolean(
+  user
+  && (
+    user.role === "owner"
+    || user.role === "admin"
+    || (Array.isArray(user.permissions) && user.permissions.includes("admin"))
+  )
+);
+
 /**
  * Load the shared user-app chrome context.
  *
  * @param {ReturnType<import("./api.js").createUserApi>} api
  * @returns {Promise<{
- *   user: {username: string, role: string} | null,
+ *   user: {username: string, role: string, permissions?: string[]} | null,
  *   loginUrl: string,
  *   bootstrap: {ownerClaimed?: boolean, superuserId?: string} | null,
- *   branding: {siteName?: string}
+ *   branding: {siteName?: string},
+ *   canAccessAdmin: boolean
  * }>}
  */
 const loadChromeContext = async (api) => {
@@ -26,11 +36,14 @@ const loadChromeContext = async (api) => {
     api.getBranding()
   ]);
 
+  const user = auth.ok ? auth.payload?.user || auth.payload || null : null;
+
   return {
-    user: auth.ok ? auth.payload.user : null,
+    user,
     loginUrl: discordUrl.ok ? discordUrl.payload?.oauthUrl || "#" : "#",
     bootstrap: bootstrap.ok ? bootstrap.payload : null,
-    branding: branding.ok ? branding.payload : {siteName: DEFAULT_SITE_NAME}
+    branding: branding.ok ? branding.payload : {siteName: DEFAULT_SITE_NAME},
+    canAccessAdmin: canAccessAdmin(user)
   };
 };
 
@@ -43,10 +56,11 @@ const formatDocumentTitle = (route, siteName) =>
  * @param {{
  *   route: ReturnType<typeof matchUserRoute>,
  *   chromeContext?: {
- *     user?: {username: string, role: string} | null,
+ *     user?: {username: string, role: string, permissions?: string[]} | null,
  *     loginUrl?: string,
  *     bootstrap?: {ownerClaimed?: boolean, superuserId?: string} | null,
- *     branding?: {siteName?: string} | null
+ *     branding?: {siteName?: string} | null,
+ *     canAccessAdmin?: boolean
  *   } | null,
  *   installAvailable?: boolean
  * }} options
@@ -189,7 +203,8 @@ export const bootUserApp = (root, options = {}) => {
         navigate,
         rerender: render,
         setFlash,
-        user: chromeContext.user
+        user: chromeContext.user,
+        route
       }, pageResult);
     } catch (error) {
       logger.error("Moon user render failed.", error);

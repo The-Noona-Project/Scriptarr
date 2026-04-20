@@ -1,19 +1,30 @@
 import {createAdminApi} from "./api.js";
 import {matchAdminRoute} from "./routes.js";
+import {renderEmptyState} from "./dom.js";
 import {renderAdminShell} from "./shell.js";
 import {enhanceAdminPage, loadAdminPage, renderAdminPage} from "./pages/index.js";
 
 const DEFAULT_SITE_NAME = "Scriptarr";
+
+const canAccessAdmin = (user) => Boolean(
+  user
+  && (
+    user.role === "owner"
+    || user.role === "admin"
+    || (Array.isArray(user.permissions) && user.permissions.includes("admin"))
+  )
+);
 
 /**
  * Load the shared auth and bootstrap context used by the admin chrome.
  *
  * @param {ReturnType<import("./api.js").createAdminApi>} api
  * @returns {Promise<{
- *   user: {username: string, role: string, avatarUrl?: string | null} | null,
+ *   user: {username: string, role: string, permissions?: string[], avatarUrl?: string | null} | null,
  *   loginUrl: string,
  *   bootstrap: {ownerClaimed?: boolean, superuserId?: string} | null,
- *   branding: {siteName?: string}
+ *   branding: {siteName?: string},
+ *   canAccessAdmin: boolean
  * }>}
  */
 const loadChromeContext = async (api) => {
@@ -24,11 +35,14 @@ const loadChromeContext = async (api) => {
     api.getBranding()
   ]);
 
+  const user = auth.ok ? auth.payload?.user || auth.payload || null : null;
+
   return {
-    user: auth.ok ? auth.payload.user : null,
+    user,
     loginUrl: discordUrl.ok ? discordUrl.payload?.oauthUrl || "#" : "#",
     bootstrap: bootstrap.ok ? bootstrap.payload : null,
-    branding: branding.ok ? branding.payload : {siteName: DEFAULT_SITE_NAME}
+    branding: branding.ok ? branding.payload : {siteName: DEFAULT_SITE_NAME},
+    canAccessAdmin: canAccessAdmin(user)
   };
 };
 
@@ -79,15 +93,27 @@ export const bootAdminApp = (root) => {
    */
   const render = async () => {
     const route = matchAdminRoute(window.location.pathname);
+    const chromeContext = await loadChromeContext(api);
+
+    if (chromeContext.user && !chromeContext.canAccessAdmin) {
+      window.location.replace("/");
+      return;
+    }
+
     const searchParams = new URLSearchParams(window.location.search);
-    const [chromeContext, pageResult] = await Promise.all([
-      loadChromeContext(api),
-      loadAdminPage(route, {api, searchParams})
-    ]);
+    const pageResult = chromeContext.user
+      ? await loadAdminPage(route, {api, searchParams})
+      : {
+        ok: false,
+        status: 401,
+        payload: {error: "Sign in with an admin account to access Moon admin."}
+      };
 
     root.innerHTML = renderAdminShell({
       route,
-      content: renderAdminPage(route, pageResult, chromeContext),
+      content: chromeContext.user
+        ? renderAdminPage(route, pageResult, chromeContext)
+        : renderEmptyState("Admin sign-in required", "Sign in with an admin Discord account to access Moon admin."),
       user: chromeContext.user,
       branding: chromeContext.branding,
       flash: state.flash,

@@ -1,5 +1,5 @@
-import {escapeHtml, renderEmptyState} from "../dom.js";
-import {formatProgress} from "../format.js";
+import {escapeHtml, renderCoverArt, renderEmptyState} from "../dom.js";
+import {formatDate, formatProgress} from "../format.js";
 import {buildReaderPathForTitle, buildTitlePathForTitle} from "../routes.js";
 
 const clampPageIndex = (pageIndex, pages) => Math.max(0, Math.min(Math.max(0, pages.length - 1), pageIndex));
@@ -7,6 +7,11 @@ const clampPageIndex = (pageIndex, pages) => Math.max(0, Math.min(Math.max(0, pa
 const getReaderTypeSlug = (payload) => payload?.title?.libraryTypeSlug || payload?.title?.mediaType || "manga";
 
 const getProgressRatio = (pageIndex, pages) => pageIndex / Math.max(1, pages.length - 1);
+
+const formatChapterDateLabel = (value, fallback = "Date unavailable") => {
+  const formatted = formatDate(value);
+  return formatted === "Unknown" ? fallback : formatted;
+};
 
 const findChapterNeighbors = (payload) => {
   const chapters = Array.isArray(payload?.manifest?.chapters) ? payload.manifest.chapters : [];
@@ -65,7 +70,7 @@ const renderChapterList = (payload) => {
       ${chapters.map((chapter) => `
         <a class="reader-chapter-link ${chapter.id === payload.chapter.id ? "is-active" : ""}" href="${escapeHtml(buildReaderPathForTitle(payload.title, chapter.id))}" data-link data-reader-chapter="${escapeHtml(chapter.id)}">
           <strong>${escapeHtml(chapter.label)}</strong>
-          <span>${escapeHtml(chapter.releaseDate || `${chapter.pageCount || 0} pages`)}</span>
+          <span>${escapeHtml(formatChapterDateLabel(chapter.releaseDate, `${chapter.pageCount || 0} pages`))}</span>
         </a>
       `).join("")}
     </div>
@@ -137,21 +142,37 @@ export const renderReaderPage = (result) => {
     showPageNumbers: payload?.preferences?.showPageNumbers !== false
   };
   const neighbors = findChapterNeighbors(payload);
+  const chapterCount = Array.isArray(payload?.manifest?.chapters) ? payload.manifest.chapters.length : 0;
+  const currentChapterIndex = Array.isArray(payload?.manifest?.chapters)
+    ? payload.manifest.chapters.findIndex((entry) => entry.id === payload?.chapter?.id)
+    : -1;
+  const chapterPositionLabel = currentChapterIndex === -1 || chapterCount === 0
+    ? "Single chapter"
+    : `Chapter ${currentChapterIndex + 1} of ${chapterCount}`;
+  const readingModeLabel = preferences.readingMode === "webtoon" ? "Vertical mode" : "Paged mode";
 
   return `
     <section class="reader-app ${preferences.showSidebar ? "is-drawer-open" : "is-drawer-collapsed"}" data-reader-root data-reader-mode="${escapeHtml(preferences.readingMode)}" data-reader-fit="${escapeHtml(preferences.pageFit)}">
       <header class="reader-chrome reader-chrome-top" id="reader-top-chrome">
         <div class="reader-title-block">
           <a class="ghost-button small" href="${escapeHtml(buildTitlePathForTitle(payload.title))}" data-link>Back to series</a>
-          <div>
-            <span class="section-kicker">${escapeHtml(payload.title.libraryTypeLabel || payload.title.mediaType || "Reader")}</span>
-            <h1 class="reader-title">${escapeHtml(payload.title.title || "Reader")}</h1>
-            <p class="reader-subtitle">${escapeHtml(payload.chapter.label || "Chapter")} · ${escapeHtml(String(pages.length))} pages</p>
+          <div class="reader-title-row">
+            ${renderCoverArt(payload.title.coverUrl, payload.title.title, "reader-cover-chip")}
+            <div>
+              <span class="section-kicker">${escapeHtml(payload.title.libraryTypeLabel || payload.title.mediaType || "Reader")}</span>
+              <h1 class="reader-title">${escapeHtml(payload.title.title || "Reader")}</h1>
+              <p class="reader-subtitle">${escapeHtml(payload.chapter.label || "Chapter")} · ${escapeHtml(String(pages.length))} pages</p>
+              <div class="reader-stat-pills">
+                <span class="reader-stat-pill">${escapeHtml(chapterPositionLabel)}</span>
+                <span class="reader-stat-pill">${escapeHtml(readingModeLabel)}</span>
+                <span class="reader-stat-pill">${escapeHtml(payload.title.latestChapter || "Active library title")}</span>
+              </div>
+            </div>
           </div>
         </div>
         <div class="reader-toolbar-actions">
-          <button class="ghost-button small" type="button" id="reader-toggle-drawer">${preferences.showSidebar ? "Hide panels" : "Show panels"}</button>
-          <button class="ghost-button small" type="button" id="reader-toggle-mode">${preferences.readingMode === "webtoon" ? "Use paged mode" : "Use vertical mode"}</button>
+          <button class="ghost-button small" type="button" id="reader-toggle-drawer">${preferences.showSidebar ? "Hide library" : "Open library"}</button>
+          <button class="ghost-button small" type="button" id="reader-toggle-mode">${preferences.readingMode === "webtoon" ? "Switch to paged" : "Switch to vertical"}</button>
           <button class="solid-button small" id="reader-add-bookmark" type="button">Bookmark page</button>
         </div>
       </header>

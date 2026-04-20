@@ -11,6 +11,7 @@ import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
 import java.net.URI;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -29,6 +30,9 @@ import java.util.regex.Pattern;
 public class TitleScraper {
     private static final String SOURCE_BASE_URL = "https://weebcentral.com";
     private static final int ADVANCED_SEARCH_PAGE_LIMIT = 32;
+    private static final int SCRAPE_RETRY_ATTEMPTS = 3;
+    private static final Duration SCRAPE_TIMEOUT = Duration.ofSeconds(30);
+    private static final long RETRY_BACKOFF_MS = 1_500L;
     private static final String USER_AGENT =
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
 
@@ -190,10 +194,10 @@ public class TitleScraper {
                 return List.of();
             }
 
-            Document doc = Jsoup.connect(listUrl)
-                .userAgent(USER_AGENT)
-                .timeout(15000)
-                .get();
+            Document doc = executeWithRetries(
+                "chapter list request",
+                () -> connect(listUrl).referrer(titleUrl.trim()).get()
+            );
 
             List<Map<String, String>> rawChapters = new ArrayList<>();
             Elements chapterLinks = doc.select("a[href^=https://weebcentral.com/chapters/], a[href^=/chapters/]");
@@ -218,13 +222,13 @@ public class TitleScraper {
     }
 
     private Document fetchSearchData(Map<String, String> queryParameters) throws Exception {
-        Connection connection = Jsoup.connect(SOURCE_BASE_URL + "/search/data")
-            .userAgent(USER_AGENT)
-            .timeout(15000);
-        for (Map.Entry<String, String> entry : queryParameters.entrySet()) {
-            connection.data(entry.getKey(), entry.getValue());
-        }
-        return connection.get();
+        return executeWithRetries("search request", () -> {
+            Connection connection = connect(SOURCE_BASE_URL + "/search/data");
+            for (Map.Entry<String, String> entry : queryParameters.entrySet()) {
+                connection.data(entry.getKey(), entry.getValue());
+            }
+            return connection.get();
+        });
     }
 
     private List<Map<String, String>> parseSearchResults(Document doc) {
@@ -304,10 +308,7 @@ public class TitleScraper {
         }
 
         try {
-            Document doc = Jsoup.connect(titleUrl.trim())
-                .userAgent(USER_AGENT)
-                .timeout(15000)
-                .get();
+            Document doc = executeWithRetries("title details request", () -> connect(titleUrl.trim()).get());
 
             return new TitleDetails(
                 extractSummary(doc),
@@ -324,6 +325,54 @@ public class TitleScraper {
             logger.warn("SCRAPER", "Title details request failed.", error.getMessage());
             return null;
         }
+    }
+
+    private Connection connect(String url) {
+        return Jsoup.connect(url)
+            .userAgent(USER_AGENT)
+            .timeout((int) SCRAPE_TIMEOUT.toMillis());
+    }
+
+    private Document executeWithRetries(String label, DocumentSupplier supplier) throws Exception {
+        Exception lastError = null;
+        for (int attempt = 1; attempt <= SCRAPE_RETRY_ATTEMPTS; attempt++) {
+            try {
+                return supplier.get();
+            } catch (Exception error) {
+                lastError = error;
+                if (attempt >= SCRAPE_RETRY_ATTEMPTS || !sleepBeforeRetry(label, attempt, error)) {
+                    throw error;
+                }
+            }
+        }
+        throw lastError == null ? new IllegalStateException("Unknown Raven scraper failure.") : lastError;
+    }
+
+    private boolean sleepBeforeRetry(String label, int attempt, Exception error) {
+        logger.warn(
+            "SCRAPER",
+            label + " failed, retrying.",
+            "attempt=" + attempt + "/" + SCRAPE_RETRY_ATTEMPTS + " reason=" + sanitizeError(error)
+        );
+        long delay = isRateLimited(error) ? RETRY_BACKOFF_MS * (attempt + 1L) : RETRY_BACKOFF_MS;
+        try {
+            Thread.sleep(delay);
+            return true;
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            return false;
+        }
+    }
+
+    private boolean isRateLimited(Exception error) {
+        String message = sanitizeError(error).toLowerCase(Locale.ROOT);
+        return message.contains("429") || message.contains("too many requests") || message.contains("timed out");
+    }
+
+    private String sanitizeError(Exception error) {
+        return error == null || error.getMessage() == null || error.getMessage().isBlank()
+            ? "unknown"
+            : error.getMessage().trim();
     }
 
     private String resolveFullChapterListUrl(String titleUrl) {
@@ -343,10 +392,19 @@ public class TitleScraper {
 
             String scheme = uri.getScheme() != null ? uri.getScheme() : "https";
             String host = uri.getHost() != null ? uri.getHost() : "weebcentral.com";
-            return scheme + "://" + host + "/series/" + seriesId + "/full-chapter-list";
+            String authority = host;
+            if (uri.getPort() >= 0) {
+                authority = authority + ":" + uri.getPort();
+            }
+            return scheme + "://" + authority + "/series/" + seriesId + "/full-chapter-list";
         } catch (Exception ignored) {
             return null;
         }
+    }
+
+    @FunctionalInterface
+    private interface DocumentSupplier {
+        Document get() throws Exception;
     }
 
     private List<Map<String, String>> dedupeExactChapters(List<Map<String, String>> chapters) {

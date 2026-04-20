@@ -7,9 +7,11 @@ import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
 import org.springframework.stereotype.Component;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 
 /**
@@ -19,6 +21,9 @@ import java.util.Set;
 public class SourceFinder {
     private static final String USER_AGENT =
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
+    private static final int SCRAPE_RETRY_ATTEMPTS = 3;
+    private static final Duration SCRAPE_TIMEOUT = Duration.ofSeconds(30);
+    private static final long RETRY_BACKOFF_MS = 1_500L;
 
     private final ScriptarrLogger logger;
 
@@ -44,43 +49,70 @@ public class SourceFinder {
 
         String normalizedUrl = chapterUrl.trim();
         if (normalizedUrl.contains("weebcentral.com/chapters/")) {
-            List<String> weebCentral = scrapeWeebCentral(normalizedUrl);
-            if (!weebCentral.isEmpty()) {
-                return weebCentral;
-            }
+            return scrapeWeebCentralChapter(normalizedUrl);
         }
 
         return genericImageScrape(normalizedUrl);
     }
 
-    private List<String> scrapeWeebCentral(String chapterUrl) {
+    /**
+     * Scrape a WeebCentral chapter's image endpoint with bounded retries.
+     *
+     * @param chapterUrl chapter URL whose images Raven should resolve
+     * @return ordered page image URLs
+     */
+    List<String> scrapeWeebCentralChapter(String chapterUrl) {
         String base = chapterUrl.endsWith("/") ? chapterUrl.substring(0, chapterUrl.length() - 1) : chapterUrl;
         String imagesUrl = base + "/images?is_prev=False&current_page=1&reading_style=long_strip";
 
-        try {
-            Document doc = Jsoup.connect(imagesUrl)
-                .userAgent(USER_AGENT)
-                .timeout(15000)
-                .get();
-            return extractImageUrls(doc.select("img[src], img[data-src]"));
-        } catch (Exception error) {
-            logger.warn("SOURCE", "WeebCentral image scrape failed.", error.getMessage());
-            return List.of();
+        for (int attempt = 1; attempt <= SCRAPE_RETRY_ATTEMPTS; attempt++) {
+            try {
+                Document doc = connect(imagesUrl)
+                    .referrer(chapterUrl)
+                    .get();
+                List<String> urls = extractImageUrls(doc.select("img[src], img[data-src]"));
+                if (!urls.isEmpty()) {
+                    return urls;
+                }
+                logger.warn(
+                    "SOURCE",
+                    "WeebCentral image scrape returned no page URLs.",
+                    "attempt=" + attempt + "/" + SCRAPE_RETRY_ATTEMPTS
+                );
+            } catch (Exception error) {
+                logger.warn("SOURCE", "WeebCentral image scrape failed.", error.getMessage());
+            }
+
+            if (attempt < SCRAPE_RETRY_ATTEMPTS && !sleepBeforeRetry(imagesUrl, attempt)) {
+                break;
+            }
         }
+        return List.of();
     }
 
     private List<String> genericImageScrape(String chapterUrl) {
-        try {
-            Document doc = Jsoup.connect(chapterUrl)
-                .userAgent(USER_AGENT)
-                .timeout(15000)
-                .get();
-            Elements images = doc.select("main img[src], img[src*=/media/], img[data-src]");
-            return extractImageUrls(images);
-        } catch (Exception error) {
-            logger.warn("SOURCE", "Generic image scrape failed.", error.getMessage());
-            return List.of();
+        for (int attempt = 1; attempt <= SCRAPE_RETRY_ATTEMPTS; attempt++) {
+            try {
+                Document doc = connect(chapterUrl).get();
+                Elements images = doc.select("main img[src], img[src*=/media/], img[data-src]");
+                List<String> urls = extractImageUrls(images);
+                if (!urls.isEmpty()) {
+                    return urls;
+                }
+                logger.warn(
+                    "SOURCE",
+                    "Generic image scrape returned no page URLs.",
+                    "attempt=" + attempt + "/" + SCRAPE_RETRY_ATTEMPTS
+                );
+            } catch (Exception error) {
+                logger.warn("SOURCE", "Generic image scrape failed.", error.getMessage());
+            }
+
+            if (attempt < SCRAPE_RETRY_ATTEMPTS && !sleepBeforeRetry(chapterUrl, attempt)) {
+                break;
+            }
         }
+        return List.of();
     }
 
     private List<String> extractImageUrls(Elements images) {
@@ -93,5 +125,28 @@ public class SourceFinder {
             unique.add(src);
         }
         return unique.isEmpty() ? List.of() : List.copyOf(new ArrayList<>(unique));
+    }
+
+    private org.jsoup.Connection connect(String url) {
+        return Jsoup.connect(url)
+            .userAgent(USER_AGENT)
+            .timeout((int) SCRAPE_TIMEOUT.toMillis());
+    }
+
+    private boolean sleepBeforeRetry(String url, int attempt) {
+        long delay = isRateLimited(url) ? RETRY_BACKOFF_MS * (attempt + 1L) : RETRY_BACKOFF_MS;
+        try {
+            Thread.sleep(delay);
+            return true;
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            logger.warn("SOURCE", "Interrupted while retrying source scraping.", interrupted.getMessage());
+            return false;
+        }
+    }
+
+    private boolean isRateLimited(String url) {
+        String normalized = url == null ? "" : url.toLowerCase(Locale.ROOT);
+        return normalized.contains("weebcentral");
     }
 }

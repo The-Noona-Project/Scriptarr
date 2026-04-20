@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
 import {deriveShortSiteName, normalizeSiteName, readMoonBranding} from "./branding.mjs";
+import {proxyJson} from "./proxy.mjs";
 
 /**
  * Read a static Moon HTML entry file.
@@ -62,6 +63,15 @@ const appendAssetVersion = (assetPath, version) => {
   }
   return assetPath.includes("?") ? `${assetPath}&v=${version}` : `${assetPath}?v=${version}`;
 };
+
+const canAccessAdmin = (user) => Boolean(
+  user
+  && (
+    user.role === "owner"
+    || user.role === "admin"
+    || (Array.isArray(user.permissions) && user.permissions.includes("admin"))
+  )
+);
 
 const rewriteJavascriptImports = (source, version) =>
   source
@@ -271,10 +281,13 @@ self.addEventListener("fetch", (event) => {
  * entry points used by the admin and user SPAs.
  *
  * @param {import("express").Express} app
- * @param {{config?: {sageBaseUrl?: string}}} [options]
+ * @param {{
+ *   config?: {sageBaseUrl?: string},
+ *   getSessionToken?: (request: import("express").Request) => string
+ * }} [options]
  * @returns {void}
  */
-export const registerPageRoutes = (app, {config = {}} = {}) => {
+export const registerPageRoutes = (app, {config = {}, getSessionToken = () => ""} = {}) => {
   const userHtmlPath = path.join(process.cwd(), "apps", "user", "index.html");
   const adminHtmlPath = path.join(process.cwd(), "apps", "admin", "index.html");
   const userAssetsPath = path.join(process.cwd(), "apps", "user", "assets");
@@ -370,12 +383,48 @@ export const registerPageRoutes = (app, {config = {}} = {}) => {
     }));
   });
 
-  app.get("/admin", async (_req, res) => {
+  const guardAdminRequest = async (req, res) => {
+    const sessionToken = getSessionToken(req);
+    if (!sessionToken) {
+      return false;
+    }
+
+    try {
+      const auth = await proxyJson({
+        baseUrl: config.sageBaseUrl || "",
+        path: "/api/auth/status",
+        sessionToken
+      });
+
+      if (auth.status === 401) {
+        return false;
+      }
+
+      const user = auth.payload?.user || auth.payload || null;
+
+      if (!canAccessAdmin(user)) {
+        res.redirect("/");
+        return true;
+      }
+    } catch {
+      return false;
+    }
+
+    return false;
+  };
+
+  app.get("/admin", async (req, res) => {
+    if (await guardAdminRequest(req, res)) {
+      return;
+    }
     res.setHeader("Cache-Control", "no-store");
     res.type("html").send(await renderAdminHtml());
   });
 
-  app.get("/admin/*splat", async (_req, res) => {
+  app.get("/admin/*splat", async (req, res) => {
+    if (await guardAdminRequest(req, res)) {
+      return;
+    }
     res.setHeader("Cache-Control", "no-store");
     res.type("html").send(await renderAdminHtml());
   });

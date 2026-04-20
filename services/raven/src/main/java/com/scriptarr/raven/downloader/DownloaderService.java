@@ -59,8 +59,16 @@ public class DownloaderService {
     private static final String PRIORITY_HIGH = "high";
     private static final String PRIORITY_NORMAL = "normal";
     private static final String PRIORITY_LOW = "low";
-    private static final int PAGE_DOWNLOAD_WORKER_COUNT = 4;
+    private static final int PAGE_DOWNLOAD_WORKER_COUNT = 2;
+    private static final int CHAPTER_SOURCE_RETRY_ATTEMPTS = 3;
+    private static final int CHAPTER_DOWNLOAD_RETRY_ATTEMPTS = 3;
+    private static final int IMAGE_DOWNLOAD_RETRY_ATTEMPTS = 3;
     private static final int CHAPTER_DOWNLOAD_PROGRESS_CAP = 90;
+    private static final Duration IMAGE_DOWNLOAD_TIMEOUT = Duration.ofSeconds(30);
+    private static final long RETRY_BACKOFF_MS = 1_500L;
+    private static final String WEBCENTRAL_REFERER = "https://weebcentral.com";
+    private static final String USER_AGENT =
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
 
     private final Map<String, Map<String, Object>> tasks = new ConcurrentHashMap<>();
     private final AtomicLong queueSequence = new AtomicLong();
@@ -74,6 +82,7 @@ public class DownloaderService {
     private final java.util.concurrent.ExecutorService pageDownloadWorker = Executors.newFixedThreadPool(PAGE_DOWNLOAD_WORKER_COUNT);
     private final HttpClient httpClient = HttpClient.newBuilder()
         .connectTimeout(Duration.ofSeconds(10))
+        .followRedirects(HttpClient.Redirect.NORMAL)
         .build();
 
     private final DownloadProviderRegistry downloadProviderRegistry;
@@ -479,7 +488,9 @@ public class DownloaderService {
     private void process(String taskId, DownloadRequest request) {
         try {
             update(taskId, "running", "Preparing Raven download.", 5);
-            vpnService.ensureConnectedIfEnabled();
+            if (vpnService != null) {
+                vpnService.ensureConnectedIfEnabled();
+            }
 
             DownloadProvider provider = resolveProvider(request);
             List<Map<String, String>> chapters = provider.getChapters(request.titleUrl());
@@ -500,7 +511,7 @@ public class DownloaderService {
             Map<String, String> sourceByChapter = new LinkedHashMap<>();
             for (int index = 0; index < chapters.size(); index++) {
                 Map<String, String> chapter = chapters.get(index);
-                Path archivePath = downloadChapter(provider, workingRoot, request, typeLabel, chapter, namingSettings);
+                Path archivePath = downloadChapterWithRetries(provider, workingRoot, request, typeLabel, chapter, namingSettings);
                 String chapterNumber = normalizeStoredChapterNumber(chapter.getOrDefault("chapter_number", String.valueOf(index + 1)));
                 sourceByChapter.put(chapterNumber, chapter.get("href"));
                 int percent = Math.max(10, (int) (((index + 1) / (double) total) * CHAPTER_DOWNLOAD_PROGRESS_CAP));
@@ -541,7 +552,7 @@ public class DownloaderService {
         }
     }
 
-    private Path downloadChapter(
+    private Path downloadChapterWithRetries(
         DownloadProvider provider,
         Path titleRoot,
         DownloadRequest request,
@@ -549,12 +560,94 @@ public class DownloaderService {
         Map<String, String> chapter,
         RavenNamingSettings namingSettings
     ) throws IOException, InterruptedException {
-        List<String> images = provider.resolvePages(chapter.get("href"));
-        if (images.isEmpty()) {
-            throw new IllegalStateException("No chapter pages were found for " + chapter.get("href"));
+        String chapterNumber = normalizeStoredChapterNumber(chapter.getOrDefault("chapter_number", "0"));
+        String lastFailureMessage = "No chapter pages were found for " + chapter.get("href");
+        IOException lastIoFailure = null;
+
+        for (int attempt = 1; attempt <= CHAPTER_DOWNLOAD_RETRY_ATTEMPTS; attempt++) {
+            List<String> images = findChapterPagesWithRetries(
+                provider,
+                request.titleName(),
+                chapterNumber,
+                chapter.get("chapter_title"),
+                chapter.get("href")
+            );
+            if (images.isEmpty()) {
+                lastFailureMessage = "No chapter pages were found for " + chapter.get("href");
+                if (attempt < CHAPTER_DOWNLOAD_RETRY_ATTEMPTS && !sleepBeforeRetry("chapter page resolution", request.titleName(), chapterNumber, attempt, null)) {
+                    break;
+                }
+                continue;
+            }
+
+            try {
+                return writeChapterArchive(titleRoot, request, typeLabel, chapter, namingSettings, chapterNumber, images);
+            } catch (IOException error) {
+                lastIoFailure = error;
+                lastFailureMessage = normalizeString(error.getMessage(), "Raven could not save chapter " + chapterNumber + ".");
+                logger.warn(
+                    "DOWNLOAD",
+                    "Chapter archive attempt failed.",
+                    "title=" + request.titleName() + " chapter=" + chapterNumber + " attempt="
+                        + attempt + "/" + CHAPTER_DOWNLOAD_RETRY_ATTEMPTS + " reason=" + lastFailureMessage
+                );
+                if (attempt < CHAPTER_DOWNLOAD_RETRY_ATTEMPTS && !sleepBeforeRetry("chapter archive", request.titleName(), chapterNumber, attempt, error)) {
+                    break;
+                }
+            }
         }
 
-        String chapterNumber = normalizeStoredChapterNumber(chapter.getOrDefault("chapter_number", "0"));
+        if (lastIoFailure != null) {
+            throw new IOException(lastFailureMessage, lastIoFailure);
+        }
+        throw new IllegalStateException(lastFailureMessage);
+    }
+
+    private List<LibraryChapter> buildLibraryChapters(Path finalRoot, Map<String, String> sourceByChapter) throws IOException {
+        RavenNamingSettings namingSettings = settingsService.getNamingSettings();
+        try (var archives = Files.list(finalRoot)) {
+            return archives
+                .filter(Files::isRegularFile)
+                .filter((path) -> path.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".cbz"))
+                .sorted()
+                .map((path) -> {
+                    String chapterNumber = LibraryNaming.extractChapterNumber(path.getFileName().toString(), namingSettings);
+                    return new LibraryChapter(
+                        "",
+                        "Chapter " + chapterNumber,
+                        chapterNumber,
+                        countArchiveEntries(path),
+                        resolveArchiveTimestamp(path),
+                        true,
+                        path.toString(),
+                        sourceByChapter.getOrDefault(chapterNumber, null)
+                    );
+                })
+                .toList();
+        }
+    }
+
+    private String resolveArchiveTimestamp(Path archivePath) {
+        if (archivePath == null) {
+            return null;
+        }
+
+        try {
+            return Files.getLastModifiedTime(archivePath).toInstant().toString();
+        } catch (IOException ignored) {
+            return null;
+        }
+    }
+
+    private Path writeChapterArchive(
+        Path titleRoot,
+        DownloadRequest request,
+        String typeLabel,
+        Map<String, String> chapter,
+        RavenNamingSettings namingSettings,
+        String chapterNumber,
+        List<String> images
+    ) throws IOException, InterruptedException {
         String volumeNumber = normalizeStoredVolumeNumber(chapter.get("volume_number"));
         String archiveName = LibraryNaming.buildChapterArchiveName(
             namingSettings,
@@ -595,7 +688,7 @@ public class DownloaderService {
 
             pageDownloads.add(pageDownloadWorker.submit(() -> {
                 Files.createDirectories(stagedPage.getParent());
-                Files.write(stagedPage, downloadImage(imageUrl));
+                Files.write(stagedPage, downloadImageWithRetries(imageUrl, chapter.get("href"), request.titleName(), chapterNumber));
                 return stagedPage;
             }));
         }
@@ -620,45 +713,113 @@ public class DownloaderService {
                 deleteDirectoryQuietly(stagedPagesRoot);
             }
         }
+
         logger.info("DOWNLOAD", "Saved chapter archive.", "file=" + archivePath.getFileName());
         return archivePath;
     }
 
-    private List<LibraryChapter> buildLibraryChapters(Path finalRoot, Map<String, String> sourceByChapter) throws IOException {
-        RavenNamingSettings namingSettings = settingsService.getNamingSettings();
-        try (var archives = Files.list(finalRoot)) {
-            return archives
-                .filter(Files::isRegularFile)
-                .filter((path) -> path.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".cbz"))
-                .sorted()
-                .map((path) -> {
-                    String chapterNumber = LibraryNaming.extractChapterNumber(path.getFileName().toString(), namingSettings);
-                    return new LibraryChapter(
-                        "",
-                        "Chapter " + chapterNumber,
-                        chapterNumber,
-                        countArchiveEntries(path),
-                        null,
-                        true,
-                        path.toString(),
-                        sourceByChapter.getOrDefault(chapterNumber, null)
-                    );
-                })
-                .toList();
+    private List<String> findChapterPagesWithRetries(
+        DownloadProvider provider,
+        String titleName,
+        String chapterNumber,
+        String chapterTitle,
+        String chapterUrl
+    ) throws InterruptedException {
+        if (chapterUrl == null || chapterUrl.isBlank()) {
+            return List.of();
         }
+
+        for (int attempt = 1; attempt <= CHAPTER_SOURCE_RETRY_ATTEMPTS; attempt++) {
+            try {
+                List<String> pageUrls = provider.resolvePages(chapterUrl);
+                if (pageUrls != null && !pageUrls.isEmpty()) {
+                    return pageUrls;
+                }
+                logger.warn(
+                    "DOWNLOAD",
+                    "Chapter page lookup returned no pages.",
+                    "title=" + titleName + " chapter=" + chapterNumber + " label=" + normalizeString(chapterTitle)
+                        + " attempt=" + attempt + "/" + CHAPTER_SOURCE_RETRY_ATTEMPTS
+                );
+            } catch (Exception error) {
+                logger.warn(
+                    "DOWNLOAD",
+                    "Chapter page lookup failed.",
+                    "title=" + titleName + " chapter=" + chapterNumber + " label=" + normalizeString(chapterTitle)
+                        + " attempt=" + attempt + "/" + CHAPTER_SOURCE_RETRY_ATTEMPTS + " reason="
+                        + normalizeString(error.getMessage(), "unknown")
+                );
+            }
+
+            if (attempt < CHAPTER_SOURCE_RETRY_ATTEMPTS && !sleepBeforeRetry("chapter page lookup", titleName, chapterNumber, attempt, null)) {
+                break;
+            }
+        }
+
+        return List.of();
     }
 
-    private byte[] downloadImage(String imageUrl) throws IOException, InterruptedException {
+    private byte[] downloadImageWithRetries(
+        String imageUrl,
+        String chapterUrl,
+        String titleName,
+        String chapterNumber
+    ) throws IOException, InterruptedException {
+        IOException lastFailure = null;
+        for (int attempt = 1; attempt <= IMAGE_DOWNLOAD_RETRY_ATTEMPTS; attempt++) {
+            try {
+                return downloadImage(imageUrl, chapterUrl);
+            } catch (IOException error) {
+                lastFailure = error;
+                logger.warn(
+                    "DOWNLOAD",
+                    "Image download attempt failed.",
+                    "title=" + titleName + " chapter=" + chapterNumber + " attempt="
+                        + attempt + "/" + IMAGE_DOWNLOAD_RETRY_ATTEMPTS + " reason="
+                        + normalizeString(error.getMessage(), "unknown")
+                );
+                if (attempt < IMAGE_DOWNLOAD_RETRY_ATTEMPTS && !sleepBeforeRetry("image download", titleName, chapterNumber, attempt, error)) {
+                    break;
+                }
+            }
+        }
+
+        throw lastFailure == null
+            ? new IOException("Image download failed for " + imageUrl)
+            : lastFailure;
+    }
+
+    private byte[] downloadImage(String imageUrl, String chapterUrl) throws IOException, InterruptedException {
         HttpRequest request = HttpRequest.newBuilder()
             .uri(URI.create(imageUrl))
-            .timeout(Duration.ofSeconds(30))
+            .timeout(IMAGE_DOWNLOAD_TIMEOUT)
+            .header("User-Agent", USER_AGENT)
+            .header("Referer", normalizeString(chapterUrl, WEBCENTRAL_REFERER))
             .GET()
             .build();
         HttpResponse<InputStream> response = httpClient.send(request, HttpResponse.BodyHandlers.ofInputStream());
         if (response.statusCode() < 200 || response.statusCode() >= 300) {
             throw new IOException("Image download failed with status " + response.statusCode() + " for " + imageUrl);
         }
-        return response.body().readAllBytes();
+        try (InputStream stream = response.body()) {
+            return stream.readAllBytes();
+        }
+    }
+
+    private boolean sleepBeforeRetry(String stage, String titleName, String chapterNumber, int attempt, Exception error) throws InterruptedException {
+        logger.info(
+            "DOWNLOAD",
+            "Retrying " + stage + ".",
+            "title=" + titleName + " chapter=" + chapterNumber + " nextAttempt=" + (attempt + 1)
+                + " reason=" + normalizeString(error == null ? "" : error.getMessage(), "retrying")
+        );
+        long delay = RETRY_BACKOFF_MS;
+        String reason = normalizeString(error == null ? "" : error.getMessage()).toLowerCase(Locale.ROOT);
+        if (reason.contains("429") || reason.contains("too many requests") || reason.contains("timed out")) {
+            delay = RETRY_BACKOFF_MS * (attempt + 1L);
+        }
+        Thread.sleep(delay);
+        return true;
     }
 
     private void update(String taskId, String status, String message, int percent) {

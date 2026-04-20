@@ -1,13 +1,22 @@
 import {escapeHtml} from "./dom.js";
 import {getPrimaryUserRoutes} from "./routes.js";
 
+const canAccessAdmin = (user) => Boolean(
+  user
+  && (
+    user.role === "owner"
+    || user.role === "admin"
+    || (Array.isArray(user.permissions) && user.permissions.includes("admin"))
+  )
+);
+
 /**
  * Render the Moon user app shell.
  *
  * @param {{
  *   route: ReturnType<import("./routes.js").matchUserRoute>,
  *   content: string,
- *   user: {username: string, role: string} | null,
+ *   user: {username: string, role: string, permissions?: string[]} | null,
  *   branding?: {siteName?: string} | null,
  *   loginUrl: string,
  *   bootstrap: {ownerClaimed?: boolean, superuserId?: string} | null,
@@ -29,7 +38,7 @@ export const renderUserShell = ({route, content, user, branding, loginUrl, boots
         ${getPrimaryUserRoutes().map((navRoute) => `
           <a class="nav-pill ${navRoute.id === route.id ? "is-active" : ""}" href="${navRoute.path}" data-link>${escapeHtml(navRoute.navLabel)}</a>
         `).join("")}
-        <a class="nav-pill admin-link" href="/admin" target="_self">Admin</a>
+        ${canAccessAdmin(user) ? `<a class="nav-pill admin-link" href="/admin" target="_self">Admin</a>` : ""}
       </nav>
       <div class="session-panel">
         <div class="session-kicker">Session</div>

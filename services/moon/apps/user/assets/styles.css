@@ -284,7 +284,8 @@ button {
 }
 
 .series-card {
-  min-height: 280px;
+  position: relative;
+  min-height: 360px;
   overflow: hidden;
   background:
     linear-gradient(160deg, color-mix(in srgb, var(--accent) 46%, #101519) 0%, #12191f 64%),
@@ -292,19 +293,43 @@ button {
 }
 
 .series-card-link {
+  position: relative;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  color: inherit;
+  text-decoration: none;
+}
+
+.series-card-media {
+  position: absolute;
+  inset: 0;
+}
+
+.series-card-link::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background:
+    linear-gradient(180deg, rgba(5, 9, 12, 0.04) 0%, rgba(5, 9, 12, 0.26) 36%, rgba(5, 9, 12, 0.88) 100%),
+    linear-gradient(150deg, rgba(255, 255, 255, 0.08), transparent 34%);
+}
+
+.series-card-content {
+  position: relative;
+  z-index: 1;
   height: 100%;
   padding: 18px;
   display: flex;
   flex-direction: column;
   justify-content: end;
   gap: 10px;
-  color: inherit;
-  text-decoration: none;
-  background: linear-gradient(180deg, transparent 0%, rgba(0, 0, 0, 0.44) 100%);
 }
 
 .series-card-art,
 .detail-cover-art,
+.reader-cover-chip,
 .request-cover-art {
   overflow: hidden;
   border: 1px solid rgba(255, 255, 255, 0.12);
@@ -319,6 +344,7 @@ button {
 
 .series-card-art img,
 .detail-cover-art img,
+.reader-cover-chip img,
 .request-cover-art img {
   width: 100%;
   height: 100%;
@@ -326,11 +352,19 @@ button {
 }
 
 .series-card-art {
-  width: 92px;
-  height: 132px;
-  border-radius: 18px;
-  margin-bottom: auto;
-  box-shadow: 0 18px 36px rgba(0, 0, 0, 0.28);
+  width: 100%;
+  height: 100%;
+  border: 0;
+  border-radius: 0;
+  margin: 0;
+  box-shadow: none;
+}
+
+.series-card-art.is-empty {
+  font-size: clamp(1.8rem, 4vw, 2.9rem);
+  background:
+    radial-gradient(circle at top left, rgba(255, 255, 255, 0.08), transparent 32%),
+    linear-gradient(160deg, color-mix(in srgb, var(--accent) 54%, #141a1f) 0%, #10161c 72%);
 }
 
 .series-card-kicker {
@@ -342,14 +376,20 @@ button {
 
 .series-card strong {
   display: block;
-  margin-top: 10px;
-  font-size: 1.4rem;
+  margin-top: 4px;
+  font-size: clamp(1.36rem, 2vw, 1.7rem);
+  line-height: 1.02;
+  text-wrap: balance;
 }
 
 .series-card p {
-  margin: 8px 0 0;
+  margin: 2px 0 0;
   color: rgba(255, 255, 255, 0.74);
   line-height: 1.45;
+  display: -webkit-box;
+  -webkit-line-clamp: 5;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .progress-pill {
@@ -679,6 +719,27 @@ body.moon-user {
   gap: 12px;
 }
 
+.reader-title-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.reader-cover-chip {
+  width: 88px;
+  height: 124px;
+  border-radius: 20px;
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.34);
+}
+
+.reader-cover-chip.is-empty {
+  font-size: 1.8rem;
+  background:
+    radial-gradient(circle at top left, rgba(255, 255, 255, 0.1), transparent 30%),
+    linear-gradient(160deg, color-mix(in srgb, var(--user-accent) 58%, #141a1f) 0%, #10161c 72%);
+}
+
 .reader-title {
   margin: 6px 0 0;
   font-family: "Literata", serif;
@@ -691,6 +752,25 @@ body.moon-user {
   color: var(--user-muted);
 }
 
+.reader-stat-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.reader-stat-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 0.84rem;
+}
+
 .reader-toolbar-actions,
 .reader-bottom-actions,
 .reader-stage-actions {
@@ -701,18 +781,19 @@ body.moon-user {
 }
 
 .reader-body {
-  display: grid;
-  grid-template-columns: minmax(300px, 360px) minmax(0, 1fr);
-  gap: 16px;
-  align-items: start;
+  display: block;
 }
 
 .reader-drawer {
-  position: sticky;
-  top: 20px;
+  position: fixed;
+  left: 18px;
+  top: 96px;
+  bottom: 18px;
+  z-index: 5;
+  width: min(360px, calc(100vw - 36px));
   display: grid;
   gap: 14px;
-  max-height: calc(100svh - 220px);
+  max-height: none;
   padding: 12px;
   overflow: auto;
   border: 1px solid var(--reader-border);
@@ -725,7 +806,7 @@ body.moon-user {
 .reader-app.is-drawer-collapsed .reader-drawer {
   opacity: 0;
   pointer-events: none;
-  transform: translateX(-18px);
+  transform: translateX(calc(-100% - 28px));
 }
 
 .reader-panel {
@@ -854,6 +935,7 @@ body.moon-user {
 .reader-stage-shell {
   display: grid;
   gap: 12px;
+  min-width: 0;
 }
 
 .reader-stage {
@@ -865,7 +947,7 @@ body.moon-user {
   border-radius: 32px;
   overflow: hidden;
   background:
-    radial-gradient(circle at top, rgba(222, 109, 58, 0.1), transparent 28%),
+    radial-gradient(circle at top, rgba(222, 109, 58, 0.08), transparent 26%),
     linear-gradient(180deg, rgba(9, 13, 18, 0.98), rgba(7, 11, 15, 1));
   box-shadow: var(--reader-shadow);
 }
@@ -877,7 +959,7 @@ body.moon-user {
   align-items: center;
   justify-items: center;
   min-height: calc(100svh - 280px);
-  padding: 32px 88px;
+  padding: 36px 112px 72px;
 }
 
 .reader-paged-frame,
@@ -894,10 +976,10 @@ body.moon-user {
 .reader-page-image {
   width: 100%;
   max-width: 1120px;
-  border-radius: 24px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.04);
   background: #0f1418;
-  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.36);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.28);
 }
 
 .reader-page-stage[data-fit="contain"] .reader-page-image {

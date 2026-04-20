@@ -11,6 +11,7 @@ import {requirePermission, requireSession} from "./auth.mjs";
 import {registerMoonV3Routes} from "./registerMoonV3Routes.mjs";
 import {createServiceAuth} from "./serviceAuth.mjs";
 import {registerInternalBrokerRoutes} from "./registerInternalBrokerRoutes.mjs";
+import {buildIntakeSelection, evaluateSelectionAgainstGuardState} from "./requestSelectionGuards.mjs";
 import {
   PORTAL_DISCORD_KEY,
   knownPortalDiscordCommands,
@@ -498,51 +499,6 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
     };
   };
 
-  const activeRequestStatuses = new Set(["pending", "queued", "downloading"]);
-  const activeTaskStatuses = new Set(["queued", "running"]);
-
-  const normalizeTitleMatchKey = (value) => normalizeString(value)
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim();
-
-  const matchesSelectionAgainstTitle = (selection, title = {}) => {
-    const selectedDownload = normalizeObject(selection.selectedDownload);
-    const sourceUrl = normalizeString(selectedDownload?.titleUrl);
-    if (sourceUrl && sourceUrl === normalizeString(title.sourceUrl)) {
-      return true;
-    }
-
-    return normalizeTitleMatchKey(selection.canonicalTitle) === normalizeTitleMatchKey(title.title)
-      && normalizeTypeSlug(selection.libraryTypeSlug || selection.requestType) === normalizeTypeSlug(title.libraryTypeSlug || title.mediaType);
-  };
-
-  const matchesSelectionAgainstRequest = (selection, request = {}) => {
-    if (!activeRequestStatuses.has(normalizeString(request.status))) {
-      return false;
-    }
-    const selectedDownload = normalizeObject(request.details?.selectedDownload);
-    const selectionDownload = normalizeObject(selection.selectedDownload);
-    const downloadUrl = normalizeString(selectionDownload?.titleUrl);
-    if (downloadUrl && downloadUrl === normalizeString(selectedDownload?.titleUrl)) {
-      return true;
-    }
-    return normalizeTitleMatchKey(selection.canonicalTitle) === normalizeTitleMatchKey(request.title)
-      && normalizeTypeSlug(selection.libraryTypeSlug || selection.requestType) === normalizeTypeSlug(request.requestType);
-  };
-
-  const matchesSelectionAgainstTask = (selection, task = {}) => {
-    if (!activeTaskStatuses.has(normalizeString(task.status))) {
-      return false;
-    }
-    const downloadUrl = normalizeString(selection.selectedDownload?.titleUrl);
-    if (downloadUrl && downloadUrl === normalizeString(task.titleUrl)) {
-      return true;
-    }
-    return normalizeTitleMatchKey(selection.canonicalTitle) === normalizeTitleMatchKey(task.titleName)
-      && normalizeTypeSlug(selection.libraryTypeSlug || selection.requestType) === normalizeTypeSlug(task.libraryTypeSlug || task.requestType);
-  };
-
   const loadPublicApiGuardState = async () => {
     const [libraryResult, requests, taskResult] = await Promise.all([
       serviceJson(config.ravenBaseUrl, "/v1/library"),
@@ -560,26 +516,18 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
   const buildPublicApiSelection = (entry, guardState) => {
     const metadata = normalizeObject(entry.metadata, {}) || {};
     const download = normalizeObject(entry.download);
-    const requestType = normalizeString(download?.requestType || metadata.type || entry.type || "manga", "manga");
-    const libraryTypeSlug = normalizeTypeSlug(download?.libraryTypeSlug || metadata.typeSlug || requestType);
-    const canonicalTitle = normalizeString(entry.canonicalTitle, metadata.title || "Untitled");
-    const coverUrl = normalizeString(download?.coverUrl, normalizeString(metadata.coverUrl));
-    const nsfw = Boolean(download?.nsfw || metadata?.nsfw || metadata?.details?.adultContent || entry.nsfw);
     const selection = {
-      query: normalizeString(entry.query),
-      canonicalTitle,
-      requestType,
-      libraryTypeSlug,
-      availability: normalizeString(entry.availability, download?.titleUrl ? "available" : "unavailable"),
-      coverUrl,
-      nsfw,
-      selectedMetadata: metadata,
-      selectedDownload: download
+      ...buildIntakeSelection({
+        ...entry,
+        metadata,
+        download
+      }),
+      nsfw: Boolean(download?.nsfw || metadata?.nsfw || metadata?.details?.adultContent || entry.nsfw)
     };
-
-    const alreadyInLibrary = guardState.libraryTitles.some((title) => matchesSelectionAgainstTitle(selection, title));
-    const alreadyQueuedOrRequested = guardState.requests.some((request) => matchesSelectionAgainstRequest(selection, request))
-      || guardState.tasks.some((task) => matchesSelectionAgainstTask(selection, task));
+    const {
+      alreadyInLibrary,
+      alreadyQueuedOrRequested
+    } = evaluateSelectionAgainstGuardState(selection, guardState);
 
     return {
       ...selection,
@@ -801,6 +749,24 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
       return;
     }
 
+    const selection = buildIntakeSelection({
+      query: normalizeString(req.body?.query),
+      title: normalizeString(req.body?.title),
+      requestType: normalizeString(req.body?.requestType),
+      selectedMetadata: normalizeObject(req.body?.selectedMetadata),
+      selectedDownload: normalizeObject(req.body?.selectedDownload)
+    });
+    const guardState = await loadPublicApiGuardState();
+    const guard = evaluateSelectionAgainstGuardState(selection, guardState);
+    if (guard.alreadyInLibrary) {
+      res.status(409).json({error: "That title is already in the Scriptarr library."});
+      return;
+    }
+    if (guard.alreadyQueuedOrRequested) {
+      res.status(409).json({error: "That title is already queued or has an active request."});
+      return;
+    }
+
     const request = await vaultClient.createRequest({
       source: req.body.source || "moon",
       title: normalizeString(req.body?.selectedMetadata?.title, req.body.title),
@@ -833,6 +799,22 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
       const selectedDownload = normalizeObject(request.details?.selectedDownload);
       if (!selectedDownload?.titleUrl) {
         res.status(409).json({error: "This request is unavailable and must be resolved with a concrete download match before it can be approved."});
+        return;
+      }
+
+      const guardState = await loadPublicApiGuardState();
+      const guard = evaluateSelectionAgainstGuardState(buildIntakeSelection({
+        title: request.title,
+        requestType: request.requestType,
+        selectedMetadata: normalizeObject(request.details?.selectedMetadata),
+        selectedDownload
+      }), guardState, {ignoreRequestId: req.params.id});
+      if (guard.alreadyInLibrary) {
+        res.status(409).json({error: "That title is already in the Scriptarr library."});
+        return;
+      }
+      if (guard.alreadyQueuedOrRequested) {
+        res.status(409).json({error: "That title is already queued or has an active request."});
         return;
       }
 
@@ -1148,9 +1130,10 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
     }
 
     const guardState = await loadPublicApiGuardState();
-    const alreadyInLibrary = guardState.libraryTitles.some((title) => matchesSelectionAgainstTitle(selection, title));
-    const alreadyQueuedOrRequested = guardState.requests.some((request) => matchesSelectionAgainstRequest(selection, request))
-      || guardState.tasks.some((task) => matchesSelectionAgainstTask(selection, task));
+    const {
+      alreadyInLibrary,
+      alreadyQueuedOrRequested
+    } = evaluateSelectionAgainstGuardState(selection, guardState);
 
     if (selection.nsfw) {
       res.status(409).json({error: "NSFW titles are blocked from the public Moon API."});

@@ -8,6 +8,16 @@ process.env.NODE_ENV = "test";
 
 const {createMoonApp} = await import("../lib/createMoonApp.mjs");
 
+const closeServer = (server) => new Promise((resolve, reject) => {
+  server.close((error) => {
+    if (error) {
+      reject(error);
+      return;
+    }
+    resolve();
+  });
+});
+
 /**
  * Start a tiny Sage stub that returns both JSON and raw SVG payloads so Moon's
  * v3 proxy behavior can be exercised without booting the full stack.
@@ -25,6 +35,8 @@ const createSageStub = ({requests = []} = {}) => Promise.resolve(http.createServ
     url: request.url,
     body
   });
+
+  const authorization = request.headers.authorization || "";
 
   if (request.url === "/api/moon-v3/public/branding") {
     response.writeHead(200, {"Content-Type": "application/json"});
@@ -47,6 +59,32 @@ const createSageStub = ({requests = []} = {}) => Promise.resolve(http.createServ
   }
 
   if (request.url === "/api/auth/status") {
+    if (authorization === "Bearer admin-token") {
+      response.writeHead(200, {"Content-Type": "application/json"});
+      response.end(JSON.stringify({
+        id: "admin-1",
+        discordId: "discord-admin-1",
+        username: "CaptainPax",
+        role: "owner",
+        permissions: ["admin", "manage_settings", "read_library"],
+        avatarUrl: "https://cdn.discordapp.com/avatars/admin.png"
+      }));
+      return;
+    }
+
+    if (authorization === "Bearer member-token") {
+      response.writeHead(200, {"Content-Type": "application/json"});
+      response.end(JSON.stringify({
+        id: "member-1",
+        discordId: "discord-member-1",
+        username: "LibraryFan",
+        role: "member",
+        permissions: ["create_requests"],
+        avatarUrl: "https://cdn.discordapp.com/avatars/member.png"
+      }));
+      return;
+    }
+
     response.writeHead(401, {"Content-Type": "application/json"});
     response.end(JSON.stringify({error: "Not signed in"}));
     return;
@@ -375,7 +413,42 @@ test("moon serves branded split entry documents, typed routes, PWA assets, and M
   assert.ok(requests.some((entry) => entry.method === "POST" && entry.url === "/api/admin/settings/moon/public-api/key"));
   assert.ok(requests.some((entry) => entry.method === "GET" && entry.url === "/api/public/openapi.json"));
 
-  server.close();
-  sageStub.close();
+  await closeServer(server);
+  await closeServer(sageStub);
+  process.chdir(cwd);
+});
+
+test("moon redirects signed-in non-admin sessions away from admin while allowing admin sessions through", async () => {
+  const cwd = process.cwd();
+  process.chdir(path.join(path.dirname(fileURLToPath(import.meta.url)), ".."));
+
+  const requests = [];
+  const sageStub = await createSageStub({requests});
+  sageStub.listen(0);
+  const sagePort = sageStub.address().port;
+  process.env.SCRIPTARR_SAGE_BASE_URL = `http://127.0.0.1:${sagePort}`;
+
+  const {app} = await createMoonApp();
+  const server = app.listen(0);
+  const baseUrl = `http://127.0.0.1:${server.address().port}`;
+
+  const memberResponse = await fetch(`${baseUrl}/admin`, {
+    headers: {cookie: "scriptarr_session=member-token"},
+    redirect: "manual"
+  });
+  assert.equal(memberResponse.status, 302);
+  assert.equal(memberResponse.headers.get("location"), "/");
+
+  const adminResponse = await fetch(`${baseUrl}/admin`, {
+    headers: {cookie: "scriptarr_session=admin-token"}
+  });
+  assert.equal(adminResponse.status, 200);
+  assert.match(await adminResponse.text(), /Pax Library Admin/);
+
+  const memberAuthLookups = requests.filter((entry) => entry.url === "/api/auth/status").length;
+  assert.ok(memberAuthLookups >= 2);
+
+  await closeServer(server);
+  await closeServer(sageStub);
   process.chdir(cwd);
 });

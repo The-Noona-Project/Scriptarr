@@ -12,6 +12,7 @@ import {loadBrowsePage, renderBrowsePage} from "../apps/user/assets/pages/browse
 import {renderHomePage} from "../apps/user/assets/pages/homePage.js";
 import {renderReaderPage} from "../apps/user/assets/pages/readerPage.js";
 import {renderRequestsPage as renderUserRequestsPage} from "../apps/user/assets/pages/requestsPage.js";
+import {renderUserShell} from "../apps/user/assets/shell.js";
 import {renderTitlePage} from "../apps/user/assets/pages/titlePage.js";
 
 test("home page shows branded empty-library copy and typed featured links", () => {
@@ -37,6 +38,7 @@ test("home page shows branded empty-library copy and typed featured links", () =
       latestTitles: [{
         id: "dan-da-dan",
         title: "Dandadan",
+        coverUrl: "https://images.example/dandadan.jpg",
         libraryTypeSlug: "webtoon",
         libraryTypeLabel: "Webtoon",
         mediaType: "webtoon",
@@ -50,6 +52,8 @@ test("home page shows branded empty-library copy and typed featured links", () =
 
   assert.match(featuredHtml, /href="\/title\/webtoon\/dan-da-dan"/);
   assert.match(featuredHtml, /href="\/reader\/webtoon\/dan-da-dan\/chapter-166"/);
+  assert.doesNotMatch(featuredHtml, /series-card/);
+  assert.equal((featuredHtml.match(/Dandadan/g) || []).length, 1);
 
   const continueReadingHtml = renderHomePage({
     ok: true,
@@ -149,6 +153,50 @@ test("title page uses typed reader links", () => {
   assert.match(html, /Webtoon/);
 });
 
+test("title page reads the newest chapter and renders source-backed metadata labels", () => {
+  const html = renderTitlePage({
+    ok: true,
+    payload: {
+      following: false,
+      requests: [],
+      title: {
+        id: "kenja-no-mago",
+        title: "Kenja no Mago",
+        libraryTypeSlug: "manga",
+        libraryTypeLabel: "Manga",
+        mediaType: "manga",
+        latestChapter: "94",
+        sourceUrl: "https://weebcentral.com/series/kenja-no-mago",
+        metadataProvider: "",
+        author: "",
+        chapters: [
+          {
+            id: "chapter-79",
+            label: "Chapter 79",
+            chapterNumber: "79",
+            pageCount: 55,
+            releaseDate: "2026-04-18T08:00:00.000Z",
+            available: true
+          },
+          {
+            id: "chapter-94",
+            label: "Chapter 94",
+            chapterNumber: "94",
+            pageCount: 52,
+            releaseDate: "2026-04-20T08:00:00.000Z",
+            available: true
+          }
+        ]
+      }
+    }
+  });
+
+  assert.match(html, /href="\/reader\/manga\/kenja-no-mago\/chapter-94"[^>]*>Read latest/);
+  assert.match(html, /<span>Source<\/span><strong>WeebCentral<\/strong>/);
+  assert.match(html, /Apr 20, 2026/);
+  assert.doesNotMatch(html, /Unmatched|Unknown date|<span>Author<\/span><strong>Unknown<\/strong>/);
+});
+
 test("reader page renders typed chapter navigation, scrubber, and thumbnail navigation", () => {
   const html = renderReaderPage({
     ok: true,
@@ -156,6 +204,7 @@ test("reader page renders typed chapter navigation, scrubber, and thumbnail navi
       title: {
         id: "dan-da-dan",
         title: "Dandadan",
+        coverUrl: "https://images.example/dandadan.jpg",
         libraryTypeSlug: "webtoon",
         libraryTypeLabel: "Webtoon",
         mediaType: "webtoon"
@@ -195,6 +244,8 @@ test("reader page renders typed chapter navigation, scrubber, and thumbnail navi
   assert.match(html, /Thumbnail scrubber/);
   assert.match(html, /reader-page-slider/);
   assert.match(html, /Bookmark page/);
+  assert.match(html, /reader-cover-chip/);
+  assert.match(html, /Chapter 2 of 3/);
 });
 
 test("admin overview renders an empty focus section when the library has no titles", () => {
@@ -387,6 +438,54 @@ test("admin shell renders a session avatar with image and initials fallback", ()
   });
 
   assert.match(fallbackHtml, />NS<\/span>/);
+});
+
+test("user shell only shows the admin entry to admin-capable sessions", () => {
+  const memberHtml = renderUserShell({
+    route: {
+      id: "home",
+      path: "/",
+      title: "Home",
+      description: "Continue reading, latest arrivals, and current requests.",
+      navLabel: "Home",
+      params: {}
+    },
+    content: "<p>ok</p>",
+    user: {
+      username: "ReaderOne",
+      role: "member",
+      permissions: ["create_requests"]
+    },
+    branding: {siteName: "Pax-Kun"},
+    flash: null,
+    loginUrl: "/login",
+    bootstrap: {ownerClaimed: true}
+  });
+
+  assert.doesNotMatch(memberHtml, />Admin<\/a>/);
+
+  const adminHtml = renderUserShell({
+    route: {
+      id: "home",
+      path: "/",
+      title: "Home",
+      description: "Continue reading, latest arrivals, and current requests.",
+      navLabel: "Home",
+      params: {}
+    },
+    content: "<p>ok</p>",
+    user: {
+      username: "CaptainPax",
+      role: "owner",
+      permissions: ["admin", "manage_settings"]
+    },
+    branding: {siteName: "Pax-Kun"},
+    flash: null,
+    loginUrl: "/login",
+    bootstrap: {ownerClaimed: true}
+  });
+
+  assert.match(adminHtml, /href="\/admin"[^>]*>Admin<\/a>/);
 });
 
 test("user requests page renders intake search results and unavailable history states", () => {

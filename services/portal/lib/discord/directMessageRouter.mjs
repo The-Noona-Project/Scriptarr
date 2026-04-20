@@ -11,6 +11,17 @@ const TYPE_ALIASES = new Map([
 
 const normalizeString = (value) => typeof value === "string" ? value.trim() : "";
 
+const isDownloadAllHelpRequest = (content) => {
+  const trimmed = normalizeString(content);
+  const commandMatch = trimmed.match(DOWNLOAD_ALL_PATTERN);
+  if (!commandMatch) {
+    return false;
+  }
+
+  const remainder = normalizeString(trimmed.slice(commandMatch[0].length)).toLowerCase();
+  return ["help", "--help", "-h", "?"].includes(remainder);
+};
+
 const normalizeBoolean = (value) => {
   const normalized = normalizeString(value).toLowerCase();
   if (!normalized) {
@@ -143,6 +154,15 @@ const sendReply = async (message, payload) => {
   return null;
 };
 
+const resolveBulkQueueFailure = (result) => {
+  if (!result || typeof result !== "object" || result.ok !== false) {
+    return "";
+  }
+  return normalizeString(result.payload?.error)
+    || normalizeString(result.payload?.message)
+    || `Sage returned ${normalizeString(result.status, "an error")}.`;
+};
+
 /**
  * Create the DM-only downloadall handler.
  *
@@ -157,14 +177,26 @@ export const createDirectMessageHandler = ({getSettings, sage, logger}) => async
     return false;
   }
 
+  if (isDownloadAllHelpRequest(message.content)) {
+    await sendReply(message, formatValidationMessage());
+    return true;
+  }
+
   const parsed = parseDownloadAllCommand(message.content);
   if (!parsed.matched) {
     return false;
   }
 
   const settings = typeof getSettings === "function" ? (getSettings() || {}) : {};
+  const commandSettings = settings?.commands && typeof settings.commands === "object"
+    ? settings.commands.downloadall || {}
+    : {};
   const superuserId = normalizeString(settings?.superuserId);
   const authorId = normalizeString(message?.author?.id);
+  if (commandSettings.enabled === false) {
+    await sendReply(message, "The Scriptarr downloadall DM command is currently disabled.");
+    return true;
+  }
   if (!superuserId || authorId !== superuserId) {
     await sendReply(message, "This DM command is restricted to the configured Scriptarr superuser.");
     return true;
@@ -185,6 +217,10 @@ export const createDirectMessageHandler = ({getSettings, sage, logger}) => async
       ...parsed.filters,
       requestedBy: authorId
     });
+    const failure = resolveBulkQueueFailure(result);
+    if (failure) {
+      throw new Error(failure);
+    }
     await sendReply(message, formatBulkQueueSummary(result.payload || result));
   } catch (error) {
     logger?.warn?.("Portal DM downloadall failed.", {error: error?.message || String(error)});

@@ -25,6 +25,7 @@ export const renderHomePage = (result, chrome = {}) => {
   const latestTitles = result.payload?.latestTitles || [];
   const continueReading = result.payload?.continueReading || [];
   const featured = latestTitles[0] || null;
+  const surfacedTitles = featured ? latestTitles.filter((title) => title?.id !== featured.id) : latestTitles;
   const siteName = chrome.branding?.siteName || "Scriptarr";
 
   return `
@@ -78,8 +79,8 @@ export const renderHomePage = (result, chrome = {}) => {
         </div>
       </div>
       <div class="card-grid">
-        ${latestTitles.length
-          ? latestTitles.map((title) => renderSeriesCard({
+        ${surfacedTitles.length
+          ? surfacedTitles.map((title) => renderSeriesCard({
             ...title,
             href: buildTitlePathForTitle(title)
           })).join("")
