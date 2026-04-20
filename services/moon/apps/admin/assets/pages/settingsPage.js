@@ -24,7 +24,7 @@ export const renderSettingsPage = (result) => {
     return renderEmptyState("Settings unavailable", result.payload?.error || "Unable to load admin settings.");
   }
 
-  const {ravenVpn = {}, metadataProviders = {}, oracle = {}, warden = {}} = result.payload || {};
+  const {ravenVpn = {}, metadataProviders = {}, oracle = {}, branding = {}, warden = {}} = result.payload || {};
   const oracleProvider = oracle.provider === "localai" ? "localai" : "openai";
   const oracleModel = oracle.model || fallbackModelForProvider(oracleProvider);
   const localAiState = [
@@ -38,6 +38,22 @@ export const renderSettingsPage = (result) => {
 
   return `
     <div class="content-grid two-up">
+      <section class="panel-section">
+        <div class="section-heading">
+          <div>
+            <span class="section-kicker">Branding</span>
+            <h2>Moon site identity</h2>
+          </div>
+        </div>
+        <form id="branding-form" class="settings-form">
+          <label>
+            <span>Site name</span>
+            <input id="branding-site-name" type="text" value="${escapeHtml(branding.siteName || "Scriptarr")}" placeholder="Scriptarr">
+          </label>
+          <p class="field-note">Moon uses this name in the user header, admin header, document titles, and install metadata for the PWA shell.</p>
+          <button class="solid-button" type="submit">Save branding</button>
+        </form>
+      </section>
       <section class="panel-section">
         <div class="section-heading">
           <div>
@@ -178,6 +194,15 @@ export const enhanceSettingsPage = async (root, {api, rerender, setFlash}) => {
       oracleModel.value = nextDefault;
       oracleModel.placeholder = nextDefault;
     }
+  });
+
+  root.querySelector("#branding-form")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const result = await api.put("/api/moon/admin/settings/moon/branding", {
+      siteName: root.querySelector("#branding-site-name")?.value || "Scriptarr"
+    });
+    setFlash(result.ok ? "good" : "bad", result.ok ? "Moon branding saved." : result.payload?.error || "Unable to save Moon branding.");
+    await rerender();
   });
 
   root.querySelector("#raven-vpn-form")?.addEventListener("submit", async (event) => {

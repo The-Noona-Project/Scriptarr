@@ -14,7 +14,7 @@ handles Discord, and Oracle provides optional read-only AI chat.
 - `scriptarr-mysql`: durable shared datastore for Scriptarr when `SCRIPTARR_MYSQL_URL=SELFHOST`
 - `scriptarr-vault`: auth, permissions, settings, secrets, cache, requests, sessions, progress, and generic job broker
 - `scriptarr-sage`: Moon-facing auth plus the only supported first-party internal HTTP broker
-- `scriptarr-moon`: same-origin user app at `/`, native reader routes under `/reader/*`, and Arr-style admin app at `/admin`
+- `scriptarr-moon`: same-origin installable user app at `/`, type-scoped native reader routes under `/reader/<type>/<title>/<chapter>`, and Arr-style admin app at `/admin`
 - `scriptarr-raven`: Spring Boot Java 24 downloader, library, metadata, and PIA/OpenVPN-aware download engine
 - `scriptarr-portal`: Discord onboarding, requests, notifications, subscriptions, and Oracle bridge
 - `scriptarr-oracle`: FastAPI Python service that starts disabled, defaults to OpenAI config, and can optionally use
@@ -67,7 +67,7 @@ For end-to-end Docker verification, use:
 6. Open Moon, confirm the bootstrap surface shows the configured first owner id, and use Discord login to claim the
    first owner session.
 7. Copy the callback URL surfaced by Warden or Moon into the Discord developer portal.
-8. Finish integrations, library, metadata, VPN, Oracle, moderation, and managed-service update settings in Moon admin.
+8. Finish branding, integrations, library, metadata, VPN, Oracle, moderation, and managed-service update settings in Moon admin.
 
 ## Key Contracts
 
@@ -91,6 +91,8 @@ For end-to-end Docker verification, use:
 - Raven VPN should fail closed when VPN-backed downloads are enabled and the tunnel cannot be established.
 - Moon admin stays dark by default, serves versioned browser assets, and exposes the managed-service updates flow for
   Vault, Sage, Moon, Raven, Portal, and Oracle.
+- Moon's user app is now installable as a PWA, keeps HTML uncached, and uses a rolling recent-chapter reader cache on
+  the current device instead of bulk offline sync.
 
 ## Docs
 

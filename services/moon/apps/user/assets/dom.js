@@ -1,4 +1,5 @@
 import {formatProgress} from "./format.js";
+import {buildTitlePath} from "./routes.js";
 
 /**
  * Escape unsafe HTML characters.
@@ -61,7 +62,7 @@ export const renderEmptyState = (title, body) => `
  */
 export const renderSeriesCard = (card) => `
   <article class="series-card" style="--accent:${escapeHtml(card.coverAccent || "#de6d3a")}">
-    <a class="series-card-link" href="${escapeHtml(card.href || `/title/${card.id}`)}" data-link>
+    <a class="series-card-link" href="${escapeHtml(card.href || buildTitlePath(card.libraryTypeSlug || card.mediaType || "manga", card.id))}" data-link>
       <span class="series-card-kicker">${escapeHtml(card.latestChapter || "Library")}</span>
       <strong>${escapeHtml(card.title)}</strong>
       <p>${escapeHtml(card.summary || card.author || "Open the series details.")}</p>

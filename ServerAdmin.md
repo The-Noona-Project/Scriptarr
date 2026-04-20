@@ -171,6 +171,7 @@ temporarily unavailable.
 - manage request moderation
 - configure Raven VPN credentials and region for PIA/OpenVPN-backed downloads
 - review Raven metadata providers, with MangaDex enabled by default
+- set the Moon site name branding that powers headers, document titles, and install metadata
 - check or install managed Scriptarr service updates from `/admin/system/updates`
 - configure Oracle and optional LocalAI runtime settings
 - manage users, roles, and permissions
@@ -186,11 +187,17 @@ Moon now serves two distinct programs from one runtime:
 Common user routes:
 
 - `/browse`
-- `/library`
-- `/title/<id>`
-- `/reader/<titleId>/<chapterId>`
+- `/library/<type>`
+- `/title/<type>/<titleId>`
+- `/reader/<type>/<titleId>/<chapterId>`
 - `/myrequests`
 - `/following`
+
+Moon still accepts the older untyped `/title/<id>` and `/reader/<titleId>/<chapterId>` paths as compatibility shims,
+but the typed routes are the canonical links Moon now emits.
+
+Moon's user app also serves a same-origin `manifest.webmanifest` and `service-worker.js` so the reader can be
+installed like an app and keep a rolling cache of recently opened chapters on the current device.
 
 Common admin routes:
 

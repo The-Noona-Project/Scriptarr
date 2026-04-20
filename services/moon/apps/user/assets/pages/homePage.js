@@ -1,5 +1,6 @@
 import {escapeHtml, renderEmptyState, renderSeriesCard} from "../dom.js";
 import {formatProgress} from "../format.js";
+import {buildReaderPathForTitle, buildTitlePath, buildTitlePathForTitle, resolveTitleTypeSlug} from "../routes.js";
 
 /**
  * Load the Moon user home payload.
@@ -13,9 +14,10 @@ export const loadHomePage = ({api}) => api.get("/api/moon/v3/user/home");
  * Render the Moon user home page.
  *
  * @param {Awaited<ReturnType<typeof loadHomePage>>} result
+ * @param {{branding?: {siteName?: string} | null}} [chrome]
  * @returns {string}
  */
-export const renderHomePage = (result) => {
+export const renderHomePage = (result, chrome = {}) => {
   if (!result.ok) {
     return renderEmptyState("Sign in to read", result.payload?.error || "Moon needs a session before it can load your library and progress.");
   }
@@ -23,6 +25,7 @@ export const renderHomePage = (result) => {
   const latestTitles = result.payload?.latestTitles || [];
   const continueReading = result.payload?.continueReading || [];
   const featured = latestTitles[0] || null;
+  const siteName = chrome.branding?.siteName || "Scriptarr";
 
   return `
     ${featured ? `
@@ -32,14 +35,14 @@ export const renderHomePage = (result) => {
           <h1>${escapeHtml(featured.title)}</h1>
           <p>${escapeHtml(featured.summary || "Moon keeps the library front-and-center so you can read, follow, and request from one place.")}</p>
           <div class="hero-actions">
-            <a class="solid-button" href="/title/${escapeHtml(featured.id)}" data-link>Open series</a>
-            ${featured.chapters?.length ? `<a class="ghost-button" href="/reader/${escapeHtml(featured.id)}/${escapeHtml(featured.chapters[featured.chapters.length - 1].id)}" data-link>Read latest</a>` : ""}
+            <a class="solid-button" href="${escapeHtml(buildTitlePathForTitle(featured))}" data-link>Open series</a>
+            ${featured.chapters?.length ? `<a class="ghost-button" href="${escapeHtml(buildReaderPathForTitle(featured, featured.chapters[featured.chapters.length - 1].id))}" data-link>Read latest</a>` : ""}
           </div>
         </div>
         <div class="hero-meta">
           <strong>${escapeHtml(featured.author || "Unknown creator")}</strong>
           <span>${escapeHtml(featured.latestChapter || "Unknown")}</span>
-          <span>${escapeHtml(featured.mediaType || "manga")}</span>
+          <span>${escapeHtml(featured.libraryTypeLabel || featured.mediaType || "manga")}</span>
         </div>
       </section>
     ` : ""}
@@ -59,7 +62,10 @@ export const renderHomePage = (result) => {
             summary: entry.summary || `${formatProgress(entry.positionRatio)} complete`,
             coverAccent: entry.coverAccent,
             progressRatio: entry.positionRatio,
-            href: entry.bookmark?.chapterId ? `/reader/${entry.titleId || entry.mediaId}/${entry.bookmark.chapterId}` : `/title/${entry.titleId || entry.mediaId}`
+            libraryTypeSlug: resolveTitleTypeSlug(entry),
+            href: entry.bookmark?.chapterId
+              ? buildReaderPath(resolveTitleTypeSlug(entry), entry.titleId || entry.mediaId, entry.bookmark.chapterId)
+              : buildTitlePath(resolveTitleTypeSlug(entry), entry.titleId || entry.mediaId)
           })).join("")
           : renderEmptyState("No saved progress yet", "Start reading a chapter and Moon will surface it here.")}
       </div>
@@ -75,9 +81,9 @@ export const renderHomePage = (result) => {
         ${latestTitles.length
           ? latestTitles.map((title) => renderSeriesCard({
             ...title,
-            href: `/title/${title.id}`
+            href: buildTitlePathForTitle(title)
           })).join("")
-          : renderEmptyState("Library is empty", "No titles have been imported into Scriptarr yet. Moon will stay empty here until Raven has real titles to serve.")}
+          : renderEmptyState("Library is empty", `No titles have been imported into ${siteName} yet. Moon will stay empty here until Raven has real titles to serve.`)}
       </div>
     </section>
     <section class="content-grid two-up">
@@ -93,7 +99,7 @@ export const renderHomePage = (result) => {
             <div class="stack-list">
               ${(result.payload.following || []).map((entry) => `
                 <article class="stack-card">
-                  <a href="/title/${escapeHtml(entry.titleId)}" data-link>
+                  <a href="${escapeHtml(buildTitlePath(entry.libraryTypeSlug || entry.mediaType || "manga", entry.titleId))}" data-link>
                     <strong>${escapeHtml(entry.title)}</strong>
                   </a>
                   <span>${escapeHtml(entry.latestChapter || "No chapter yet")}</span>

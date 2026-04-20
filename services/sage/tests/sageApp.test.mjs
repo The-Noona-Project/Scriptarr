@@ -25,7 +25,9 @@ const originalFetch = globalThis.fetch;
 const defaultLibraryTitle = Object.freeze({
   id: "dan-da-dan",
   title: "Dandadan",
-  mediaType: "manga",
+  mediaType: "webtoon",
+  libraryTypeLabel: "Webtoon",
+  libraryTypeSlug: "webtoon",
   status: "watching",
   latestChapter: "166",
   coverAccent: "#ff6a3d",
@@ -43,8 +45,15 @@ const defaultLibraryTitle = Object.freeze({
     id: "dandadan-c166",
     label: "Chapter 166",
     chapterNumber: "166",
-    pageCount: 16,
+    pageCount: 3,
     releaseDate: "2026-04-14",
+    available: true
+  }, {
+    id: "dandadan-c167",
+    label: "Chapter 167",
+    chapterNumber: "167",
+    pageCount: 2,
+    releaseDate: "2026-04-21",
     available: true
   }]
 });
@@ -63,6 +72,31 @@ const createDependencyStub = ({libraryTitles = [defaultLibraryTitle]} = {}) => {
     runtime: 0
   };
   const libraryById = new Map(libraryTitles.map((title) => [title.id, title]));
+  const buildReaderManifest = (title) => ({
+    title,
+    chapters: title.chapters || []
+  });
+  const buildReaderChapterPayload = (title, chapterId) => {
+    const chapters = title.chapters || [];
+    const chapterIndex = chapters.findIndex((entry) => entry.id === chapterId);
+    const chapter = chapters[chapterIndex];
+
+    if (!chapter) {
+      return null;
+    }
+
+    return {
+      title,
+      chapter,
+      previousChapterId: chapters[chapterIndex - 1]?.id || null,
+      nextChapterId: chapters[chapterIndex + 1]?.id || null,
+      pages: Array.from({length: chapter.pageCount || 1}, (_value, index) => ({
+        index,
+        label: `Page ${index + 1}`,
+        src: `https://reader.invalid/${title.id}/${chapter.id}/${index}.svg`
+      }))
+    };
+  };
 
   const server = http.createServer((request, response) => {
     if (request.url === "/health") {
@@ -142,6 +176,42 @@ const createDependencyStub = ({libraryTitles = [defaultLibraryTitle]} = {}) => {
       }
       response.writeHead(200, {"Content-Type": "application/json"});
       response.end(JSON.stringify(title));
+      return;
+    }
+
+    if (request.url?.startsWith("/v1/reader/") && !request.url.includes("/page/")) {
+      const parts = String(request.url).split("/").filter(Boolean);
+      const titleId = decodeURIComponent(parts[2] || "");
+      const chapterId = parts[3] ? decodeURIComponent(parts[3]) : "";
+      const title = libraryById.get(titleId);
+
+      if (!title) {
+        response.writeHead(404, {"Content-Type": "application/json"});
+        response.end(JSON.stringify({error: "Title not found."}));
+        return;
+      }
+
+      if (!chapterId) {
+        response.writeHead(200, {"Content-Type": "application/json"});
+        response.end(JSON.stringify(buildReaderManifest(title)));
+        return;
+      }
+
+      const payload = buildReaderChapterPayload(title, chapterId);
+      if (!payload) {
+        response.writeHead(404, {"Content-Type": "application/json"});
+        response.end(JSON.stringify({error: "Chapter not found."}));
+        return;
+      }
+
+      response.writeHead(200, {"Content-Type": "application/json"});
+      response.end(JSON.stringify(payload));
+      return;
+    }
+
+    if (request.url?.startsWith("/v1/reader/") && request.url.includes("/page/")) {
+      response.writeHead(200, {"Content-Type": "image/svg+xml"});
+      response.end("<svg xmlns=\"http://www.w3.org/2000/svg\"><text>reader-page</text></svg>");
       return;
     }
 
@@ -384,6 +454,133 @@ test("sage keeps Moon library routes empty when Raven has no imported titles", a
   assert.equal(overview.counts.titles, 0);
   assert.equal(overview.counts.missingChapters, 0);
   assert.equal(overview.counts.metadataGaps, 0);
+
+  sageServer.close();
+  vaultServer.close();
+  dependencyStub.server.close();
+});
+
+test("sage round-trips Moon branding and exposes typed Moon reader payloads", async () => {
+  const {app: vaultApp} = await createVaultApp();
+  const vaultServer = vaultApp.listen(0);
+  const vaultPort = vaultServer.address().port;
+
+  const dependencyStub = await createDependencyStub();
+  dependencyStub.server.listen(0);
+  const dependencyPort = dependencyStub.server.address().port;
+
+  process.env.SCRIPTARR_VAULT_BASE_URL = `http://127.0.0.1:${vaultPort}`;
+  process.env.SCRIPTARR_WARDEN_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_PORTAL_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_ORACLE_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_RAVEN_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_DISCORD_CLIENT_ID = "discord-client-id";
+  process.env.SCRIPTARR_DISCORD_CLIENT_SECRET = "discord-client-secret";
+
+  installDiscordFetchStub();
+
+  const {app: sageApp} = await createSageApp();
+  const sageServer = sageApp.listen(0);
+  const sagePort = sageServer.address().port;
+  const baseUrl = `http://127.0.0.1:${sagePort}`;
+
+  const ownerClaim = await signInViaDiscord(baseUrl);
+  const headers = {
+    "Authorization": `Bearer ${ownerClaim.token}`,
+    "Content-Type": "application/json"
+  };
+
+  const initialBranding = await fetch(`${baseUrl}/api/admin/settings/moon/branding`, {
+    headers
+  }).then((response) => response.json());
+  assert.equal(initialBranding.siteName, "Scriptarr");
+
+  const savedBrandingResponse = await fetch(`${baseUrl}/api/admin/settings/moon/branding`, {
+    method: "PUT",
+    headers,
+    body: JSON.stringify({siteName: "  Pax Library  "})
+  });
+  const savedBranding = await savedBrandingResponse.json();
+
+  assert.equal(savedBrandingResponse.status, 200);
+  assert.equal(savedBranding.siteName, "Pax Library");
+
+  const publicBranding = await fetch(`${baseUrl}/api/moon-v3/public/branding`).then((response) => response.json());
+  assert.equal(publicBranding.siteName, "Pax Library");
+
+  const aggregatedSettings = await fetch(`${baseUrl}/api/moon-v3/admin/settings`, {
+    headers: {
+      "Authorization": `Bearer ${ownerClaim.token}`
+    }
+  }).then((response) => response.json());
+  assert.equal(aggregatedSettings.branding.siteName, "Pax Library");
+
+  const moonLibrary = await fetch(`${baseUrl}/api/moon-v3/user/library`, {
+    headers: {
+      "Authorization": `Bearer ${ownerClaim.token}`
+    }
+  }).then((response) => response.json());
+  assert.equal(moonLibrary.titles[0].libraryTypeSlug, "webtoon");
+  assert.equal(moonLibrary.titles[0].libraryTypeLabel, "Webtoon");
+
+  const titleDetail = await fetch(`${baseUrl}/api/moon-v3/user/title/dan-da-dan`, {
+    headers: {
+      "Authorization": `Bearer ${ownerClaim.token}`
+    }
+  }).then((response) => response.json());
+  assert.equal(titleDetail.title.libraryTypeSlug, "webtoon");
+  assert.equal(titleDetail.title.libraryTypeLabel, "Webtoon");
+
+  const followResponse = await fetch(`${baseUrl}/api/moon-v3/user/following`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      titleId: "dan-da-dan",
+      title: "Dandadan",
+      latestChapter: "166",
+      mediaType: "webtoon",
+      libraryTypeLabel: "Webtoon",
+      libraryTypeSlug: "webtoon"
+    })
+  });
+  assert.equal(followResponse.status, 201);
+
+  const following = await fetch(`${baseUrl}/api/moon-v3/user/following`, {
+    headers: {
+      "Authorization": `Bearer ${ownerClaim.token}`
+    }
+  }).then((response) => response.json());
+  assert.equal(following.following[0].libraryTypeSlug, "webtoon");
+  assert.equal(following.following[0].libraryTypeLabel, "Webtoon");
+
+  const readerManifest = await fetch(`${baseUrl}/api/moon-v3/user/reader/title/dan-da-dan`, {
+    headers: {
+      "Authorization": `Bearer ${ownerClaim.token}`
+    }
+  }).then((response) => response.json());
+  assert.equal(readerManifest.title.libraryTypeSlug, "webtoon");
+  assert.equal(readerManifest.title.libraryTypeLabel, "Webtoon");
+
+  const readerChapter = await fetch(`${baseUrl}/api/moon-v3/user/reader/title/dan-da-dan/chapter/dandadan-c166`, {
+    headers: {
+      "Authorization": `Bearer ${ownerClaim.token}`
+    }
+  }).then((response) => response.json());
+
+  assert.equal(readerChapter.title.libraryTypeSlug, "webtoon");
+  assert.equal(readerChapter.title.libraryTypeLabel, "Webtoon");
+  assert.equal(readerChapter.manifest.title.libraryTypeSlug, "webtoon");
+  assert.equal(readerChapter.manifest.title.libraryTypeLabel, "Webtoon");
+  assert.equal(readerChapter.preferences.readingMode, "webtoon");
+  assert.equal(readerChapter.pages[0].src, "/api/moon/v3/user/reader/title/dan-da-dan/chapter/dandadan-c166/page/0");
+
+  const home = await fetch(`${baseUrl}/api/moon-v3/user/home`, {
+    headers: {
+      "Authorization": `Bearer ${ownerClaim.token}`
+    }
+  }).then((response) => response.json());
+  assert.equal(home.latestTitles[0].libraryTypeSlug, "webtoon");
+  assert.equal(home.latestTitles[0].libraryTypeLabel, "Webtoon");
 
   sageServer.close();
   vaultServer.close();

@@ -13,7 +13,7 @@ import {loadWantedPage, renderWantedPage} from "./wantedPage.js";
 /**
  * @typedef {{
  *   load: (context: any) => Promise<any>,
- *   render: (result: any) => string,
+ *   render: (result: any, chrome?: any) => string,
  *   enhance?: (root: HTMLElement, context: any, result: any) => Promise<void>
  * }} AdminPageModule
  */
@@ -58,9 +58,10 @@ export const loadAdminPage = (route, context) => pageModules[route.id].load({...
  *
  * @param {import("../routes.js").AdminRoute} route
  * @param {any} result
+ * @param {any} [chrome]
  * @returns {string}
  */
-export const renderAdminPage = (route, result) => pageModules[route.id].render(result);
+export const renderAdminPage = (route, result, chrome) => pageModules[route.id].render(result, chrome);
 
 /**
  * Run any page-specific enhancement hooks after the shell has rendered.

@@ -99,6 +99,19 @@ export const registerLegacyApiRoutes = (app, {config, getSessionToken}) => {
     res.status(result.status).json(result.payload);
   });
 
+  app.get("/api/moon/admin/settings/moon/branding", async (req, res) => {
+    const result = await proxyToSage(req, "/api/admin/settings/moon/branding");
+    res.status(result.status).json(result.payload);
+  });
+
+  app.put("/api/moon/admin/settings/moon/branding", async (req, res) => {
+    const result = await proxyToSage(req, "/api/admin/settings/moon/branding", {
+      method: "PUT",
+      body: req.body
+    });
+    res.status(result.status).json(result.payload);
+  });
+
   app.get("/api/moon/admin/warden/localai", async (req, res) => {
     const result = await proxyToSage(req, "/api/admin/warden/localai");
     res.status(result.status).json(result.payload);

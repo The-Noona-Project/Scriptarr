@@ -8,13 +8,14 @@ import {getAdminNavigationGroups} from "./routes.js";
  *   route: import("./routes.js").AdminRoute,
  *   content: string,
  *   user: {username: string, role: string} | null,
+ *   branding?: {siteName?: string} | null,
  *   flash: {tone: string, text: string} | null,
  *   loginUrl: string,
  *   bootstrap: {ownerClaimed?: boolean, superuserId?: string} | null
  * }} options
  * @returns {string}
  */
-export const renderAdminShell = ({route, content, user, flash, loginUrl, bootstrap}) => {
+export const renderAdminShell = ({route, content, user, branding, flash, loginUrl, bootstrap}) => {
   const groups = getAdminNavigationGroups();
   const authSummary = user
     ? `
@@ -39,7 +40,7 @@ export const renderAdminShell = ({route, content, user, flash, loginUrl, bootstr
           <span class="brand-mark">S</span>
           <span>
             <span class="brand-kicker">Moon Admin</span>
-            <strong class="brand-name">Scriptarr</strong>
+            <strong class="brand-name">${escapeHtml(branding?.siteName || "Scriptarr")}</strong>
           </span>
         </a>
         <nav class="nav-groups">

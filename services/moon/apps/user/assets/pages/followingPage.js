@@ -1,4 +1,5 @@
 import {renderEmptyState, renderSeriesCard} from "../dom.js";
+import {buildTitlePath} from "../routes.js";
 
 /**
  * Load the following list for the current user.
@@ -34,7 +35,8 @@ export const renderFollowingPage = (result) => {
             title: entry.title,
             latestChapter: entry.latestChapter,
             summary: entry.mediaType,
-            href: `/title/${entry.titleId}`
+            libraryTypeSlug: entry.libraryTypeSlug,
+            href: buildTitlePath(entry.libraryTypeSlug || entry.mediaType || "manga", entry.titleId)
           })).join("")
           : renderEmptyState("You are not following anything yet", "Follow titles from their detail page to build a personal update shelf.")}
       </div>

@@ -15,10 +15,16 @@ const {createMoonApp} = await import("../lib/createMoonApp.mjs");
  * @returns {Promise<http.Server>}
  */
 const createSageStub = () => Promise.resolve(http.createServer((request, response) => {
+  if (request.url === "/api/moon-v3/public/branding") {
+    response.writeHead(200, {"Content-Type": "application/json"});
+    response.end(JSON.stringify({siteName: "Pax Library"}));
+    return;
+  }
+
   if (request.url === "/api/moon-v3/user/library") {
     response.writeHead(200, {"Content-Type": "application/json"});
     response.end(JSON.stringify({
-      titles: [{id: "dan-da-dan", title: "Dandadan"}]
+      titles: [{id: "dan-da-dan", title: "Dandadan", libraryTypeSlug: "webtoon", libraryTypeLabel: "Webtoon"}]
     }));
     return;
   }
@@ -51,7 +57,7 @@ const createSageStub = () => Promise.resolve(http.createServer((request, respons
   response.end(JSON.stringify({error: "Not found"}));
 }));
 
-test("moon serves split entry documents and proxies Moon v3 JSON plus SVG payloads", async () => {
+test("moon serves branded split entry documents, typed routes, PWA assets, and Moon v3 proxy payloads", async () => {
   const cwd = process.cwd();
   process.chdir(path.join(path.dirname(fileURLToPath(import.meta.url)), ".."));
 
@@ -64,33 +70,61 @@ test("moon serves split entry documents and proxies Moon v3 JSON plus SVG payloa
   const server = app.listen(0);
   const baseUrl = `http://127.0.0.1:${server.address().port}`;
 
-  const [userPageResponse, adminPageResponse] = await Promise.all([
+  const [userPageResponse, adminPageResponse, libraryRouteResponse, titleRouteResponse, readerRouteResponse] = await Promise.all([
     fetch(`${baseUrl}/`),
-    fetch(`${baseUrl}/admin`)
+    fetch(`${baseUrl}/admin`),
+    fetch(`${baseUrl}/library/webtoon`),
+    fetch(`${baseUrl}/title/webtoon/dan-da-dan`),
+    fetch(`${baseUrl}/reader/webtoon/dan-da-dan/chapter-1`)
   ]);
+
   const userPage = await userPageResponse.text();
   const adminPage = await adminPageResponse.text();
 
-  assert.match(userPage, /Scriptarr Moon/);
-  assert.match(adminPage, /Scriptarr Admin/);
+  assert.match(userPage, /Pax Library/);
+  assert.match(adminPage, /Pax Library Admin/);
   assert.match(userPage, /\/user-assets\/styles\.css\?v=/);
   assert.match(userPage, /\/user-assets\/app\.js\?v=/);
   assert.match(adminPage, /\/admin-assets\/styles\.css\?v=/);
   assert.match(adminPage, /\/admin-assets\/app\.js\?v=/);
-  assert.equal((await fetch(`${baseUrl}/admin`)).headers.get("cache-control"), "no-store");
+  assert.equal(userPageResponse.headers.get("cache-control"), "no-store");
+  assert.equal(adminPageResponse.headers.get("cache-control"), "no-store");
+  assert.equal(libraryRouteResponse.headers.get("cache-control"), "no-store");
+  assert.equal(titleRouteResponse.headers.get("cache-control"), "no-store");
+  assert.equal(readerRouteResponse.headers.get("cache-control"), "no-store");
+  assert.match(await libraryRouteResponse.text(), /manifest\.webmanifest/);
+  assert.match(await titleRouteResponse.text(), /manifest\.webmanifest/);
+  assert.match(await readerRouteResponse.text(), /manifest\.webmanifest/);
+
   const adminAppResponse = await fetch(`${baseUrl}/admin-assets/app.js`);
   assert.equal(adminAppResponse.headers.get("cache-control"), "no-store");
   assert.match(await adminAppResponse.text(), /\.\/main\.js\?v=/);
+
   const userMainResponse = await fetch(`${baseUrl}/user-assets/main.js`);
   assert.equal(userMainResponse.headers.get("cache-control"), "no-store");
   assert.match(await userMainResponse.text(), /\.\/api\.js\?v=/);
-  assert.doesNotMatch(userPage, /Claim dev session/);
-  assert.doesNotMatch(adminPage, /Claim dev session/);
+
+  const manifestResponse = await fetch(`${baseUrl}/manifest.webmanifest`);
+  assert.match(manifestResponse.headers.get("content-type") || "", /application\/manifest\+json/);
+  const manifest = await manifestResponse.json();
+  assert.equal(manifest.name, "Pax Library");
+  assert.equal(manifest.short_name, "Pax");
+  assert.equal(manifest.start_url, "/");
+
+  const serviceWorkerResponse = await fetch(`${baseUrl}/service-worker.js`);
+  assert.match(serviceWorkerResponse.headers.get("content-type") || "", /javascript/);
+  const serviceWorkerSource = await serviceWorkerResponse.text();
+  assert.match(serviceWorkerSource, /moon-shell-/);
+  assert.doesNotMatch(serviceWorkerSource, /<!doctype html>/i);
+
+  const brandingResponse = await fetch(`${baseUrl}/api/moon/v3/public/branding`);
+  assert.equal(brandingResponse.status, 200);
+  assert.deepEqual(await brandingResponse.json(), {siteName: "Pax Library"});
 
   const libraryResponse = await fetch(`${baseUrl}/api/moon/v3/user/library`);
   assert.equal(libraryResponse.status, 200);
   assert.deepEqual(await libraryResponse.json(), {
-    titles: [{id: "dan-da-dan", title: "Dandadan"}]
+    titles: [{id: "dan-da-dan", title: "Dandadan", libraryTypeSlug: "webtoon", libraryTypeLabel: "Webtoon"}]
   });
 
   const pageResponse = await fetch(`${baseUrl}/api/moon/v3/user/reader/title/dan-da-dan/chapter/chapter-1/page/0`);

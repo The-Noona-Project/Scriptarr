@@ -8,7 +8,7 @@ import {enhanceTitlePage, loadTitlePage, renderTitlePage} from "./titlePage.js";
 /**
  * @typedef {{
  *   load: (context: any) => Promise<any>,
- *   render: (result: any) => string,
+ *   render: (result: any, chrome?: any) => string,
  *   enhance?: (root: HTMLElement, context: any, result: any) => Promise<void>
  * }} UserPageModule
  */
@@ -42,9 +42,10 @@ export const loadUserPage = (route, context) => pageModules[route.id].load({...c
  *
  * @param {ReturnType<import("../routes.js").matchUserRoute>} route
  * @param {any} result
+ * @param {any} [chrome]
  * @returns {string}
  */
-export const renderUserPage = (route, result) => pageModules[route.id].render(result);
+export const renderUserPage = (route, result, chrome) => pageModules[route.id].render(result, chrome);
 
 /**
  * Run user page enhancement hooks.

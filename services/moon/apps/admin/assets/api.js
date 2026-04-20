@@ -70,7 +70,8 @@ export const requestJson = async (url, options = {}) => {
  *   delete: (url: string) => Promise<ApiResult>,
  *   getAuthStatus: () => Promise<ApiResult>,
  *   getBootstrapStatus: () => Promise<ApiResult>,
- *   getDiscordUrl: () => Promise<ApiResult>
+ *   getDiscordUrl: () => Promise<ApiResult>,
+ *   getBranding: () => Promise<ApiResult>
  * }}
  */
 export const createAdminApi = () => ({
@@ -80,7 +81,8 @@ export const createAdminApi = () => ({
   delete: (url) => requestJson(url, {method: "DELETE"}),
   getAuthStatus: () => requestJson("/api/moon/auth/status"),
   getBootstrapStatus: () => requestJson("/api/moon/auth/bootstrap-status"),
-  getDiscordUrl: () => requestJson("/api/moon/auth/discord/url")
+  getDiscordUrl: () => requestJson("/api/moon/auth/discord/url"),
+  getBranding: () => requestJson("/api/moon/v3/public/branding")
 });
 
 export default createAdminApi;

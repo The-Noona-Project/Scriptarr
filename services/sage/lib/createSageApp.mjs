@@ -16,6 +16,7 @@ const RAVEN_VPN_PASSWORD_SECRET = "raven.vpn.piaPassword";
 const RAVEN_METADATA_KEY = "raven.metadata.providers";
 const ORACLE_SETTINGS_KEY = "oracle.settings";
 const ORACLE_OPENAI_API_KEY_SECRET = "oracle.openai.apiKey";
+const MOON_BRANDING_KEY = "moon.branding";
 const ORACLE_OPENAI_DEFAULT_MODEL = process.env.SCRIPTARR_ORACLE_OPENAI_MODEL || "gpt-4.1-mini";
 const ORACLE_LOCALAI_DEFAULT_MODEL = "gpt-4";
 
@@ -135,6 +136,11 @@ const defaultOracleSettings = () => ({
   openAiApiKeyConfigured: false
 });
 
+const defaultMoonBrandingSettings = () => ({
+  key: MOON_BRANDING_KEY,
+  siteName: "Scriptarr"
+});
+
 const normalizeProviderId = (value) => normalizeString(value).toLowerCase();
 
 const normalizeMetadataProviderSettings = (value) => {
@@ -193,6 +199,15 @@ const normalizeOracleSettings = (value, secretValue) => {
   };
 };
 
+const normalizeMoonBrandingSettings = (value) => {
+  const defaults = defaultMoonBrandingSettings();
+  const siteName = normalizeString(value?.siteName, defaults.siteName).slice(0, 80).trim();
+  return {
+    ...defaults,
+    siteName: siteName || defaults.siteName
+  };
+};
+
 const readSetting = async (vaultClient, key, fallback) => {
   const setting = await vaultClient.getSetting(key);
   return setting?.value ?? fallback;
@@ -222,6 +237,11 @@ const readOracleSettings = async (vaultClient) => {
     readSecret(vaultClient, ORACLE_OPENAI_API_KEY_SECRET)
   ]);
   return normalizeOracleSettings(settingsValue, apiKey);
+};
+
+const readMoonBrandingSettings = async (vaultClient) => {
+  const settingsValue = await readSetting(vaultClient, MOON_BRANDING_KEY, defaultMoonBrandingSettings());
+  return normalizeMoonBrandingSettings(settingsValue);
 };
 
 const syncWardenLocalAiConfig = async (config, oracleSettings) => {
@@ -518,6 +538,16 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
     });
   });
 
+  app.get("/api/admin/settings/moon/branding", requirePermission(vaultClient, "manage_settings"), async (_req, res) => {
+    res.json(await readMoonBrandingSettings(vaultClient));
+  });
+
+  app.put("/api/admin/settings/moon/branding", requirePermission(vaultClient, "manage_settings"), async (req, res) => {
+    const nextSettings = normalizeMoonBrandingSettings(req.body);
+    await vaultClient.setSetting(MOON_BRANDING_KEY, nextSettings);
+    res.json(await readMoonBrandingSettings(vaultClient));
+  });
+
   app.get("/api/admin/warden/localai", requirePermission(vaultClient, "manage_settings"), async (_req, res) => {
     const [oracleSettings, localAiStatus] = await Promise.all([
       readOracleSettings(vaultClient),
@@ -588,6 +618,7 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
     readRavenVpnSettings: () => readRavenVpnSettings(vaultClient),
     readMetadataProviderSettings: () => readMetadataProviderSettings(vaultClient),
     readOracleSettings: () => readOracleSettings(vaultClient),
+    readMoonBrandingSettings: () => readMoonBrandingSettings(vaultClient),
     serviceJson,
     safeJson
   });

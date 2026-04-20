@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
+import {deriveShortSiteName, normalizeSiteName, readMoonBranding} from "./branding.mjs";
 
 /**
  * Read a static Moon HTML entry file.
@@ -10,10 +11,9 @@ import crypto from "node:crypto";
  */
 const readHtml = (filePath) => fs.readFile(filePath, "utf8");
 
-const toVersionedAssetPath = (assetPath, content) => {
-  const hash = crypto.createHash("sha256").update(content).digest("hex").slice(0, 12);
-  return `${assetPath}?v=${hash}`;
-};
+const hashContent = (content) => crypto.createHash("sha256").update(content).digest("hex").slice(0, 12);
+
+const toVersionedAssetPath = (assetPath, content) => `${assetPath}?v=${hashContent(content)}`;
 
 const renderVersionedHtml = async (htmlPath, replacements) => {
   let html = await readHtml(htmlPath);
@@ -22,8 +22,6 @@ const renderVersionedHtml = async (htmlPath, replacements) => {
   }
   return html;
 };
-
-const hashContent = (content) => crypto.createHash("sha256").update(content).digest("hex").slice(0, 12);
 
 const collectAssetFiles = async (rootPath) => {
   const entries = await fs.readdir(rootPath, {withFileTypes: true});
@@ -120,29 +118,207 @@ const registerVersionedJsAssets = (app, routePrefix, assetsPath, resolveVersion)
   });
 };
 
+const toPublicAssetPath = (routePrefix, rootPath, filePath) =>
+  `${routePrefix}/${path.relative(rootPath, filePath).split(path.sep).join("/")}`;
+
+const buildUserShellAssetList = async ({userAssetsPath, userStylesPath, resolveUserJsVersion}) => {
+  const [styleContent, jsVersion, assetVersion, files] = await Promise.all([
+    fs.readFile(userStylesPath, "utf8"),
+    resolveUserJsVersion(),
+    resolveAssetVersion(userAssetsPath, new Set([".js", ".css", ".svg"])),
+    collectAssetFiles(userAssetsPath)
+  ]);
+
+  const jsAssets = files
+    .filter((filePath) => path.extname(filePath) === ".js")
+    .map((filePath) => appendAssetVersion(toPublicAssetPath("/user-assets", userAssetsPath, filePath), jsVersion));
+
+  return {
+    assetVersion,
+    jsVersion,
+    stylesUrl: toVersionedAssetPath("/user-assets/styles.css", styleContent),
+    urls: [
+      "/",
+      "/manifest.webmanifest",
+      "/user-assets/icons/icon.svg",
+      "/user-assets/icons/icon-maskable.svg",
+      toVersionedAssetPath("/user-assets/styles.css", styleContent),
+      ...jsAssets
+    ]
+  };
+};
+
+const renderServiceWorker = ({assetVersion, shellAssets}) => `
+const SHELL_CACHE = "moon-shell-${assetVersion}";
+const READER_CACHE = "moon-reader-${assetVersion}";
+const INDEX_REQUEST = "/__moon_recent_chapters__";
+const MAX_RECENT_CHAPTERS = 5;
+const SHELL_ASSETS = ${JSON.stringify(shellAssets)};
+
+const isReaderChapterRequest = (requestUrl) =>
+  requestUrl.pathname.startsWith("/api/moon/v3/user/reader/title/") &&
+  /\\/chapter\\/[^/]+$/.test(requestUrl.pathname);
+
+const isReaderPageRequest = (requestUrl) =>
+  requestUrl.pathname.startsWith("/api/moon/v3/user/reader/title/") &&
+  /\\/chapter\\/[^/]+\\/page\\/\\d+$/.test(requestUrl.pathname);
+
+const chapterPrefixFromPath = (pathname) => pathname.replace(/\\/page\\/\\d+$/, "");
+
+const readRecentIndex = async () => {
+  const cache = await caches.open(READER_CACHE);
+  const response = await cache.match(INDEX_REQUEST);
+  if (!response) {
+    return [];
+  }
+  return response.json().catch(() => []);
+};
+
+const writeRecentIndex = async (entries) => {
+  const cache = await caches.open(READER_CACHE);
+  await cache.put(INDEX_REQUEST, new Response(JSON.stringify(entries), {
+    headers: {"Content-Type": "application/json"}
+  }));
+};
+
+const trimRecentChapters = async (keepPrefixes) => {
+  const cache = await caches.open(READER_CACHE);
+  const keys = await cache.keys();
+
+  for (const request of keys) {
+    const url = new URL(request.url);
+    if (url.pathname === INDEX_REQUEST) {
+      continue;
+    }
+
+    const chapterPrefix = chapterPrefixFromPath(url.pathname);
+    if (!keepPrefixes.includes(chapterPrefix)) {
+      await cache.delete(request);
+    }
+  }
+};
+
+const rememberChapter = async (requestUrl) => {
+  const chapterPrefix = chapterPrefixFromPath(requestUrl.pathname);
+  const entries = await readRecentIndex();
+  const nextEntries = [chapterPrefix, ...entries.filter((entry) => entry !== chapterPrefix)].slice(0, MAX_RECENT_CHAPTERS);
+  await writeRecentIndex(nextEntries);
+  await trimRecentChapters(nextEntries);
+};
+
+self.addEventListener("install", (event) => {
+  event.waitUntil((async () => {
+    const cache = await caches.open(SHELL_CACHE);
+    await cache.addAll(SHELL_ASSETS);
+    await self.skipWaiting();
+  })());
+});
+
+self.addEventListener("activate", (event) => {
+  event.waitUntil((async () => {
+    const keys = await caches.keys();
+    await Promise.all(keys
+      .filter((key) => ![SHELL_CACHE, READER_CACHE].includes(key))
+      .map((key) => caches.delete(key)));
+    await self.clients.claim();
+  })());
+});
+
+self.addEventListener("fetch", (event) => {
+  const requestUrl = new URL(event.request.url);
+
+  if (requestUrl.origin !== self.location.origin) {
+    return;
+  }
+
+  if (event.request.mode === "navigate") {
+    event.respondWith((async () => {
+      try {
+        const response = await fetch(event.request);
+        const cache = await caches.open(SHELL_CACHE);
+        await cache.put("/", response.clone());
+        return response;
+      } catch {
+        const cache = await caches.open(SHELL_CACHE);
+        return (await cache.match("/")) || Response.error();
+      }
+    })());
+    return;
+  }
+
+  if (isReaderChapterRequest(requestUrl) || isReaderPageRequest(requestUrl)) {
+    event.respondWith((async () => {
+      const cache = await caches.open(READER_CACHE);
+      const cached = await cache.match(event.request);
+      if (cached) {
+        return cached;
+      }
+
+      const response = await fetch(event.request);
+      if (response.ok) {
+        await cache.put(event.request, response.clone());
+        await rememberChapter(requestUrl);
+      }
+      return response;
+    })());
+    return;
+  }
+});
+`;
+
 /**
  * Register Moon's static assets, legacy redirects, and the two HTML program
  * entry points used by the admin and user SPAs.
  *
  * @param {import("express").Express} app
+ * @param {{config?: {sageBaseUrl?: string}}} [options]
  * @returns {void}
  */
-export const registerPageRoutes = (app) => {
+export const registerPageRoutes = (app, {config = {}} = {}) => {
   const userHtmlPath = path.join(process.cwd(), "apps", "user", "index.html");
   const adminHtmlPath = path.join(process.cwd(), "apps", "admin", "index.html");
   const userAssetsPath = path.join(process.cwd(), "apps", "user", "assets");
   const adminAssetsPath = path.join(process.cwd(), "apps", "admin", "assets");
   const userStylesPath = path.join(process.cwd(), "apps", "user", "assets", "styles.css");
-  const userAppPath = path.join(process.cwd(), "apps", "user", "assets", "app.js");
   const adminStylesPath = path.join(process.cwd(), "apps", "admin", "assets", "styles.css");
-  const adminAppPath = path.join(process.cwd(), "apps", "admin", "assets", "app.js");
   const resolveUserJsVersion = () => resolveAssetVersion(userAssetsPath, new Set([".js"]));
   const resolveAdminJsVersion = () => resolveAssetVersion(adminAssetsPath, new Set([".js"]));
+  const loadBranding = () => readMoonBranding(config.sageBaseUrl || "");
 
   registerVersionedJsAssets(app, "/user-assets", userAssetsPath, resolveUserJsVersion);
   registerVersionedJsAssets(app, "/admin-assets", adminAssetsPath, resolveAdminJsVersion);
   app.use("/user-assets", express.static(userAssetsPath, staticAssetOptions()));
   app.use("/admin-assets", express.static(adminAssetsPath, staticAssetOptions()));
+
+  const renderUserHtml = async () => {
+    const [shellAssets, branding] = await Promise.all([
+      buildUserShellAssetList({userAssetsPath, userStylesPath, resolveUserJsVersion}),
+      loadBranding()
+    ]);
+
+    return renderVersionedHtml(userHtmlPath, [
+      ["__MOON_USER_TITLE__", normalizeSiteName(branding.siteName)],
+      ["__MOON_SITE_NAME__", normalizeSiteName(branding.siteName)],
+      ["__MOON_SHORT_NAME__", deriveShortSiteName(branding.siteName)],
+      ["/user-assets/styles.css", shellAssets.stylesUrl],
+      ["/user-assets/app.js", appendAssetVersion("/user-assets/app.js", shellAssets.jsVersion)]
+    ]);
+  };
+
+  const renderAdminHtml = async () => {
+    const [styles, jsVersion, branding] = await Promise.all([
+      fs.readFile(adminStylesPath, "utf8"),
+      resolveAdminJsVersion(),
+      loadBranding()
+    ]);
+
+    return renderVersionedHtml(adminHtmlPath, [
+      ["__MOON_ADMIN_TITLE__", `${normalizeSiteName(branding.siteName)} Admin`],
+      ["__MOON_SITE_NAME__", normalizeSiteName(branding.siteName)],
+      ["/admin-assets/styles.css", toVersionedAssetPath("/admin-assets/styles.css", styles)],
+      ["/admin-assets/app.js", appendAssetVersion("/admin-assets/app.js", jsVersion)]
+    ]);
+  };
 
   app.get("/downloads", (_req, res) => {
     res.redirect("/admin/activity/queue");
@@ -156,52 +332,62 @@ export const registerPageRoutes = (app) => {
     res.redirect("/admin");
   });
 
-  app.get("/admin", async (_req, res) => {
-    const [styles, jsVersion] = await Promise.all([
-      fs.readFile(adminStylesPath, "utf8"),
-      resolveAdminJsVersion()
-    ]);
+  app.get("/manifest.webmanifest", async (_req, res) => {
+    const branding = await loadBranding();
     res.setHeader("Cache-Control", "no-store");
-    res.type("html").send(await renderVersionedHtml(adminHtmlPath, [
-      ["/admin-assets/styles.css", toVersionedAssetPath("/admin-assets/styles.css", styles)],
-      ["/admin-assets/app.js", appendAssetVersion("/admin-assets/app.js", jsVersion)]
-    ]));
+    res.type("application/manifest+json").send(JSON.stringify({
+      name: normalizeSiteName(branding.siteName),
+      short_name: deriveShortSiteName(branding.siteName),
+      description: `${normalizeSiteName(branding.siteName)} lets readers browse, follow, and read type-scoped libraries from one installable web app.`,
+      start_url: "/",
+      scope: "/",
+      display: "standalone",
+      background_color: "#0f1418",
+      theme_color: "#0f1418",
+      icons: [
+        {
+          src: "/user-assets/icons/icon.svg",
+          sizes: "any",
+          type: "image/svg+xml",
+          purpose: "any"
+        },
+        {
+          src: "/user-assets/icons/icon-maskable.svg",
+          sizes: "any",
+          type: "image/svg+xml",
+          purpose: "maskable"
+        }
+      ]
+    }));
+  });
+
+  app.get("/service-worker.js", async (_req, res) => {
+    const shellAssets = await buildUserShellAssetList({userAssetsPath, userStylesPath, resolveUserJsVersion});
+    res.setHeader("Cache-Control", "no-store");
+    res.type("text/javascript").send(renderServiceWorker({
+      assetVersion: shellAssets.assetVersion,
+      shellAssets: shellAssets.urls
+    }));
+  });
+
+  app.get("/admin", async (_req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    res.type("html").send(await renderAdminHtml());
   });
 
   app.get("/admin/*splat", async (_req, res) => {
-    const [styles, jsVersion] = await Promise.all([
-      fs.readFile(adminStylesPath, "utf8"),
-      resolveAdminJsVersion()
-    ]);
     res.setHeader("Cache-Control", "no-store");
-    res.type("html").send(await renderVersionedHtml(adminHtmlPath, [
-      ["/admin-assets/styles.css", toVersionedAssetPath("/admin-assets/styles.css", styles)],
-      ["/admin-assets/app.js", appendAssetVersion("/admin-assets/app.js", jsVersion)]
-    ]));
+    res.type("html").send(await renderAdminHtml());
   });
 
   app.get("/", async (_req, res) => {
-    const [styles, jsVersion] = await Promise.all([
-      fs.readFile(userStylesPath, "utf8"),
-      resolveUserJsVersion()
-    ]);
     res.setHeader("Cache-Control", "no-store");
-    res.type("html").send(await renderVersionedHtml(userHtmlPath, [
-      ["/user-assets/styles.css", toVersionedAssetPath("/user-assets/styles.css", styles)],
-      ["/user-assets/app.js", appendAssetVersion("/user-assets/app.js", jsVersion)]
-    ]));
+    res.type("html").send(await renderUserHtml());
   });
 
   app.get("/*splat", async (_req, res) => {
-    const [styles, jsVersion] = await Promise.all([
-      fs.readFile(userStylesPath, "utf8"),
-      resolveUserJsVersion()
-    ]);
     res.setHeader("Cache-Control", "no-store");
-    res.type("html").send(await renderVersionedHtml(userHtmlPath, [
-      ["/user-assets/styles.css", toVersionedAssetPath("/user-assets/styles.css", styles)],
-      ["/user-assets/app.js", appendAssetVersion("/user-assets/app.js", jsVersion)]
-    ]));
+    res.type("html").send(await renderUserHtml());
   });
 };
 

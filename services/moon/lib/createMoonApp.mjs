@@ -46,7 +46,7 @@ export const createMoonApp = async ({logger = createLogger("MOON")} = {}) => {
   registerAuthRoutes(app, {config, getSessionToken, logger});
   registerLegacyApiRoutes(app, {config, getSessionToken});
   registerMoonV3ProxyRoutes(app, {config, getSessionToken});
-  registerPageRoutes(app);
+  registerPageRoutes(app, {config});
 
   logger.info("Moon app initialized.", {
     sageBaseUrl: config.sageBaseUrl

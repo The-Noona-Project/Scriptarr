@@ -27,7 +27,7 @@ export const adminRoutes = [
   {id: "wanted-metadata", path: "/admin/wanted/metadata-gaps", title: "Metadata Gaps", description: "Titles that still need better provider coverage or summaries.", navLabel: "Metadata Gaps", group: "Wanted"},
   {id: "requests", path: "/admin/requests", title: "Requests", description: "Moderate Moon and Discord requests from one queue.", navLabel: "Requests", group: "Community"},
   {id: "users", path: "/admin/users", title: "Users", description: "Roles, permissions, and Discord-linked members.", navLabel: "Users", group: "Community"},
-  {id: "settings", path: "/admin/settings", title: "Settings", description: "Raven VPN, metadata providers, Oracle, and LocalAI runtime controls.", navLabel: "Settings", group: "System"},
+  {id: "settings", path: "/admin/settings", title: "Settings", description: "Branding, Raven VPN, metadata providers, Oracle, and LocalAI runtime controls.", navLabel: "Settings", group: "System"},
   {id: "system-status", path: "/admin/system/status", title: "System Status", description: "Warden runtime, bootstrap plan, and service health.", navLabel: "Status", group: "System"},
   {id: "system-tasks", path: "/admin/system/tasks", title: "Tasks", description: "Pending request load and active processing queues.", navLabel: "Tasks", group: "System"},
   {id: "system-updates", path: "/admin/system/updates", title: "Updates", description: "Current image tags and published channels.", navLabel: "Updates", group: "System"},

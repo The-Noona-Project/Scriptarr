@@ -267,7 +267,8 @@ export const createTestStackManager = ({
     moonPort = DEFAULT_TEST_MOON_PORT,
     wardenPort = DEFAULT_TEST_WARDEN_PORT,
     mysqlUrl = "SELFHOST",
-    removeDataRootOnStop
+    removeDataRootOnStop,
+    startupTimeoutMs = 6 * 60_000
   } = {}) => {
     const built = buildTestStackEnvironment({
       env,
@@ -317,15 +318,15 @@ export const createTestStackManager = ({
     });
 
     await dockerOps.waitForHttp(`http://127.0.0.1:${built.wardenPort}/health`, {
-      timeoutMs: 120000,
+      timeoutMs: startupTimeoutMs,
       intervalMs: 1500
     });
     await dockerOps.waitForHttp(`http://127.0.0.1:${built.moonPort}/health`, {
-      timeoutMs: 120000,
+      timeoutMs: startupTimeoutMs,
       intervalMs: 1500
     });
     await dockerOps.waitForHttp(`http://127.0.0.1:${built.moonPort}/api/moon/auth/bootstrap-status`, {
-      timeoutMs: 120000,
+      timeoutMs: startupTimeoutMs,
       intervalMs: 1500
     });
 

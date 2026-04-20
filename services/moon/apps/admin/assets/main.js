@@ -3,6 +3,8 @@ import {matchAdminRoute} from "./routes.js";
 import {renderAdminShell} from "./shell.js";
 import {enhanceAdminPage, loadAdminPage, renderAdminPage} from "./pages/index.js";
 
+const DEFAULT_SITE_NAME = "Scriptarr";
+
 /**
  * Load the shared auth and bootstrap context used by the admin chrome.
  *
@@ -10,22 +12,27 @@ import {enhanceAdminPage, loadAdminPage, renderAdminPage} from "./pages/index.js
  * @returns {Promise<{
  *   user: {username: string, role: string} | null,
  *   loginUrl: string,
- *   bootstrap: {ownerClaimed?: boolean, superuserId?: string} | null
+ *   bootstrap: {ownerClaimed?: boolean, superuserId?: string} | null,
+ *   branding: {siteName?: string}
  * }>}
  */
 const loadChromeContext = async (api) => {
-  const [auth, discordUrl, bootstrap] = await Promise.all([
+  const [auth, discordUrl, bootstrap, branding] = await Promise.all([
     api.getAuthStatus(),
     api.getDiscordUrl(),
-    api.getBootstrapStatus()
+    api.getBootstrapStatus(),
+    api.getBranding()
   ]);
 
   return {
     user: auth.ok ? auth.payload.user : null,
     loginUrl: discordUrl.ok ? discordUrl.payload?.oauthUrl || "#" : "#",
-    bootstrap: bootstrap.ok ? bootstrap.payload : null
+    bootstrap: bootstrap.ok ? bootstrap.payload : null,
+    branding: branding.ok ? branding.payload : {siteName: DEFAULT_SITE_NAME}
   };
 };
+
+const formatDocumentTitle = (route, siteName) => `${route.title} - ${siteName} Admin`;
 
 /**
  * Start the Moon admin SPA runtime.
@@ -80,12 +87,14 @@ export const bootAdminApp = (root) => {
 
     root.innerHTML = renderAdminShell({
       route,
-      content: renderAdminPage(route, pageResult),
+      content: renderAdminPage(route, pageResult, chromeContext),
       user: chromeContext.user,
+      branding: chromeContext.branding,
       flash: state.flash,
       loginUrl: chromeContext.loginUrl,
       bootstrap: chromeContext.bootstrap
     });
+    document.title = formatDocumentTitle(route, chromeContext.branding?.siteName || DEFAULT_SITE_NAME);
 
     state.flash = null;
 

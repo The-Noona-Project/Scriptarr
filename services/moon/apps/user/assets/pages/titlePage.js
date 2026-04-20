@@ -1,4 +1,5 @@
 import {escapeHtml, renderChipList, renderEmptyState} from "../dom.js";
+import {buildReaderPathForTitle, buildTitlePathForTitle} from "../routes.js";
 
 /**
  * Load a Moon title detail payload.
@@ -29,11 +30,11 @@ export const renderTitlePage = (result) => {
   return `
     <section class="detail-hero" style="--detail-accent:${escapeHtml(title.coverAccent || "#de6d3a")}">
       <div class="detail-copy">
-        <span class="section-kicker">${escapeHtml(title.mediaType || "manga")}</span>
+        <span class="section-kicker">${escapeHtml(title.libraryTypeLabel || title.mediaType || "manga")}</span>
         <h1>${escapeHtml(title.title)}</h1>
         <p>${escapeHtml(title.summary || "No summary has been matched for this title yet.")}</p>
         <div class="detail-actions">
-          ${latestChapter ? `<a class="solid-button" href="/reader/${escapeHtml(title.id)}/${escapeHtml(latestChapter.id)}" data-link>Read latest</a>` : ""}
+          ${latestChapter ? `<a class="solid-button" href="${escapeHtml(buildReaderPathForTitle(title, latestChapter.id))}" data-link>Read latest</a>` : ""}
           <button class="ghost-button" id="title-follow-toggle" type="button" data-following="${result.payload.following ? "yes" : "no"}">${result.payload.following ? "Unfollow" : "Follow"}</button>
         </div>
       </div>
@@ -82,9 +83,9 @@ export const renderTitlePage = (result) => {
           <h2>Read from Moon</h2>
         </div>
       </div>
-      <div class="chapter-list">
+        <div class="chapter-list">
         ${availableChapters.map((chapter) => `
-          <a class="chapter-row" href="/reader/${escapeHtml(title.id)}/${escapeHtml(chapter.id)}" data-link>
+          <a class="chapter-row" href="${escapeHtml(buildReaderPathForTitle(title, chapter.id))}" data-link>
             <div>
               <strong>${escapeHtml(chapter.label)}</strong>
               <span>${escapeHtml(chapter.releaseDate || "Unknown date")}</span>
@@ -103,13 +104,20 @@ export const renderTitlePage = (result) => {
  * @param {HTMLElement} root
  * @param {{
  *   api: ReturnType<import("../api.js").createUserApi>,
+ *   navigate: (path: string, options?: {replace?: boolean}) => void,
  *   rerender: () => Promise<void>,
  *   setFlash: (tone: string, text: string) => void
  * }} context
  * @param {Awaited<ReturnType<typeof loadTitlePage>>} result
  * @returns {Promise<void>}
  */
-export const enhanceTitlePage = async (root, {api, rerender, setFlash}, result) => {
+export const enhanceTitlePage = async (root, {api, navigate, rerender, setFlash}, result) => {
+  const canonicalTitlePath = buildTitlePathForTitle(result.payload?.title);
+  if (window.location.pathname !== canonicalTitlePath && result.payload?.title?.libraryTypeSlug) {
+    navigate(canonicalTitlePath, {replace: true});
+    return;
+  }
+
   root.querySelector("#title-follow-toggle")?.addEventListener("click", async () => {
     const title = result.payload?.title;
     const isFollowing = result.payload?.following === true;
@@ -119,7 +127,9 @@ export const enhanceTitlePage = async (root, {api, rerender, setFlash}, result) 
         titleId: title.id,
         title: title.title,
         latestChapter: title.latestChapter,
-        mediaType: title.mediaType
+        mediaType: title.mediaType,
+        libraryTypeLabel: title.libraryTypeLabel,
+        libraryTypeSlug: title.libraryTypeSlug
       });
 
     setFlash(response.ok ? "good" : "bad", response.ok

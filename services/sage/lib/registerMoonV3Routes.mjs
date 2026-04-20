@@ -6,7 +6,7 @@ import {hasPermission} from "./auth.mjs";
 const defaultReaderPreferences = Object.freeze({
   readingMode: "paged",
   pageFit: "width",
-  showSidebar: true,
+  showSidebar: false,
   showPageNumbers: true
 });
 
@@ -17,6 +17,15 @@ const normalizeString = (value, fallback = "") => {
 
 const normalizeArray = (value) => Array.isArray(value) ? value : [];
 
+const normalizeTypeSlug = (value, fallback = "manga") => {
+  const normalized = normalizeString(value, fallback)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+/, "")
+    .replace(/-+$/, "");
+  return normalized || fallback;
+};
+
 const parseIso = (value) => {
   const normalized = normalizeString(value);
   if (!normalized) {
@@ -26,10 +35,81 @@ const parseIso = (value) => {
   return Number.isFinite(parsed) ? new Date(parsed).toISOString() : null;
 };
 
+const defaultReaderPreferencesForType = (typeSlug) => ({
+  ...defaultReaderPreferences,
+  readingMode: normalizeTypeSlug(typeSlug) === "webtoon" ? "webtoon" : "paged"
+});
+
+const normalizeStoredReaderPreferenceLeaf = (value = {}) => ({
+  ...(["paged", "webtoon"].includes(normalizeString(value.readingMode))
+    ? {readingMode: normalizeString(value.readingMode)}
+    : {}),
+  ...(["width", "contain", "height"].includes(normalizeString(value.pageFit))
+    ? {pageFit: normalizeString(value.pageFit)}
+    : {}),
+  ...(typeof value.showSidebar === "boolean" ? {showSidebar: value.showSidebar} : {}),
+  ...(typeof value.showPageNumbers === "boolean" ? {showPageNumbers: value.showPageNumbers} : {})
+});
+
+const normalizeReaderPreferenceLeaf = (value = {}, typeSlug = "manga") => {
+  const defaults = defaultReaderPreferencesForType(typeSlug);
+  return {
+    readingMode: ["paged", "webtoon"].includes(normalizeString(value.readingMode))
+      ? normalizeString(value.readingMode)
+      : defaults.readingMode,
+    pageFit: ["width", "contain", "height"].includes(normalizeString(value.pageFit))
+      ? normalizeString(value.pageFit)
+      : defaults.pageFit,
+    showSidebar: typeof value.showSidebar === "boolean" ? value.showSidebar : defaults.showSidebar,
+    showPageNumbers: typeof value.showPageNumbers === "boolean" ? value.showPageNumbers : defaults.showPageNumbers
+  };
+};
+
+const normalizeReaderPreferenceStore = (value = {}) => {
+  const legacy = value
+    && !value.defaultPreferences
+    && !value.typePreferences
+    && ["readingMode", "pageFit", "showSidebar", "showPageNumbers"].some((key) => key in value)
+    ? value
+    : null;
+  const rawTypePreferences = legacy ? {} : value?.typePreferences;
+  return {
+    defaultPreferences: normalizeStoredReaderPreferenceLeaf(legacy || value?.defaultPreferences || {}),
+    typePreferences: Object.fromEntries(Object.entries(rawTypePreferences || {}).map(([typeSlug, preferences]) => [
+      normalizeTypeSlug(typeSlug),
+      normalizeReaderPreferenceLeaf(preferences, typeSlug)
+    ]))
+  };
+};
+
+const resolveReaderPreferences = (value, typeSlug) => {
+  const store = normalizeReaderPreferenceStore(value);
+  const normalizedType = normalizeTypeSlug(typeSlug);
+  return {
+    ...defaultReaderPreferencesForType(normalizedType),
+    ...store.defaultPreferences,
+    ...(store.typePreferences[normalizedType] || {})
+  };
+};
+
+const mergeReaderPreferences = (currentValue, typeSlug, nextValue) => {
+  const store = normalizeReaderPreferenceStore(currentValue);
+  const normalizedType = normalizeTypeSlug(typeSlug);
+  return {
+    ...store,
+    typePreferences: {
+      ...store.typePreferences,
+      [normalizedType]: normalizeReaderPreferenceLeaf(nextValue, normalizedType)
+    }
+  };
+};
+
 const toTitleSummary = (title = {}) => ({
   id: normalizeString(title.id),
   title: normalizeString(title.title, "Untitled"),
   mediaType: normalizeString(title.mediaType, "manga"),
+  libraryTypeLabel: normalizeString(title.libraryTypeLabel, normalizeString(title.mediaType, "Manga")),
+  libraryTypeSlug: normalizeTypeSlug(title.libraryTypeSlug || title.mediaType),
   status: normalizeString(title.status, "active"),
   latestChapter: normalizeString(title.latestChapter, "Unknown"),
   coverAccent: normalizeString(title.coverAccent, "#4f8f88"),
@@ -43,7 +123,16 @@ const toTitleSummary = (title = {}) => ({
   metadataProvider: normalizeString(title.metadataProvider),
   metadataMatchedAt: parseIso(title.metadataMatchedAt),
   relations: normalizeArray(title.relations),
-  chapters: normalizeArray(title.chapters)
+  chapters: normalizeArray(title.chapters).map(toChapterSummary)
+});
+
+const toChapterSummary = (chapter = {}) => ({
+  id: normalizeString(chapter.id),
+  label: normalizeString(chapter.label, "Chapter"),
+  chapterNumber: normalizeString(chapter.chapterNumber),
+  pageCount: Number.parseInt(String(chapter.pageCount || 0), 10) || 0,
+  releaseDate: normalizeString(chapter.releaseDate),
+  available: chapter.available !== false
 });
 
 const toRequestSummary = (request = {}, userIndex = new Map()) => {
@@ -121,6 +210,8 @@ const enrichProgressEntry = (entry = {}, titleIndex = new Map()) => {
     titleId: normalizeString(entry.mediaId),
     title: normalizeString(title.title, normalizeString(entry.mediaId, "Untitled")),
     mediaType: normalizeString(title.mediaType, "manga"),
+    libraryTypeLabel: normalizeString(title.libraryTypeLabel, normalizeString(title.mediaType, "Manga")),
+    libraryTypeSlug: normalizeTypeSlug(title.libraryTypeSlug || title.mediaType),
     coverAccent: normalizeString(title.coverAccent, "#4f8f88"),
     latestChapter: normalizeString(title.latestChapter, entry.chapterLabel || "In progress"),
     summary: normalizeString(title.summary)
@@ -160,6 +251,7 @@ const withPermission = (requirePermission, permission, handler) => async (req, r
  *   readRavenVpnSettings: () => Promise<Record<string, unknown>>,
  *   readMetadataProviderSettings: () => Promise<Record<string, unknown>>,
  *   readOracleSettings: () => Promise<Record<string, unknown>>,
+ *   readMoonBrandingSettings: () => Promise<Record<string, unknown>>,
  *   serviceJson: (baseUrl: string, path: string, options?: {method?: string, body?: unknown, headers?: Record<string, string>}) => Promise<{ok: boolean, status: number, payload: any}>,
  *   safeJson: (promise: Promise<unknown>) => Promise<any>
  * }} options
@@ -173,6 +265,7 @@ export const registerMoonV3Routes = (app, {
   readRavenVpnSettings,
   readMetadataProviderSettings,
   readOracleSettings,
+  readMoonBrandingSettings,
   serviceJson,
   safeJson
 }) => {
@@ -256,6 +349,10 @@ export const registerMoonV3Routes = (app, {
   const requireAdminSettings = (handler) => withPermission(requirePermission, "manage_settings", handler);
   const requireLibraryRead = (handler) => withPermission(requirePermission, "read_library", handler);
   const requireRequestRead = (handler) => withPermission(requirePermission, "read_requests", handler);
+
+  app.get("/api/moon-v3/public/branding", async (_req, res) => {
+    res.json(await readMoonBrandingSettings());
+  });
 
   app.get("/api/moon-v3/admin/overview", requireLibraryRead(async (_req, res) => {
     const [titles, tasks, requests, services] = await Promise.all([
@@ -393,10 +490,11 @@ export const registerMoonV3Routes = (app, {
   }));
 
   app.get("/api/moon-v3/admin/settings", requireAdminSettings(async (_req, res) => {
-    const [ravenVpn, metadataProviders, oracle, wardenStatus] = await Promise.all([
+    const [ravenVpn, metadataProviders, oracle, branding, wardenStatus] = await Promise.all([
       readRavenVpnSettings(),
       readMetadataProviderSettings(),
       readOracleSettings(),
+      readMoonBrandingSettings(),
       safeJson(serviceJson(config.wardenBaseUrl, "/api/localai/status"))
     ]);
 
@@ -404,6 +502,7 @@ export const registerMoonV3Routes = (app, {
       ravenVpn,
       metadataProviders,
       oracle,
+      branding,
       warden: wardenStatus.payload || wardenStatus
     });
   }));
@@ -497,7 +596,11 @@ export const registerMoonV3Routes = (app, {
       latestTitles: titles.slice(0, 8),
       continueReading: normalizeArray(progress).map((entry) => enrichProgressEntry(entry, titleIndex)),
       requests: requests.filter((entry) => entry.requestedBy.discordUserId === req.user.discordUserId),
-      following: normalizeArray(following)
+      following: normalizeArray(following).map((entry) => ({
+        ...entry,
+        libraryTypeLabel: normalizeString(entry.libraryTypeLabel, normalizeString(entry.mediaType, "Manga")),
+        libraryTypeSlug: normalizeTypeSlug(entry.libraryTypeSlug || entry.mediaType)
+      }))
     });
   }));
 
@@ -554,7 +657,11 @@ export const registerMoonV3Routes = (app, {
 
   app.get("/api/moon-v3/user/following", withUser(requireUser, async (req, res) => {
     res.json({
-      following: normalizeArray(await readUserScopedSetting(vaultClient, "moon.following", req.user.discordUserId, []))
+      following: normalizeArray(await readUserScopedSetting(vaultClient, "moon.following", req.user.discordUserId, [])).map((entry) => ({
+        ...entry,
+        libraryTypeLabel: normalizeString(entry.libraryTypeLabel, normalizeString(entry.mediaType, "Manga")),
+        libraryTypeSlug: normalizeTypeSlug(entry.libraryTypeSlug || entry.mediaType)
+      }))
     });
   }));
 
@@ -564,7 +671,9 @@ export const registerMoonV3Routes = (app, {
       titleId: normalizeString(req.body.titleId),
       title: normalizeString(req.body.title),
       latestChapter: normalizeString(req.body.latestChapter),
-      mediaType: normalizeString(req.body.mediaType, "manga")
+      mediaType: normalizeString(req.body.mediaType, "manga"),
+      libraryTypeLabel: normalizeString(req.body.libraryTypeLabel, normalizeString(req.body.mediaType, "Manga")),
+      libraryTypeSlug: normalizeTypeSlug(req.body.libraryTypeSlug || req.body.mediaType)
     };
     const deduped = [...current.filter((entry) => entry.titleId !== nextEntry.titleId), nextEntry];
     await writeUserScopedSetting(vaultClient, "moon.following", req.user.discordUserId, deduped);
@@ -579,18 +688,17 @@ export const registerMoonV3Routes = (app, {
   }));
 
   app.get("/api/moon-v3/user/reader/preferences", withUser(requireUser, async (req, res) => {
-    res.json(await readUserScopedSetting(vaultClient, "moon.reader.preferences", req.user.discordUserId, defaultReaderPreferences));
+    const typeSlug = normalizeTypeSlug(req.query.typeSlug || req.query.type || "manga");
+    const storedPreferences = await readUserScopedSetting(vaultClient, "moon.reader.preferences", req.user.discordUserId, {});
+    res.json(resolveReaderPreferences(storedPreferences, typeSlug));
   }));
 
   app.put("/api/moon-v3/user/reader/preferences", withUser(requireUser, async (req, res) => {
-    const next = {
-      readingMode: ["paged", "webtoon"].includes(normalizeString(req.body.readingMode)) ? normalizeString(req.body.readingMode) : defaultReaderPreferences.readingMode,
-      pageFit: ["width", "contain", "height"].includes(normalizeString(req.body.pageFit)) ? normalizeString(req.body.pageFit) : defaultReaderPreferences.pageFit,
-      showSidebar: Boolean(req.body.showSidebar),
-      showPageNumbers: Boolean(req.body.showPageNumbers)
-    };
-    await writeUserScopedSetting(vaultClient, "moon.reader.preferences", req.user.discordUserId, next);
-    res.json(next);
+    const typeSlug = normalizeTypeSlug(req.body.typeSlug || req.body.type || "manga");
+    const storedPreferences = await readUserScopedSetting(vaultClient, "moon.reader.preferences", req.user.discordUserId, {});
+    const nextStore = mergeReaderPreferences(storedPreferences, typeSlug, req.body);
+    await writeUserScopedSetting(vaultClient, "moon.reader.preferences", req.user.discordUserId, nextStore);
+    res.json(resolveReaderPreferences(nextStore, typeSlug));
   }));
 
   app.get("/api/moon-v3/user/reader/bookmarks", withUser(requireUser, async (req, res) => {
@@ -643,15 +751,24 @@ export const registerMoonV3Routes = (app, {
 
   app.get("/api/moon-v3/user/reader/title/:titleId", withUser(requireUser, async (req, res) => {
     const result = await serviceJson(config.ravenBaseUrl, `/v1/reader/${encodeURIComponent(req.params.titleId)}`);
-    res.status(result.status).json(result.payload);
+    if (!result.ok) {
+      res.status(result.status).json(result.payload);
+      return;
+    }
+
+    res.json({
+      title: toTitleSummary(result.payload?.title),
+      chapters: normalizeArray(result.payload?.chapters).map(toChapterSummary)
+    });
   }));
 
   app.get("/api/moon-v3/user/reader/title/:titleId/chapter/:chapterId", withUser(requireUser, async (req, res) => {
-    const [chapter, progress, bookmarks, preferences] = await Promise.all([
+    const [manifest, chapter, progress, bookmarks, storedPreferences] = await Promise.all([
+      serviceJson(config.ravenBaseUrl, `/v1/reader/${encodeURIComponent(req.params.titleId)}`),
       serviceJson(config.ravenBaseUrl, `/v1/reader/${encodeURIComponent(req.params.titleId)}/${encodeURIComponent(req.params.chapterId)}`),
       vaultClient.getProgress(req.user.discordUserId),
       readUserScopedSetting(vaultClient, "moon.reader.bookmarks", req.user.discordUserId, []),
-      readUserScopedSetting(vaultClient, "moon.reader.preferences", req.user.discordUserId, defaultReaderPreferences)
+      readUserScopedSetting(vaultClient, "moon.reader.preferences", req.user.discordUserId, {})
     ]);
 
     if (!chapter.ok) {
@@ -660,18 +777,33 @@ export const registerMoonV3Routes = (app, {
     }
 
     const payload = chapter.payload;
+    const title = toTitleSummary(payload.title);
+    const chapterSummary = toChapterSummary(payload.chapter);
+    const manifestPayload = manifest.ok
+      ? {
+        title: toTitleSummary(manifest.payload?.title || payload.title),
+        chapters: normalizeArray(manifest.payload?.chapters).map(toChapterSummary)
+      }
+      : {
+        title,
+        chapters: [chapterSummary]
+      };
+    const typeSlug = normalizeTypeSlug(title.libraryTypeSlug || title.mediaType);
     const progressEntry = normalizeArray(progress).find((entry) => entry.mediaId === payload.title.id);
     const pageBase = `/api/moon/v3/user/reader/title/${encodeURIComponent(req.params.titleId)}/chapter/${encodeURIComponent(req.params.chapterId)}/page`;
 
     res.json({
       ...payload,
+      title,
+      chapter: chapterSummary,
+      manifest: manifestPayload,
       pages: normalizeArray(payload.pages).map((page) => ({
         ...page,
         src: `${pageBase}/${page.index}`
       })),
       progress: progressEntry || null,
       bookmarks: normalizeArray(bookmarks).filter((entry) => entry.titleId === req.params.titleId && entry.chapterId === req.params.chapterId),
-      preferences
+      preferences: resolveReaderPreferences(storedPreferences, typeSlug)
     });
   }));
 
