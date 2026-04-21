@@ -2,6 +2,68 @@ import {escapeHtml, renderChipList, renderCoverThumb, renderEmptyState, renderSt
 import {formatDate} from "../format.js";
 
 const normalizeArray = (value) => Array.isArray(value) ? value : [];
+const normalizeString = (value, fallback = "") => {
+  const normalized = typeof value === "string" ? value.trim() : "";
+  return normalized || fallback;
+};
+
+/**
+ * Resolve the representative metadata entry from a grouped Raven intake result.
+ *
+ * @param {Record<string, any>} entry
+ * @returns {Record<string, any>}
+ */
+const resolveMetadata = (entry) => entry.selectedMetadata
+  || entry.metadata
+  || entry.representativeMetadata
+  || normalizeArray(entry.metadataMatches)[0]
+  || {};
+
+/**
+ * Resolve the concrete download target from a grouped Raven intake result.
+ *
+ * @param {Record<string, any>} entry
+ * @returns {Record<string, any> | null}
+ */
+const resolveDownload = (entry) => entry.selectedDownload
+  || entry.download
+  || entry.downloadTarget
+  || entry.bestDownloadMatch
+  || null;
+
+/**
+ * Resolve the stable target identity from a grouped Raven intake result.
+ *
+ * @param {Record<string, any>} entry
+ * @param {Record<string, any> | null} download
+ * @returns {Record<string, any> | null}
+ */
+const resolveTargetIdentity = (entry, download) => {
+  const explicitIdentity = entry.targetIdentity
+    || entry.workIdentity
+    || entry.stableTargetIdentity
+    || download?.targetIdentity
+    || null;
+  if (explicitIdentity && typeof explicitIdentity === "object" && !Array.isArray(explicitIdentity)) {
+    return explicitIdentity;
+  }
+
+  const workKey = normalizeString(entry.workKey || entry.targetWorkKey || download?.workKey);
+  const providerId = normalizeString(
+    entry.downloadProviderId
+    || download?.providerId
+    || download?.providerName
+  );
+  const titleUrl = normalizeString(entry.titleUrl || download?.titleUrl);
+  if (!workKey && !providerId && !titleUrl) {
+    return null;
+  }
+  return {
+    workKey,
+    providerId,
+    titleUrl
+  };
+};
 
 /**
  * Load the moderation request queue.
@@ -94,16 +156,24 @@ export const enhanceRequestsPage = async (root, {api, rerender, setFlash}) => {
       if (action === "resolve") {
         const query = button.dataset.requestQuery || "";
         const search = await api.get(`/api/moon/v3/admin/add/search?query=${encodeURIComponent(query)}`);
-        const readyMatch = normalizeArray(search.payload?.results).find((entry) => entry.download?.titleUrl);
+        const readyMatch = normalizeArray(search.payload?.results).find((entry) => {
+          const download = resolveDownload(entry);
+          return Boolean(download?.titleUrl);
+        });
         if (!readyMatch) {
           setFlash("bad", "No concrete download match is available for this request yet.");
           return;
         }
+        const metadata = resolveMetadata(readyMatch);
+        const download = resolveDownload(readyMatch);
+        const targetIdentity = resolveTargetIdentity(readyMatch, download);
 
         const result = await api.post(`/api/moon/v3/admin/requests/${encodeURIComponent(requestId)}/resolve`, {
           query,
-          selectedMetadata: readyMatch.metadata,
-          selectedDownload: readyMatch.download
+          title: normalizeString(readyMatch.title || readyMatch.canonicalTitle || metadata.title || download?.titleName),
+          selectedMetadata: metadata,
+          selectedDownload: download,
+          ...(targetIdentity ? {targetIdentity} : {})
         });
         setFlash(result.ok ? "good" : "bad", result.ok
           ? "Unavailable request resolved and queued."

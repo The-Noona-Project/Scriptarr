@@ -8,6 +8,12 @@
   configured priority and credential gates.
 - Download-provider selection is now explicit. Raven intake should search enabled metadata providers first, expand
   aliases from those matches, then run enabled site-specific download providers in registry order.
+- Raven intake results should group by concrete `providerId + titleUrl` identity. Metadata variants that hit the same
+  provider series should collapse into one requestable target, while true separate edition URLs should stay separate.
+- Raven's DM-only bulk queue flow (`/downloadall`) should stay provider-browse first, then metadata-resolve each
+  concrete provider target before queueing it. Only queue titles with one confident metadata match, persist that
+  metadata snapshot into the queued download, and report already-active, no-metadata, ambiguous-metadata, and failed
+  outcomes separately.
 - Keep full JavaDoc on Raven main and test Java sources and let `gradlew check` fail when doc coverage regresses.
 - Fresh installs must not reintroduce demo titles; Raven's default library state is empty until real ingest exists.
 - Raven library storage now uses dynamic source-backed type labels and the managed folder lifecycle:
@@ -17,6 +23,8 @@
   an existing tunnel is still valid.
 - Raven chapter and page filenames now come from the brokered `raven.naming` template settings while title-folder
   naming stays stable for rescan compatibility.
+- `raven.naming` is now profile-based by library type. Preserve the fallback profile plus the per-type profiles for
+  manga, manhwa, manhua, webtoon, comic, and OEL when changing naming or parser code.
 - The brokered `raven.download.providers` setting controls which download providers are enabled and their priority.
   This release only registers WeebCentral, but new sites should arrive as discrete provider implementations under the
   registry contract instead of by growing one generic scraper class.
@@ -26,6 +34,8 @@
   persist step fails, fail the task loudly instead of leaving it running at `90%`.
 - Startup recovery should rescan finished `downloaded/<type>/...` content, backfill missing catalog rows, and collapse
   duplicate restorable tasks so Moon queue views only see one logical download.
+- Preserve and enrich release-date data when Raven can observe it. Chapter release dates from provider scrapes and
+  title-level release labels from metadata providers now feed Moon's dense admin library and calendar views.
 - Raven parity notes from the old Noona services:
   - keep WeebCentral search, title detail scrape, chapter scrape, and page image resolution
   - keep download task persistence across restarts

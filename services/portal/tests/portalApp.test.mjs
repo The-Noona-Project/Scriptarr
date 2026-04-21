@@ -136,6 +136,8 @@ test("portal HTTP surface covers command inventory, request routing, chat routin
     "POST /api/internal/portal/requests/from-discord": async ({req, body}) => {
       assert.equal(req.headers.authorization, "Bearer portal-service-token");
       assert.equal(body.discordUserId, "253987219969146890");
+      assert.equal(body.title, "Dandadan");
+      assert.equal(body.targetIdentity.workKey, "weebcentral:https://weebcentral.example/dandadan");
       return {
         status: 201,
         body: {
@@ -184,6 +186,11 @@ test("portal HTTP surface covers command inventory, request routing, chat routin
             providerId: "weebcentral",
             titleUrl: "https://weebcentral.example/dandadan",
             requestType: "manga"
+          },
+          targetIdentity: {
+            workKey: "weebcentral:https://weebcentral.example/dandadan",
+            providerId: "weebcentral",
+            titleUrl: "https://weebcentral.example/dandadan"
           }
         })
       });
@@ -263,12 +270,13 @@ test("portal HTTP surface covers command inventory, request routing, chat routin
   await legacySage.close();
 });
 
-test("portal notifier delivers follow and request completion DMs once", async () => {
+test("portal notifier delivers follow, approval, denial, and completion DMs once", async () => {
   const sent = [];
   const acknowledged = [];
   const ackedIds = new Set();
   const notifier = createFollowNotifier({
     pollMs: 5,
+    publicBaseUrl: "https://pax-kun.com",
     logger: {error() {}},
     discord: {
       async sendDirectMessage(discordUserId, payload) {
@@ -299,14 +307,37 @@ test("portal notifier delivers follow and request completion DMs once", async ()
         return {
           ok: true,
           payload: {
-            notifications: ackedIds.has("request-1") ? [] : [{
-              id: "request-1",
-              requestId: "request-1",
-              discordUserId: "user-1",
-              titleName: "Solo Leveling",
-              titleUrl: "https://pax-kun.com/title/manhwa/solo-leveling",
-              coverUrl: "https://images.example/solo.jpg"
-            }]
+            notifications: [
+              ackedIds.has("request-1")
+                ? null
+                : {
+                  id: "request-1",
+                  requestId: "request-1",
+                  discordUserId: "user-1",
+                  titleName: "Solo Leveling",
+                  titleUrl: "https://pax-kun.com/title/manhwa/solo-leveling",
+                  coverUrl: "https://images.example/solo.jpg"
+                },
+              ackedIds.has("request-2:approved")
+                ? null
+                : {
+                  requestId: "request-2",
+                  decisionType: "approved",
+                  discordUserId: "user-1",
+                  titleName: "One Piece",
+                  coverUrl: "https://images.example/one-piece.jpg",
+                  moderatorNote: "Approved from Moon admin."
+                },
+              ackedIds.has("request-3:denied")
+                ? null
+                : {
+                  requestId: "request-3",
+                  decisionType: "denied",
+                  discordUserId: "user-1",
+                  titleName: "Chainsaw Man",
+                  note: "Already available elsewhere."
+                }
+            ].filter(Boolean)
           }
         };
       },
@@ -322,9 +353,18 @@ test("portal notifier delivers follow and request completion DMs once", async ()
   await new Promise((resolve) => setTimeout(resolve, 30));
   notifier.stop();
 
-  assert.equal(sent.length >= 2, true);
+  assert.equal(sent.length >= 4, true);
   assert.ok(sent.some((entry) => entry.payload?.content.includes("Dandadan")));
   assert.ok(sent.some((entry) => entry.payload?.content.includes("Solo Leveling")));
+  assert.ok(sent.some((entry) => entry.payload?.content.includes("was approved")));
+  assert.ok(sent.some((entry) => entry.payload?.content.includes("was denied")));
+  assert.ok(sent.some((entry) => entry.payload?.content.includes("Approved from Moon admin.")));
+  assert.ok(sent.some((entry) => entry.payload?.content.includes("https://pax-kun.com/myrequests")));
   assert.ok(sent.some((entry) => entry.payload?.embeds?.[0]?.image?.url === "https://images.example/solo.jpg"));
-  assert.deepEqual(acknowledged.sort(), ["follow:follow-1", "request:request-1"]);
+  assert.deepEqual(acknowledged.sort(), [
+    "follow:follow-1",
+    "request:request-1",
+    "request:request-2:approved",
+    "request:request-3:denied"
+  ]);
 });

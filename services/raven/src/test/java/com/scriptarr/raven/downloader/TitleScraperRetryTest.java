@@ -74,6 +74,38 @@ class TitleScraperRetryTest {
     }
 
     /**
+     * Verify chapter list scraping carries upstream release dates through the
+     * normalized chapter payload.
+     *
+     * @throws Exception when the local test server cannot start
+     */
+    @Test
+    void getChaptersCapturesReleaseDateMetadata() throws Exception {
+        server = HttpServer.create(new InetSocketAddress(0), 0);
+        server.createContext("/series/demo/full-chapter-list", (exchange) -> respond(
+            exchange,
+            200,
+            """
+                <html><body>
+                  <div class="chapter-row">
+                    <a href="https://weebcentral.com/chapters/one">Chapter 1</a>
+                    <time datetime="2026-04-17T20:37:44.947792Z">Apr 17</time>
+                  </div>
+                </body></html>
+                """
+        ));
+        server.start();
+
+        TitleScraper scraper = new TitleScraper(new TestLogger());
+        String titleUrl = "http://127.0.0.1:" + server.getAddress().getPort() + "/series/demo/Example-Title";
+
+        List<Map<String, String>> chapters = scraper.getChapters(titleUrl);
+
+        assertEquals(1, chapters.size());
+        assertEquals("2026-04-17T20:37:44.947792Z", chapters.getFirst().get("release_date"));
+    }
+
+    /**
      * Send a fixed HTTP response for the lightweight local server.
      *
      * @param exchange active HTTP exchange

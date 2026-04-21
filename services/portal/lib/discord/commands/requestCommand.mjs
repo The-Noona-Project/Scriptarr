@@ -1,7 +1,12 @@
 import {
   createPickerMessage,
   ensureDiscordIdentity,
-  handleSessionButton
+  handleSessionButton,
+  resolveIntakeDownload,
+  resolveIntakeMetadata,
+  resolveIntakeRequestType,
+  resolveIntakeTargetIdentity,
+  resolveIntakeTitle
 } from "../commandHelpers.mjs";
 import {REQUEST_SESSION_TTL_MS} from "../constants.mjs";
 import {createSessionStore} from "../sessionStore.mjs";
@@ -87,6 +92,7 @@ export const createRequestCommand = ({sage}) => {
             });
             return;
           }
+          const targetIdentity = resolveIntakeTargetIdentity(choice);
 
           const response = await sage.createDiscordRequest({
             source: "discord",
@@ -94,14 +100,16 @@ export const createRequestCommand = ({sage}) => {
             username: component.user?.globalName || component.user?.username || "Discord Reader",
             query: session.query,
             notes: session.notes,
-            selectedMetadata: choice.selectedMetadata || choice.metadata || null,
-            selectedDownload: choice.selectedDownload || choice.download || null,
-            requestType: normalizeString(choice.requestType || choice.type, "manga")
+            title: resolveIntakeTitle(choice),
+            selectedMetadata: resolveIntakeMetadata(choice),
+            selectedDownload: resolveIntakeDownload(choice),
+            requestType: resolveIntakeRequestType(choice),
+            ...(targetIdentity ? {targetIdentity} : {})
           });
 
           await sendInteractionReply(component, {
             content: response.ok
-              ? `Request saved as **${normalizeString(response.payload?.status, "pending")}** for **${normalizeString(response.payload?.title || choice.title, "Untitled")}**.`
+              ? `Request saved as **${normalizeString(response.payload?.status, "pending")}** for **${normalizeString(response.payload?.title || resolveIntakeTitle(choice), "Untitled")}**.`
               : response.payload?.error || "Unable to create that request right now.",
             ephemeral: true,
             components: []

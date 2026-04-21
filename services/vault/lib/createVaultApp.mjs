@@ -16,6 +16,21 @@ const sendStoreError = (logger, res, error, context = {}) => {
     res.status(409).json({error: "Request revision conflict.", code: error.code});
     return true;
   }
+  if (error?.code === "REQUEST_WORK_KEY_CONFLICT") {
+    logger.warn("Request create or update hit an active work-key conflict.", {
+      ...context,
+      requestId: error?.requestId,
+      workKeyKind: error?.workKeyKind
+    });
+    res.status(409).json({
+      error: "That title is already queued or has an active request.",
+      code: error.code,
+      ...(error?.requestId ? {requestId: error.requestId} : {}),
+      ...(error?.workKey ? {workKey: error.workKey} : {}),
+      ...(error?.workKeyKind ? {workKeyKind: error.workKeyKind} : {})
+    });
+    return true;
+  }
   return false;
 };
 
@@ -122,7 +137,17 @@ export const createVaultApp = async ({logger = createLogger("VAULT")} = {}) => {
   });
 
   app.post("/api/service/requests", requireJson, async (req, res) => {
-    res.status(201).json(await store.createRequest(req.body));
+    try {
+      res.status(201).json(await store.createRequest(req.body));
+    } catch (error) {
+      if (sendStoreError(logger, res, error, {
+        requestedBy: req.body?.requestedBy,
+        source: req.body?.source
+      })) {
+        return;
+      }
+      throw error;
+    }
   });
 
   app.patch("/api/service/requests/:id", requireJson, async (req, res) => {

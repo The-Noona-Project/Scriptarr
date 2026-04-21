@@ -1,6 +1,118 @@
 import {escapeHtml, renderChipList, renderCoverThumb, renderEmptyState, renderStatusBadge} from "../dom.js";
 
 const normalizeArray = (value) => Array.isArray(value) ? value : [];
+const normalizeString = (value, fallback = "") => {
+  const normalized = typeof value === "string" ? value.trim() : "";
+  return normalized || fallback;
+};
+
+/**
+ * Resolve the representative metadata match from a grouped intake result.
+ *
+ * @param {Record<string, any>} entry
+ * @returns {Record<string, any>}
+ */
+const resolveMetadata = (entry) => entry.selectedMetadata
+  || entry.metadata
+  || entry.representativeMetadata
+  || normalizeArray(entry.metadataMatches)[0]
+  || {};
+
+/**
+ * Resolve the concrete download target from a grouped intake result.
+ *
+ * @param {Record<string, any>} entry
+ * @returns {Record<string, any> | null}
+ */
+const resolveDownload = (entry) => entry.selectedDownload
+  || entry.download
+  || entry.downloadTarget
+  || entry.bestDownloadMatch
+  || null;
+
+/**
+ * Resolve the stable work identity from a grouped Raven intake result.
+ *
+ * @param {Record<string, any>} entry
+ * @param {Record<string, any> | null} download
+ * @returns {Record<string, any> | null}
+ */
+const resolveTargetIdentity = (entry, download) => {
+  const explicitIdentity = entry.targetIdentity
+    || entry.workIdentity
+    || entry.stableTargetIdentity
+    || download?.targetIdentity
+    || null;
+  if (explicitIdentity && typeof explicitIdentity === "object" && !Array.isArray(explicitIdentity)) {
+    return explicitIdentity;
+  }
+
+  const workKey = normalizeString(entry.workKey || entry.targetWorkKey || download?.workKey);
+  const providerId = normalizeString(
+    entry.downloadProviderId
+    || download?.providerId
+    || download?.providerName
+  );
+  const titleUrl = normalizeString(entry.titleUrl || download?.titleUrl);
+  if (!workKey && !providerId && !titleUrl) {
+    return null;
+  }
+  return {
+    workKey,
+    providerId,
+    titleUrl
+  };
+};
+
+/**
+ * Normalize a grouped intake result into a consistent Moon admin shape.
+ *
+ * @param {Record<string, any>} entry
+ * @returns {{
+ *   metadata: Record<string, any>,
+ *   download: Record<string, any> | null,
+ *   targetIdentity: Record<string, any> | null,
+ *   title: string,
+ *   editionLabel: string,
+ *   availability: string,
+ *   type: string,
+ *   requestType: string,
+ *   coverUrl: string,
+ *   aliases: string[]
+ * }}
+ */
+const normalizeIntakeResult = (entry) => {
+  const metadata = resolveMetadata(entry);
+  const download = resolveDownload(entry);
+  const title = normalizeString(
+    entry.displayTitle
+    || entry.title
+    || entry.canonicalTitle
+    || entry.baseTitle
+    || metadata.title
+    || download?.titleName,
+    "Untitled match"
+  );
+  const editionLabel = normalizeString(
+    entry.editionLabel
+    || entry.variantLabel
+    || entry.variantSummary
+    || entry.subtitle
+    || entry.targetIdentity?.editionLabel
+  );
+  return {
+    metadata,
+    download,
+    targetIdentity: resolveTargetIdentity(entry, download),
+    title,
+    editionLabel,
+    availability: normalizeString(entry.availability, "unavailable"),
+    type: normalizeString(entry.type || metadata.type || metadata.libraryTypeLabel || "manga"),
+    requestType: normalizeString(download?.requestType || entry.requestType || metadata.type, "manga"),
+    coverUrl: normalizeString(entry.coverUrl || download?.coverUrl || metadata.coverUrl),
+    aliases: normalizeArray(entry.aliases || metadata.aliases).filter(Boolean).slice(0, 5)
+  };
+};
 
 /**
  * Load add-title search results for the current query string.
@@ -27,28 +139,35 @@ export const loadAddPage = async ({api, searchParams}) => {
 };
 
 const renderResultCard = (entry, index) => {
-  const metadata = entry.metadata || {};
-  const download = entry.download || null;
-  const aliases = normalizeArray(entry.aliases || metadata.aliases).filter(Boolean).slice(0, 5);
-  const ready = entry.availability === "available" && download?.titleUrl;
-  const coverUrl = entry.coverUrl || download?.coverUrl || metadata.coverUrl || "";
+  const normalized = normalizeIntakeResult(entry);
+  const metadata = normalized.metadata;
+  const download = normalized.download;
+  const ready = ["available", "download-ready"].includes(normalized.availability) && download?.titleUrl;
+  const detailChips = [
+    normalized.editionLabel,
+    normalized.type
+  ].filter((value) => {
+    const normalizedValue = normalizeString(value).toLowerCase();
+    return normalizedValue && !normalized.title.toLowerCase().includes(normalizedValue);
+  });
 
   return `
     <article class="stack-card intake-card ${ready ? "is-ready" : "is-unavailable"}">
       <div class="list-card-head with-cover">
-        ${renderCoverThumb(coverUrl, entry.canonicalTitle || metadata.title || "Untitled match")}
+        ${renderCoverThumb(normalized.coverUrl, normalized.title)}
         <div class="list-card-copy">
           <div>
-            <strong>${escapeHtml(entry.canonicalTitle || metadata.title || "Untitled match")}</strong>
+            <strong>${escapeHtml(normalized.title)}</strong>
             <span>${escapeHtml(metadata.provider || entry.metadataProviderId || "metadata")} -> ${escapeHtml(download?.providerName || "No download match yet")}</span>
+            ${detailChips.length ? renderChipList(detailChips) : ""}
           </div>
         </div>
         ${renderStatusBadge(ready ? "Ready" : "Unavailable")}
       </div>
       <p>${escapeHtml(metadata.summary || "No metadata summary was returned for this match.")}</p>
-      ${aliases.length ? renderChipList(aliases) : ""}
+      ${normalized.aliases.length ? renderChipList(normalized.aliases) : ""}
       <div class="inline-note">
-        <strong>${escapeHtml(entry.type || metadata.type || "manga")}</strong>
+        <strong>${escapeHtml(normalized.type)}</strong>
         <span>${escapeHtml(download?.titleName || "No enabled download provider match yet")}</span>
       </div>
       <button class="solid-button" type="button" data-action="queue-title" data-result-index="${escapeHtml(index)}">
@@ -129,19 +248,22 @@ export const enhanceAddPage = async (root, {api, navigate, rerender, setFlash}, 
         setFlash("bad", "That intake result is no longer available.");
         return;
       }
+      const normalized = normalizeIntakeResult(selected);
 
       const response = await api.post("/api/moon/v3/admin/add/queue", {
         query: root.querySelector("#admin-add-query")?.value.trim() || "",
-        requestType: selected.download?.requestType || selected.type || "manga",
+        title: normalized.title,
+        requestType: normalized.requestType,
         notes: root.querySelector("#admin-add-notes")?.value || "",
-        selectedMetadata: selected.metadata,
-        selectedDownload: selected.download || null
+        selectedMetadata: normalized.metadata,
+        selectedDownload: normalized.download || null,
+        ...(normalized.targetIdentity ? {targetIdentity: normalized.targetIdentity} : {})
       });
 
       setFlash(
         response.ok ? "good" : "bad",
         response.ok
-          ? (selected.download?.titleUrl
+          ? (normalized.download?.titleUrl
             ? "Request created and queued into Raven."
             : "Request saved as unavailable for later resolution.")
           : response.payload?.error || "Unable to queue the selected title."

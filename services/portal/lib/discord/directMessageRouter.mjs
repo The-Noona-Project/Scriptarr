@@ -133,6 +133,8 @@ export const formatBulkQueueSummary = (result = {}) => {
     `Matched: ${Number.parseInt(String(result?.matchedCount || 0), 10) || 0}`,
     `Queued: ${Number.parseInt(String(result?.queuedCount || 0), 10) || 0}`,
     `Skipped active: ${Number.parseInt(String(result?.skippedActiveCount || 0), 10) || 0}`,
+    `Skipped no metadata: ${Number.parseInt(String(result?.skippedNoMetadataCount || 0), 10) || 0}`,
+    `Skipped ambiguous metadata: ${Number.parseInt(String(result?.skippedAmbiguousMetadataCount || 0), 10) || 0}`,
     `Failed: ${Number.parseInt(String(result?.failedCount || 0), 10) || 0}`
   ];
 
@@ -140,6 +142,8 @@ export const formatBulkQueueSummary = (result = {}) => {
     lines.join("\n"),
     formatTitleSection("Queued titles (first 10)", result?.queuedTitles),
     formatTitleSection("Skipped active titles (first 10)", result?.skippedActiveTitles),
+    formatTitleSection("Skipped no metadata titles (first 10)", result?.skippedNoMetadataTitles),
+    formatTitleSection("Skipped ambiguous metadata titles (first 10)", result?.skippedAmbiguousMetadataTitles),
     formatTitleSection("Failed titles (first 10)", result?.failedTitles)
   ].filter(Boolean).join("\n\n");
 };

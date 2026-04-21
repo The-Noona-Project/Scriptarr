@@ -1,4 +1,4 @@
-import {randomUUID} from "node:crypto";
+import {createHash, randomUUID} from "node:crypto";
 
 import mysql from "mysql2/promise";
 import {createCachedStore} from "./createCachedStore.mjs";
@@ -36,7 +36,19 @@ const normalizeString = (value, fallback = "") => {
   const normalized = typeof value === "string" ? value.trim() : "";
   return normalized || fallback;
 };
+const normalizeScalarString = (value, fallback = "") => {
+  if (typeof value === "string") {
+    const normalized = value.trim();
+    return normalized || fallback;
+  }
+  if (typeof value === "number" || typeof value === "bigint" || typeof value === "boolean") {
+    const normalized = String(value).trim();
+    return normalized || fallback;
+  }
+  return fallback;
+};
 const REQUEST_STATUSES = new Set(["pending", "unavailable", "denied", "queued", "downloading", "completed", "failed"]);
+const ACTIVE_REQUEST_WORK_STATUSES = new Set(["pending", "unavailable", "queued", "downloading"]);
 const normalizeRequestStatus = (value, fallback = "pending") => {
   const normalized = normalizeString(value, fallback).toLowerCase();
   return REQUEST_STATUSES.has(normalized) ? normalized : fallback;
@@ -62,6 +74,12 @@ const normalizeRequestDetails = (value = {}) => {
   next.taskId = normalizeString(next.taskId || next.linkedTaskId);
   delete next.linkedJobId;
   delete next.linkedTaskId;
+  delete next.requestWorkKey;
+  delete next.requestWorkKind;
+  delete next.requestWorkHash;
+  delete next.workKey;
+  delete next.workKeyKind;
+  delete next.workKeyHash;
   return next;
 };
 const mergeRequestDetails = (currentValue, patchValue) => {
@@ -120,6 +138,68 @@ const buildInitialRequestTimeline = ({requestedBy, status}) => {
   }
   return timeline;
 };
+const buildRequestWorkIdentity = (value = {}) => {
+  const details = value?.details && typeof value.details === "object" ? value.details : value;
+  const selectedDownload = details?.selectedDownload && typeof details.selectedDownload === "object"
+    ? details.selectedDownload
+    : null;
+  const selectedMetadata = details?.selectedMetadata && typeof details.selectedMetadata === "object"
+    ? details.selectedMetadata
+    : null;
+  const providerId = normalizeString(selectedDownload?.providerId).toLowerCase();
+  const titleUrl = normalizeString(selectedDownload?.titleUrl);
+  if (providerId && titleUrl) {
+    const key = `download:${providerId}::${titleUrl}`;
+    return {
+      key,
+      hash: createHash("sha256").update(key).digest("hex"),
+      kind: "download"
+    };
+  }
+
+  const metadataProviderId = normalizeString(selectedMetadata?.provider).toLowerCase();
+  const providerSeriesId = normalizeScalarString(selectedMetadata?.providerSeriesId);
+  if (metadataProviderId && providerSeriesId) {
+    const key = `metadata:${metadataProviderId}::${providerSeriesId}`;
+    return {
+      key,
+      hash: createHash("sha256").update(key).digest("hex"),
+      kind: "metadata"
+    };
+  }
+
+  return {
+    key: "",
+    hash: "",
+    kind: ""
+  };
+};
+const requestStatusUsesWorkLock = (status) => ACTIVE_REQUEST_WORK_STATUSES.has(normalizeRequestStatus(status, "pending"));
+const applyRequestWorkIdentity = (request = {}) => {
+  const workIdentity = buildRequestWorkIdentity(request);
+  const details = request.details && typeof request.details === "object"
+    ? cloneJsonValue(request.details, {})
+    : {};
+  if (workIdentity.key) {
+    details.requestWorkKey = workIdentity.key;
+    details.requestWorkKind = workIdentity.kind;
+    details.requestWorkHash = workIdentity.hash;
+  }
+  return {
+    ...request,
+    details,
+    workKey: workIdentity.key,
+    workKeyHash: workIdentity.hash,
+    workKeyKind: workIdentity.kind
+  };
+};
+const buildRequestWorkConflict = (existingRequestId, workIdentity) => {
+  const error = createConflictError("That title is already queued or has an active request.", "REQUEST_WORK_KEY_CONFLICT");
+  error.requestId = normalizeScalarString(existingRequestId);
+  error.workKey = normalizeString(workIdentity?.key);
+  error.workKeyKind = normalizeString(workIdentity?.kind);
+  return error;
+};
 const applyRequestUpdate = (existing, update = {}) => {
   const next = {
     ...existing,
@@ -155,7 +235,7 @@ const applyRequestUpdate = (existing, update = {}) => {
   }
 
   next.timeline = nextTimeline;
-  return next;
+  return applyRequestWorkIdentity(next);
 };
 
 const sortRavenTitles = (titles) => [...titles].sort((left, right) => String(left.title || "").localeCompare(String(right.title || "")));
@@ -236,7 +316,7 @@ const normalizeVaultJobTask = (jobId, task = {}) => ({
 });
 const buildRequestFromPayload = (payload, requestId) => {
   const status = normalizeRequestStatus(payload.status, payload.selectedDownload || payload.details?.selectedDownload ? "pending" : "unavailable");
-  return {
+  return applyRequestWorkIdentity({
     id: requestId,
     source: normalizeString(payload.source, "moon"),
     title: normalizeString(payload.title, "Untitled request"),
@@ -260,7 +340,7 @@ const buildRequestFromPayload = (payload, requestId) => {
     }),
     createdAt: nowIso(),
     updatedAt: nowIso()
-  };
+  });
 };
 
 const defaultPermissionsForRole = (role) => {
@@ -288,6 +368,7 @@ const createMemoryStore = () => {
     settings: new Map(),
     secrets: new Map(),
     requests: new Map(),
+    requestWorkLocks: new Map(),
     progress: new Map(),
     ravenTitles: new Map(),
     ravenChapters: new Map(),
@@ -386,7 +467,19 @@ const createMemoryStore = () => {
     async createRequest(payload) {
       const id = state.requestSeq++;
       const request = buildRequestFromPayload(payload, id);
+      if (requestStatusUsesWorkLock(request.status) && request.workKeyHash) {
+        const existingLock = state.requestWorkLocks.get(request.workKeyHash);
+        if (existingLock && existingLock.requestId !== id) {
+          throw buildRequestWorkConflict(existingLock.requestId, request);
+        }
+      }
       state.requests.set(id, request);
+      if (requestStatusUsesWorkLock(request.status) && request.workKeyHash) {
+        state.requestWorkLocks.set(request.workKeyHash, {
+          requestId: id,
+          workKey: request.workKey
+        });
+      }
       return request;
     },
     async updateRequest(id, update) {
@@ -399,7 +492,33 @@ const createMemoryStore = () => {
         throw createConflictError("Request revision conflict.", "REQUEST_REVISION_CONFLICT");
       }
       const next = applyRequestUpdate(existing, update);
+      if (requestStatusUsesWorkLock(next.status) && next.workKeyHash) {
+        const existingLock = state.requestWorkLocks.get(next.workKeyHash);
+        if (existingLock && existingLock.requestId !== Number(id)) {
+          throw buildRequestWorkConflict(existingLock.requestId, next);
+        }
+      }
+
+      if (requestStatusUsesWorkLock(existing.status) && existing.workKeyHash && existing.workKeyHash !== next.workKeyHash) {
+        const existingLock = state.requestWorkLocks.get(existing.workKeyHash);
+        if (existingLock?.requestId === Number(id)) {
+          state.requestWorkLocks.delete(existing.workKeyHash);
+        }
+      }
+      if (requestStatusUsesWorkLock(existing.status) && existing.workKeyHash && !requestStatusUsesWorkLock(next.status)) {
+        const existingLock = state.requestWorkLocks.get(existing.workKeyHash);
+        if (existingLock?.requestId === Number(id)) {
+          state.requestWorkLocks.delete(existing.workKeyHash);
+        }
+      }
+
       state.requests.set(Number(id), next);
+      if (requestStatusUsesWorkLock(next.status) && next.workKeyHash) {
+        state.requestWorkLocks.set(next.workKeyHash, {
+          requestId: Number(id),
+          workKey: next.workKey
+        });
+      }
       return next;
     },
     async reviewRequest(id, review) {
@@ -574,8 +693,19 @@ const createMysqlStore = (config) => {
         status_name VARCHAR(32) NOT NULL,
         moderator_comment TEXT NULL,
         request_details_json JSON NULL,
+        request_work_key TEXT NULL,
+        request_work_key_hash CHAR(64) NULL,
         timeline_json JSON NOT NULL,
         revision_number INT NOT NULL DEFAULT 1,
+        created_at DATETIME NOT NULL,
+        updated_at DATETIME NOT NULL
+      )
+    `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS request_work_locks (
+        request_work_key_hash CHAR(64) PRIMARY KEY,
+        request_work_key TEXT NOT NULL,
+        request_id BIGINT NOT NULL,
         created_at DATETIME NOT NULL,
         updated_at DATETIME NOT NULL
       )
@@ -703,13 +833,44 @@ const createMysqlStore = (config) => {
       )
     `);
     await ignoreKnownAlterError("ALTER TABLE requests ADD COLUMN request_details_json JSON NULL AFTER moderator_comment");
+    await ignoreKnownAlterError("ALTER TABLE requests ADD COLUMN request_work_key TEXT NULL AFTER request_details_json");
+    await ignoreKnownAlterError("ALTER TABLE requests ADD COLUMN request_work_key_hash CHAR(64) NULL AFTER request_work_key");
     await ignoreKnownAlterError("ALTER TABLE requests ADD COLUMN revision_number INT NOT NULL DEFAULT 1");
+    await ignoreKnownAlterError("ALTER TABLE requests ADD INDEX idx_requests_work_key_hash (request_work_key_hash)");
     await ignoreKnownAlterError("ALTER TABLE raven_titles ADD COLUMN library_type_label VARCHAR(255) NULL");
     await ignoreKnownAlterError("ALTER TABLE raven_titles ADD COLUMN library_type_slug VARCHAR(191) NULL");
     await ignoreKnownAlterError("ALTER TABLE raven_titles ADD COLUMN working_root TEXT NULL");
     await ignoreKnownAlterError("ALTER TABLE raven_download_tasks ADD COLUMN provider_id VARCHAR(128) NULL AFTER title_url");
     await ignoreKnownAlterError("ALTER TABLE raven_download_tasks ADD COLUMN request_id BIGINT NULL AFTER provider_id");
     await ignoreKnownAlterError("ALTER TABLE raven_download_tasks ADD COLUMN details_json JSON NULL AFTER percent_value");
+
+    const [requestRows] = await pool.query("SELECT * FROM requests ORDER BY created_at ASC, id ASC");
+    await pool.query("DELETE FROM request_work_locks");
+    const claimedWorkKeys = new Set();
+    for (const row of requestRows) {
+      const request = toRequest(row);
+      await pool.query(`
+        UPDATE requests
+        SET request_work_key = ?, request_work_key_hash = ?
+        WHERE id = ?
+      `, [
+        request.workKey || null,
+        request.workKeyHash || null,
+        row.id
+      ]);
+      if (!requestStatusUsesWorkLock(request.status) || !request.workKeyHash || claimedWorkKeys.has(request.workKeyHash)) {
+        continue;
+      }
+      await pool.query(`
+        INSERT INTO request_work_locks (request_work_key_hash, request_work_key, request_id, created_at, updated_at)
+        VALUES (?, ?, ?, NOW(), NOW())
+      `, [
+        request.workKeyHash,
+        request.workKey,
+        row.id
+      ]);
+      claimedWorkKeys.add(request.workKeyHash);
+    }
   };
 
   const toUser = (row) => ({
@@ -757,21 +918,44 @@ const createMysqlStore = (config) => {
     workingRoot: row.working_root,
     downloadRoot: row.download_root
   }, chapters);
-  const toRequest = (row) => ({
-    id: row.id,
-    source: row.source,
-    title: row.title,
-    requestType: row.request_type,
-    notes: row.notes,
-    requestedBy: row.requested_by,
-    status: row.status_name,
-    moderatorComment: row.moderator_comment,
-    details: normalizeRequestDetails(parseJsonColumn(row.request_details_json, {})),
-    timeline: parseJsonColumn(row.timeline_json, []),
-    revision: Number.parseInt(String(row.revision_number || 1), 10) || 1,
-    createdAt: row.created_at.toISOString(),
-    updatedAt: row.updated_at.toISOString()
-  });
+  const toRequest = (row) => {
+    const details = normalizeRequestDetails(parseJsonColumn(row.request_details_json, {}));
+    const derived = applyRequestWorkIdentity({
+      id: row.id,
+      source: row.source,
+      title: row.title,
+      requestType: row.request_type,
+      notes: row.notes,
+      requestedBy: row.requested_by,
+      status: row.status_name,
+      moderatorComment: row.moderator_comment,
+      details,
+      timeline: parseJsonColumn(row.timeline_json, []),
+      revision: Number.parseInt(String(row.revision_number || 1), 10) || 1,
+      createdAt: row.created_at.toISOString(),
+      updatedAt: row.updated_at.toISOString()
+    });
+    const workKey = normalizeString(row.request_work_key, derived.workKey);
+    const workKeyHash = normalizeString(row.request_work_key_hash, derived.workKeyHash);
+    const workKeyKind = normalizeString(
+      derived.workKeyKind,
+      workKey.startsWith("download:") ? "download" : workKey.startsWith("metadata:") ? "metadata" : ""
+    );
+    return {
+      ...derived,
+      details: {
+        ...derived.details,
+        ...(workKey ? {
+          requestWorkKey: workKey,
+          requestWorkHash: workKeyHash,
+          requestWorkKind: workKeyKind
+        } : {})
+      },
+      workKey,
+      workKeyHash,
+      workKeyKind
+    };
+  };
   const toVaultJob = (row) => normalizeVaultJob({
     jobId: row.job_id,
     kind: row.job_kind,
@@ -814,6 +998,67 @@ const createMysqlStore = (config) => {
     } finally {
       connection.release();
     }
+  };
+  const isDuplicateKeyError = (error) => Number(error?.errno) === 1062 || String(error?.code || "") === "ER_DUP_ENTRY";
+  const acquireRequestWorkLock = async (connection, request, requestId) => {
+    if (!requestStatusUsesWorkLock(request?.status) || !normalizeString(request?.workKeyHash) || !normalizeString(request?.workKey)) {
+      return;
+    }
+
+    const workKeyHash = normalizeString(request.workKeyHash);
+    const workKey = normalizeString(request.workKey);
+    const normalizedRequestId = normalizeScalarString(requestId);
+    const [existingRows] = await connection.query(`
+      SELECT request_id, request_work_key
+      FROM request_work_locks
+      WHERE request_work_key_hash = ?
+      LIMIT 1
+      FOR UPDATE
+    `, [workKeyHash]);
+    if (existingRows[0]) {
+      const existingRequestId = normalizeScalarString(existingRows[0].request_id);
+      if (existingRequestId !== normalizedRequestId) {
+        throw buildRequestWorkConflict(existingRequestId, request);
+      }
+
+      if (normalizeString(existingRows[0].request_work_key) !== workKey) {
+        await connection.query(`
+          UPDATE request_work_locks
+          SET request_work_key = ?, updated_at = NOW()
+          WHERE request_work_key_hash = ?
+        `, [workKey, workKeyHash]);
+      }
+      return;
+    }
+
+    try {
+      await connection.query(`
+        INSERT INTO request_work_locks (request_work_key_hash, request_work_key, request_id, created_at, updated_at)
+        VALUES (?, ?, ?, NOW(), NOW())
+      `, [workKeyHash, workKey, normalizedRequestId]);
+    } catch (error) {
+      if (!isDuplicateKeyError(error)) {
+        throw error;
+      }
+      const [conflictRows] = await connection.query(`
+        SELECT request_id
+        FROM request_work_locks
+        WHERE request_work_key_hash = ?
+        LIMIT 1
+      `, [workKeyHash]);
+      throw buildRequestWorkConflict(conflictRows[0]?.request_id, request);
+    }
+  };
+  const releaseRequestWorkLock = async (connection, requestId, workKeyHash) => {
+    const normalizedRequestId = normalizeScalarString(requestId);
+    const normalizedWorkKeyHash = normalizeString(workKeyHash);
+    if (!normalizedRequestId || !normalizedWorkKeyHash) {
+      return;
+    }
+    await connection.query(`
+      DELETE FROM request_work_locks
+      WHERE request_work_key_hash = ? AND request_id = ?
+    `, [normalizedWorkKeyHash, normalizedRequestId]);
   };
 
   return {
@@ -916,26 +1161,31 @@ const createMysqlStore = (config) => {
       return rows[0] ? toRequest(rows[0]) : null;
     },
     async createRequest(payload) {
-      const request = buildRequestFromPayload(payload);
-      const [result] = await pool.query(`
-        INSERT INTO requests (
-          source, title, request_type, notes, requested_by, status_name, moderator_comment, request_details_json, timeline_json,
-          revision_number, created_at, updated_at
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, NOW(), NOW())
-      `, [
-        request.source,
-        request.title,
-        request.requestType,
-        request.notes || "",
-        request.requestedBy,
-        request.status,
-        request.moderatorComment || "",
-        JSON.stringify(request.details || {}),
-        JSON.stringify(request.timeline || [])
-      ]);
-      const [rows] = await pool.query("SELECT * FROM requests WHERE id = ?", [result.insertId]);
-      return toRequest(rows[0]);
+      return withTransaction(async (connection) => {
+        const request = buildRequestFromPayload(payload);
+        const [result] = await connection.query(`
+          INSERT INTO requests (
+            source, title, request_type, notes, requested_by, status_name, moderator_comment, request_details_json, request_work_key,
+            request_work_key_hash, timeline_json, revision_number, created_at, updated_at
+          )
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, NOW(), NOW())
+        `, [
+          request.source,
+          request.title,
+          request.requestType,
+          request.notes || "",
+          request.requestedBy,
+          request.status,
+          request.moderatorComment || "",
+          JSON.stringify(request.details || {}),
+          request.workKey || null,
+          request.workKeyHash || null,
+          JSON.stringify(request.timeline || [])
+        ]);
+        await acquireRequestWorkLock(connection, request, result.insertId);
+        const [rows] = await connection.query("SELECT * FROM requests WHERE id = ? LIMIT 1", [result.insertId]);
+        return rows[0] ? toRequest(rows[0]) : null;
+      });
     },
     async updateRequest(id, update) {
       const expectedRevision = update.expectedRevision ?? update.revision;
@@ -951,9 +1201,16 @@ const createMysqlStore = (config) => {
         }
 
         const next = applyRequestUpdate(current, update);
+        if (requestStatusUsesWorkLock(current.status) && current.workKeyHash && current.workKeyHash !== next.workKeyHash) {
+          await releaseRequestWorkLock(connection, id, current.workKeyHash);
+        }
+        if (requestStatusUsesWorkLock(current.status) && current.workKeyHash && !requestStatusUsesWorkLock(next.status)) {
+          await releaseRequestWorkLock(connection, id, current.workKeyHash);
+        }
+        await acquireRequestWorkLock(connection, next, id);
         await connection.query(`
           UPDATE requests
-          SET title = ?, request_type = ?, notes = ?, status_name = ?, moderator_comment = ?, request_details_json = ?, timeline_json = ?, revision_number = ?, updated_at = NOW()
+          SET title = ?, request_type = ?, notes = ?, status_name = ?, moderator_comment = ?, request_details_json = ?, request_work_key = ?, request_work_key_hash = ?, timeline_json = ?, revision_number = ?, updated_at = NOW()
           WHERE id = ?
         `, [
           next.title,
@@ -962,6 +1219,8 @@ const createMysqlStore = (config) => {
           next.status,
           next.moderatorComment || "",
           JSON.stringify(next.details || {}),
+          next.workKey || null,
+          next.workKeyHash || null,
           JSON.stringify(next.timeline || []),
           next.revision,
           id

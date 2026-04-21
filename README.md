@@ -41,15 +41,25 @@ contract and the recommended `docker run` shape.
 
 Fresh installs no longer seed demo titles into Moon or Raven. The user and admin library views stay empty until Raven
 has real imported titles to surface.
+Moon admin now uses a denser Arr-style series index at `/admin/library` and exposes a dedicated
+`/admin/mediamanagement` page for Raven naming profiles instead of burying file-management controls inside the generic
+settings screen.
 Raven now stages active work under `downloading/<type>/...` and promotes completed library content into
 `downloaded/<type>/...` inside the Raven downloads tree.
 Raven also supports old-style chapter and page naming templates behind the internal `raven.naming` setting while
 keeping the current title-folder layout stable for rescans.
+Those naming settings are now profile-based by library type, so manga, manhwa, manhua, webtoon, comic, and OEL
+downloads can each use their own archive and page format while still sharing the same Raven rescan logic.
 Moon requests and admin add-title now use a metadata-first intake flow. Users search once, Scriptarr checks enabled
 metadata providers first, then enabled download providers, and stores the selected match snapshot with the request so
 moderation can queue the exact Raven target later.
+That intake is now edition-aware and grouped by concrete download target, so duplicate metadata rows collapse into one
+requestable result while real variants such as plain vs colored editions stay separate when the provider exposes
+different series URLs.
 Moon admin also exposes a dedicated Discord page at `/admin/discord` for guild workflow settings, onboarding template
 or channel management, per-command role gates, and Portal runtime visibility without exposing Discord credentials.
+Moon admin calendar is now backed by Raven chapter release dates captured from provider scrapes plus metadata
+enrichment, so the calendar view can surface real title-release timing instead of only generic task history.
 Moon admin also exposes `/admin/system/api` for trusted automation settings, API key generation, and same-origin
 Swagger or OpenAPI links for the public Moon API.
 
@@ -85,14 +95,19 @@ For end-to-end Docker verification, use:
 - Users can create and track requests in Moon and Discord, but Raven only receives approved work.
 - Moon user requests and Moon admin add-title now share one metadata-first intake engine. Requests persist the selected
   metadata plus download match snapshot, and unavailable requests can be re-resolved later instead of being dropped.
+- Vault now enforces one active request per concrete work identity, so duplicate submissions that resolve to the same
+  provider target cannot create parallel active requests.
 - Portal now owns a real Discord command runtime again. The supported command set is `/ding`, `/status`, `/chat`,
   `/search`, `/request`, `/subscribe`, plus the DM-only `downloadall` command for the configured Discord superuser.
+- The DM-only `downloadall` flow now stays provider-browse first but resolves metadata before queueing each title. It
+  only queues titles with one confident metadata match and reports already-active, no-metadata, ambiguous-metadata,
+  and failed skips back in the Discord DM summary instead of silently creating metadata-less library entries.
 - Portal now prefers a minimal Discord runtime over going fully dark when privileged intents are unavailable, so slash
   commands and DMs can stay online while onboarding is shown as degraded in Moon admin.
 - Discord `/subscribe` reuses Moon's shared follow store, so Moon and Discord notifications stay aligned instead of
   creating parallel subscription data.
-- Portal now sends one Discord DM when a request-linked Raven download completes for a requester with a Discord id,
-  reusing the same title art and Moon links the rest of the stack exposes.
+- Portal now sends requester Discord DMs when a moderated request is approved, denied, or completed, reusing the same
+  title art and Moon links the rest of the stack exposes.
 - Vault is the only supported broker to the shared MySQL database.
 - Sage is the supported internal HTTP hop between first-party services. Direct internal exceptions are limited to
   Vault -> MySQL, Warden -> Docker or host runtime, Oracle -> OpenAI or LocalAI, and Raven -> external source,

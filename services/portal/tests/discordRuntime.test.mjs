@@ -364,6 +364,7 @@ test("request and subscribe commands drive interactive Sage-backed selections", 
       subscribe: {enabled: true}
     }
   };
+  const createdRequests = [];
   const sage = {
     async searchIntake() {
       return {
@@ -371,11 +372,23 @@ test("request and subscribe commands drive interactive Sage-backed selections", 
         payload: {
           results: [
             {
-              title: "Dandadan",
+              canonicalTitle: "One Piece",
+              editionLabel: "Official Colored",
               availability: "download-ready",
-              requestType: "manga",
-              selectedMetadata: {provider: "mangadex", providerSeriesId: "md-1", title: "Dandadan"},
-              selectedDownload: {providerId: "weebcentral", titleUrl: "https://weebcentral.example/dandadan", requestType: "manga"}
+              type: "manga",
+              metadataMatches: [{provider: "mangadex", providerSeriesId: "md-1", title: "One Piece (Official Colored)"}],
+              downloadTarget: {
+                providerId: "weebcentral",
+                providerName: "WeebCentral",
+                titleName: "One Piece (Color)",
+                titleUrl: "https://weebcentral.example/one-piece-color",
+                requestType: "manga"
+              },
+              targetIdentity: {
+                workKey: "weebcentral:https://weebcentral.example/one-piece-color",
+                providerId: "weebcentral",
+                titleUrl: "https://weebcentral.example/one-piece-color"
+              }
             }
           ]
         }
@@ -401,12 +414,13 @@ test("request and subscribe commands drive interactive Sage-backed selections", 
     async upsertDiscordUser(payload) {
       return {ok: true, payload, status: 200};
     },
-    async createDiscordRequest() {
+    async createDiscordRequest(payload) {
+      createdRequests.push(payload);
       return {
         ok: true,
         payload: {
           id: "req-1",
-          title: "Dandadan",
+          title: "One Piece (Official Colored)",
           status: "pending"
         },
         status: 201
@@ -437,16 +451,19 @@ test("request and subscribe commands drive interactive Sage-backed selections", 
 
   const requestInteraction = createInteraction({
     commandName: "request",
-    strings: {query: "Dandadan", notes: "Please add this"}
+    strings: {query: "One Piece", notes: "Please add this"}
   });
   await handler(requestInteraction);
   const requestReply = requestInteraction.__calls.editReply[0];
   assert.match(requestReply.content, /Select the Scriptarr request result/);
+  assert.match(requestReply.content, /Official Colored/);
   const requestButtonId = requestReply.components[0].components[0].custom_id;
 
   const requestButton = createButtonInteraction({customId: requestButtonId});
   await handler(requestButton);
   assert.match(requestButton.__calls.reply[0].content, /Request saved as \*\*pending\*\*/);
+  assert.equal(createdRequests[0].title, "One Piece");
+  assert.equal(createdRequests[0].targetIdentity.workKey, "weebcentral:https://weebcentral.example/one-piece-color");
 
   const subscribeInteraction = createInteraction({
     commandName: "subscribe",

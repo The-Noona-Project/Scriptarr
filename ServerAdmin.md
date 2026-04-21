@@ -96,6 +96,9 @@ Vault now fronts shared MySQL state with its own cache-first broker layer, and f
 expected to flow through Sage instead of bypassing the broker topology.
 Moon requests and admin add-title now run through one intake flow: search query, enabled metadata providers, enabled
 download providers, saved match snapshot, then moderation or immediate queueing depending on who submitted it.
+That intake is now grouped by concrete provider target so duplicate metadata rows that land on the same download URL
+only create one requestable result, while real separate variants such as plain vs colored editions stay distinct when
+the provider exposes different series URLs.
 Raven now only marks download work complete after the promoted files also persist into the brokered catalog, and it
 rescans the existing `downloaded/<type>/...` tree on boot so already-finished archives can repopulate Moon's library
 without forcing a re-download.
@@ -216,6 +219,7 @@ Common admin routes:
 - `/admin/add`
 - `/admin/import`
 - `/admin/calendar`
+- `/admin/mediamanagement`
 - `/admin/activity/*`
 - `/admin/wanted/*`
 - `/admin/requests`
@@ -247,8 +251,11 @@ The current Discord command set is:
 
 Blank role ids mean any member in the configured guild can use that slash command. `downloadall` ignores guild roles
 and only checks the configured DM superuser id.
-Portal also sends one completion DM to the requester when a request-linked Raven download finishes and the requester
-has a Discord id on file.
+`downloadall` now bulk-browses the provider first, then metadata-resolves each matched title before queueing it. Only
+titles with one confident metadata match are queued. Portal's DM summary now breaks skipped titles out as already
+active, no-metadata, ambiguous-metadata, or failed instead of silently queueing metadata-less library entries.
+Portal also sends requester DMs when a moderated request is approved, denied, or finishes downloading, and dedupes
+those notifications by request id plus decision state so retries and restarts do not spam Discord.
 Portal now prefers a minimal Discord runtime when privileged intents are unavailable. Slash commands and DM handling
 can stay online while onboarding is marked degraded, and `/admin/discord` will show the last meaningful runtime or
 command-sync error instead of only a generic disconnected state.
@@ -301,8 +308,20 @@ Raven's download tree now uses a two-stage layout under `raven/downloads/`:
 
 Raven also supports internal chapter and page naming templates through the brokered `raven.naming` setting. This pass
 keeps title-folder naming unchanged so rescans remain compatible with the current library model.
+Moon now exposes those controls at `/admin/mediamanagement`, with one fallback profile plus per-type naming profiles
+for manga, manhwa, manhua, webtoon, comic, and OEL downloads. The saved formats apply to new Raven downloads and to
+archive rescans so Moon, Raven, and the on-disk layout stay aligned.
 Request records now persist the original search query, selected metadata snapshot, selected download snapshot, and any
 linked Raven job or task ids so Moon admin can moderate or retry the exact saved target later.
+Vault now also stores a durable request work key derived from the concrete download target when one exists, or from the
+metadata identity when no download match exists yet, and active duplicate work keys are rejected.
+
+Moon admin library and calendar are now denser operational views:
+
+- `/admin/library` uses a Sonarr-inspired series index with search, type and status filters, latest chapter, last
+  release date, file coverage, metadata state, and source or open actions in one table.
+- `/admin/calendar` uses Raven chapter release dates captured from source scrapes plus metadata enrichment to render a
+  month or agenda view for tracked chapter releases. Older titles may need a rescan before they show dated entries.
 
 ## Docker Test Workflow
 

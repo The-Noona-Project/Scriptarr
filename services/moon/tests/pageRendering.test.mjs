@@ -3,7 +3,10 @@ import assert from "node:assert/strict";
 
 import {renderAddPage} from "../apps/admin/assets/pages/addPage.js";
 import {renderApiPage} from "../apps/admin/assets/pages/apiPage.js";
+import {renderCalendarPage} from "../apps/admin/assets/pages/calendarPage.js";
 import {renderDiscordPage} from "../apps/admin/assets/pages/discordPage.js";
+import {renderLibraryPage} from "../apps/admin/assets/pages/libraryPage.js";
+import {renderMediaManagementPage} from "../apps/admin/assets/pages/mediaManagementPage.js";
 import {renderOverviewPage} from "../apps/admin/assets/pages/overviewPage.js";
 import {renderRequestsPage as renderAdminRequestsPage} from "../apps/admin/assets/pages/requestsPage.js";
 import {renderSettingsPage} from "../apps/admin/assets/pages/settingsPage.js";
@@ -197,6 +200,34 @@ test("title page reads the newest chapter and renders source-backed metadata lab
   assert.doesNotMatch(html, /Unmatched|Unknown date|<span>Author<\/span><strong>Unknown<\/strong>/);
 });
 
+test("title page keeps plain date-only chapter releases on the same local day", () => {
+  const html = renderTitlePage({
+    ok: true,
+    payload: {
+      following: false,
+      requests: [],
+      title: {
+        id: "dr-stone",
+        title: "Dr. STONE",
+        libraryTypeSlug: "manga",
+        libraryTypeLabel: "Manga",
+        mediaType: "manga",
+        latestChapter: "27",
+        chapters: [{
+          id: "chapter-27",
+          label: "Chapter 27",
+          chapterNumber: "27",
+          pageCount: 24,
+          releaseDate: "2026-04-20",
+          available: true
+        }]
+      }
+    }
+  });
+
+  assert.match(html, /Apr 20, 2026/);
+});
+
 test("reader page renders typed chapter navigation, scrubber, and thumbnail navigation", () => {
   const html = renderReaderPage({
     ok: true,
@@ -271,6 +302,80 @@ test("admin overview renders an empty focus section when the library has no titl
   assert.match(html, /Moon will surface focus titles here after Raven imports real series/);
 });
 
+test("admin library page renders a dense Sonarr-style series index", () => {
+  const html = renderLibraryPage({
+    ok: true,
+    payload: {
+      titles: [{
+        id: "kenja-no-mago",
+        title: "Kenja no Mago",
+        coverUrl: "https://images.example/kenja.jpg",
+        mediaType: "manga",
+        libraryTypeLabel: "Manga",
+        libraryTypeSlug: "manga",
+        status: "active",
+        latestChapter: "94",
+        metadataProvider: "mangadex",
+        summary: "A young man is reborn into another world.",
+        downloadRoot: "/downloads/downloaded/manga/Kenja_no_Mago",
+        chapterCount: 94,
+        chaptersDownloaded: 94,
+        chapters: [{
+          id: "chapter-94",
+          releaseDate: "2026-04-20T08:00:00.000Z"
+        }]
+      }]
+    }
+  });
+
+  assert.match(html, /Series index/);
+  assert.match(html, /Search title, author, tag, or provider/);
+  assert.match(html, /Coverage/);
+  assert.match(html, /Kenja no Mago/);
+  assert.match(html, /\/title\/manga\/kenja-no-mago/);
+  assert.match(html, /94\/94/);
+});
+
+test("admin calendar page renders a Sonarr-style month view with agenda controls", () => {
+  const html = renderCalendarPage({
+    ok: true,
+    payload: {
+      entries: [{
+        titleId: "dr-stone",
+        title: "Dr. STONE",
+        coverUrl: "https://images.example/dr-stone.jpg",
+        libraryTypeLabel: "Manga",
+        libraryTypeSlug: "manga",
+        metadataProvider: "mangadex",
+        chapterId: "chapter-27",
+        chapterLabel: "Chapter 27",
+        pageCount: 24,
+        releaseDate: "2026-04-15T08:00:00.000Z",
+        available: true
+      }, {
+        titleId: "kill-blue",
+        title: "KILL BLUE",
+        libraryTypeLabel: "Manga",
+        libraryTypeSlug: "manga",
+        metadataProvider: "mangadex",
+        chapterId: "chapter-3",
+        chapterLabel: "Chapter 3",
+        pageCount: 19,
+        releaseDate: "2026-04-18T08:00:00.000Z",
+        available: true
+      }],
+      undatedCount: 2
+    }
+  });
+
+  assert.match(html, /Library release calendar/);
+  assert.match(html, /Month/);
+  assert.match(html, /Agenda/);
+  assert.match(html, /Dr\. STONE/);
+  assert.match(html, /KILL BLUE/);
+  assert.match(html, /undated chapter/);
+});
+
 test("settings page renders branding controls and LocalAI AIO guidance", () => {
   const html = renderSettingsPage({
     ok: true,
@@ -304,6 +409,43 @@ test("settings page renders branding controls and LocalAI AIO guidance", () => {
   assert.match(html, /value="gpt-4"/);
   assert.match(html, /Download providers/);
   assert.match(html, /WeebCentral/);
+});
+
+test("media management page renders per-type naming profiles and template previews", () => {
+  const html = renderMediaManagementPage({
+    ok: true,
+    payload: {
+      naming: {
+        chapterTemplate: "{title} c{chapter_padded} [Scriptarr].cbz",
+        pageTemplate: "{page_padded}{ext}",
+        chapterPad: 3,
+        pagePad: 3,
+        volumePad: 2,
+        profiles: {
+          manga: {
+            chapterTemplate: "{title} ch{chapter_padded}.cbz",
+            pageTemplate: "{page_padded}{ext}",
+            chapterPad: 3,
+            pagePad: 3,
+            volumePad: 2
+          },
+          webtoon: {
+            chapterTemplate: "{title} ep{chapter_padded}.cbz",
+            pageTemplate: "{chapter_padded}-{page_padded}{ext}",
+            chapterPad: 3,
+            pagePad: 3,
+            volumePad: 2
+          }
+        }
+      }
+    }
+  });
+
+  assert.match(html, /Type-based naming profiles/);
+  assert.match(html, /Per-type download naming/);
+  assert.match(html, /Tower of God ep012\.cbz/);
+  assert.match(html, /Blue Box ch012\.cbz/);
+  assert.match(html, /Supported tokens/);
 });
 
 test("api page renders enable controls, docs links, and key actions", () => {
@@ -496,18 +638,25 @@ test("user requests page renders intake search results and unavailable history s
       search: {
         query: "dandadan",
         results: [{
-          canonicalTitle: "Dandadan",
-          availability: "available",
-          type: "webtoon",
-          metadata: {
+          canonicalTitle: "One Piece",
+          editionLabel: "Official Colored",
+          availability: "download-ready",
+          type: "manga",
+          metadataMatches: [{
             provider: "mangadex",
-            title: "Dandadan",
-            summary: "Aliens and yokai."
-          },
-          download: {
+            title: "One Piece (Official Colored)",
+            summary: "Pirates, now in color."
+          }],
+          downloadTarget: {
             providerName: "WeebCentral",
-            titleName: "Dandadan",
-            titleUrl: "https://weebcentral.com/series/dan-da-dan"
+            providerId: "weebcentral",
+            titleName: "One Piece (Color)",
+            titleUrl: "https://weebcentral.com/series/one-piece-color"
+          },
+          targetIdentity: {
+            workKey: "weebcentral:https://weebcentral.com/series/one-piece-color",
+            providerId: "weebcentral",
+            titleUrl: "https://weebcentral.com/series/one-piece-color"
           }
         }]
       },
@@ -527,6 +676,7 @@ test("user requests page renders intake search results and unavailable history s
 
   assert.match(html, /Search metadata, then submit/);
   assert.match(html, /WeebCentral/);
+  assert.match(html, /Official Colored/);
   assert.match(html, /Save as unavailable|Send to moderation/);
   assert.match(html, /The Fable/);
   assert.match(html, /unavailable/i);
@@ -538,19 +688,26 @@ test("admin add and requests pages render intake-driven moderation data", () => 
     query: "dandadan",
     payload: {
       results: [{
-        canonicalTitle: "Dandadan",
-        availability: "available",
+        canonicalTitle: "One Piece",
+        editionLabel: "Official Colored",
+        availability: "download-ready",
         coverUrl: "https://images.example/dandadan.jpg",
-        type: "webtoon",
-        metadata: {
+        type: "manga",
+        metadataMatches: [{
           provider: "mangadex",
-          title: "Dandadan",
-          summary: "Aliens and yokai."
-        },
-        download: {
+          title: "One Piece (Official Colored)",
+          summary: "Pirates, now in color."
+        }],
+        downloadTarget: {
           providerName: "WeebCentral",
-          titleName: "Dandadan",
-          titleUrl: "https://weebcentral.com/series/dan-da-dan"
+          providerId: "weebcentral",
+          titleName: "One Piece (Color)",
+          titleUrl: "https://weebcentral.com/series/one-piece-color"
+        },
+        targetIdentity: {
+          workKey: "weebcentral:https://weebcentral.com/series/one-piece-color",
+          providerId: "weebcentral",
+          titleUrl: "https://weebcentral.com/series/one-piece-color"
         }
       }]
     }
@@ -558,6 +715,7 @@ test("admin add and requests pages render intake-driven moderation data", () => 
   assert.match(addHtml, /Search metadata and resolve downloads/);
   assert.match(addHtml, /Queue immediately/);
   assert.match(addHtml, /https:\/\/images\.example\/dandadan\.jpg/);
+  assert.match(addHtml, /Official Colored/);
 
   const requestsHtml = renderAdminRequestsPage({
     ok: true,

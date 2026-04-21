@@ -832,6 +832,168 @@ test("sage blocks duplicate active intake requests across Moon and Portal create
   await closeServer(dependencyStub.server);
 });
 
+test("sage surfaces Vault's durable request work-key conflict when concurrent creates race past broker preflight", async () => {
+  const {app: vaultApp} = await createVaultApp();
+  const vaultServer = vaultApp.listen(0);
+  const vaultPort = vaultServer.address().port;
+
+  const dependencyStub = await createDependencyStub({libraryTitles: []});
+  dependencyStub.server.listen(0);
+  const dependencyPort = dependencyStub.server.address().port;
+
+  process.env.SCRIPTARR_VAULT_BASE_URL = `http://127.0.0.1:${vaultPort}`;
+  process.env.SCRIPTARR_WARDEN_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_PORTAL_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_ORACLE_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_RAVEN_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_DISCORD_CLIENT_ID = "discord-client-id";
+  process.env.SCRIPTARR_DISCORD_CLIENT_SECRET = "discord-client-secret";
+
+  installDiscordFetchStub();
+
+  const {app: sageApp} = await createSageApp();
+  const sageServer = sageApp.listen(0);
+  const sagePort = sageServer.address().port;
+  const baseUrl = `http://127.0.0.1:${sagePort}`;
+
+  const ownerClaim = await signInViaDiscord(baseUrl);
+  const ownerHeaders = {
+    "Authorization": `Bearer ${ownerClaim.token}`,
+    "Content-Type": "application/json"
+  };
+
+  const [first, second] = await Promise.all([
+    fetch(`${baseUrl}/api/moon-v3/user/requests`, {
+      method: "POST",
+      headers: ownerHeaders,
+      body: JSON.stringify(defaultIntakePayload)
+    }),
+    fetch(`${baseUrl}/api/moon-v3/user/requests`, {
+      method: "POST",
+      headers: ownerHeaders,
+      body: JSON.stringify(defaultIntakePayload)
+    })
+  ]);
+
+  const statuses = [first.status, second.status].sort((left, right) => left - right);
+  assert.deepEqual(statuses, [201, 409]);
+
+  const conflictResponse = first.status === 409 ? await first.json() : await second.json();
+  assert.equal(conflictResponse.code, "REQUEST_WORK_KEY_CONFLICT");
+  assert.match(conflictResponse.error, /already queued|active request/i);
+
+  const requests = await fetch(`${baseUrl}/api/moon-v3/admin/requests`, {
+    headers: ownerHeaders
+  }).then((response) => response.json());
+  assert.equal(requests.requests.length, 1);
+  assert.equal(requests.requests[0].workKey, "download:weebcentral::https://weebcentral.com/series/dan-da-dan");
+
+  await closeServer(sageServer);
+  await closeServer(vaultServer);
+  await closeServer(dependencyStub.server);
+});
+
+test("sage admin resolve surfaces durable work-key conflicts from Vault cleanly", async () => {
+  const {app: vaultApp} = await createVaultApp();
+  const vaultServer = vaultApp.listen(0);
+  const vaultPort = vaultServer.address().port;
+
+  const dependencyStub = await createDependencyStub({libraryTitles: []});
+  dependencyStub.server.listen(0);
+  const dependencyPort = dependencyStub.server.address().port;
+
+  process.env.SCRIPTARR_VAULT_BASE_URL = `http://127.0.0.1:${vaultPort}`;
+  process.env.SCRIPTARR_WARDEN_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_PORTAL_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_ORACLE_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_RAVEN_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_DISCORD_CLIENT_ID = "discord-client-id";
+  process.env.SCRIPTARR_DISCORD_CLIENT_SECRET = "discord-client-secret";
+
+  installDiscordFetchStub();
+
+  const {app: sageApp} = await createSageApp();
+  const sageServer = sageApp.listen(0);
+  const sagePort = sageServer.address().port;
+  const baseUrl = `http://127.0.0.1:${sagePort}`;
+
+  const ownerClaim = await signInViaDiscord(baseUrl);
+  const ownerHeaders = {
+    "Authorization": `Bearer ${ownerClaim.token}`,
+    "Content-Type": "application/json"
+  };
+  const vaultHeaders = {
+    "Authorization": "Bearer vault-dev-token",
+    "Content-Type": "application/json"
+  };
+
+  const existing = await fetch(`http://127.0.0.1:${vaultPort}/api/service/requests`, {
+    method: "POST",
+    headers: vaultHeaders,
+    body: JSON.stringify({
+      source: "moon",
+      title: "Dandadan",
+      requestType: "webtoon",
+      requestedBy: ownerClaim.user.discordUserId,
+      status: "pending",
+      details: {
+        query: "dandadan",
+        selectedMetadata: defaultIntakePayload.selectedMetadata,
+        selectedDownload: defaultIntakePayload.selectedDownload,
+        availability: "available"
+      }
+    })
+  }).then((response) => response.json());
+
+  const unresolved = await fetch(`http://127.0.0.1:${vaultPort}/api/service/requests`, {
+    method: "POST",
+    headers: vaultHeaders,
+    body: JSON.stringify({
+      source: "moon",
+      title: "Dan Da Dan",
+      requestType: "webtoon",
+      requestedBy: ownerClaim.user.discordUserId,
+      status: "unavailable",
+      details: {
+        query: "dan da dan",
+        selectedMetadata: {
+          provider: "mangadex",
+          providerSeriesId: "md-2",
+          title: "Dan Da Dan",
+          type: "webtoon"
+        },
+        availability: "unavailable"
+      }
+    })
+  }).then((response) => response.json());
+
+  assert.equal(existing.id, 1);
+  assert.equal(typeof unresolved.id, "number");
+
+  const resolved = await fetch(`${baseUrl}/api/moon-v3/admin/requests/${unresolved.id}/resolve`, {
+    method: "POST",
+    headers: ownerHeaders,
+    body: JSON.stringify({
+      query: "dan da dan",
+      selectedMetadata: {
+        provider: "mangadex",
+        providerSeriesId: "md-2",
+        title: "Dan Da Dan",
+        type: "webtoon"
+      },
+      selectedDownload: defaultIntakePayload.selectedDownload
+    })
+  });
+  assert.equal(resolved.status, 409);
+  const conflict = await resolved.json();
+  assert.equal(conflict.code, "REQUEST_WORK_KEY_CONFLICT");
+  assert.match(conflict.error, /already queued|active request/i);
+
+  await closeServer(sageServer);
+  await closeServer(vaultServer);
+  await closeServer(dependencyStub.server);
+});
+
 test("sage emits request and follow completion notifications with Moon links even when Raven task title ids are blank", async () => {
   const {app: vaultApp} = await createVaultApp();
   const vaultServer = vaultApp.listen(0);
@@ -935,6 +1097,185 @@ test("sage emits request and follow completion notifications with Moon links eve
   assert.equal(followNotifications.notifications.length, 1);
   assert.equal(followNotifications.notifications[0].titleId, "dan-da-dan");
   assert.equal(followNotifications.notifications[0].titleUrl, "https://pax-kun.com/title/webtoon/dan-da-dan");
+
+  await closeServer(sageServer);
+  await closeServer(vaultServer);
+  await closeServer(dependencyStub.server);
+});
+
+test("sage emits approved, denied, and completed request notifications with deduped acknowledgments", async () => {
+  const {app: vaultApp} = await createVaultApp();
+  const vaultServer = vaultApp.listen(0);
+  const vaultPort = vaultServer.address().port;
+
+  const dependencyStub = await createDependencyStub({
+    downloadTasks: [{
+      taskId: "task-complete-1",
+      requestId: "3",
+      titleId: "dan-da-dan",
+      titleName: "Dandadan",
+      status: "completed",
+      libraryTypeSlug: "webtoon",
+      titleUrl: "https://weebcentral.com/series/dan-da-dan",
+      coverUrl: "https://images.example/dandadan.jpg",
+      updatedAt: "2026-04-20T00:00:00.000Z"
+    }]
+  });
+  dependencyStub.server.listen(0);
+  const dependencyPort = dependencyStub.server.address().port;
+
+  process.env.SCRIPTARR_VAULT_BASE_URL = `http://127.0.0.1:${vaultPort}`;
+  process.env.SCRIPTARR_WARDEN_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_PORTAL_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_ORACLE_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_RAVEN_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_PUBLIC_BASE_URL = "https://pax-kun.com";
+  process.env.SCRIPTARR_DISCORD_CLIENT_ID = "discord-client-id";
+  process.env.SCRIPTARR_DISCORD_CLIENT_SECRET = "discord-client-secret";
+
+  installDiscordFetchStub();
+
+  const {app: sageApp} = await createSageApp();
+  const sageServer = sageApp.listen(0);
+  const sagePort = sageServer.address().port;
+  const baseUrl = `http://127.0.0.1:${sagePort}`;
+
+  const ownerClaim = await signInViaDiscord(baseUrl);
+  const portalHeaders = {
+    "Authorization": "Bearer portal-dev-token",
+    "Content-Type": "application/json"
+  };
+  const vaultHeaders = {
+    "Authorization": "Bearer vault-dev-token",
+    "Content-Type": "application/json"
+  };
+
+  const approved = await fetch(`http://127.0.0.1:${vaultPort}/api/service/requests`, {
+    method: "POST",
+    headers: vaultHeaders,
+    body: JSON.stringify({
+      source: "moon",
+      title: "One Piece",
+      requestType: "manga",
+      requestedBy: ownerClaim.user.discordUserId,
+      status: "queued",
+      moderatorComment: "Approved from Moon admin.",
+      details: {
+        selectedMetadata: {
+          provider: "mangadex",
+          providerSeriesId: "md-op",
+          title: "One Piece"
+        },
+        selectedDownload: {
+          providerId: "weebcentral",
+          titleUrl: "https://weebcentral.com/series/one-piece",
+          coverUrl: "https://images.example/one-piece.jpg"
+        },
+        availability: "available"
+      }
+    })
+  }).then((response) => response.json());
+
+  const denied = await fetch(`http://127.0.0.1:${vaultPort}/api/service/requests`, {
+    method: "POST",
+    headers: vaultHeaders,
+    body: JSON.stringify({
+      source: "discord",
+      title: "Chainsaw Man",
+      requestType: "manga",
+      requestedBy: ownerClaim.user.discordUserId,
+      status: "denied",
+      moderatorComment: "Already available elsewhere.",
+      details: {
+        selectedMetadata: {
+          provider: "mangadex",
+          providerSeriesId: "md-csm",
+          title: "Chainsaw Man"
+        },
+        availability: "unavailable"
+      }
+    })
+  }).then((response) => response.json());
+
+  const completed = await fetch(`http://127.0.0.1:${vaultPort}/api/service/requests`, {
+    method: "POST",
+    headers: vaultHeaders,
+    body: JSON.stringify({
+      source: "moon",
+      title: "Dandadan",
+      requestType: "webtoon",
+      requestedBy: ownerClaim.user.discordUserId,
+      status: "completed",
+      details: {
+        selectedMetadata: {
+          provider: "mangadex",
+          providerSeriesId: "md-1",
+          title: "Dandadan"
+        },
+        selectedDownload: {
+          providerId: "weebcentral",
+          titleUrl: "https://weebcentral.com/series/dan-da-dan",
+          libraryTypeSlug: "webtoon",
+          coverUrl: "https://images.example/dandadan.jpg"
+        },
+        taskId: "task-complete-1",
+        availability: "available"
+      }
+    })
+  }).then((response) => response.json());
+
+  const initialNotifications = await fetch(`${baseUrl}/api/internal/portal/notifications/requests`, {
+    headers: portalHeaders
+  }).then((response) => response.json());
+  assert.deepEqual(
+    initialNotifications.notifications.map((entry) => entry.id).sort(),
+    [
+      `${approved.id}:approved`,
+      `${denied.id}:denied`,
+      `${completed.id}:approved`,
+      String(completed.id)
+    ].sort()
+  );
+  assert.equal(
+    initialNotifications.notifications.find((entry) => entry.id === `${approved.id}:approved`)?.linkUrl,
+    "https://pax-kun.com/myrequests"
+  );
+  assert.equal(
+    initialNotifications.notifications.find((entry) => entry.id === String(completed.id))?.titleUrl,
+    "https://pax-kun.com/title/webtoon/dan-da-dan"
+  );
+
+  const approvedAck = await fetch(`${baseUrl}/api/internal/portal/notifications/requests/${encodeURIComponent(`${approved.id}:approved`)}/ack`, {
+    method: "POST",
+    headers: portalHeaders,
+    body: JSON.stringify({})
+  }).then((response) => response.json());
+  assert.equal(approvedAck.requestId, `${approved.id}:approved`);
+
+  const deniedAck = await fetch(`${baseUrl}/api/internal/portal/notifications/requests/${encodeURIComponent(`${denied.id}:denied`)}/ack`, {
+    method: "POST",
+    headers: portalHeaders,
+    body: JSON.stringify({})
+  }).then((response) => response.json());
+  assert.equal(deniedAck.requestId, `${denied.id}:denied`);
+
+  const remainingNotifications = await fetch(`${baseUrl}/api/internal/portal/notifications/requests`, {
+    headers: portalHeaders
+  }).then((response) => response.json());
+  assert.deepEqual(
+    remainingNotifications.notifications.map((entry) => entry.id).sort(),
+    [
+      `${completed.id}:approved`,
+      String(completed.id)
+    ].sort()
+  );
+
+  const completedAck = await fetch(`${baseUrl}/api/internal/portal/notifications/requests/${completed.id}/ack`, {
+    method: "POST",
+    headers: portalHeaders,
+    body: JSON.stringify({})
+  }).then((response) => response.json());
+  assert.equal(completedAck.requestId, String(completed.id));
 
   await closeServer(sageServer);
   await closeServer(vaultServer);

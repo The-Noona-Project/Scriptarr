@@ -13,6 +13,7 @@
   - `/admin/add`
   - `/admin/import`
   - `/admin/calendar`
+  - `/admin/mediamanagement`
   - `/admin/activity/*`
   - `/admin/wanted/*`
   - `/admin/requests`
@@ -43,6 +44,12 @@
 - `/admin/system/updates` is an actionable Moon surface that checks or starts managed-service update jobs through Sage.
 - `/admin/discord` should surface Portal capability state honestly: command runtime, command sync, onboarding
   availability, and the last meaningful runtime error should all be visible without forcing the admin to read logs.
+- `/admin/library` should stay dense and operational, closer to Sonarr's series index than to a marketing gallery.
+  Favor sortable status, release, coverage, and path information over oversized cards.
+- `/admin/mediamanagement` is the dedicated Raven naming surface. Keep one fallback naming profile plus per-type
+  profiles for manga, manhwa, manhua, webtoon, comic, and OEL in sync with the brokered `raven.naming` payload.
+- `/admin/calendar` should consume real release entries, not just task history. Prefer chapter release dates captured
+  from Raven's provider scrapes plus metadata enrichment and present them in a calendar-first operational view.
 - `/admin/requests` should surface the saved metadata and download snapshots, linked Raven task state, and the resolve
   path for `unavailable` requests instead of assuming every request is immediately approvable.
 - `/admin/system/api` is the admin control point for Moon's trusted public API. Keep the docs and key-management

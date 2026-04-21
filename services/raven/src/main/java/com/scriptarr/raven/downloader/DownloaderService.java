@@ -4,6 +4,7 @@ import com.scriptarr.raven.library.LibraryChapter;
 import com.scriptarr.raven.library.LibraryNaming;
 import com.scriptarr.raven.library.LibraryService;
 import com.scriptarr.raven.library.LibraryTitle;
+import com.scriptarr.raven.metadata.MetadataService;
 import com.scriptarr.raven.downloader.providers.DownloadProvider;
 import com.scriptarr.raven.downloader.providers.DownloadProviderRegistry;
 import com.scriptarr.raven.settings.RavenBrokerClient;
@@ -88,6 +89,8 @@ public class DownloaderService {
     private final DownloadProviderRegistry downloadProviderRegistry;
     private final VpnService vpnService;
     private final LibraryService libraryService;
+    private final DownloadIntakeService downloadIntakeService;
+    private final MetadataService metadataService;
     private final RavenBrokerClient brokerClient;
     private final RavenSettingsService settingsService;
     private final ScriptarrLogger logger;
@@ -98,6 +101,8 @@ public class DownloaderService {
      * @param downloadProviderRegistry registry of enabled Raven download providers
      * @param vpnService VPN coordinator for optional protected downloads
      * @param libraryService library projection and persistence service
+     * @param downloadIntakeService metadata-first Raven intake service
+     * @param metadataService metadata persistence service
      * @param brokerClient Sage-backed broker client for Raven state
      * @param settingsService Sage-backed Raven settings service
      * @param logger shared Raven logger
@@ -106,6 +111,8 @@ public class DownloaderService {
         DownloadProviderRegistry downloadProviderRegistry,
         VpnService vpnService,
         LibraryService libraryService,
+        DownloadIntakeService downloadIntakeService,
+        MetadataService metadataService,
         RavenBrokerClient brokerClient,
         RavenSettingsService settingsService,
         ScriptarrLogger logger
@@ -113,6 +120,8 @@ public class DownloaderService {
         this.downloadProviderRegistry = downloadProviderRegistry;
         this.vpnService = vpnService;
         this.libraryService = libraryService;
+        this.downloadIntakeService = downloadIntakeService;
+        this.metadataService = metadataService;
         this.brokerClient = brokerClient;
         this.settingsService = settingsService;
         this.logger = logger;
@@ -278,6 +287,10 @@ public class DownloaderService {
                 0,
                 0,
                 0,
+                0,
+                0,
+                List.of(),
+                List.of(),
                 List.of(),
                 List.of(),
                 List.of()
@@ -295,6 +308,10 @@ public class DownloaderService {
                 0,
                 0,
                 0,
+                0,
+                0,
+                List.of(),
+                List.of(),
                 List.of(),
                 List.of(),
                 List.of()
@@ -332,6 +349,10 @@ public class DownloaderService {
                 0,
                 0,
                 0,
+                0,
+                0,
+                List.of(),
+                List.of(),
                 List.of(),
                 List.of(),
                 List.of()
@@ -340,6 +361,8 @@ public class DownloaderService {
 
         List<String> queuedTitles = new ArrayList<>();
         List<String> skippedActiveTitles = new ArrayList<>();
+        List<String> skippedNoMetadataTitles = new ArrayList<>();
+        List<String> skippedAmbiguousMetadataTitles = new ArrayList<>();
         List<String> failedTitles = new ArrayList<>();
         String actor = normalizeString(requestedBy, "scriptarr-portal");
 
@@ -360,23 +383,41 @@ public class DownloaderService {
             }
 
             try {
+                String requestType = LibraryNaming.normalizeTypeLabel(selectedTitle.getOrDefault("type", normalizedType));
+                DownloadIntakeService.BulkMetadataResolution metadataResolution = downloadIntakeService.resolveBulkMetadata(
+                    selectedProvider.id(),
+                    titleUrl,
+                    titleName,
+                    requestType
+                );
+                if (metadataResolution.unmatched()) {
+                    skippedNoMetadataTitles.add(titleName);
+                    continue;
+                }
+                if (metadataResolution.ambiguous()) {
+                    skippedAmbiguousMetadataTitles.add(titleName);
+                    continue;
+                }
+
+                Map<String, Object> selectedMetadata = new LinkedHashMap<>(metadataResolution.metadataSnapshot());
+                Map<String, Object> selectedDownload = new LinkedHashMap<>(metadataResolution.downloadSnapshot());
+                selectedDownload.putIfAbsent("providerId", selectedProvider.id());
+                selectedDownload.putIfAbsent("providerName", selectedProvider.name());
+                selectedDownload.putIfAbsent("titleName", titleName);
+                selectedDownload.putIfAbsent("titleUrl", titleUrl);
+                selectedDownload.putIfAbsent("requestType", requestType);
+                selectedDownload.putIfAbsent("libraryTypeLabel", requestType);
+                selectedDownload.putIfAbsent("libraryTypeSlug", LibraryNaming.normalizeTypeSlug(requestType));
+
                 queueDownload(new DownloadRequest(
                     titleName,
                     titleUrl,
-                    LibraryNaming.normalizeTypeLabel(selectedTitle.getOrDefault("type", normalizedType)),
+                    requestType,
                     actor,
                     selectedProvider.id(),
                     "",
-                    Map.of(),
-                    Map.of(
-                        "providerId", selectedProvider.id(),
-                        "providerName", selectedProvider.name(),
-                        "titleName", titleName,
-                        "titleUrl", titleUrl,
-                        "requestType", LibraryNaming.normalizeTypeLabel(selectedTitle.getOrDefault("type", normalizedType)),
-                        "libraryTypeLabel", LibraryNaming.normalizeTypeLabel(selectedTitle.getOrDefault("type", normalizedType)),
-                        "libraryTypeSlug", LibraryNaming.normalizeTypeSlug(selectedTitle.getOrDefault("type", normalizedType))
-                    ),
+                    selectedMetadata,
+                    selectedDownload,
                     "normal"
                 ));
                 queuedTitles.add(titleName);
@@ -387,16 +428,33 @@ public class DownloaderService {
         }
 
         return new BulkQueueDownloadResult(
-            resolveBulkQueueStatus(queuedTitles, skippedActiveTitles, failedTitles),
-            buildBulkQueueMessage(queuedTitles, skippedActiveTitles, failedTitles, matchedTitles.size()),
+            resolveBulkQueueStatus(
+                queuedTitles,
+                skippedActiveTitles,
+                skippedNoMetadataTitles,
+                skippedAmbiguousMetadataTitles,
+                failedTitles
+            ),
+            buildBulkQueueMessage(
+                queuedTitles,
+                skippedActiveTitles,
+                skippedNoMetadataTitles,
+                skippedAmbiguousMetadataTitles,
+                failedTitles,
+                matchedTitles.size()
+            ),
             filters,
             browseResult.pagesScanned(),
             matchedTitles.size(),
             queuedTitles.size(),
             skippedActiveTitles.size(),
+            skippedNoMetadataTitles.size(),
+            skippedAmbiguousMetadataTitles.size(),
             failedTitles.size(),
             queuedTitles,
             skippedActiveTitles,
+            skippedNoMetadataTitles,
+            skippedAmbiguousMetadataTitles,
             failedTitles
         );
     }
@@ -508,12 +566,14 @@ public class DownloaderService {
             Files.createDirectories(workingRoot);
 
             int total = chapters.size();
-            Map<String, String> sourceByChapter = new LinkedHashMap<>();
+            Map<String, Map<String, String>> chapterDetailsByNumber = new LinkedHashMap<>();
             for (int index = 0; index < chapters.size(); index++) {
                 Map<String, String> chapter = chapters.get(index);
                 Path archivePath = downloadChapterWithRetries(provider, workingRoot, request, typeLabel, chapter, namingSettings);
                 String chapterNumber = normalizeStoredChapterNumber(chapter.getOrDefault("chapter_number", String.valueOf(index + 1)));
-                sourceByChapter.put(chapterNumber, chapter.get("href"));
+                Map<String, String> storedChapter = new LinkedHashMap<>(chapter);
+                storedChapter.put("archive_path", archivePath.toString());
+                chapterDetailsByNumber.put(chapterNumber, storedChapter);
                 int percent = Math.max(10, (int) (((index + 1) / (double) total) * CHAPTER_DOWNLOAD_PROGRESS_CAP));
                 update(taskId, "running", "Downloaded chapter " + chapterNumber + ".", percent);
             }
@@ -526,13 +586,14 @@ public class DownloaderService {
                 request.titleUrl(),
                 resolveCoverUrl(request),
                 details,
-                buildLibraryChapters(finalRoot, sourceByChapter),
+                buildLibraryChapters(finalRoot, chapterDetailsByNumber, typeLabel, namingSettings),
                 workingRoot,
                 finalRoot
             );
             if (title == null || title.id() == null || title.id().isBlank()) {
                 throw new IllegalStateException("Raven could not persist the downloaded title into the library catalog.");
             }
+            title = persistSelectedMetadata(title, request);
             if (title != null) {
                 Map<String, Object> task = tasks.get(taskId);
                 if (task != null) {
@@ -550,6 +611,22 @@ public class DownloaderService {
             update(taskId, "failed", normalizeString(error.getMessage(), "Raven download failed."), 90);
             logger.error("DOWNLOAD", "Raven download failed.", error);
         }
+    }
+
+    private LibraryTitle persistSelectedMetadata(LibraryTitle title, DownloadRequest request) {
+        Map<String, Object> selectedMetadata = normalizeMap(request.selectedMetadata());
+        String provider = stringValue(selectedMetadata.get("provider"));
+        String providerSeriesId = stringValue(selectedMetadata.get("providerSeriesId"));
+        if (title == null || title.id() == null || title.id().isBlank() || provider.isBlank() || providerSeriesId.isBlank()) {
+            return title;
+        }
+
+        Map<String, Object> result = metadataService.persistResolvedMatch(title.id(), selectedMetadata);
+        if (!Boolean.TRUE.equals(result.get("ok"))) {
+            throw new IllegalStateException(normalizeString(result.get("error"), "Raven could not persist metadata for the downloaded title."));
+        }
+        LibraryTitle refreshed = libraryService.findTitle(title.id());
+        return refreshed == null ? title : refreshed;
     }
 
     private Path downloadChapterWithRetries(
@@ -603,24 +680,33 @@ public class DownloaderService {
         throw new IllegalStateException(lastFailureMessage);
     }
 
-    private List<LibraryChapter> buildLibraryChapters(Path finalRoot, Map<String, String> sourceByChapter) throws IOException {
-        RavenNamingSettings namingSettings = settingsService.getNamingSettings();
+    private List<LibraryChapter> buildLibraryChapters(
+        Path finalRoot,
+        Map<String, Map<String, String>> chapterDetailsByNumber,
+        String typeLabel,
+        RavenNamingSettings namingSettings
+    ) throws IOException {
         try (var archives = Files.list(finalRoot)) {
             return archives
                 .filter(Files::isRegularFile)
                 .filter((path) -> path.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".cbz"))
                 .sorted()
                 .map((path) -> {
-                    String chapterNumber = LibraryNaming.extractChapterNumber(path.getFileName().toString(), namingSettings);
+                    String chapterNumber = LibraryNaming.extractChapterNumber(path.getFileName().toString(), namingSettings, typeLabel);
+                    Map<String, String> chapterDetails = chapterDetailsByNumber.getOrDefault(chapterNumber, Map.of());
+                    String releaseDate = firstNonBlank(
+                        normalizeString(chapterDetails.get("release_date")),
+                        resolveArchiveTimestamp(path)
+                    );
                     return new LibraryChapter(
                         "",
-                        "Chapter " + chapterNumber,
+                        normalizeString(chapterDetails.get("chapter_title"), "Chapter " + chapterNumber),
                         chapterNumber,
                         countArchiveEntries(path),
-                        resolveArchiveTimestamp(path),
+                        releaseDate,
                         true,
                         path.toString(),
-                        sourceByChapter.getOrDefault(chapterNumber, null)
+                        normalizeString(chapterDetails.get("href"), null)
                     );
                 })
                 .toList();
@@ -1506,16 +1592,20 @@ public class DownloaderService {
     private String resolveBulkQueueStatus(
         List<String> queuedTitles,
         List<String> skippedActiveTitles,
+        List<String> skippedNoMetadataTitles,
+        List<String> skippedAmbiguousMetadataTitles,
         List<String> failedTitles
     ) {
         boolean hasQueued = queuedTitles != null && !queuedTitles.isEmpty();
-        boolean hasSkipped = skippedActiveTitles != null && !skippedActiveTitles.isEmpty();
+        boolean hasSkippedActive = skippedActiveTitles != null && !skippedActiveTitles.isEmpty();
+        boolean hasSkippedNoMetadata = skippedNoMetadataTitles != null && !skippedNoMetadataTitles.isEmpty();
+        boolean hasSkippedAmbiguous = skippedAmbiguousMetadataTitles != null && !skippedAmbiguousMetadataTitles.isEmpty();
         boolean hasFailed = failedTitles != null && !failedTitles.isEmpty();
 
-        if (hasQueued && !hasSkipped && !hasFailed) {
+        if (hasQueued && !hasSkippedActive && !hasSkippedNoMetadata && !hasSkippedAmbiguous && !hasFailed) {
             return BulkQueueDownloadResult.STATUS_QUEUED;
         }
-        if (!hasQueued && hasSkipped && !hasFailed) {
+        if (!hasQueued && hasSkippedActive && !hasSkippedNoMetadata && !hasSkippedAmbiguous && !hasFailed) {
             return BulkQueueDownloadResult.STATUS_ALREADY_ACTIVE;
         }
         return BulkQueueDownloadResult.STATUS_PARTIAL;
@@ -1524,27 +1614,32 @@ public class DownloaderService {
     private String buildBulkQueueMessage(
         List<String> queuedTitles,
         List<String> skippedActiveTitles,
+        List<String> skippedNoMetadataTitles,
+        List<String> skippedAmbiguousMetadataTitles,
         List<String> failedTitles,
         int matchedCount
     ) {
         int queuedCount = queuedTitles == null ? 0 : queuedTitles.size();
-        int skippedCount = skippedActiveTitles == null ? 0 : skippedActiveTitles.size();
+        int skippedActiveCount = skippedActiveTitles == null ? 0 : skippedActiveTitles.size();
+        int skippedNoMetadataCount = skippedNoMetadataTitles == null ? 0 : skippedNoMetadataTitles.size();
+        int skippedAmbiguousCount = skippedAmbiguousMetadataTitles == null ? 0 : skippedAmbiguousMetadataTitles.size();
         int failedCount = failedTitles == null ? 0 : failedTitles.size();
 
         if (matchedCount <= 0) {
             return "No titles matched the supplied filters.";
         }
-        if (queuedCount > 0 && skippedCount == 0 && failedCount == 0) {
+        if (queuedCount > 0 && skippedActiveCount == 0 && skippedNoMetadataCount == 0 && skippedAmbiguousCount == 0 && failedCount == 0) {
             return "Queued " + queuedCount + " title(s) for download.";
         }
-        if (queuedCount == 0 && skippedCount > 0 && failedCount == 0) {
-            return skippedCount == 1
+        if (queuedCount == 0 && skippedActiveCount > 0 && skippedNoMetadataCount == 0 && skippedAmbiguousCount == 0 && failedCount == 0) {
+            return skippedActiveCount == 1
                 ? "Download already in progress for: " + skippedActiveTitles.getFirst()
                 : "Downloads already in progress for: " + String.join(", ", skippedActiveTitles);
         }
 
-        return "Queued " + queuedCount + " title(s). Skipped " + skippedCount
-            + " already-active title(s). Failed " + failedCount + " title(s).";
+        return "Queued " + queuedCount + " title(s). Skipped " + skippedActiveCount
+            + " already-active title(s), " + skippedNoMetadataCount + " without confident metadata, "
+            + skippedAmbiguousCount + " with ambiguous metadata. Failed " + failedCount + " title(s).";
     }
 
     private String normalizePrefixComparableTitle(String rawTitle) {

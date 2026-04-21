@@ -27,9 +27,19 @@ Moon's request and admin add-title flows now share the same metadata-first intak
 concrete match, and Scriptarr saves the selected metadata plus download snapshot with the request so moderation can
 queue the exact Raven target later. Admin add-title uses the same intake results and queues immediately when a
 download-ready match exists.
+Moon now renders those intake results one row per concrete download target instead of one row per metadata row, so
+duplicate metadata matches collapse cleanly while real edition targets such as plain vs colored remain visibly
+distinct.
 
 Admin routes follow the Arr-style operations model, including library, add/import, calendar, activity, wanted,
 requests, users, Discord, settings, and system sections under `/admin`.
+`/admin/library` now uses a denser Sonarr-inspired series index with live filtering, coverage bars, latest chapter,
+last release date, metadata state, and direct open or source actions.
+`/admin/mediamanagement` is now the dedicated Raven file-management page. It exposes a fallback naming profile plus
+per-type naming profiles for manga, manhwa, manhua, webtoon, comic, and OEL so admins can preview and save archive or
+page formats without digging through the broader settings surface.
+`/admin/calendar` now renders a month or agenda view backed by Raven chapter release dates captured from source
+scrapes and metadata enrichment instead of only showing a flat task-style table.
 
 Fresh installs intentionally show empty library states until Raven has real imported titles to surface, and the admin
 program now ships in a dark-only theme by default.

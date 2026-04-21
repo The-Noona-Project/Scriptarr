@@ -73,6 +73,19 @@ export const registerLegacyApiRoutes = (app, {config, getSessionToken}) => {
     res.status(result.status).json(result.payload);
   });
 
+  app.get("/api/moon/admin/settings/raven/naming", async (req, res) => {
+    const result = await proxyToSage(req, "/api/admin/settings/raven/naming");
+    res.status(result.status).json(result.payload);
+  });
+
+  app.put("/api/moon/admin/settings/raven/naming", async (req, res) => {
+    const result = await proxyToSage(req, "/api/admin/settings/raven/naming", {
+      method: "PUT",
+      body: req.body
+    });
+    res.status(result.status).json(result.payload);
+  });
+
   app.get("/api/moon/admin/settings/raven/metadata", async (req, res) => {
     const result = await proxyToSage(req, "/api/admin/settings/raven/metadata");
     res.status(result.status).json(result.payload);

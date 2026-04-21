@@ -12,6 +12,7 @@ import {registerMoonV3Routes} from "./registerMoonV3Routes.mjs";
 import {createServiceAuth} from "./serviceAuth.mjs";
 import {registerInternalBrokerRoutes} from "./registerInternalBrokerRoutes.mjs";
 import {buildIntakeSelection, evaluateSelectionAgainstGuardState} from "./requestSelectionGuards.mjs";
+import {buildRequestWorkConflictPayload, isRequestWorkConflictError} from "./requestConflict.mjs";
 import {
   PORTAL_DISCORD_KEY,
   knownPortalDiscordCommands,
@@ -22,6 +23,7 @@ import {
 
 const RAVEN_VPN_KEY = "raven.vpn";
 const RAVEN_VPN_PASSWORD_SECRET = "raven.vpn.piaPassword";
+const RAVEN_NAMING_KEY = "raven.naming";
 const RAVEN_METADATA_KEY = "raven.metadata.providers";
 const RAVEN_DOWNLOAD_PROVIDERS_KEY = "raven.download.providers";
 const ORACLE_SETTINGS_KEY = "oracle.settings";
@@ -42,6 +44,14 @@ const knownMetadataProviders = Object.freeze([
 ]);
 const knownDownloadProviders = Object.freeze([
   {id: "weebcentral", name: "WeebCentral", scopes: ["manga", "webtoon", "comic"], enabled: true, priority: 10}
+]);
+const knownNamingProfileTypes = Object.freeze([
+  {id: "manga", name: "Manga"},
+  {id: "manhwa", name: "Manhwa"},
+  {id: "manhua", name: "Manhua"},
+  {id: "webtoon", name: "Webtoon"},
+  {id: "comic", name: "Comic"},
+  {id: "oel", name: "OEL"}
 ]);
 
 const safeJson = async (promise) => {
@@ -144,6 +154,23 @@ const defaultRavenVpnSettings = () => ({
   passwordConfigured: false
 });
 
+const defaultRavenNamingProfile = () => ({
+  chapterTemplate: "{title} c{chapter_padded} (v{volume_padded}) [Scriptarr].cbz",
+  pageTemplate: "{page_padded}{ext}",
+  pagePad: 3,
+  chapterPad: 3,
+  volumePad: 2
+});
+
+const defaultRavenNamingSettings = () => {
+  const defaults = defaultRavenNamingProfile();
+  return {
+    key: RAVEN_NAMING_KEY,
+    ...defaults,
+    profiles: Object.fromEntries(knownNamingProfileTypes.map((type) => [type.id, {...defaults}]))
+  };
+};
+
 const defaultMetadataProviderSettings = () => ({
   key: RAVEN_METADATA_KEY,
   providers: knownMetadataProviders.map((provider) => ({...provider}))
@@ -214,6 +241,56 @@ const normalizeDownloadProviderSettings = (value) => {
         };
       })
       .sort((left, right) => left.priority - right.priority)
+  };
+};
+
+const normalizeRavenNamingProfile = (value, fallback = defaultRavenNamingProfile()) => {
+  const chapterTemplate = normalizeString(value?.chapterTemplate, fallback.chapterTemplate);
+  const pageTemplate = normalizeString(value?.pageTemplate, fallback.pageTemplate);
+  const pagePad = Number.parseInt(String(value?.pagePad ?? fallback.pagePad), 10);
+  const chapterPad = Number.parseInt(String(value?.chapterPad ?? fallback.chapterPad), 10);
+  const volumePad = Number.parseInt(String(value?.volumePad ?? fallback.volumePad), 10);
+  return {
+    chapterTemplate: chapterTemplate.includes("{chapter}") || chapterTemplate.includes("{chapter_padded}")
+      ? chapterTemplate
+      : fallback.chapterTemplate,
+    pageTemplate: pageTemplate.includes("{page}") || pageTemplate.includes("{page_padded}")
+      ? pageTemplate
+      : fallback.pageTemplate,
+    pagePad: Number.isInteger(pagePad) && pagePad > 0 ? pagePad : fallback.pagePad,
+    chapterPad: Number.isInteger(chapterPad) && chapterPad > 0 ? chapterPad : fallback.chapterPad,
+    volumePad: Number.isInteger(volumePad) && volumePad > 0 ? volumePad : fallback.volumePad
+  };
+};
+
+const normalizeRavenNamingSettings = (value) => {
+  const defaults = defaultRavenNamingSettings();
+  const normalizedDefaults = normalizeRavenNamingProfile(value, defaults);
+  const configuredProfiles = normalizeObject(value?.profiles, {}) || {};
+  const normalizedProfiles = {...defaults.profiles};
+
+  for (const [typeId, profile] of Object.entries(configuredProfiles)) {
+    const normalizedTypeId = normalizeTypeSlug(typeId);
+    if (!normalizedTypeId) {
+      continue;
+    }
+    normalizedProfiles[normalizedTypeId] = normalizeRavenNamingProfile(
+      profile,
+      normalizedProfiles[normalizedTypeId] || normalizedDefaults
+    );
+  }
+
+  for (const type of knownNamingProfileTypes) {
+    normalizedProfiles[type.id] = normalizeRavenNamingProfile(
+      normalizedProfiles[type.id],
+      normalizedDefaults
+    );
+  }
+
+  return {
+    key: RAVEN_NAMING_KEY,
+    ...normalizedDefaults,
+    profiles: normalizedProfiles
   };
 };
 
@@ -291,6 +368,11 @@ const readRavenVpnSettings = async (vaultClient) => {
     readSecret(vaultClient, RAVEN_VPN_PASSWORD_SECRET)
   ]);
   return normalizeRavenVpnSettings(settingsValue, password);
+};
+
+const readRavenNamingSettings = async (vaultClient) => {
+  const settingsValue = await readSetting(vaultClient, RAVEN_NAMING_KEY, defaultRavenNamingSettings());
+  return normalizeRavenNamingSettings(settingsValue);
 };
 
 const readMetadataProviderSettings = async (vaultClient) => {
@@ -767,20 +849,29 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
       return;
     }
 
-    const request = await vaultClient.createRequest({
-      source: req.body.source || "moon",
-      title: normalizeString(req.body?.selectedMetadata?.title, req.body.title),
-      requestType: normalizeString(req.body?.requestType || req.body?.selectedDownload?.requestType || req.body?.selectedMetadata?.type || "manga", "manga"),
-      notes: normalizeString(req.body.notes),
-      requestedBy: req.user.discordUserId,
-      status: normalizeObject(req.body?.selectedDownload)?.titleUrl ? "pending" : "unavailable",
-      details: {
-        query: normalizeString(req.body?.query),
-        selectedMetadata: normalizeObject(req.body?.selectedMetadata),
-        selectedDownload: normalizeObject(req.body?.selectedDownload),
-        availability: normalizeObject(req.body?.selectedDownload)?.titleUrl ? "available" : "unavailable"
+    let request;
+    try {
+      request = await vaultClient.createRequest({
+        source: req.body.source || "moon",
+        title: normalizeString(req.body?.selectedMetadata?.title, req.body.title),
+        requestType: normalizeString(req.body?.requestType || req.body?.selectedDownload?.requestType || req.body?.selectedMetadata?.type || "manga", "manga"),
+        notes: normalizeString(req.body.notes),
+        requestedBy: req.user.discordUserId,
+        status: normalizeObject(req.body?.selectedDownload)?.titleUrl ? "pending" : "unavailable",
+        details: {
+          query: normalizeString(req.body?.query),
+          selectedMetadata: normalizeObject(req.body?.selectedMetadata),
+          selectedDownload: normalizeObject(req.body?.selectedDownload),
+          availability: normalizeObject(req.body?.selectedDownload)?.titleUrl ? "available" : "unavailable"
+        }
+      });
+    } catch (error) {
+      if (isRequestWorkConflictError(error)) {
+        res.status(409).json(buildRequestWorkConflictPayload(error));
+        return;
       }
-    });
+      throw error;
+    }
     res.status(201).json(request);
   });
 
@@ -911,6 +1002,16 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
       await vaultClient.setSecret(RAVEN_VPN_PASSWORD_SECRET, password);
     }
     res.json(await readRavenVpnSettings(vaultClient));
+  });
+
+  app.get("/api/admin/settings/raven/naming", requirePermission(vaultClient, "manage_settings"), async (_req, res) => {
+    res.json(await readRavenNamingSettings(vaultClient));
+  });
+
+  app.put("/api/admin/settings/raven/naming", requirePermission(vaultClient, "manage_settings"), async (req, res) => {
+    const nextSettings = normalizeRavenNamingSettings(req.body);
+    await vaultClient.setSetting(RAVEN_NAMING_KEY, nextSettings);
+    res.json(await readRavenNamingSettings(vaultClient));
   });
 
   app.get("/api/admin/settings/raven/metadata", requirePermission(vaultClient, "manage_settings"), async (_req, res) => {
@@ -1152,21 +1253,30 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
       return;
     }
 
-    const request = await vaultClient.createRequest({
-      source: "external_api",
-      title: selection.canonicalTitle,
-      requestType: selection.requestType,
-      notes: normalizeString(req.body?.notes),
-      requestedBy: "external-api",
-      status: "pending",
-      details: {
-        query: selection.query,
-        selectedMetadata: selection.selectedMetadata,
-        selectedDownload: selection.selectedDownload,
-        availability: "available",
-        coverUrl: selection.coverUrl
+    let request;
+    try {
+      request = await vaultClient.createRequest({
+        source: "external_api",
+        title: selection.canonicalTitle,
+        requestType: selection.requestType,
+        notes: normalizeString(req.body?.notes),
+        requestedBy: "external-api",
+        status: "pending",
+        details: {
+          query: selection.query,
+          selectedMetadata: selection.selectedMetadata,
+          selectedDownload: selection.selectedDownload,
+          availability: "available",
+          coverUrl: selection.coverUrl
+        }
+      });
+    } catch (error) {
+      if (isRequestWorkConflictError(error)) {
+        res.status(409).json(buildRequestWorkConflictPayload(error));
+        return;
       }
-    });
+      throw error;
+    }
 
     const queued = await serviceJson(config.ravenBaseUrl, "/v1/downloads/queue", {
       method: "POST",
@@ -1297,6 +1407,7 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
     requireUser,
     requirePermission: (permission) => requirePermission(vaultClient, permission),
     readRavenVpnSettings: () => readRavenVpnSettings(vaultClient),
+    readRavenNamingSettings: () => readRavenNamingSettings(vaultClient),
     readMetadataProviderSettings: () => readMetadataProviderSettings(vaultClient),
     readDownloadProviderSettings: () => readDownloadProviderSettings(vaultClient),
     readOracleSettings: () => readOracleSettings(vaultClient),

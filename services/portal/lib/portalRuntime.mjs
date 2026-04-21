@@ -312,7 +312,8 @@ export const createPortalRuntime = ({
         followNotifier = createFollowNotifier({
           sage,
           discord,
-          logger
+          logger,
+          publicBaseUrl: config.publicBaseUrl
         });
         followNotifier.start();
         state = {

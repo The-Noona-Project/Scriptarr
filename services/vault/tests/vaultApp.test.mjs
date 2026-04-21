@@ -44,6 +44,8 @@ test("vault exposes bootstrap status and request intake lifecycle", async () => 
 
   assert.equal(request.status, "unavailable");
   assert.equal(request.details.query, "dandadan");
+  assert.equal(request.workKey, "metadata:mangadex::md-1");
+  assert.equal(request.details.requestWorkKey, "metadata:mangadex::md-1");
   assert.equal(request.timeline.at(-1).type, "unavailable");
 
   const updated = await fetch(`${baseUrl}/api/service/requests/${request.id}`, {
@@ -69,6 +71,8 @@ test("vault exposes bootstrap status and request intake lifecycle", async () => 
   assert.equal(updated.status, "queued");
   assert.equal(updated.details.jobId, "job-1");
   assert.equal(updated.details.taskId, "task-1");
+  assert.equal(updated.workKey, "download:weebcentral::https://weebcentral.com/series/abc");
+  assert.equal(updated.details.requestWorkKind, "download");
   assert.equal(updated.timeline.at(-1).actor, "owner");
 
   const setting = await fetch(`${baseUrl}/api/service/settings/oracle.settings`, {
@@ -93,6 +97,197 @@ test("vault exposes bootstrap status and request intake lifecycle", async () => 
   }).then((response) => response.json());
 
   assert.equal(secret.value, "test-openai-key");
+
+  server.close();
+});
+
+test("vault durably rejects duplicate active request work keys and releases them when requests stop being active", async () => {
+  const {app} = await createVaultApp();
+  const server = app.listen(0);
+  const {port} = server.address();
+  const baseUrl = `http://127.0.0.1:${port}`;
+
+  const headers = {
+    "Authorization": "Bearer sage-dev-token",
+    "Content-Type": "application/json"
+  };
+
+  const first = await fetch(`${baseUrl}/api/service/requests`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      source: "moon",
+      title: "One Piece",
+      requestType: "manga",
+      requestedBy: "123",
+      status: "pending",
+      details: {
+        query: "one piece",
+        selectedMetadata: {
+          provider: "mangadex",
+          providerSeriesId: "md-one-piece",
+          title: "One Piece"
+        },
+        selectedDownload: {
+          providerId: "weebcentral",
+          titleUrl: "https://weebcentral.com/series/one-piece",
+          titleName: "One Piece"
+        },
+        availability: "available"
+      }
+    })
+  });
+  assert.equal(first.status, 201);
+
+  const duplicate = await fetch(`${baseUrl}/api/service/requests`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      source: "moon-admin",
+      title: "One Piece",
+      requestType: "manga",
+      requestedBy: "456",
+      status: "pending",
+      details: {
+        query: "one piece",
+        selectedMetadata: {
+          provider: "mangadex",
+          providerSeriesId: "md-one-piece-alt",
+          title: "One Piece"
+        },
+        selectedDownload: {
+          providerId: "weebcentral",
+          titleUrl: "https://weebcentral.com/series/one-piece",
+          titleName: "One Piece"
+        },
+        availability: "available"
+      }
+    })
+  });
+  assert.equal(duplicate.status, 409);
+  assert.equal((await duplicate.json()).code, "REQUEST_WORK_KEY_CONFLICT");
+
+  const metadataFirst = await fetch(`${baseUrl}/api/service/requests`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      source: "moon",
+      title: "Blue Box",
+      requestType: "manga",
+      requestedBy: "123",
+      status: "unavailable",
+      details: {
+        query: "blue box",
+        selectedMetadata: {
+          provider: "mangadex",
+          providerSeriesId: "md-blue-box",
+          title: "Blue Box"
+        },
+        availability: "unavailable"
+      }
+    })
+  });
+  assert.equal(metadataFirst.status, 201);
+
+  const metadataDuplicate = await fetch(`${baseUrl}/api/service/requests`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      source: "discord",
+      title: "Blue Box",
+      requestType: "manga",
+      requestedBy: "789",
+      status: "unavailable",
+      details: {
+        query: "blue box",
+        selectedMetadata: {
+          provider: "mangadex",
+          providerSeriesId: "md-blue-box",
+          title: "Blue Box"
+        },
+        availability: "unavailable"
+      }
+    })
+  });
+  assert.equal(metadataDuplicate.status, 409);
+  assert.equal((await metadataDuplicate.json()).code, "REQUEST_WORK_KEY_CONFLICT");
+
+  const alternateUnavailable = await fetch(`${baseUrl}/api/service/requests`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      source: "moon",
+      title: "One Piece (Official Colored)",
+      requestType: "manga",
+      requestedBy: "123",
+      status: "unavailable",
+      details: {
+        query: "one piece official colored",
+        selectedMetadata: {
+          provider: "mangadex",
+          providerSeriesId: "md-one-piece-color",
+          title: "One Piece (Official Colored)"
+        },
+        availability: "unavailable"
+      }
+    })
+  });
+  assert.equal(alternateUnavailable.status, 201);
+
+  const conflictingResolve = await fetch(`${baseUrl}/api/service/requests/3`, {
+    method: "PATCH",
+    headers,
+    body: JSON.stringify({
+      detailsMerge: {
+        selectedDownload: {
+          providerId: "weebcentral",
+          titleUrl: "https://weebcentral.com/series/one-piece",
+          titleName: "One Piece"
+        },
+        availability: "available"
+      },
+      actor: "owner-1"
+    })
+  });
+  assert.equal(conflictingResolve.status, 409);
+  assert.equal((await conflictingResolve.json()).code, "REQUEST_WORK_KEY_CONFLICT");
+
+  const denied = await fetch(`${baseUrl}/api/service/requests/1`, {
+    method: "PATCH",
+    headers,
+    body: JSON.stringify({
+      status: "denied",
+      actor: "owner-1"
+    })
+  });
+  assert.equal(denied.status, 200);
+
+  const recreated = await fetch(`${baseUrl}/api/service/requests`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      source: "moon",
+      title: "One Piece",
+      requestType: "manga",
+      requestedBy: "123",
+      status: "pending",
+      details: {
+        query: "one piece",
+        selectedMetadata: {
+          provider: "mangadex",
+          providerSeriesId: "md-one-piece",
+          title: "One Piece"
+        },
+        selectedDownload: {
+          providerId: "weebcentral",
+          titleUrl: "https://weebcentral.com/series/one-piece",
+          titleName: "One Piece"
+        },
+        availability: "available"
+      }
+    })
+  });
+  assert.equal(recreated.status, 201);
 
   server.close();
 });

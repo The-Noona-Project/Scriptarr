@@ -1,10 +1,11 @@
 import {loadActivityPage, renderActivityPage} from "./activityPage.js";
 import {enhanceAddPage, loadAddPage, renderAddPage} from "./addPage.js";
 import {enhanceApiPage, loadApiPage, renderApiPage} from "./apiPage.js";
-import {loadCalendarPage, renderCalendarPage} from "./calendarPage.js";
+import {enhanceCalendarPage, loadCalendarPage, renderCalendarPage} from "./calendarPage.js";
 import {enhanceDiscordPage, loadDiscordPage, renderDiscordPage} from "./discordPage.js";
 import {loadImportPage, renderImportPage} from "./importPage.js";
-import {loadLibraryPage, renderLibraryPage} from "./libraryPage.js";
+import {enhanceLibraryPage, loadLibraryPage, renderLibraryPage} from "./libraryPage.js";
+import {enhanceMediaManagementPage, loadMediaManagementPage, renderMediaManagementPage} from "./mediaManagementPage.js";
 import {loadOverviewPage, renderOverviewPage} from "./overviewPage.js";
 import {enhanceRequestsPage, loadRequestsPage, renderRequestsPage} from "./requestsPage.js";
 import {enhanceSettingsPage, loadSettingsPage, renderSettingsPage} from "./settingsPage.js";
@@ -27,10 +28,10 @@ import {loadWantedPage, renderWantedPage} from "./wantedPage.js";
  */
 const pageModules = {
   overview: {load: loadOverviewPage, render: renderOverviewPage},
-  library: {load: loadLibraryPage, render: renderLibraryPage},
+  library: {load: loadLibraryPage, render: renderLibraryPage, enhance: enhanceLibraryPage},
   add: {load: loadAddPage, render: renderAddPage, enhance: enhanceAddPage},
   import: {load: loadImportPage, render: renderImportPage},
-  calendar: {load: loadCalendarPage, render: renderCalendarPage},
+  calendar: {load: loadCalendarPage, render: renderCalendarPage, enhance: enhanceCalendarPage},
   "activity-queue": {load: loadActivityPage, render: renderActivityPage},
   "activity-history": {load: loadActivityPage, render: renderActivityPage},
   "activity-blocklist": {load: loadActivityPage, render: renderActivityPage},
@@ -39,6 +40,7 @@ const pageModules = {
   requests: {load: loadRequestsPage, render: renderRequestsPage, enhance: enhanceRequestsPage},
   users: {load: loadUsersPage, render: renderUsersPage},
   discord: {load: loadDiscordPage, render: renderDiscordPage, enhance: enhanceDiscordPage},
+  mediamanagement: {load: loadMediaManagementPage, render: renderMediaManagementPage, enhance: enhanceMediaManagementPage},
   settings: {load: loadSettingsPage, render: renderSettingsPage, enhance: enhanceSettingsPage},
   "system-api": {load: loadApiPage, render: renderApiPage, enhance: enhanceApiPage},
   "system-status": {load: loadSystemPage, render: renderSystemPage, enhance: enhanceSystemPage},

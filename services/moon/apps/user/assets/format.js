@@ -1,3 +1,27 @@
+const DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * Parse a Moon user-facing date without shifting plain YYYY-MM-DD strings across timezones.
+ *
+ * @param {string | null | undefined} value
+ * @returns {Date | null}
+ */
+export const parseDateValue = (value) => {
+  if (!value) {
+    return null;
+  }
+  const normalized = String(value).trim();
+  if (!normalized) {
+    return null;
+  }
+  if (DATE_ONLY_PATTERN.test(normalized)) {
+    const [year, month, day] = normalized.split("-").map((part) => Number.parseInt(part, 10));
+    return new Date(year, month - 1, day, 12, 0, 0, 0);
+  }
+  const parsed = new Date(normalized);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+};
+
 /**
  * Format a date label for the Moon user app.
  *
@@ -10,8 +34,8 @@ export const formatDate = (value, {includeTime = false} = {}) => {
     return "Unknown";
   }
 
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) {
+  const parsed = parseDateValue(value);
+  if (!parsed) {
     return value;
   }
 
@@ -41,6 +65,7 @@ export const joinValues = (values) => Array.isArray(values) && values.length ? v
 
 export default {
   formatDate,
+  parseDateValue,
   formatProgress,
   joinValues
 };

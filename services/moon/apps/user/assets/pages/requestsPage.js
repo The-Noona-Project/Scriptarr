@@ -2,7 +2,122 @@ import {escapeHtml, renderChipList, renderCoverArt, renderEmptyState} from "../d
 import {formatDate} from "../format.js";
 
 const normalizeArray = (value) => Array.isArray(value) ? value : [];
+const normalizeString = (value, fallback = "") => {
+  const normalized = typeof value === "string" ? value.trim() : "";
+  return normalized || fallback;
+};
 const renderStatusBadge = (value) => `<span class="status-pill">${escapeHtml(value)}</span>`;
+
+/**
+ * Resolve the representative metadata match from a grouped intake result.
+ *
+ * @param {Record<string, any>} entry
+ * @returns {Record<string, any>}
+ */
+const resolveMetadata = (entry) => entry.selectedMetadata
+  || entry.metadata
+  || entry.representativeMetadata
+  || normalizeArray(entry.metadataMatches)[0]
+  || {};
+
+/**
+ * Resolve the concrete download target from a grouped intake result.
+ *
+ * @param {Record<string, any>} entry
+ * @returns {Record<string, any> | null}
+ */
+const resolveDownload = (entry) => entry.selectedDownload
+  || entry.download
+  || entry.downloadTarget
+  || entry.bestDownloadMatch
+  || null;
+
+/**
+ * Resolve a stable target identity if Raven already grouped this result.
+ *
+ * @param {Record<string, any>} entry
+ * @param {Record<string, any> | null} download
+ * @returns {Record<string, any> | null}
+ */
+const resolveTargetIdentity = (entry, download) => {
+  const explicitIdentity = entry.targetIdentity
+    || entry.workIdentity
+    || entry.stableTargetIdentity
+    || download?.targetIdentity
+    || null;
+  if (explicitIdentity && typeof explicitIdentity === "object" && !Array.isArray(explicitIdentity)) {
+    return explicitIdentity;
+  }
+
+  const workKey = normalizeString(entry.workKey || entry.targetWorkKey || download?.workKey);
+  const providerId = normalizeString(
+    entry.downloadProviderId
+    || download?.providerId
+    || download?.providerName
+  );
+  const titleUrl = normalizeString(entry.titleUrl || download?.titleUrl);
+  if (!workKey && !providerId && !titleUrl) {
+    return null;
+  }
+  return {
+    workKey,
+    providerId,
+    titleUrl
+  };
+};
+
+/**
+ * Normalize a grouped intake result into a consistent Moon-facing shape.
+ *
+ * @param {Record<string, any>} entry
+ * @returns {{
+ *   metadata: Record<string, any>,
+ *   download: Record<string, any> | null,
+ *   targetIdentity: Record<string, any> | null,
+ *   title: string,
+ *   editionLabel: string,
+ *   availability: string,
+ *   type: string,
+ *   requestType: string,
+ *   coverUrl: string,
+ *   aliases: string[]
+ * }}
+ */
+const normalizeIntakeResult = (entry) => {
+  const metadata = resolveMetadata(entry);
+  const download = resolveDownload(entry);
+  const title = normalizeString(
+    entry.displayTitle
+    || entry.title
+    || entry.canonicalTitle
+    || entry.baseTitle
+    || metadata.title
+    || download?.titleName,
+    "Untitled match"
+  );
+  const editionLabel = normalizeString(
+    entry.editionLabel
+    || entry.variantLabel
+    || entry.variantSummary
+    || entry.subtitle
+    || entry.targetIdentity?.editionLabel
+  );
+  const aliases = normalizeArray(entry.aliases || metadata.aliases)
+    .filter(Boolean)
+    .slice(0, 5);
+  return {
+    metadata,
+    download,
+    targetIdentity: resolveTargetIdentity(entry, download),
+    title,
+    editionLabel,
+    availability: normalizeString(entry.availability, "unavailable"),
+    type: normalizeString(entry.type || metadata.type || metadata.libraryTypeLabel || "manga"),
+    requestType: normalizeString(download?.requestType || entry.requestType || metadata.type, "manga"),
+    coverUrl: normalizeString(entry.coverUrl || download?.coverUrl || metadata.coverUrl),
+    aliases
+  };
+};
 
 /**
  * Load the current user's request list and optional intake-search results.
@@ -42,26 +157,33 @@ export const loadRequestsPage = async ({api, searchParams}) => {
 };
 
 const renderIntakeResult = (entry, index) => {
-  const metadata = entry.metadata || {};
-  const download = entry.download || null;
-  const aliases = normalizeArray(entry.aliases || metadata.aliases).filter(Boolean).slice(0, 5);
-  const isAvailable = entry.availability === "available" && download?.titleUrl;
-  const coverUrl = entry.coverUrl || download?.coverUrl || metadata.coverUrl || "";
+  const normalized = normalizeIntakeResult(entry);
+  const metadata = normalized.metadata;
+  const download = normalized.download;
+  const isAvailable = ["available", "download-ready"].includes(normalized.availability) && download?.titleUrl;
+  const detailChips = [
+    normalized.editionLabel,
+    normalized.type
+  ].filter((value) => {
+    const normalizedValue = normalizeString(value).toLowerCase();
+    return normalizedValue && !normalized.title.toLowerCase().includes(normalizedValue);
+  });
 
   return `
     <article class="stack-card intake-card ${isAvailable ? "is-ready" : "is-unavailable"}">
       <div class="list-card-head with-cover">
-        ${renderCoverArt(coverUrl, entry.canonicalTitle || metadata.title || "Untitled match", "request-cover-art")}
+        ${renderCoverArt(normalized.coverUrl, normalized.title, "request-cover-art")}
         <div class="list-card-copy">
-          <strong>${escapeHtml(entry.canonicalTitle || metadata.title || "Untitled match")}</strong>
+          <strong>${escapeHtml(normalized.title)}</strong>
           <span>${escapeHtml(metadata.provider || entry.metadataProviderId || "metadata")} -> ${escapeHtml(download?.providerName || "No download match yet")}</span>
+          ${detailChips.length ? renderChipList(detailChips) : ""}
         </div>
         ${renderStatusBadge(isAvailable ? "Ready" : "Unavailable")}
       </div>
       <p>${escapeHtml(metadata.summary || "No metadata summary was returned for this match.")}</p>
-      ${aliases.length ? renderChipList(aliases) : ""}
+      ${normalized.aliases.length ? renderChipList(normalized.aliases) : ""}
       <div class="inline-note">
-        <strong>${escapeHtml(entry.type || metadata.type || "manga")}</strong>
+        <strong>${escapeHtml(normalized.type)}</strong>
         <span>${escapeHtml(download?.titleName || "No enabled download provider match yet")}</span>
       </div>
       <button class="solid-button" type="button" data-intake-action="submit-request" data-result-index="${escapeHtml(index)}">
@@ -176,19 +298,22 @@ export const enhanceRequestsPage = async (root, {navigate, api, rerender, setFla
         setFlash("bad", "That intake result is no longer available.");
         return;
       }
+      const normalized = normalizeIntakeResult(selected);
 
       const response = await api.post("/api/moon/v3/user/requests", {
         query: root.querySelector("#request-search-query")?.value.trim() || "",
-        requestType: selected.download?.requestType || selected.type || "manga",
+        title: normalized.title,
+        requestType: normalized.requestType,
         notes: root.querySelector("#request-notes")?.value || "",
-        selectedMetadata: selected.metadata,
-        selectedDownload: selected.download || null
+        selectedMetadata: normalized.metadata,
+        selectedDownload: normalized.download || null,
+        ...(normalized.targetIdentity ? {targetIdentity: normalized.targetIdentity} : {})
       });
 
       setFlash(
         response.ok ? "good" : "bad",
         response.ok
-          ? (selected.download?.titleUrl
+          ? (normalized.download?.titleUrl
             ? "Request created and sent to moderation."
             : "Unavailable request saved for later resolution.")
           : response.payload?.error || "Unable to create your request."

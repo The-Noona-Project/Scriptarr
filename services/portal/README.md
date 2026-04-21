@@ -19,12 +19,16 @@ Portal's supported Discord command set is:
 - `/subscribe`
 - DM-only `downloadall`
 
+`downloadall` stays provider-browse first, but it now asks Raven to metadata-resolve each matched bulk title before
+queueing it. Portal only queues titles with one confident metadata match and reports already-active, no-metadata,
+ambiguous-metadata, and failed skips in the DM summary.
+
 Guild id, onboarding settings, DM superuser id, and per-command role gates are managed from Moon admin at
 `/admin/discord`. Discord bot credentials remain env-managed.
 
 Moon admin also surfaces the live Discord runtime state from Portal, including command-sync health, onboarding
 capability, and the last meaningful Discord runtime error when the bot disconnects.
 
-Portal also watches request-linked Raven completion state through Sage. When a request finishes and the requester has a
-Discord id, Portal sends one completion DM with the shared title art and Moon link instead of duplicating notification
-state in a separate store.
+Portal also watches request-linked moderation and Raven completion state through Sage. When a request is approved,
+denied, or finished and the requester has a Discord id, Portal sends one deduped DM with the shared title art and the
+right Moon link instead of duplicating notification state in a separate store.

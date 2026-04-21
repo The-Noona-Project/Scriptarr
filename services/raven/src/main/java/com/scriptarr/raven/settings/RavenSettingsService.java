@@ -90,7 +90,8 @@ public class RavenSettingsService {
                 settingsNode.path("pageTemplate").asText(defaults.pageTemplate()),
                 settingsNode.path("pagePad").asInt(defaults.pagePad()),
                 settingsNode.path("chapterPad").asInt(defaults.chapterPad()),
-                settingsNode.path("volumePad").asInt(defaults.volumePad())
+                settingsNode.path("volumePad").asInt(defaults.volumePad()),
+                loadNamingProfiles(settingsNode.path("profiles"), defaults)
             ).normalized();
         } catch (Exception error) {
             logger.warn("SETTINGS", "Failed to load Raven naming settings.", error.getMessage());
@@ -247,6 +248,30 @@ public class RavenSettingsService {
     private String normalize(String value, String fallback) {
         String normalized = value == null ? "" : value.trim();
         return normalized.isBlank() ? fallback : normalized;
+    }
+
+    private Map<String, RavenNamingProfile> loadNamingProfiles(JsonNode profilesNode, RavenNamingSettings defaults) {
+        if (profilesNode == null || profilesNode.isMissingNode() || profilesNode.isNull() || !profilesNode.isObject()) {
+            return defaults.profilesOrEmpty();
+        }
+
+        Map<String, RavenNamingProfile> profiles = new HashMap<>();
+        profilesNode.fields().forEachRemaining((entry) -> {
+            String typeSlug = normalize(entry.getKey(), "").toLowerCase(Locale.ROOT);
+            if (typeSlug.isBlank()) {
+                return;
+            }
+            JsonNode profileNode = entry.getValue();
+            RavenNamingProfile fallbackProfile = defaults.profileForType(typeSlug);
+            profiles.put(typeSlug, new RavenNamingProfile(
+                profileNode.path("chapterTemplate").asText(fallbackProfile.chapterTemplate()),
+                profileNode.path("pageTemplate").asText(fallbackProfile.pageTemplate()),
+                profileNode.path("pagePad").asInt(fallbackProfile.pagePad()),
+                profileNode.path("chapterPad").asInt(fallbackProfile.chapterPad()),
+                profileNode.path("volumePad").asInt(fallbackProfile.volumePad())
+            ));
+        });
+        return profiles;
     }
 
     private RavenVpnSettings loadVpnSettings() throws Exception {

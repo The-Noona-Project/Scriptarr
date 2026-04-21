@@ -102,7 +102,12 @@ export const createPortalApp = async ({
   app.post("/api/requests/from-discord", async (req, res) => {
     const discordUserId = normalizeString(req.body?.discordUserId);
     const username = normalizeString(req.body?.username, "Discord Reader");
-    const title = normalizeString(req.body?.title || req.body?.selectedMetadata?.title);
+    const title = normalizeString(
+      req.body?.title
+      || req.body?.canonicalTitle
+      || req.body?.selectedMetadata?.title
+      || req.body?.selectedDownload?.titleName
+    );
     const selectedMetadata = req.body?.selectedMetadata || null;
     const selectedDownload = req.body?.selectedDownload || null;
     if (!discordUserId || !title) {
@@ -130,11 +135,13 @@ export const createPortalApp = async ({
         source: "discord",
         discordUserId,
         username,
+        title,
         query: normalizeString(req.body?.query, title),
         requestType: normalizeString(req.body?.requestType || selectedDownload?.requestType || selectedMetadata?.type, "manga"),
         notes: normalizeString(req.body?.notes),
         selectedMetadata,
-        selectedDownload
+        selectedDownload,
+        ...(req.body?.targetIdentity ? {targetIdentity: req.body.targetIdentity} : {})
       })
       : await sage.createRequest({
         source: "discord",

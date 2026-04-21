@@ -10,5 +10,8 @@
 - Portal should prefer a minimal Discord runtime over going fully dark when privileged intents are unavailable. Slash
   commands and DMs should remain online, while onboarding should degrade separately and surface the real runtime error
   or command-sync problem back through Moon admin.
-- Portal now also owns requester completion DMs. Keep those notifications deduped by request id and ack state, and
-  reuse the shared `coverUrl` plus Moon public base URL when they are available.
+- Portal now also owns requester approval, denial, and completion DMs. Keep those notifications deduped by request id
+  plus decision state, and reuse the shared `coverUrl` plus Moon public base URL when they are available.
+- DM-only `downloadall` is still provider-browse first, but it must now go through Raven's metadata-safe bulk resolver
+  before queueing anything. Queue only titles with one confident metadata match and surface already-active,
+  no-metadata, ambiguous-metadata, and failed outcomes in the DM summary.

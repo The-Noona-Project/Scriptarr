@@ -28,6 +28,7 @@ export const adminRoutes = [
   {id: "requests", path: "/admin/requests", title: "Requests", description: "Moderate Moon and Discord requests from one queue.", navLabel: "Requests", group: "Community"},
   {id: "users", path: "/admin/users", title: "Users", description: "Roles, permissions, and Discord-linked members.", navLabel: "Users", group: "Community"},
   {id: "discord", path: "/admin/discord", title: "Discord", description: "Guild workflow settings, slash-command access, onboarding, and Portal runtime status.", navLabel: "Discord", group: "System"},
+  {id: "mediamanagement", path: "/admin/mediamanagement", title: "Media Management", description: "Per-type naming formats and Raven file-management rules for every download.", navLabel: "Media Management", group: "System"},
   {id: "settings", path: "/admin/settings", title: "Settings", description: "Branding, Raven VPN, metadata providers, Oracle, and LocalAI runtime controls.", navLabel: "Settings", group: "System"},
   {id: "system-api", path: "/admin/system/api", title: "API", description: "Public Moon API access, admin automation key, and Swagger docs.", navLabel: "API", group: "System"},
   {id: "system-status", path: "/admin/system/status", title: "System Status", description: "Warden runtime, bootstrap plan, and service health.", navLabel: "Status", group: "System"},

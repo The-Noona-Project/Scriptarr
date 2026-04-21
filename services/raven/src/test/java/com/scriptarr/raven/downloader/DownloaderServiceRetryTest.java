@@ -3,6 +3,7 @@ package com.scriptarr.raven.downloader;
 import com.scriptarr.raven.downloader.providers.DownloadProvider;
 import com.scriptarr.raven.downloader.providers.DownloadProviderRegistry;
 import com.scriptarr.raven.library.LibraryService;
+import com.scriptarr.raven.metadata.MetadataService;
 import com.scriptarr.raven.settings.RavenSettingsService;
 import com.scriptarr.raven.support.FakeRavenBrokerClient;
 import com.scriptarr.raven.support.ScriptarrLogger;
@@ -129,6 +130,51 @@ class DownloaderServiceRetryTest {
     }
 
     /**
+     * Verify a queued Raven title can persist its selected metadata snapshot
+     * into the durable library projection after download completion.
+     *
+     * @throws Exception when the local test server cannot be used
+     */
+    @Test
+    void queueDownloadPersistsSelectedMetadataAfterCompletion() throws Exception {
+        server = startImageServer(new AtomicInteger(), false);
+        String imageUrl = "http://127.0.0.1:" + server.getAddress().getPort() + "/images/page-1.jpg";
+
+        TestContext context = createContext(new FakeDownloadProvider(() -> List.of(imageUrl)));
+
+        service.queueDownload(new DownloadRequest(
+            "Metadata Series",
+            "https://weebcentral.com/series/metadata-series",
+            "Manga",
+            "tester",
+            "weebcentral",
+            "",
+            Map.of(
+                "provider", "mangadex",
+                "providerSeriesId", "metadata-md",
+                "title", "Metadata Series",
+                "type", "Manga",
+                "details", Map.of(
+                    "title", "Metadata Series",
+                    "summary", "Metadata summary",
+                    "aliases", List.of("Metadata Series"),
+                    "type", "Manga"
+                )
+            ),
+            Map.of(),
+            "normal"
+        ));
+
+        Map<String, Object> task = awaitTerminalTask(service);
+
+        assertEquals("completed", task.get("status"));
+        assertEquals(1, context.libraryService().listTitles().size());
+        assertEquals("mangadex", context.libraryService().listTitles().getFirst().metadataProvider());
+        assertFalse(context.libraryService().listTitles().getFirst().metadataMatchedAt().isBlank());
+        assertFalse(context.brokerClient().getMetadataMatch(context.libraryService().listTitles().getFirst().id()).path("error").isTextual());
+    }
+
+    /**
      * Build a DownloaderService with in-memory broker state and a temporary
      * downloads root.
      *
@@ -148,9 +194,20 @@ class DownloaderServiceRetryTest {
         RavenSettingsService settingsService = new RavenSettingsService(brokerClient, logger, List.of());
         DownloadProviderRegistry providerRegistry = new DownloadProviderRegistry(List.of(provider), settingsService);
         LibraryService libraryService = new LibraryService(brokerClient, settingsService, logger);
+        MetadataService metadataService = new MetadataService(List.of(), settingsService, brokerClient, libraryService, logger);
+        DownloadIntakeService downloadIntakeService = new DownloadIntakeService(metadataService, providerRegistry);
         VpnService vpnService = new VpnService(settingsService, logger);
-        service = new DownloaderService(providerRegistry, vpnService, libraryService, brokerClient, settingsService, logger);
-        return new TestContext(service, libraryService, logger);
+        service = new DownloaderService(
+            providerRegistry,
+            vpnService,
+            libraryService,
+            downloadIntakeService,
+            metadataService,
+            brokerClient,
+            settingsService,
+            logger
+        );
+        return new TestContext(service, libraryService, brokerClient, logger);
     }
 
     /**
@@ -219,11 +276,13 @@ class DownloaderServiceRetryTest {
      *
      * @param downloaderService service under test
      * @param libraryService library projection used by the service
+     * @param brokerClient in-memory Raven broker used by the service
      * @param logger temporary filesystem logger
      */
     private record TestContext(
         DownloaderService downloaderService,
         LibraryService libraryService,
+        FakeRavenBrokerClient brokerClient,
         TestLogger logger
     ) {
     }

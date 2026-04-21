@@ -6,26 +6,95 @@ const normalizeString = (value, fallback = "") => {
   return normalized || fallback;
 };
 
-const buildDirectMessagePayload = (notification, kind) => {
+const resolveRequestEventType = (notification = {}) => {
+  const normalized = normalizeString(
+    notification.decisionType
+    || notification.eventType
+    || notification.notificationType
+    || notification.type
+    || notification.status
+  ).toLowerCase();
+  if (["approved", "queued"].includes(normalized)) {
+    return "approved";
+  }
+  if (["denied", "rejected"].includes(normalized)) {
+    return "denied";
+  }
+  return "completed";
+};
+
+const resolveRequestNotificationId = (notification = {}) => {
+  const explicitId = normalizeString(notification.id);
+  if (explicitId) {
+    return explicitId;
+  }
+  const requestId = normalizeString(notification.requestId);
+  const decisionType = resolveRequestEventType(notification);
+  return requestId
+    ? `${requestId}:${decisionType}`
+    : "";
+};
+
+const resolveNotificationLink = (notification, kind, publicBaseUrl) => {
+  const explicitLink = normalizeString(
+    notification?.linkUrl
+    || notification?.moonUrl
+    || notification?.requestUrl
+    || notification?.requestsUrl
+    || notification?.titleUrl
+  );
+  if (explicitLink) {
+    return explicitLink;
+  }
+
+  const baseUrl = normalizeString(publicBaseUrl).replace(/\/+$/g, "");
+  if (!baseUrl || kind !== "request") {
+    return "";
+  }
+
+  const eventType = resolveRequestEventType(notification);
+  return eventType === "completed"
+    ? ""
+    : `${baseUrl}/myrequests`;
+};
+
+const buildDirectMessagePayload = (notification, kind, publicBaseUrl) => {
   const titleName = normalizeString(notification?.titleName || notification?.title || "your Scriptarr title");
-  const titleUrl = normalizeString(notification?.titleUrl);
+  const titleUrl = resolveNotificationLink(notification, kind, publicBaseUrl);
   const coverUrl = normalizeString(notification?.coverUrl);
+  const moderatorNote = normalizeString(notification?.moderatorNote || notification?.note || notification?.comment);
+  const requestEventType = resolveRequestEventType(notification);
   const titleLine = kind === "request"
-    ? `Your Scriptarr request for **${titleName}** is ready.`
+    ? requestEventType === "approved"
+      ? `Your Scriptarr request for **${titleName}** was approved.`
+      : requestEventType === "denied"
+        ? `Your Scriptarr request for **${titleName}** was denied.`
+        : `Your Scriptarr request for **${titleName}** is ready.`
     : `New Scriptarr download completed for **${titleName}**.`;
+  const noteLine = moderatorNote ? `\nModerator note: ${moderatorNote}` : "";
   const linkLine = titleUrl ? `\nOpen in Scriptarr: ${titleUrl}` : "";
   const payload = {
-    content: `${titleLine}${linkLine}`
+    content: `${titleLine}${noteLine}${linkLine}`
   };
 
   if (coverUrl || titleUrl) {
     payload.embeds = [{
       title: titleName,
       description: kind === "request"
-        ? "Requested title download completed."
+        ? requestEventType === "approved"
+          ? "Requested title approved."
+          : requestEventType === "denied"
+            ? "Requested title denied."
+            : "Requested title download completed."
         : "Followed title download completed.",
       url: titleUrl || undefined,
-      image: coverUrl ? {url: coverUrl} : undefined
+      image: coverUrl ? {url: coverUrl} : undefined,
+      fields: moderatorNote
+        ? [{
+          name: "Moderator note",
+          value: moderatorNote
+        }]
+        : undefined
     }];
   }
 
@@ -37,7 +106,8 @@ const deliverNotifications = async ({
   acknowledge,
   kind,
   discord,
-  logger
+  logger,
+  publicBaseUrl
 }) => {
   if (typeof list !== "function" || typeof acknowledge !== "function") {
     return;
@@ -48,11 +118,19 @@ const deliverNotifications = async ({
     return;
   }
 
+  const deliveredIds = new Set();
+
   for (const notification of normalizeArray(response.payload?.notifications)) {
-    const notificationId = normalizeString(notification?.id, normalizeString(notification?.requestId));
+    const notificationId = kind === "request"
+      ? resolveRequestNotificationId(notification)
+      : normalizeString(notification?.id, normalizeString(notification?.requestId));
+    if (notificationId && deliveredIds.has(notificationId)) {
+      continue;
+    }
     try {
-      await discord.sendDirectMessage(notification.discordUserId, buildDirectMessagePayload(notification, kind));
+      await discord.sendDirectMessage(notification.discordUserId, buildDirectMessagePayload(notification, kind, publicBaseUrl));
       if (notificationId) {
+        deliveredIds.add(notificationId);
         await acknowledge(notificationId);
       }
     } catch (error) {
@@ -65,6 +143,7 @@ export const createFollowNotifier = ({
   sage,
   discord,
   logger,
+  publicBaseUrl,
   pollMs = FOLLOW_NOTIFICATION_POLL_MS
 } = {}) => {
   let timer = null;
@@ -81,14 +160,16 @@ export const createFollowNotifier = ({
         acknowledge: (id) => sage?.acknowledgeFollowNotification?.(id),
         kind: "follow",
         discord,
-        logger
+        logger,
+        publicBaseUrl
       });
       await deliverNotifications({
         list: () => sage?.listRequestNotifications?.(),
         acknowledge: (id) => sage?.acknowledgeRequestNotification?.(id),
         kind: "request",
         discord,
-        logger
+        logger,
+        publicBaseUrl
       });
     } catch (error) {
       logger?.error?.("Portal notifier poll failed.", {error});

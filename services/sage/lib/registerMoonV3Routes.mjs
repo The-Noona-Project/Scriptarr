@@ -3,6 +3,7 @@
  */
 import {hasPermission} from "./auth.mjs";
 import {buildIntakeSelection, evaluateSelectionAgainstGuardState} from "./requestSelectionGuards.mjs";
+import {buildRequestWorkConflictPayload, isRequestWorkConflictError} from "./requestConflict.mjs";
 
 const defaultReaderPreferences = Object.freeze({
   readingMode: "paged",
@@ -173,9 +174,13 @@ const toRequestSummary = (request = {}, userIndex = new Map()) => {
         details.coverUrl,
         normalizeString(selectedDownload?.coverUrl, normalizeString(selectedMetadata?.coverUrl))
       ),
+      requestWorkKey: normalizeString(request.workKey, normalizeString(details.requestWorkKey)),
+      requestWorkKind: normalizeString(request.workKeyKind, normalizeString(details.requestWorkKind)),
       jobId: normalizeString(details.jobId),
       taskId: normalizeString(details.taskId)
     },
+    workKey: normalizeString(request.workKey, normalizeString(details.requestWorkKey)),
+    workKeyKind: normalizeString(request.workKeyKind, normalizeString(details.requestWorkKind)),
     jobId: normalizeString(details.jobId),
     taskId: normalizeString(details.taskId),
     requestedBy: {
@@ -276,6 +281,7 @@ const withPermission = (requirePermission, permission, handler) => async (req, r
  *   requireUser: ReturnType<import("./auth.mjs").requireSession>,
  *   requirePermission: (permission: string) => import("express").RequestHandler,
  *   readRavenVpnSettings: () => Promise<Record<string, unknown>>,
+ *   readRavenNamingSettings: () => Promise<Record<string, unknown>>,
  *   readMetadataProviderSettings: () => Promise<Record<string, unknown>>,
  *   readDownloadProviderSettings: () => Promise<Record<string, unknown>>,
  *   readOracleSettings: () => Promise<Record<string, unknown>>,
@@ -293,6 +299,7 @@ export const registerMoonV3Routes = (app, {
   requireUser,
   requirePermission,
   readRavenVpnSettings,
+  readRavenNamingSettings,
   readMetadataProviderSettings,
   readDownloadProviderSettings,
   readOracleSettings,
@@ -544,20 +551,29 @@ export const registerMoonV3Routes = (app, {
       return;
     }
 
-    const request = await vaultClient.createRequest({
-      source: "moon-admin",
-      title: normalizeString(selectedMetadata.title, req.body?.title || "Untitled request"),
-      requestType: normalizeString(req.body?.requestType || selectedDownload?.requestType || selectedMetadata.type || "manga", "manga"),
-      notes: normalizeString(req.body?.notes),
-      requestedBy: req.user.discordUserId,
-      status: selectedDownload ? "pending" : "unavailable",
-      details: {
-        query: normalizeString(req.body?.query),
-        selectedMetadata,
-        selectedDownload,
-        availability: selectedDownload ? "available" : "unavailable"
+    let request;
+    try {
+      request = await vaultClient.createRequest({
+        source: "moon-admin",
+        title: normalizeString(selectedMetadata.title, req.body?.title || "Untitled request"),
+        requestType: normalizeString(req.body?.requestType || selectedDownload?.requestType || selectedMetadata.type || "manga", "manga"),
+        notes: normalizeString(req.body?.notes),
+        requestedBy: req.user.discordUserId,
+        status: selectedDownload ? "pending" : "unavailable",
+        details: {
+          query: normalizeString(req.body?.query),
+          selectedMetadata,
+          selectedDownload,
+          availability: selectedDownload ? "available" : "unavailable"
+        }
+      });
+    } catch (error) {
+      if (isRequestWorkConflictError(error)) {
+        res.status(409).json(buildRequestWorkConflictPayload(error));
+        return;
       }
-    });
+      throw error;
+    }
 
     if (!selectedDownload?.titleUrl) {
       res.status(201).json({
@@ -614,19 +630,32 @@ export const registerMoonV3Routes = (app, {
 
   app.get("/api/moon-v3/admin/calendar", requireLibraryRead(async (_req, res) => {
     const titles = await loadLibrary();
-    const entries = titles.flatMap((title) =>
+    const rawEntries = titles.flatMap((title) =>
       normalizeArray(title.chapters).map((chapter) => ({
         titleId: title.id,
         title: title.title,
+        coverUrl: title.coverUrl || "",
+        libraryTypeLabel: title.libraryTypeLabel || title.mediaType || "Manga",
+        libraryTypeSlug: title.libraryTypeSlug || title.mediaType || "manga",
+        mediaType: title.mediaType,
+        metadataProvider: title.metadataProvider || "",
+        sourceUrl: title.sourceUrl || chapter.sourceUrl || "",
         chapterId: chapter.id,
         chapterLabel: chapter.label,
+        chapterNumber: chapter.chapterNumber || "",
+        pageCount: chapter.pageCount || 0,
         releaseDate: chapter.releaseDate,
-        available: chapter.available,
-        mediaType: title.mediaType
+        available: chapter.available
       }))
-    ).sort((left, right) => Date.parse(right.releaseDate || "") - Date.parse(left.releaseDate || ""));
+    );
+    const entries = rawEntries
+      .filter((entry) => Date.parse(entry.releaseDate || ""))
+      .sort((left, right) => Date.parse(left.releaseDate || "") - Date.parse(right.releaseDate || ""));
 
-    res.json({entries});
+    res.json({
+      entries,
+      undatedCount: Math.max(0, rawEntries.length - entries.length)
+    });
   }));
 
   app.get("/api/moon-v3/admin/activity/queue", requireLibraryRead(async (_req, res) => {
@@ -708,18 +737,26 @@ export const registerMoonV3Routes = (app, {
       return;
     }
 
-    await vaultClient.updateRequest(req.params.id, {
-      title: normalizeString(selectedMetadata.title, existing.title),
-      requestType: normalizeString(selectedDownload.requestType, existing.requestType),
-      notes: normalizeString(req.body?.notes, existing.notes),
-      detailsMerge: {
-        query: normalizeString(req.body?.query, existing.details?.query),
-        selectedMetadata,
-        selectedDownload,
-        availability: "available"
-      },
-      actor: req.user.username
-    });
+    try {
+      await vaultClient.updateRequest(req.params.id, {
+        title: normalizeString(selectedMetadata.title, existing.title),
+        requestType: normalizeString(selectedDownload.requestType, existing.requestType),
+        notes: normalizeString(req.body?.notes, existing.notes),
+        detailsMerge: {
+          query: normalizeString(req.body?.query, existing.details?.query),
+          selectedMetadata,
+          selectedDownload,
+          availability: "available"
+        },
+        actor: req.user.username
+      });
+    } catch (error) {
+      if (isRequestWorkConflictError(error)) {
+        res.status(409).json(buildRequestWorkConflictPayload(error));
+        return;
+      }
+      throw error;
+    }
     const refreshed = await loadRequestById(req.params.id);
     const queueResult = await queueSelectedDownload({
       requestId: req.params.id,
@@ -759,8 +796,9 @@ export const registerMoonV3Routes = (app, {
   }));
 
   app.get("/api/moon-v3/admin/settings", requireAdminSettings(async (_req, res) => {
-    const [ravenVpn, metadataProviders, downloadProviders, oracle, branding, publicApi, discord, wardenStatus] = await Promise.all([
+    const [ravenVpn, naming, metadataProviders, downloadProviders, oracle, branding, publicApi, discord, wardenStatus] = await Promise.all([
       readRavenVpnSettings(),
+      readRavenNamingSettings(),
       readMetadataProviderSettings(),
       readDownloadProviderSettings(),
       readOracleSettings(),
@@ -772,6 +810,7 @@ export const registerMoonV3Routes = (app, {
 
     res.json({
       ravenVpn,
+      naming,
       metadataProviders,
       downloadProviders,
       oracle,
@@ -948,20 +987,29 @@ export const registerMoonV3Routes = (app, {
       return;
     }
 
-    const request = await vaultClient.createRequest({
-      source: "moon",
-      title: normalizeString(req.body?.selectedMetadata?.title, req.body?.title || "Untitled request"),
-      requestType: normalizeString(req.body?.requestType || req.body?.selectedDownload?.requestType || req.body?.selectedMetadata?.type || "manga", "manga"),
-      notes: normalizeString(req.body?.notes),
-      requestedBy: req.user.discordUserId,
-      status: normalizeObject(req.body?.selectedDownload)?.titleUrl ? "pending" : "unavailable",
-      details: {
-        query: normalizeString(req.body?.query),
-        selectedMetadata: normalizeObject(req.body?.selectedMetadata),
-        selectedDownload: normalizeObject(req.body?.selectedDownload),
-        availability: normalizeObject(req.body?.selectedDownload)?.titleUrl ? "available" : "unavailable"
+    let request;
+    try {
+      request = await vaultClient.createRequest({
+        source: "moon",
+        title: normalizeString(req.body?.selectedMetadata?.title, req.body?.title || "Untitled request"),
+        requestType: normalizeString(req.body?.requestType || req.body?.selectedDownload?.requestType || req.body?.selectedMetadata?.type || "manga", "manga"),
+        notes: normalizeString(req.body?.notes),
+        requestedBy: req.user.discordUserId,
+        status: normalizeObject(req.body?.selectedDownload)?.titleUrl ? "pending" : "unavailable",
+        details: {
+          query: normalizeString(req.body?.query),
+          selectedMetadata: normalizeObject(req.body?.selectedMetadata),
+          selectedDownload: normalizeObject(req.body?.selectedDownload),
+          availability: normalizeObject(req.body?.selectedDownload)?.titleUrl ? "available" : "unavailable"
+        }
+      });
+    } catch (error) {
+      if (isRequestWorkConflictError(error)) {
+        res.status(409).json(buildRequestWorkConflictPayload(error));
+        return;
       }
-    });
+      throw error;
+    }
     res.status(201).json(request);
   }));
 

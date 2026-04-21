@@ -20,6 +20,72 @@ export const buildEphemeralContent = (content, components = []) => ({
   components
 });
 
+const normalizeArray = (value) => Array.isArray(value) ? value : [];
+
+export const resolveIntakeMetadata = (entry = {}) => entry.selectedMetadata
+  || entry.metadata
+  || entry.representativeMetadata
+  || normalizeArray(entry.metadataMatches)[0]
+  || null;
+
+export const resolveIntakeDownload = (entry = {}) => entry.selectedDownload
+  || entry.download
+  || entry.downloadTarget
+  || entry.bestDownloadMatch
+  || null;
+
+export const resolveIntakeTitle = (entry = {}) => {
+  const metadata = resolveIntakeMetadata(entry);
+  const download = resolveIntakeDownload(entry);
+  return normalizeString(
+    entry.displayTitle
+    || entry.title
+    || entry.canonicalTitle
+    || entry.baseTitle
+    || metadata?.title
+    || download?.titleName,
+    "Untitled"
+  );
+};
+
+export const resolveIntakeEditionLabel = (entry = {}) => normalizeString(
+  entry.editionLabel
+  || entry.variantLabel
+  || entry.variantSummary
+  || entry.subtitle
+  || entry.targetIdentity?.editionLabel
+);
+
+export const resolveIntakeRequestType = (entry = {}) => {
+  const metadata = resolveIntakeMetadata(entry);
+  const download = resolveIntakeDownload(entry);
+  return normalizeString(download?.requestType || entry.requestType || entry.type || metadata?.type, "manga");
+};
+
+export const resolveIntakeTargetIdentity = (entry = {}) => {
+  const download = resolveIntakeDownload(entry);
+  const explicitIdentity = entry.targetIdentity
+    || entry.workIdentity
+    || entry.stableTargetIdentity
+    || download?.targetIdentity
+    || null;
+  if (explicitIdentity && typeof explicitIdentity === "object" && !Array.isArray(explicitIdentity)) {
+    return explicitIdentity;
+  }
+
+  const workKey = normalizeString(entry.workKey || entry.targetWorkKey || download?.workKey);
+  const providerId = normalizeString(entry.downloadProviderId || download?.providerId || download?.providerName);
+  const titleUrl = normalizeString(entry.titleUrl || download?.titleUrl);
+  if (!workKey && !providerId && !titleUrl) {
+    return null;
+  }
+  return {
+    workKey,
+    providerId,
+    titleUrl
+  };
+};
+
 export const buildMoonTitleUrl = (publicBaseUrl, result = {}) => {
   const baseUrl = normalizeString(publicBaseUrl);
   const titleId = normalizeString(result.id || result.titleId);
@@ -70,17 +136,29 @@ export const createPickerMessage = ({
 }) => {
   const visible = results.slice(0, MAX_VISIBLE_RESULTS);
   const lines = visible.map((entry, index) => {
+    const download = resolveIntakeDownload(entry);
     const availability = normalizeString(entry.availability || kind, kind || "available");
-    const downloadProvider = normalizeString(entry.downloadProviderId);
+    const downloadProvider = normalizeString(entry.downloadProviderId || download?.providerName || download?.providerId);
     const typeLabel = normalizeString(entry.libraryTypeLabel || entry.type || entry.requestType);
-    return `${index + 1}. ${truncate(normalizeString(entry.title || entry.canonicalTitle, "Untitled"), 64)}${typeLabel ? ` | ${typeLabel}` : ""}${downloadProvider ? ` | ${downloadProvider}` : ""}${availability ? ` | ${availability}` : ""}`;
+    const editionLabel = resolveIntakeEditionLabel(entry);
+    const title = resolveIntakeTitle(entry);
+    return `${index + 1}. ${truncate(title, 64)}${editionLabel && !title.toLowerCase().includes(editionLabel.toLowerCase()) ? ` | ${editionLabel}` : ""}${typeLabel ? ` | ${typeLabel}` : ""}${downloadProvider ? ` | ${downloadProvider}` : ""}${availability ? ` | ${availability}` : ""}`;
   });
 
-  const buttons = visible.map((entry, index) => buildButton({
-    customId: `portal:${action}:${sessionId}:${index}`,
-    label: `${index + 1}. ${truncate(normalizeString(entry.title || entry.canonicalTitle, "Option"), 70)}`,
-    style: entry.availability === "download-ready" || entry.availability === "available" ? 1 : 2
-  }));
+  const buttons = visible.map((entry, index) => {
+    const buttonTitle = resolveIntakeTitle(entry);
+    const editionLabel = resolveIntakeEditionLabel(entry);
+    return buildButton({
+      customId: `portal:${action}:${sessionId}:${index}`,
+      label: `${index + 1}. ${truncate(
+        editionLabel && !buttonTitle.toLowerCase().includes(editionLabel.toLowerCase())
+          ? `${buttonTitle} (${editionLabel})`
+          : buttonTitle,
+        70
+      )}`,
+      style: entry.availability === "download-ready" || entry.availability === "available" ? 1 : 2
+    });
+  });
 
   return buildEphemeralContent(
     [

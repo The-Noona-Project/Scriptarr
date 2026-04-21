@@ -1,6 +1,7 @@
 package com.scriptarr.raven.library;
 
 import com.scriptarr.raven.settings.RavenNamingSettings;
+import com.scriptarr.raven.settings.RavenNamingProfile;
 
 import java.util.LinkedHashMap;
 import java.util.Locale;
@@ -131,7 +132,7 @@ public final class LibraryNaming {
         int pageCount,
         String domain
     ) {
-        RavenNamingSettings naming = normalizedSettings(settings);
+        RavenNamingProfile naming = normalizedSettings(settings).profileForType(rawType);
         String normalizedTitle = Optional.ofNullable(titleName).orElse("").trim();
         String normalizedType = normalizeTypeLabel(rawType);
         String typeSlug = normalizeTypeSlug(rawType);
@@ -194,7 +195,7 @@ public final class LibraryNaming {
         int pageIndex,
         String extension
     ) {
-        RavenNamingSettings naming = normalizedSettings(settings);
+        RavenNamingProfile naming = normalizedSettings(settings).profileForType(rawType);
         String normalizedTitle = Optional.ofNullable(titleName).orElse("").trim();
         String normalizedType = normalizeTypeLabel(rawType);
         String typeSlug = normalizeTypeSlug(rawType);
@@ -240,9 +241,13 @@ public final class LibraryNaming {
      * @param settings active naming settings
      * @return normalized chapter number or a stable fallback token
      */
-    public static String extractChapterNumber(String fileName, RavenNamingSettings settings) {
+    public static String extractChapterNumber(String fileName, RavenNamingSettings settings, String rawType) {
         String normalized = Optional.ofNullable(fileName).orElse("");
-        String templateMatch = extractTemplateNumber(normalized, normalizedSettings(settings).chapterTemplate(), "chapter");
+        String templateMatch = extractTemplateNumber(
+            normalized,
+            normalizedSettings(settings).profileForType(rawType).chapterTemplate(),
+            "chapter"
+        );
         if (!templateMatch.isBlank()) {
             return normalizeChapterToken(templateMatch);
         }
@@ -266,8 +271,12 @@ public final class LibraryNaming {
      * @param settings active naming settings
      * @return zero-based page sort key
      */
-    public static int extractPageOrder(String fileName, RavenNamingSettings settings) {
-        String templateMatch = extractTemplateNumber(Optional.ofNullable(fileName).orElse(""), normalizedSettings(settings).pageTemplate(), "page");
+    public static int extractPageOrder(String fileName, RavenNamingSettings settings, String rawType) {
+        String templateMatch = extractTemplateNumber(
+            Optional.ofNullable(fileName).orElse(""),
+            normalizedSettings(settings).profileForType(rawType).pageTemplate(),
+            "page"
+        );
         if (!templateMatch.isBlank()) {
             return parsePositiveInt(templateMatch, Integer.MAX_VALUE);
         }

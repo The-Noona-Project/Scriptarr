@@ -3,6 +3,7 @@
  */
 import {knownPortalDiscordCommands, readPortalDiscordSettings} from "./portalDiscordSettings.mjs";
 import {buildIntakeSelection, evaluateSelectionAgainstGuardState} from "./requestSelectionGuards.mjs";
+import {buildRequestWorkConflictPayload, isRequestWorkConflictError} from "./requestConflict.mjs";
 
 const normalizeString = (value, fallback = "") => {
   const normalized = typeof value === "string" ? value.trim() : "";
@@ -192,6 +193,60 @@ const readRequestNotificationState = async (vaultClient, requestId) =>
 const writeRequestNotificationState = async (vaultClient, requestId, value) =>
   vaultClient.setSetting(`${REQUEST_NOTIFICATION_ACK_PREFIX}.${requestId}`, normalizeObject(value, {}) || {});
 
+const normalizeRequestNotificationState = (value = {}) => {
+  const normalized = normalizeObject(value, {}) || {};
+  return {
+    approvedSentAt: normalizeString(
+      normalized.approvedSentAt,
+      normalizeString(normalized.approved?.sentAt)
+    ),
+    deniedSentAt: normalizeString(
+      normalized.deniedSentAt,
+      normalizeString(normalized.denied?.sentAt)
+    ),
+    completedSentAt: normalizeString(
+      normalized.completedSentAt,
+      normalizeString(
+        normalized.completed?.sentAt,
+        normalizeString(normalized.status) === "completed"
+          ? normalizeString(normalized.sentAt)
+          : ""
+      )
+    )
+  };
+};
+
+const isRequestNotificationAcked = (state, decisionType) =>
+  Boolean(normalizeRequestNotificationState(state)[`${decisionType}SentAt`]);
+
+const markRequestNotificationAcked = (state, decisionType, sentAt = new Date().toISOString()) => {
+  const normalized = normalizeRequestNotificationState(state);
+  return {
+    ...normalized,
+    [`${decisionType}SentAt`]: normalizeString(sentAt, new Date().toISOString())
+  };
+};
+
+const buildRequestNotificationId = (requestId, decisionType) =>
+  normalizeString(decisionType) === "completed"
+    ? normalizeString(requestId)
+    : `${normalizeString(requestId)}:${normalizeString(decisionType)}`;
+
+const parseRequestNotificationId = (value) => {
+  const normalized = normalizeString(value);
+  const match = normalized.match(/^(.*?):(approved|denied|completed)$/);
+  if (!match) {
+    return {
+      requestId: normalized,
+      decisionType: "completed"
+    };
+  }
+  return {
+    requestId: normalizeString(match[1]),
+    decisionType: normalizeString(match[2], "completed")
+  };
+};
+
 const buildPortalStatusSummary = async ({config, vaultClient, serviceJson}) => {
   const [warden, portal, oracle, raven, requests, tasks, users] = await Promise.all([
     safeServiceJson(serviceJson(config.wardenBaseUrl, "/health")),
@@ -352,7 +407,7 @@ const buildFollowNotifications = async ({config, vaultClient, serviceJson}) => {
   return notifications.slice(0, 50);
 };
 
-const buildRequestCompletionNotifications = async ({config, vaultClient, serviceJson}) => {
+const buildRequestNotifications = async ({config, vaultClient, serviceJson}) => {
   const [users, requests, tasksResponse, libraryResponse] = await Promise.all([
     vaultClient.listUsers(),
     vaultClient.listRequests(),
@@ -430,7 +485,6 @@ const buildRequestCompletionNotifications = async ({config, vaultClient, service
 
   const notifications = [];
   for (const request of normalizeArray(requests)
-    .filter((entry) => normalizeString(entry?.status) === "completed")
     .sort((left, right) => normalizeString(right?.updatedAt).localeCompare(normalizeString(left?.updatedAt)))) {
     const requestId = normalizeScalarString(request?.id);
     const requesterDiscordId = normalizeScalarString(request?.requestedBy);
@@ -438,10 +492,7 @@ const buildRequestCompletionNotifications = async ({config, vaultClient, service
       continue;
     }
 
-    const notificationState = await readRequestNotificationState(vaultClient, requestId);
-    if (normalizeString(notificationState?.status) === "completed") {
-      continue;
-    }
+    const notificationState = normalizeRequestNotificationState(await readRequestNotificationState(vaultClient, requestId));
 
     const details = normalizeObject(request?.details, {}) || {};
     const linkedTask = tasksByRequestId.get(requestId) || tasksByTaskId.get(normalizeScalarString(details.taskId));
@@ -456,21 +507,58 @@ const buildRequestCompletionNotifications = async ({config, vaultClient, service
       linkedTask?.libraryTypeSlug || details?.selectedDownload?.libraryTypeSlug || matchedTitle?.libraryTypeSlug || request?.requestType
     );
     const titleId = normalizeScalarString(linkedTask?.titleId, normalizeScalarString(details?.titleId, normalizeScalarString(matchedTitle?.id)));
-    notifications.push({
-      id: requestId,
+    const coverUrl = normalizeString(
+      linkedTask?.coverUrl,
+      normalizeString(details.coverUrl, normalizeString(details?.selectedDownload?.coverUrl, normalizeString(details?.selectedMetadata?.coverUrl, matchedTitle?.coverUrl)))
+    );
+    const titleUrl = titleId
+      ? `${config.publicBaseUrl}/title/${encodeURIComponent(libraryTypeSlug)}/${encodeURIComponent(titleId)}`
+      : "";
+    const requestsUrl = `${normalizeString(config.publicBaseUrl).replace(/\/+$/g, "")}/myrequests`;
+    const baseNotification = {
       requestId,
       discordUserId: requesterDiscordId,
       username: normalizeString(usersByDiscordId.get(requesterDiscordId)?.username, "Reader"),
       titleName,
-      coverUrl: normalizeString(
-        linkedTask?.coverUrl,
-        normalizeString(details.coverUrl, normalizeString(details?.selectedDownload?.coverUrl, normalizeString(details?.selectedMetadata?.coverUrl, matchedTitle?.coverUrl)))
-      ),
-      titleUrl: titleId
-        ? `${config.publicBaseUrl}/title/${encodeURIComponent(libraryTypeSlug)}/${encodeURIComponent(titleId)}`
-        : "",
-      completedAt: normalizeString(linkedTask?.updatedAt, request?.updatedAt)
-    });
+      coverUrl,
+      moderatorNote: normalizeString(request?.moderatorComment),
+      titleUrl,
+      requestsUrl
+    };
+    const requestStatus = normalizeString(request?.status);
+
+    if (["queued", "downloading", "completed"].includes(requestStatus) && !isRequestNotificationAcked(notificationState, "approved")) {
+      notifications.push({
+        ...baseNotification,
+        id: buildRequestNotificationId(requestId, "approved"),
+        decisionType: "approved",
+        status: requestStatus,
+        linkUrl: requestsUrl,
+        decidedAt: normalizeString(request?.updatedAt)
+      });
+    }
+
+    if (requestStatus === "denied" && !isRequestNotificationAcked(notificationState, "denied")) {
+      notifications.push({
+        ...baseNotification,
+        id: buildRequestNotificationId(requestId, "denied"),
+        decisionType: "denied",
+        status: "denied",
+        linkUrl: requestsUrl,
+        decidedAt: normalizeString(request?.updatedAt)
+      });
+    }
+
+    if (requestStatus === "completed" && !isRequestNotificationAcked(notificationState, "completed")) {
+      notifications.push({
+        ...baseNotification,
+        id: buildRequestNotificationId(requestId, "completed"),
+        decisionType: "completed",
+        status: "completed",
+        linkUrl: titleUrl,
+        completedAt: normalizeString(linkedTask?.updatedAt, request?.updatedAt)
+      });
+    }
   }
 
   return notifications.slice(0, 50);
@@ -529,7 +617,15 @@ export const registerInternalBrokerRoutes = (app, {
   }));
 
   app.post("/api/internal/vault/requests", withService(requireService, ["scriptarr-portal"], async (req, res) => {
-    res.status(201).json(await vaultClient.createRequest(req.body || {}));
+    try {
+      res.status(201).json(await vaultClient.createRequest(req.body || {}));
+    } catch (error) {
+      if (isRequestWorkConflictError(error)) {
+        res.status(409).json(buildRequestWorkConflictPayload(error));
+        return;
+      }
+      throw error;
+    }
   }));
 
   app.get("/api/internal/vault/requests/:id", withService(requireService, ["scriptarr-raven"], async (req, res) => {
@@ -542,7 +638,16 @@ export const registerInternalBrokerRoutes = (app, {
   }));
 
   app.patch("/api/internal/vault/requests/:id", withService(requireService, ["scriptarr-raven"], async (req, res) => {
-    const request = await vaultClient.updateRequest(req.params.id, req.body || {});
+    let request;
+    try {
+      request = await vaultClient.updateRequest(req.params.id, req.body || {});
+    } catch (error) {
+      if (isRequestWorkConflictError(error)) {
+        res.status(409).json(buildRequestWorkConflictPayload(error));
+        return;
+      }
+      throw error;
+    }
     if (!request) {
       res.status(404).json({error: "Request not found."});
       return;
@@ -753,7 +858,15 @@ export const registerInternalBrokerRoutes = (app, {
       return;
     }
 
-    res.status(201).json(await vaultClient.createRequest(createIntakeBackedRequestPayload(req.body, requestedBy)));
+    try {
+      res.status(201).json(await vaultClient.createRequest(createIntakeBackedRequestPayload(req.body, requestedBy)));
+    } catch (error) {
+      if (isRequestWorkConflictError(error)) {
+        res.status(409).json(buildRequestWorkConflictPayload(error));
+        return;
+      }
+      throw error;
+    }
   }));
 
   app.post("/api/internal/portal/requests/from-discord", withService(requireService, ["scriptarr-portal"], async (req, res) => {
@@ -787,7 +900,15 @@ export const registerInternalBrokerRoutes = (app, {
       return;
     }
 
-    res.status(201).json(await vaultClient.createRequest(createIntakeBackedRequestPayload(req.body, requestedBy)));
+    try {
+      res.status(201).json(await vaultClient.createRequest(createIntakeBackedRequestPayload(req.body, requestedBy)));
+    } catch (error) {
+      if (isRequestWorkConflictError(error)) {
+        res.status(409).json(buildRequestWorkConflictPayload(error));
+        return;
+      }
+      throw error;
+    }
   }));
 
   app.post("/api/internal/portal/following", withService(requireService, ["scriptarr-portal"], async (req, res) => {
@@ -854,24 +975,26 @@ export const registerInternalBrokerRoutes = (app, {
 
   app.get("/api/internal/portal/notifications/requests", withService(requireService, ["scriptarr-portal"], async (_req, res) => {
     res.json({
-      notifications: await buildRequestCompletionNotifications({config, vaultClient, serviceJson})
+      notifications: await buildRequestNotifications({config, vaultClient, serviceJson})
     });
   }));
 
   app.post("/api/internal/portal/notifications/requests/:requestId/ack", withService(requireService, ["scriptarr-portal"], async (req, res) => {
-    const requestId = normalizeString(req.params.requestId);
-    if (!requestId) {
+    const parsed = parseRequestNotificationId(req.params.requestId);
+    if (!parsed.requestId) {
       res.status(400).json({error: "A valid request id is required."});
       return;
     }
 
-    await writeRequestNotificationState(vaultClient, requestId, {
-      status: "completed",
-      sentAt: new Date().toISOString()
-    });
+    const currentState = await readRequestNotificationState(vaultClient, parsed.requestId);
+    await writeRequestNotificationState(
+      vaultClient,
+      parsed.requestId,
+      markRequestNotificationAcked(currentState, parsed.decisionType)
+    );
     res.json({
       ok: true,
-      requestId
+      requestId: buildRequestNotificationId(parsed.requestId, parsed.decisionType)
     });
   }));
 };

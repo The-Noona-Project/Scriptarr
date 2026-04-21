@@ -33,6 +33,30 @@ const normalizeTypeSlug = (value, fallback = "manga") => {
     .replace(/-+$/, "");
   return normalized || fallback;
 };
+const buildWorkIdentity = ({selectedMetadata, selectedDownload}) => {
+  const providerId = normalizeString(selectedDownload?.providerId).toLowerCase();
+  const titleUrl = normalizeString(selectedDownload?.titleUrl);
+  if (providerId && titleUrl) {
+    return {
+      key: `download:${providerId}::${titleUrl}`,
+      kind: "download"
+    };
+  }
+
+  const metadataProviderId = normalizeString(selectedMetadata?.provider).toLowerCase();
+  const providerSeriesId = normalizeScalarString(selectedMetadata?.providerSeriesId);
+  if (metadataProviderId && providerSeriesId) {
+    return {
+      key: `metadata:${metadataProviderId}::${providerSeriesId}`,
+      kind: "metadata"
+    };
+  }
+
+  return {
+    key: "",
+    kind: ""
+  };
+};
 
 const normalizeTitleMatchKey = (value) => normalizeString(value)
   .toLowerCase()
@@ -70,6 +94,8 @@ const hasMatchingMetadataIdentity = (left, right) => {
  *   libraryTypeSlug: string,
  *   availability: string,
  *   coverUrl: string,
+ *   requestWorkKey: string,
+ *   requestWorkKind: string,
  *   selectedMetadata: Record<string, unknown>,
  *   selectedDownload: Record<string, unknown> | null
  * }}
@@ -90,6 +116,10 @@ export const buildIntakeSelection = (entry = {}) => {
   );
   const availability = normalizeString(entry.availability, download?.titleUrl ? "available" : "unavailable");
   const coverUrl = normalizeString(entry.coverUrl, normalizeString(download?.coverUrl, normalizeString(metadata.coverUrl)));
+  const workIdentity = buildWorkIdentity({
+    selectedMetadata: metadata,
+    selectedDownload: download
+  });
   return {
     query: normalizeString(entry.query),
     canonicalTitle,
@@ -97,6 +127,8 @@ export const buildIntakeSelection = (entry = {}) => {
     libraryTypeSlug,
     availability,
     coverUrl,
+    requestWorkKey: workIdentity.key,
+    requestWorkKind: workIdentity.kind,
     selectedMetadata: metadata,
     selectedDownload: download
   };
@@ -138,6 +170,12 @@ export const matchesSelectionAgainstRequest = (selection, request = {}, options 
     return false;
   }
 
+  const selectionWorkKey = normalizeString(selection.requestWorkKey);
+  const requestWorkKey = normalizeString(request.workKey, normalizeString(request.details?.requestWorkKey));
+  if (selectionWorkKey && selectionWorkKey === requestWorkKey) {
+    return true;
+  }
+
   const selectedDownload = normalizeObject(request.details?.selectedDownload);
   const selectionDownload = normalizeObject(selection.selectedDownload);
   const downloadUrl = normalizeString(selectionDownload?.titleUrl);
@@ -162,6 +200,15 @@ export const matchesSelectionAgainstRequest = (selection, request = {}, options 
 export const matchesSelectionAgainstTask = (selection, task = {}) => {
   if (!activeTaskStatuses.has(normalizeString(task.status))) {
     return false;
+  }
+
+  const selectionDownload = normalizeObject(selection.selectedDownload);
+  if (
+    normalizeString(selection.requestWorkKind) === "download"
+    && normalizeString(selectionDownload?.providerId).toLowerCase() === normalizeString(task.providerId).toLowerCase()
+    && normalizeString(selectionDownload?.titleUrl) === normalizeString(task.titleUrl)
+  ) {
+    return true;
   }
 
   const downloadUrl = normalizeString(selection.selectedDownload?.titleUrl);

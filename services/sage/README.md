@@ -10,6 +10,9 @@ browser-safe handoff to Warden for manual LocalAI or managed-service update acti
 Sage now also owns the shared metadata-first request intake flow. Moon user requests and Moon admin add-title both
 search through Sage, which asks Raven for metadata-plus-download availability, persists the chosen match snapshot in
 Vault, and later queues the exact saved Raven target during moderation or admin immediate-add.
+Sage now treats Raven's grouped intake result as the canonical request identity and defers final duplicate enforcement
+to Vault's durable work-key guard so Moon, Discord, admin add-title, and the public API all reject the same duplicate
+targets consistently under concurrency.
 
 Moon's legacy and v3 library routes should mirror Raven's real-or-empty library state. Sage no longer seeds preview
 titles on behalf of Moon.

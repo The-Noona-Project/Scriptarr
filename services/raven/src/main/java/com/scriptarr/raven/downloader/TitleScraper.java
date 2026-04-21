@@ -11,6 +11,8 @@ import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
 import java.net.URI;
+import java.time.Instant;
+import java.time.OffsetDateTime;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -206,11 +208,15 @@ public class TitleScraper {
                 String chapterTitle = chapter.text();
                 String href = chapter.absUrl("href");
                 String chapterNumber = normalizeChapterNumber(extractChapterNumberFull(chapterTitle));
+                String releaseDate = extractChapterReleaseDate(chapter);
 
                 Map<String, String> data = new HashMap<>();
                 data.put("chapter_number", chapterNumber.isEmpty() ? String.valueOf(index + 1) : chapterNumber);
                 data.put("chapter_title", chapterTitle);
                 data.put("href", href);
+                if (!releaseDate.isBlank()) {
+                    data.put("release_date", releaseDate);
+                }
                 rawChapters.add(data);
             }
 
@@ -442,6 +448,42 @@ public class TitleScraper {
         } catch (NumberFormatException ignored) {
             return value.trim();
         }
+    }
+
+    private String extractChapterReleaseDate(Element chapterLink) {
+        if (chapterLink == null) {
+            return "";
+        }
+
+        Element current = chapterLink;
+        for (int depth = 0; current != null && depth < 6; depth++) {
+            Element time = current.selectFirst("time[datetime]");
+            if (time != null) {
+                String normalized = normalizeReleaseDate(time.attr("datetime"));
+                if (!normalized.isBlank()) {
+                    return normalized;
+                }
+            }
+            current = current.parent();
+        }
+
+        return "";
+    }
+
+    private String normalizeReleaseDate(String value) {
+        String normalized = value == null ? "" : value.trim();
+        if (normalized.isBlank()) {
+            return "";
+        }
+        try {
+            return Instant.parse(normalized).toString();
+        } catch (Exception ignored) {
+        }
+        try {
+            return OffsetDateTime.parse(normalized).toInstant().toString();
+        } catch (Exception ignored) {
+        }
+        return "";
     }
 
     private String normalizeMediaType(String raw) {

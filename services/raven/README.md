@@ -33,6 +33,8 @@ Raven also supports a Sage-backed `raven.naming` setting for the safe subset of 
 Title-folder naming stays unchanged so rescans remain compatible with Raven's current durable catalog and managed
 storage roots. Chapter archives default to Scriptarr-style `c001` naming with optional volume omission when no
 volume data exists, and page names default to padded numeric files like `001.jpg`.
+That naming contract is now profile-based by library type, so Moon admin can save different archive and page formats
+for manga, manhwa, manhua, webtoon, comic, and OEL downloads while Raven keeps one shared rescan and parser flow.
 
 When Raven VPN is enabled through Moon admin, downloads now fail closed if Raven cannot safely load the settings,
 resolve the requested PIA profile, or complete the OpenVPN handshake. Raven still uses the existing simplified
@@ -42,8 +44,16 @@ changes, and uses short-lived credential files with `--auth-nocache`.
 Raven's request intake is now provider-based on the download side. Enabled metadata providers run first, Raven expands
 aliases from those results, then the enabled download-provider registry checks site-specific scrapers for a concrete
 match. This release ships only the WeebCentral provider, but the registry contract is now in place for future sites.
+Raven intake is also edition-aware and grouped by concrete provider target, so metadata variants that resolve to the
+same download URL collapse into one requestable result while plain vs colored editions stay separate when the provider
+exposes different series URLs.
+The DM-only Discord `downloadall` flow now uses the same metadata-aware path for each bulk-browsed provider title. It
+only queues titles with one confident metadata match and reports already-active, no-metadata, ambiguous-metadata, and
+failed skips back to Portal instead of bulk-queueing metadata-less library entries.
 Raven now also treats cover art as first-class title metadata, carries it through intake, queue state, and library
 records, and exposes the same imagery Moon and Portal reuse in their UIs and embeds.
+Raven now also preserves chapter release dates from provider chapter scrapes and blends in richer title-level release
+labels from metadata providers, which Moon admin reuses for its library and calendar views.
 
 Download completion now waits for both file promotion and brokered catalog persistence before a task can reach `100%`.
 If catalog persistence fails, Raven marks the task failed instead of leaving it stuck at `90%`. On boot, Raven also

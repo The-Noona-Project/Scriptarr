@@ -66,7 +66,7 @@ class LibraryNamingTest {
             2
         );
 
-        assertEquals("1", LibraryNaming.extractChapterNumber("Blacksad v07 - 001.cbz", settings));
+        assertEquals("1", LibraryNaming.extractChapterNumber("Blacksad v07 - 001.cbz", settings, "Comic"));
     }
 
     /**
@@ -83,6 +83,36 @@ class LibraryNamingTest {
             2
         );
 
-        assertEquals(2, LibraryNaming.extractPageOrder("001_p2.jpg", settings));
+        assertEquals(2, LibraryNaming.extractPageOrder("001_p2.jpg", settings, "Manga"));
+    }
+
+    /**
+     * Verify Raven can use a dedicated type profile without affecting the
+     * global naming fallback for other library types.
+     */
+    @Test
+    void buildChapterArchiveNameUsesPerTypeProfile() {
+        RavenNamingSettings settings = new RavenNamingSettings(
+            "{title} c{chapter_padded} [Scriptarr].cbz",
+            "{page_padded}{ext}",
+            3,
+            3,
+            2,
+            java.util.Map.of(
+                "webtoon",
+                new com.scriptarr.raven.settings.RavenNamingProfile(
+                    "{title} ep{chapter_padded}.cbz",
+                    "{page_padded}{ext}",
+                    3,
+                    3,
+                    2
+                )
+            )
+        );
+
+        assertEquals(
+            "Tower of God ep012.cbz",
+            LibraryNaming.buildChapterArchiveName(settings, "Tower of God", "Webtoon", "12", "", 28, "weebcentral.com")
+        );
     }
 }

@@ -37,6 +37,10 @@ export const renderSettingsPage = (result) => {
   }
 
   return `
+    <section class="callout subtle">
+      <strong>Looking for file naming?</strong>
+      <p>Raven naming profiles now live in <a class="series-row-link" href="/admin/mediamanagement" data-link>Media Management</a> so every type can keep its own chapter and page format.</p>
+    </section>
     <div class="content-grid two-up">
       <section class="panel-section">
         <div class="section-heading">

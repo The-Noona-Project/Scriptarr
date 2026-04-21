@@ -134,6 +134,27 @@ const createSageStub = ({requests = []} = {}) => Promise.resolve(http.createServ
     return;
   }
 
+  if (request.url === "/api/admin/settings/raven/naming" && request.method === "GET") {
+    response.writeHead(200, {"Content-Type": "application/json"});
+    response.end(JSON.stringify({
+      chapterTemplate: "{title} c{chapter_padded} [Scriptarr].cbz",
+      pageTemplate: "{page_padded}{ext}",
+      chapterPad: 3,
+      pagePad: 3,
+      volumePad: 2,
+      profiles: {
+        manga: {
+          chapterTemplate: "{title} ch{chapter_padded}.cbz",
+          pageTemplate: "{page_padded}{ext}",
+          chapterPad: 3,
+          pagePad: 3,
+          volumePad: 2
+        }
+      }
+    }));
+    return;
+  }
+
   if (request.url === "/api/admin/settings/moon/public-api" && request.method === "GET") {
     response.writeHead(200, {"Content-Type": "application/json"});
     response.end(JSON.stringify({
@@ -212,6 +233,12 @@ const createSageStub = ({requests = []} = {}) => Promise.resolve(http.createServ
       ok: true,
       saved: body ? JSON.parse(body) : null
     }));
+    return;
+  }
+
+  if (request.url === "/api/admin/settings/raven/naming" && request.method === "PUT") {
+    response.writeHead(200, {"Content-Type": "application/json"});
+    response.end(JSON.stringify(body ? JSON.parse(body) : {}));
     return;
   }
 
@@ -406,9 +433,29 @@ test("moon serves branded split entry documents, typed routes, PWA assets, and M
   assert.equal(redirectResponse.status, 302);
   assert.equal(redirectResponse.headers.get("location"), "/admin/activity/queue");
 
+  const namingResponse = await fetch(`${baseUrl}/api/moon/admin/settings/raven/naming`);
+  assert.equal(namingResponse.status, 200);
+  assert.deepEqual(await namingResponse.json(), {
+    chapterTemplate: "{title} c{chapter_padded} [Scriptarr].cbz",
+    pageTemplate: "{page_padded}{ext}",
+    chapterPad: 3,
+    pagePad: 3,
+    volumePad: 2,
+    profiles: {
+      manga: {
+        chapterTemplate: "{title} ch{chapter_padded}.cbz",
+        pageTemplate: "{page_padded}{ext}",
+        chapterPad: 3,
+        pagePad: 3,
+        volumePad: 2
+      }
+    }
+  });
+
   assert.ok(requests.some((entry) => entry.method === "GET" && entry.url === "/api/admin/settings/portal/discord"));
   assert.ok(requests.some((entry) => entry.method === "PUT" && entry.url === "/api/admin/settings/portal/discord"));
   assert.ok(requests.some((entry) => entry.method === "POST" && entry.url === "/api/admin/settings/portal/discord/onboarding/test"));
+  assert.ok(requests.some((entry) => entry.method === "GET" && entry.url === "/api/admin/settings/raven/naming"));
   assert.ok(requests.some((entry) => entry.method === "GET" && entry.url === "/api/admin/settings/moon/public-api"));
   assert.ok(requests.some((entry) => entry.method === "POST" && entry.url === "/api/admin/settings/moon/public-api/key"));
   assert.ok(requests.some((entry) => entry.method === "GET" && entry.url === "/api/public/openapi.json"));

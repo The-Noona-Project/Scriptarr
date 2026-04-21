@@ -179,6 +179,73 @@ public class MetadataService {
     }
 
     /**
+     * Persist a pre-resolved metadata snapshot onto a Raven library title
+     * without re-querying the upstream metadata provider.
+     *
+     * @param titleId stable Raven title id
+     * @param metadataSnapshot metadata snapshot captured during intake or bulk queue resolution
+     * @return confirmation payload
+     */
+    public Map<String, Object> persistResolvedMatch(String titleId, Map<String, Object> metadataSnapshot) {
+        String effectiveTitleId = titleId == null ? "" : titleId.trim();
+        if (effectiveTitleId.isBlank()) {
+            return Map.of(
+                "ok", false,
+                "error", "titleId is required."
+            );
+        }
+
+        Map<String, Object> snapshot = metadataSnapshot == null ? Map.of() : metadataSnapshot;
+        String provider = String.valueOf(snapshot.getOrDefault("provider", "")).trim();
+        String providerSeriesId = String.valueOf(snapshot.getOrDefault("providerSeriesId", "")).trim();
+        if (provider.isBlank() || providerSeriesId.isBlank()) {
+            return Map.of(
+                "ok", false,
+                "error", "provider and providerSeriesId are required."
+            );
+        }
+
+        try {
+            Map<String, Object> details = new LinkedHashMap<>(normalizeMap(snapshot.get("details")));
+            if (details.isEmpty()) {
+                details.putAll(seriesDetails(provider, providerSeriesId));
+            }
+            details.putIfAbsent("title", String.valueOf(snapshot.getOrDefault("title", "")));
+            details.putIfAbsent("summary", String.valueOf(snapshot.getOrDefault("summary", "")));
+            details.putIfAbsent("aliases", snapshot.getOrDefault("aliases", List.of()));
+            details.putIfAbsent("coverUrl", String.valueOf(snapshot.getOrDefault("coverUrl", "")));
+            details.putIfAbsent("type", String.valueOf(snapshot.getOrDefault("type", "")));
+
+            String matchedAt = Instant.now().toString();
+            brokerClient.putMetadataMatch(effectiveTitleId, Map.of(
+                "provider", provider,
+                "providerSeriesId", providerSeriesId,
+                "details", details
+            ));
+            libraryService.applyMetadata(effectiveTitleId, provider, matchedAt, normalizeAppliedMetadata(details));
+
+            Map<String, Object> response = new LinkedHashMap<>();
+            response.put("ok", true);
+            response.put("libraryId", effectiveTitleId);
+            response.put("provider", provider);
+            response.put("providerSeriesId", providerSeriesId);
+            response.put("matchedAt", matchedAt);
+            response.put("details", details);
+            response.put("message", "Raven applied the resolved metadata match.");
+            return response;
+        } catch (Exception error) {
+            logger.warn("METADATA", "Resolved metadata persistence failed.", error.getMessage());
+            return Map.of(
+                "ok", false,
+                "libraryId", effectiveTitleId,
+                "provider", provider,
+                "providerSeriesId", providerSeriesId,
+                "error", firstNonBlank(error.getMessage(), error.getClass().getSimpleName())
+            );
+        }
+    }
+
+    /**
      * Load series detail payloads for a specific metadata provider result.
      *
      * @param provider provider id to query
@@ -241,7 +308,7 @@ public class MetadataService {
 
     private Map<String, Object> fetchMangaDexSeriesDetails(String providerSeriesId) throws IOException, InterruptedException {
         HttpRequest request = HttpRequest.newBuilder()
-            .uri(URI.create("https://api.mangadex.org/manga/" + providerSeriesId))
+            .uri(URI.create("https://api.mangadex.org/manga/" + providerSeriesId + "?includes[]=cover_art&includes[]=author"))
             .timeout(Duration.ofSeconds(15))
             .GET()
             .build();
@@ -251,6 +318,7 @@ public class MetadataService {
             "providerSeriesId", providerSeriesId,
             "title", preferredLocalizedValue(root.path("attributes").path("title"), providerSeriesId),
             "summary", root.path("attributes").path("description").path("en").asText(""),
+            "releaseLabel", root.path("attributes").path("year").asText(""),
             "aliases", List.of(),
             "books", List.of()
         );
@@ -287,7 +355,7 @@ public class MetadataService {
     }
 
     private Map<String, Object> fetchAniListSeriesDetails(String providerSeriesId) throws IOException, InterruptedException {
-        String query = "query ($id: Int) { Media(id: $id, type: MANGA) { id title { romaji english } siteUrl } }";
+        String query = "query ($id: Int) { Media(id: $id, type: MANGA) { id title { romaji english } siteUrl description(asHtml: false) startDate { year month day } } }";
         String body = objectMapper.writeValueAsString(Map.of(
             "query", query,
             "variables", Map.of("id", Integer.parseInt(providerSeriesId))
@@ -305,6 +373,7 @@ public class MetadataService {
             "title", media.path("title").path("english").asText(media.path("title").path("romaji").asText(providerSeriesId)),
             "url", media.path("siteUrl").asText("https://anilist.co/manga/" + providerSeriesId),
             "summary", media.path("description").asText(""),
+            "releaseLabel", formatPartialDate(media.path("startDate")),
             "aliases", List.of(
                 media.path("title").path("english").asText(""),
                 media.path("title").path("romaji").asText("")
@@ -476,8 +545,28 @@ public class MetadataService {
             "title", result.path("name").asText(providerSeriesId),
             "url", result.path("site_detail_url").asText(""),
             "summary", result.path("description").asText(""),
+            "releaseLabel", result.path("start_year").asText(""),
             "books", List.of()
         );
+    }
+
+    private String formatPartialDate(JsonNode value) {
+        if (value == null || value.isMissingNode() || value.isNull()) {
+            return "";
+        }
+        int year = value.path("year").asInt(0);
+        int month = value.path("month").asInt(0);
+        int day = value.path("day").asInt(0);
+        if (year <= 0) {
+            return "";
+        }
+        if (month <= 0) {
+            return String.valueOf(year);
+        }
+        if (day <= 0) {
+            return String.format(java.util.Locale.ROOT, "%04d-%02d", year, month);
+        }
+        return String.format(java.util.Locale.ROOT, "%04d-%02d-%02d", year, month, day);
     }
 
     private Map<String, Object> normalizeAppliedMetadata(Map<String, Object> details) {
@@ -489,6 +578,15 @@ public class MetadataService {
             "aliases", details.getOrDefault("aliases", List.of()),
             "relations", details.getOrDefault("relations", List.of())
         );
+    }
+
+    private Map<String, Object> normalizeMap(Object value) {
+        if (value instanceof Map<?, ?> rawMap) {
+            Map<String, Object> normalized = new LinkedHashMap<>();
+            rawMap.forEach((key, entryValue) -> normalized.put(String.valueOf(key), entryValue));
+            return normalized;
+        }
+        return Map.of();
     }
 
     private JsonNode sendJson(HttpRequest request) throws IOException, InterruptedException {

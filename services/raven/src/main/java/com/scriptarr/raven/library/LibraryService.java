@@ -369,7 +369,11 @@ public final class LibraryService {
         int chapterIndex = manifest.chapters().indexOf(chapter);
         int pageCount = resolvePageCount(chapter);
         List<ReaderPage> pages = java.util.stream.IntStream.range(0, pageCount)
-            .mapToObj((index) -> new ReaderPage(index, "Page " + (index + 1), resolvePageMediaType(chapter, index)))
+            .mapToObj((index) -> new ReaderPage(
+                index,
+                "Page " + (index + 1),
+                resolvePageMediaType(manifest.title(), chapter, index)
+            ))
             .toList();
 
         String previousChapterId = chapterIndex > 0 ? manifest.chapters().get(chapterIndex - 1).id() : null;
@@ -396,7 +400,7 @@ public final class LibraryService {
         LibraryChapter chapter = payload.chapter();
         if (chapter.archivePath() != null && !chapter.archivePath().isBlank()) {
             try {
-                byte[] bytes = readArchivePage(Path.of(chapter.archivePath()), pageIndex);
+                byte[] bytes = readArchivePage(payload.title(), Path.of(chapter.archivePath()), pageIndex);
                 if (bytes != null) {
                     return new RenderedPage(bytes, payload.pages().get(pageIndex).mediaType());
                 }
@@ -528,7 +532,7 @@ public final class LibraryService {
                 : UUID.randomUUID().toString();
 
             for (Path archive : archives) {
-                String chapterNumber = LibraryNaming.extractChapterNumber(archive.getFileName().toString(), namingSettings);
+                String chapterNumber = LibraryNaming.extractChapterNumber(archive.getFileName().toString(), namingSettings, typeLabel);
                 chapters.add(new LibraryChapter(
                     chapterId(titleId, chapterNumber),
                     "Chapter " + chapterNumber,
@@ -909,9 +913,9 @@ public final class LibraryService {
         }
     }
 
-    private byte[] readArchivePage(Path archivePath, int pageIndex) throws IOException {
+    private byte[] readArchivePage(LibraryTitle title, Path archivePath, int pageIndex) throws IOException {
         try (ZipFile zipFile = new ZipFile(archivePath.toFile())) {
-            List<? extends ZipEntry> entries = sortArchiveEntries(zipFile);
+            List<? extends ZipEntry> entries = sortArchiveEntries(zipFile, title);
             if (pageIndex < 0 || pageIndex >= entries.size()) {
                 return null;
             }
@@ -921,13 +925,13 @@ public final class LibraryService {
         }
     }
 
-    private String resolvePageMediaType(LibraryChapter chapter, int pageIndex) {
+    private String resolvePageMediaType(LibraryTitle title, LibraryChapter chapter, int pageIndex) {
         if (chapter.archivePath() == null || chapter.archivePath().isBlank()) {
             return "image/svg+xml";
         }
 
         try (ZipFile zipFile = new ZipFile(Path.of(chapter.archivePath()).toFile())) {
-            List<? extends ZipEntry> entries = sortArchiveEntries(zipFile);
+            List<? extends ZipEntry> entries = sortArchiveEntries(zipFile, title);
             if (pageIndex < 0 || pageIndex >= entries.size()) {
                 return "image/jpeg";
             }
@@ -1060,13 +1064,17 @@ public final class LibraryService {
         }
     }
 
-    private List<? extends ZipEntry> sortArchiveEntries(ZipFile zipFile) {
+    private List<? extends ZipEntry> sortArchiveEntries(ZipFile zipFile, LibraryTitle title) {
         RavenNamingSettings namingSettings = settingsService.getNamingSettings();
         return zipFile.stream()
             .filter((entry) -> !entry.isDirectory())
             .sorted(
                 Comparator
-                    .comparingInt((ZipEntry entry) -> LibraryNaming.extractPageOrder(entry.getName(), namingSettings))
+                    .comparingInt((ZipEntry entry) -> LibraryNaming.extractPageOrder(
+                        entry.getName(),
+                        namingSettings,
+                        title == null ? "manga" : title.libraryTypeSlug()
+                    ))
                     .thenComparing(ZipEntry::getName)
             )
             .toList();
