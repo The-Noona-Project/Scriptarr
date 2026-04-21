@@ -6,6 +6,7 @@ import {renderApiPage} from "../apps/admin/assets/pages/apiPage.js";
 import {renderCalendarPage} from "../apps/admin/assets/pages/calendarPage.js";
 import {renderDiscordPage} from "../apps/admin/assets/pages/discordPage.js";
 import {renderLibraryPage} from "../apps/admin/assets/pages/libraryPage.js";
+import {renderLibraryTitlePage} from "../apps/admin/assets/pages/libraryTitlePage.js";
 import {renderMediaManagementPage} from "../apps/admin/assets/pages/mediaManagementPage.js";
 import {renderOverviewPage} from "../apps/admin/assets/pages/overviewPage.js";
 import {renderRequestsPage as renderAdminRequestsPage} from "../apps/admin/assets/pages/requestsPage.js";
@@ -332,8 +333,69 @@ test("admin library page renders a dense Sonarr-style series index", () => {
   assert.match(html, /Search title, author, tag, or provider/);
   assert.match(html, /Coverage/);
   assert.match(html, /Kenja no Mago/);
-  assert.match(html, /\/title\/manga\/kenja-no-mago/);
+  assert.match(html, /\/admin\/library\/manga\/kenja-no-mago/);
   assert.match(html, /94\/94/);
+});
+
+test("admin library title page renders Sonarr-style hero stats and chapter table", () => {
+  const html = renderLibraryTitlePage({
+    ok: true,
+    payload: {
+      title: {
+        id: "akame-ga-kill",
+        title: "Akame ga Kill!",
+        coverUrl: "https://images.example/akame.jpg",
+        coverAccent: "#a53d32",
+        mediaType: "manga",
+        libraryTypeLabel: "Manga",
+        libraryTypeSlug: "manga",
+        status: "completed",
+        latestChapter: "24",
+        metadataProvider: "mangadex",
+        metadataMatchedAt: "2026-04-20T08:00:00.000Z",
+        releaseLabel: "2010",
+        author: "Takahiro",
+        summary: "Night Raid fights corruption across the Empire.",
+        sourceUrl: "https://weebcentral.com/series/akame-ga-kill",
+        downloadRoot: "/downloads/downloaded/manga/Akame_ga_Kill",
+        workingRoot: "/downloads/downloading/manga/Akame_ga_Kill",
+        chapterCount: 24,
+        chaptersDownloaded: 24,
+        chapters: [{
+          id: "chapter-24",
+          label: "Chapter 24",
+          chapterNumber: "24",
+          pageCount: 36,
+          releaseDate: "2026-04-20T08:00:00.000Z",
+          available: true,
+          archivePath: "/downloads/downloaded/manga/Akame_ga_Kill/Akame ga Kill ch024.cbz"
+        }]
+      },
+      requests: [{
+        id: "request-1",
+        title: "Akame ga Kill!",
+        status: "completed",
+        source: "moon",
+        updatedAt: "2026-04-20T08:00:00.000Z"
+      }],
+      activeTasks: [],
+      recentTasks: [{
+        taskId: "task-1",
+        titleName: "Download Akame ga Kill!",
+        status: "completed",
+        percent: 100,
+        message: "Catalog persisted.",
+        updatedAt: "2026-04-20T08:05:00.000Z"
+      }]
+    }
+  });
+
+  assert.match(html, /Series facts/);
+  assert.match(html, /Cataloged chapter table/);
+  assert.match(html, /Open user title page/);
+  assert.match(html, /Lifecycle/);
+  assert.match(html, /completed/i);
+  assert.match(html, /Akame ga Kill ch024\.cbz/);
 });
 
 test("admin calendar page renders a Sonarr-style month view with agenda controls", () => {
@@ -347,6 +409,7 @@ test("admin calendar page renders a Sonarr-style month view with agenda controls
         libraryTypeLabel: "Manga",
         libraryTypeSlug: "manga",
         metadataProvider: "mangadex",
+        titleStatus: "completed",
         chapterId: "chapter-27",
         chapterLabel: "Chapter 27",
         pageCount: 24,
@@ -374,6 +437,7 @@ test("admin calendar page renders a Sonarr-style month view with agenda controls
   assert.match(html, /Dr\. STONE/);
   assert.match(html, /KILL BLUE/);
   assert.match(html, /undated chapter/);
+  assert.match(html, /completed/i);
 });
 
 test("settings page renders branding controls and LocalAI AIO guidance", () => {
@@ -384,8 +448,19 @@ test("settings page renders branding controls and LocalAI AIO guidance", () => {
         siteName: "Pax Library"
       },
       ravenVpn: {},
-      metadataProviders: {providers: []},
-      downloadProviders: {providers: [{id: "weebcentral", name: "WeebCentral", scopes: ["manga"], enabled: true, priority: 10}]},
+      metadataProviders: {
+        providers: [
+          {id: "mangadex", name: "MangaDex", scopes: ["manga", "webtoon"], enabled: true, priority: 10},
+          {id: "animeplanet", name: "Anime-Planet", scopes: ["manga", "webtoon"], enabled: true, priority: 25},
+          {id: "mangaupdates", name: "MangaUpdates", scopes: ["manga", "webtoon"], enabled: false, priority: 30}
+        ]
+      },
+      downloadProviders: {
+        providers: [
+          {id: "weebcentral", name: "WeebCentral", scopes: ["manga"], enabled: true, priority: 10},
+          {id: "mangadex", name: "MangaDex", scopes: ["manga", "webtoon"], enabled: true, priority: 20}
+        ]
+      },
       oracle: {
         provider: "localai",
         model: "",
@@ -409,6 +484,9 @@ test("settings page renders branding controls and LocalAI AIO guidance", () => {
   assert.match(html, /value="gpt-4"/);
   assert.match(html, /Download providers/);
   assert.match(html, /WeebCentral/);
+  assert.match(html, /MangaDex/);
+  assert.match(html, /Anime-Planet/);
+  assert.match(html, /WeebCentral-only/);
 });
 
 test("media management page renders per-type naming profiles and template previews", () => {

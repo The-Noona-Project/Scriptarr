@@ -67,6 +67,7 @@ public class DownloaderService {
     private static final int CHAPTER_DOWNLOAD_PROGRESS_CAP = 90;
     private static final Duration IMAGE_DOWNLOAD_TIMEOUT = Duration.ofSeconds(30);
     private static final long RETRY_BACKOFF_MS = 1_500L;
+    private static final String WEBCENTRAL_PROVIDER_ID = "weebcentral";
     private static final String WEBCENTRAL_REFERER = "https://weebcentral.com";
     private static final String USER_AGENT =
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
@@ -262,13 +263,15 @@ public class DownloaderService {
     /**
      * Queue every provider title matching the supplied browse filters.
      *
+     * @param providerId explicit provider id for the bulk browse path
      * @param type requested display type label
      * @param nsfw whether adult-only titles should be included
      * @param titlePrefix visible title prefix filter
      * @param requestedBy user or system actor requesting the bulk queue
      * @return bulk queue summary
      */
-    public BulkQueueDownloadResult bulkQueueDownload(String type, Boolean nsfw, String titlePrefix, String requestedBy) {
+    public BulkQueueDownloadResult bulkQueueDownload(String providerId, String type, Boolean nsfw, String titlePrefix, String requestedBy) {
+        String normalizedProviderId = normalizeString(providerId).toLowerCase(Locale.ROOT);
         String normalizedType = normalizeBulkQueueType(type);
         String normalizedPrefix = normalizeBulkTitlePrefix(titlePrefix);
         BulkQueueDownloadResult.Filters filters = new BulkQueueDownloadResult.Filters(
@@ -277,10 +280,10 @@ public class DownloaderService {
             normalizedPrefix == null ? "" : normalizedPrefix
         );
 
-        if (normalizedType == null || nsfw == null || normalizedPrefix == null) {
+        if (normalizedProviderId.isBlank() || normalizedType == null || nsfw == null || normalizedPrefix == null) {
             return new BulkQueueDownloadResult(
                 BulkQueueDownloadResult.STATUS_INVALID_REQUEST,
-                "type, nsfw, and titlePrefix are required.",
+                "providerId, type, nsfw, and titlePrefix are required.",
                 filters,
                 0,
                 0,
@@ -297,11 +300,10 @@ public class DownloaderService {
             );
         }
 
-        List<DownloadProvider> providers = downloadProviderRegistry.enabledProviders();
-        if (providers.isEmpty()) {
+        if (!WEBCENTRAL_PROVIDER_ID.equals(normalizedProviderId)) {
             return new BulkQueueDownloadResult(
-                BulkQueueDownloadResult.STATUS_EMPTY_RESULTS,
-                "No enabled download provider can handle bulk queue requests right now.",
+                BulkQueueDownloadResult.STATUS_INVALID_REQUEST,
+                "The Scriptarr bulk queue command is locked to the WeebCentral provider.",
                 filters,
                 0,
                 0,
@@ -318,25 +320,29 @@ public class DownloaderService {
             );
         }
 
-        BulkBrowseResult browseResult = new BulkBrowseResult(List.of(), 0);
-        DownloadProvider selectedProvider = null;
-        for (DownloadProvider provider : providers) {
-            BulkBrowseResult candidate = provider.browseTitlesAlphabetically(normalizedType, Boolean.TRUE.equals(nsfw), normalizedPrefix);
-            if (candidate.titles().isEmpty() && selectedProvider == null) {
-                browseResult = candidate;
-                selectedProvider = provider;
-                continue;
-            }
-            if (!candidate.titles().isEmpty()) {
-                browseResult = candidate;
-                selectedProvider = provider;
-                break;
-            }
+        Optional<DownloadProvider> selectedProvider = downloadProviderRegistry.getById(normalizedProviderId)
+            .filter((provider) -> settingsService.isDownloadProviderEnabled(provider.id()));
+        if (selectedProvider.isEmpty()) {
+            return new BulkQueueDownloadResult(
+                BulkQueueDownloadResult.STATUS_INVALID_REQUEST,
+                "WeebCentral bulk queue is unavailable because the provider is disabled in Raven settings.",
+                filters,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of()
+            );
         }
 
-        if (selectedProvider == null) {
-            selectedProvider = providers.getFirst();
-        }
+        BulkBrowseResult browseResult = selectedProvider.get().browseTitlesAlphabetically(normalizedType, Boolean.TRUE.equals(nsfw), normalizedPrefix);
 
         List<Map<String, String>> matchedTitles = filterTitlesByPrefix(browseResult.titles(), normalizedPrefix);
         if (matchedTitles.isEmpty()) {
@@ -370,7 +376,7 @@ public class DownloaderService {
             String titleName = normalizeString(selectedTitle.get("title"), "Unknown title");
             String titleUrl = normalizeString(selectedTitle.get("href"));
             String activeKey = activeBulkTaskKey(Map.of(
-                "providerId", selectedProvider.id(),
+                "providerId", selectedProvider.get().id(),
                 "titleUrl", titleUrl
             ));
             if (titleUrl.isBlank()) {
@@ -385,7 +391,7 @@ public class DownloaderService {
             try {
                 String requestType = LibraryNaming.normalizeTypeLabel(selectedTitle.getOrDefault("type", normalizedType));
                 DownloadIntakeService.BulkMetadataResolution metadataResolution = downloadIntakeService.resolveBulkMetadata(
-                    selectedProvider.id(),
+                    selectedProvider.get().id(),
                     titleUrl,
                     titleName,
                     requestType
@@ -401,8 +407,8 @@ public class DownloaderService {
 
                 Map<String, Object> selectedMetadata = new LinkedHashMap<>(metadataResolution.metadataSnapshot());
                 Map<String, Object> selectedDownload = new LinkedHashMap<>(metadataResolution.downloadSnapshot());
-                selectedDownload.putIfAbsent("providerId", selectedProvider.id());
-                selectedDownload.putIfAbsent("providerName", selectedProvider.name());
+                selectedDownload.putIfAbsent("providerId", selectedProvider.get().id());
+                selectedDownload.putIfAbsent("providerName", selectedProvider.get().name());
                 selectedDownload.putIfAbsent("titleName", titleName);
                 selectedDownload.putIfAbsent("titleUrl", titleUrl);
                 selectedDownload.putIfAbsent("requestType", requestType);
@@ -414,7 +420,7 @@ public class DownloaderService {
                     titleUrl,
                     requestType,
                     actor,
-                    selectedProvider.id(),
+                    selectedProvider.get().id(),
                     "",
                     selectedMetadata,
                     selectedDownload,

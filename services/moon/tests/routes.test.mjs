@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import {matchAdminRoute} from "../apps/admin/assets/routes.js";
+import {buildAdminLibraryTitlePath, matchAdminRoute} from "../apps/admin/assets/routes.js";
 import {
   buildLibraryPath,
   buildReaderPath,
@@ -94,5 +94,21 @@ test("admin routes include the public API page", () => {
     description: "Public Moon API access, admin automation key, and Swagger docs.",
     navLabel: "API",
     group: "System"
+  });
+});
+
+test("admin routes build and parse canonical library detail URLs", () => {
+  assert.equal(buildAdminLibraryTitlePath("Manhwa", "solo-leveling"), "/admin/library/manhwa/solo-leveling");
+  assert.deepEqual(matchAdminRoute("/admin/library/manhwa/solo-leveling"), {
+    id: "library-title",
+    path: "/admin/library/manhwa/solo-leveling",
+    title: "Series Detail",
+    description: "Inspect title health, chapter releases, metadata state, and Raven file coverage.",
+    navLabel: "Library",
+    group: "Manage",
+    params: {
+      typeSlug: "manhwa",
+      titleId: "solo-leveling"
+    }
   });
 });

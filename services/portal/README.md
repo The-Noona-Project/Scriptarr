@@ -21,7 +21,8 @@ Portal's supported Discord command set is:
 
 `downloadall` stays provider-browse first, but it now asks Raven to metadata-resolve each matched bulk title before
 queueing it. Portal only queues titles with one confident metadata match and reports already-active, no-metadata,
-ambiguous-metadata, and failed skips in the DM summary.
+ambiguous-metadata, and failed skips in the DM summary. The command is still owner-only and intentionally pinned to
+WeebCentral, so it fails if that provider is disabled instead of browsing MangaDex.
 
 Guild id, onboarding settings, DM superuser id, and per-command role gates are managed from Moon admin at
 `/admin/discord`. Discord bot credentials remain env-managed.

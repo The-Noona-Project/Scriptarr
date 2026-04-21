@@ -5,7 +5,8 @@
  *   title: string,
  *   description: string,
  *   navLabel: string,
- *   group: string
+ *   group: string,
+ *   params?: Record<string, string>
  * }} AdminRoute
  */
 
@@ -38,6 +39,26 @@ export const adminRoutes = [
   {id: "system-logs", path: "/admin/system/logs", title: "Logs", description: "Sanitized operational log summaries for Scriptarr services.", navLabel: "Logs", group: "System"}
 ];
 
+const normalizeTypeSlug = (value, fallback = "manga") => {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+/, "")
+    .replace(/-+$/, "");
+  return normalized || fallback;
+};
+
+/**
+ * Build a canonical admin library title path.
+ *
+ * @param {string} typeSlug
+ * @param {string} titleId
+ * @returns {string}
+ */
+export const buildAdminLibraryTitlePath = (typeSlug, titleId) =>
+  `/admin/library/${encodeURIComponent(normalizeTypeSlug(typeSlug))}/${encodeURIComponent(String(titleId || "").trim())}`;
+
 /**
  * Ordered admin navigation groups.
  *
@@ -56,10 +77,34 @@ export const getAdminNavigationGroups = () => ["Manage", "Monitor", "Activity", 
  * @param {string} pathname
  * @returns {AdminRoute}
  */
-export const matchAdminRoute = (pathname) => adminRoutes.find((route) => route.path === pathname) || adminRoutes[0];
+export const matchAdminRoute = (pathname) => {
+  const staticRoute = adminRoutes.find((route) => route.path === pathname);
+  if (staticRoute) {
+    return staticRoute;
+  }
+
+  const libraryTitleMatch = pathname.match(/^\/admin\/library\/([^/]+)\/([^/]+)$/);
+  if (libraryTitleMatch) {
+    return {
+      id: "library-title",
+      path: pathname,
+      title: "Series Detail",
+      description: "Inspect title health, chapter releases, metadata state, and Raven file coverage.",
+      navLabel: "Library",
+      group: "Manage",
+      params: {
+        typeSlug: decodeURIComponent(libraryTitleMatch[1]),
+        titleId: decodeURIComponent(libraryTitleMatch[2])
+      }
+    };
+  }
+
+  return adminRoutes[0];
+};
 
 export default {
   adminRoutes,
+  buildAdminLibraryTitlePath,
   getAdminNavigationGroups,
   matchAdminRoute
 };

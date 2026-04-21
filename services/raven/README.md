@@ -2,8 +2,9 @@
 
 Raven is Scriptarr's Spring Boot Java 24 download, library, and metadata engine.
 
-It owns the built-in metadata stack that replaces Komf, keeps MangaDex enabled by default, and supports optional
-PIA/OpenVPN-backed downloads using the simplified Moon admin VPN settings.
+It owns the built-in metadata stack that replaces Komf, keeps MangaDex enabled by default, enables Anime-Planet ahead
+of MangaUpdates for scrape-based enrichment, and supports optional PIA/OpenVPN-backed downloads using the simplified
+Moon admin VPN settings.
 
 Fresh installs now expose an empty library instead of demo titles. Moon stays empty until Raven has real imported
 titles to surface.
@@ -43,17 +44,22 @@ changes, and uses short-lived credential files with `--auth-nocache`.
 
 Raven's request intake is now provider-based on the download side. Enabled metadata providers run first, Raven expands
 aliases from those results, then the enabled download-provider registry checks site-specific scrapers for a concrete
-match. This release ships only the WeebCentral provider, but the registry contract is now in place for future sites.
+match. WeebCentral stays first by default, MangaDex is now a second normal download-provider option, and the registry
+contract is in place for future sites after those two.
 Raven intake is also edition-aware and grouped by concrete provider target, so metadata variants that resolve to the
 same download URL collapse into one requestable result while plain vs colored editions stay separate when the provider
 exposes different series URLs.
 The DM-only Discord `downloadall` flow now uses the same metadata-aware path for each bulk-browsed provider title. It
 only queues titles with one confident metadata match and reports already-active, no-metadata, ambiguous-metadata, and
-failed skips back to Portal instead of bulk-queueing metadata-less library entries.
+failed skips back to Portal instead of bulk-queueing metadata-less library entries. That command is intentionally
+locked to the WeebCentral provider and fails when WeebCentral is disabled rather than falling back to MangaDex.
 Raven now also treats cover art as first-class title metadata, carries it through intake, queue state, and library
 records, and exposes the same imagery Moon and Portal reuse in their UIs and embeds.
 Raven now also preserves chapter release dates from provider chapter scrapes and blends in richer title-level release
 labels from metadata providers, which Moon admin reuses for its library and calendar views.
+Raven now also normalizes lifecycle status from both source scrapes and metadata providers, including completed or
+finished series states, so Moon's admin library, title-detail, and calendar views can distinguish active titles from
+completed, hiatus, cancelled, or upcoming work without guessing from chapter gaps alone.
 
 Download completion now waits for both file promotion and brokered catalog persistence before a task can reach `100%`.
 If catalog persistence fails, Raven marks the task failed instead of leaving it stuck at `90%`. On boot, Raven also

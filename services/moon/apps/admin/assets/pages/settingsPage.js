@@ -114,7 +114,7 @@ export const renderSettingsPage = (result) => {
               </article>
             `).join("")}
           </div>
-          <p class="field-note">MangaDex stays on by default. AniList and ComicVine are available when you want wider metadata coverage.</p>
+          <p class="field-note">MangaDex stays on by default, Anime-Planet is enabled ahead of MangaUpdates for scrape-based lifecycle and alias enrichment, and AniList or ComicVine can widen coverage when you need more sources.</p>
           <button class="solid-button" type="submit">Save provider order</button>
         </form>
       </section>
@@ -146,7 +146,7 @@ export const renderSettingsPage = (result) => {
               </article>
             `).join("")}
           </div>
-          <p class="field-note">WeebCentral is the only download provider right now, but this setting keeps the intake and matching pipeline ready for more sites later.</p>
+          <p class="field-note">WeebCentral stays first by default, MangaDex is available as a normal fallback source, and the Discord <code>downloadall</code> command remains intentionally WeebCentral-only for the configured owner account.</p>
           <button class="solid-button" type="submit">Save download providers</button>
         </form>
       </section>

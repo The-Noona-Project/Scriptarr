@@ -85,7 +85,9 @@ public final class LibraryService {
             if (payload == null || !payload.isArray()) {
                 return List.of();
             }
-            return dedupeTitles(objectMapper.convertValue(payload, TITLE_LIST_TYPE));
+            return dedupeTitles(objectMapper.convertValue(payload, TITLE_LIST_TYPE)).stream()
+                .map(this::normalizeLibraryTitle)
+                .toList();
         } catch (Exception error) {
             logger.warn("LIBRARY", "Failed to list Raven titles.", error.getMessage());
             return List.of();
@@ -111,12 +113,12 @@ public final class LibraryService {
             LibraryTitle resolved = objectMapper.treeToValue(payload, LibraryTitle.class);
             String identityKey = titleIdentityKey(resolved);
             if (identityKey.isBlank()) {
-                return resolved;
+                return normalizeLibraryTitle(resolved);
             }
             return listTitles().stream()
                 .filter((candidate) -> identityKey.equals(titleIdentityKey(candidate)))
                 .findFirst()
-                .orElse(resolved);
+                .orElse(normalizeLibraryTitle(resolved));
         } catch (Exception error) {
             logger.warn("LIBRARY", "Failed to load Raven title.", error.getMessage());
             return null;
@@ -304,7 +306,7 @@ public final class LibraryService {
             existing.mediaType(),
             existing.libraryTypeLabel(),
             existing.libraryTypeSlug(),
-            existing.status(),
+            firstNonBlank(SeriesLifecycle.normalizeStatus(stringValue(details.get("status"))), existing.status()),
             existing.latestChapter(),
             existing.coverAccent(),
             firstNonBlank(stringValue(details.get("summary")), existing.summary()),
@@ -663,7 +665,10 @@ public final class LibraryService {
             firstNonBlank(preferred.mediaType(), secondary.mediaType()),
             firstNonBlank(preferred.libraryTypeLabel(), secondary.libraryTypeLabel()),
             firstNonBlank(preferred.libraryTypeSlug(), secondary.libraryTypeSlug()),
-            firstNonBlank(preferred.status(), secondary.status()),
+            firstNonBlank(
+                SeriesLifecycle.normalizeStatus(preferred.status()),
+                SeriesLifecycle.normalizeStatus(secondary.status())
+            ),
             resolveLatestChapter(mergedChapters),
             firstNonBlank(preferred.coverAccent(), secondary.coverAccent()),
             preferLongerText(preferred.summary(), secondary.summary()),
@@ -681,6 +686,38 @@ public final class LibraryService {
             firstNonBlank(preferred.workingRoot(), secondary.workingRoot()),
             firstNonBlank(preferred.downloadRoot(), secondary.downloadRoot()),
             List.copyOf(mergedChapters)
+        );
+    }
+
+    private LibraryTitle normalizeLibraryTitle(LibraryTitle title) {
+        if (title == null) {
+            return null;
+        }
+
+        return new LibraryTitle(
+            title.id(),
+            title.title(),
+            title.mediaType(),
+            title.libraryTypeLabel(),
+            title.libraryTypeSlug(),
+            SeriesLifecycle.normalizeStatus(title.status()),
+            title.latestChapter(),
+            title.coverAccent(),
+            title.summary(),
+            title.releaseLabel(),
+            title.chapterCount(),
+            title.chaptersDownloaded(),
+            title.author(),
+            title.tags(),
+            title.aliases(),
+            title.metadataProvider(),
+            title.metadataMatchedAt(),
+            title.relations(),
+            title.sourceUrl(),
+            title.coverUrl(),
+            title.workingRoot(),
+            title.downloadRoot(),
+            title.chapters()
         );
     }
 
@@ -888,7 +925,10 @@ public final class LibraryService {
 
     private String resolveStatus(LibraryTitle existing, TitleDetails details) {
         if (details != null && details.status() != null && !details.status().isBlank()) {
-            return details.status().trim().toLowerCase(Locale.ROOT);
+            return firstNonBlank(
+                SeriesLifecycle.normalizeStatus(details.status()),
+                firstNonBlank(existing != null ? existing.status() : "", "active")
+            );
         }
         return existing != null && existing.status() != null && !existing.status().isBlank() ? existing.status() : "active";
     }

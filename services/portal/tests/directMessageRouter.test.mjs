@@ -91,10 +91,13 @@ test("formatBulkQueueSummary includes counts and title sections", () => {
 
 test("direct message handler gates by superuser and forwards legacy downloadall filters to Sage", async () => {
   const replies = [];
+  const forwardedPayloads = [];
   const handler = createDirectMessageHandler({
     getSettings: () => ({superuserId: "253987219969146890"}),
     sage: {
-      bulkQueueDownload: async (payload) => ({
+      bulkQueueDownload: async (payload) => {
+        forwardedPayloads.push(payload);
+        return {
         ok: true,
         payload: {
           status: "queued",
@@ -107,7 +110,8 @@ test("direct message handler gates by superuser and forwards legacy downloadall 
           failedCount: 0,
           queuedTitles: ["Dandadan"]
         }
-      })
+      };
+      }
     }
   });
 
@@ -134,6 +138,13 @@ test("direct message handler gates by superuser and forwards legacy downloadall 
   assert.equal(await handler(allowedMessage), true);
   assert.match(replies[0].content, /Queueing Scriptarr bulk download/);
   assert.match(replies[1].content, /Bulk queue submitted/);
+  assert.deepEqual(forwardedPayloads[0], {
+    providerId: "weebcentral",
+    type: "Manga",
+    nsfw: false,
+    titlePrefix: "a",
+    requestedBy: "253987219969146890"
+  });
 });
 
 test("direct message handler respects the enabled toggle and surfaces Sage failures", async () => {

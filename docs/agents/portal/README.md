@@ -15,3 +15,6 @@
 - DM-only `downloadall` is still provider-browse first, but it must now go through Raven's metadata-safe bulk resolver
   before queueing anything. Queue only titles with one confident metadata match and surface already-active,
   no-metadata, ambiguous-metadata, and failed outcomes in the DM summary.
+- That DM bulk path stays owner-only and WeebCentral-only. Even when MangaDex is enabled for normal intake or direct
+  requests, Portal should always send `providerId=weebcentral` for `downloadall` and surface a clear error when
+  WeebCentral is disabled.

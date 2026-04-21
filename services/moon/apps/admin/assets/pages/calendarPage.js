@@ -6,6 +6,7 @@ import {
   renderStatusBadge
 } from "../dom.js";
 import {formatDate, parseDateValue} from "../format.js";
+import {buildAdminLibraryTitlePath} from "../routes.js";
 
 const DAY_LABELS = Object.freeze(["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]);
 const DEFAULT_CALENDAR_STATE = Object.freeze({
@@ -97,11 +98,12 @@ const normalizeCalendarEntries = (entries) => (Array.isArray(entries) ? entries 
       libraryTypeLabel: String(entry?.libraryTypeLabel || entry?.mediaType || "Manga").trim() || "Manga",
       libraryTypeSlug,
       metadataProvider: String(entry?.metadataProvider || "").trim(),
+      titleStatus: String(entry?.titleStatus || "active").trim() || "active",
       sourceUrl: String(entry?.sourceUrl || "").trim(),
       parsedDate,
       monthKey: toMonthKey(parsedDate),
       dayKey: toDayKey(parsedDate),
-      titleHref: titleId ? `/title/${encodeURIComponent(libraryTypeSlug)}/${encodeURIComponent(titleId)}` : "",
+      titleHref: titleId ? buildAdminLibraryTitlePath(libraryTypeSlug, titleId) : "",
       pageCount: Number.parseInt(String(entry?.pageCount || 0), 10) || 0,
       available: entry?.available !== false
     };
@@ -142,6 +144,7 @@ const renderMonthEntry = (entry) => `
     <span class="calendar-entry-copy">
       <strong>${escapeHtml(entry.title)}</strong>
       <span>${escapeHtml(entry.chapterLabel)}</span>
+      ${entry.titleStatus && entry.titleStatus !== "active" ? `<small>${escapeHtml(entry.titleStatus)}</small>` : ""}
     </span>
   </a>
 `;
@@ -165,6 +168,7 @@ const renderAgendaEntry = (entry) => `
         </div>
         <div class="agenda-entry-meta">
           ${renderChip(entry.libraryTypeLabel)}
+          ${entry.titleStatus ? renderChip(entry.titleStatus) : ""}
           ${entry.metadataProvider ? renderChip(entry.metadataProvider) : ""}
           ${entry.pageCount > 0 ? renderChip(`${entry.pageCount} pages`) : ""}
         </div>

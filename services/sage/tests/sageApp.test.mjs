@@ -361,6 +361,7 @@ const createDependencyStub = ({
           status: "queued",
           message: "Queued 1 title(s) for download.",
           filters: {
+            providerId: payload.providerId || "",
             type: payload.type || "",
             nsfw: payload.nsfw === true,
             titlePrefix: payload.titlePrefix || ""
@@ -701,6 +702,17 @@ test("sage round-trips Moon branding and exposes typed Moon reader payloads", as
   }).then((response) => response.json());
   assert.equal(titleDetail.title.libraryTypeSlug, "webtoon");
   assert.equal(titleDetail.title.libraryTypeLabel, "Webtoon");
+
+  const adminTitleDetail = await fetch(`${baseUrl}/api/moon-v3/admin/library/dan-da-dan`, {
+    headers: {
+      "Authorization": `Bearer ${ownerClaim.token}`
+    }
+  }).then((response) => response.json());
+  assert.equal(adminTitleDetail.title.id, "dan-da-dan");
+  assert.equal(adminTitleDetail.title.libraryTypeSlug, "webtoon");
+  assert.ok(Array.isArray(adminTitleDetail.requests));
+  assert.ok(Array.isArray(adminTitleDetail.activeTasks));
+  assert.ok(Array.isArray(adminTitleDetail.recentTasks));
 
   const followResponse = await fetch(`${baseUrl}/api/moon-v3/user/following`, {
     method: "POST",
@@ -1562,6 +1574,7 @@ test("sage brokers service-to-service routes with internal service auth", async 
     method: "POST",
     headers: portalHeaders,
     body: JSON.stringify({
+      providerId: "weebcentral",
       type: "Manga",
       nsfw: false,
       titlePrefix: "a",
@@ -1569,6 +1582,20 @@ test("sage brokers service-to-service routes with internal service auth", async 
     })
   }).then((response) => response.json());
   assert.equal(bulkQueue.status, "queued");
+  assert.equal(dependencyStub.calls.bulkQueue, 1);
+
+  const rejectedBulkQueue = await fetch(`${baseUrl}/api/internal/portal/raven/bulk-queue`, {
+    method: "POST",
+    headers: portalHeaders,
+    body: JSON.stringify({
+      providerId: "mangadex",
+      type: "Manga",
+      nsfw: false,
+      titlePrefix: "a",
+      requestedBy: "owner-1"
+    })
+  });
+  assert.equal(rejectedBulkQueue.status, 400);
   assert.equal(dependencyStub.calls.bulkQueue, 1);
 
   const oracleStatus = await fetch(`${baseUrl}/api/internal/warden/bootstrap`, {

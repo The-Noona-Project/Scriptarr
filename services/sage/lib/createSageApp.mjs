@@ -38,12 +38,14 @@ const PUBLIC_API_SELECTION_TTL_MS = 5 * 60 * 1000;
 const knownMetadataProviders = Object.freeze([
   {id: "mangadex", name: "MangaDex", scopes: ["manga", "webtoon"], enabled: true, priority: 10},
   {id: "anilist", name: "AniList", scopes: ["manga"], enabled: false, priority: 20},
+  {id: "animeplanet", name: "Anime-Planet", scopes: ["manga", "webtoon"], enabled: true, priority: 25},
   {id: "mangaupdates", name: "MangaUpdates", scopes: ["manga", "webtoon"], enabled: false, priority: 30},
   {id: "mal", name: "MyAnimeList", scopes: ["manga"], enabled: false, priority: 40, credentialKey: "malClientId"},
   {id: "comicvine", name: "ComicVine", scopes: ["comic"], enabled: false, priority: 50, credentialKey: "comicVineApiKey"}
 ]);
 const knownDownloadProviders = Object.freeze([
-  {id: "weebcentral", name: "WeebCentral", scopes: ["manga", "webtoon", "comic"], enabled: true, priority: 10}
+  {id: "weebcentral", name: "WeebCentral", scopes: ["manga", "webtoon", "comic"], enabled: true, priority: 10},
+  {id: "mangadex", name: "MangaDex", scopes: ["manga", "webtoon"], enabled: true, priority: 20}
 ]);
 const knownNamingProfileTypes = Object.freeze([
   {id: "manga", name: "Manga"},

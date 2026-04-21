@@ -5,6 +5,11 @@ import {enhanceCalendarPage, loadCalendarPage, renderCalendarPage} from "./calen
 import {enhanceDiscordPage, loadDiscordPage, renderDiscordPage} from "./discordPage.js";
 import {loadImportPage, renderImportPage} from "./importPage.js";
 import {enhanceLibraryPage, loadLibraryPage, renderLibraryPage} from "./libraryPage.js";
+import {
+  enhanceLibraryTitlePage,
+  loadLibraryTitlePage,
+  renderLibraryTitlePage
+} from "./libraryTitlePage.js";
 import {enhanceMediaManagementPage, loadMediaManagementPage, renderMediaManagementPage} from "./mediaManagementPage.js";
 import {loadOverviewPage, renderOverviewPage} from "./overviewPage.js";
 import {enhanceRequestsPage, loadRequestsPage, renderRequestsPage} from "./requestsPage.js";
@@ -29,6 +34,7 @@ import {loadWantedPage, renderWantedPage} from "./wantedPage.js";
 const pageModules = {
   overview: {load: loadOverviewPage, render: renderOverviewPage},
   library: {load: loadLibraryPage, render: renderLibraryPage, enhance: enhanceLibraryPage},
+  "library-title": {load: loadLibraryTitlePage, render: renderLibraryTitlePage, enhance: enhanceLibraryTitlePage},
   add: {load: loadAddPage, render: renderAddPage, enhance: enhanceAddPage},
   import: {load: loadImportPage, render: renderImportPage},
   calendar: {load: loadCalendarPage, render: renderCalendarPage, enhance: enhanceCalendarPage},

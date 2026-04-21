@@ -101,4 +101,73 @@ class MetadataServiceTest {
         assertEquals(true, accepted.get("ok"));
         assertFalse(brokerClient.getMetadataMatch("title-1").path("provider").asText("").isBlank());
     }
+
+    /**
+     * Verify provider lifecycle labels are normalized onto the stored Raven
+     * title when metadata is applied.
+     *
+     * @param tempDir temporary test directory
+     */
+    @Test
+    void identifyPersistsNormalizedLifecycleStatus(@TempDir Path tempDir) {
+        FakeRavenBrokerClient brokerClient = new FakeRavenBrokerClient();
+        ScriptarrLogger logger = mock(ScriptarrLogger.class);
+        when(logger.getDownloadsRoot()).thenReturn(tempDir);
+
+        LibraryService libraryService = new LibraryService(
+            brokerClient,
+            new RavenSettingsService(brokerClient, logger, List.of(new MangaDexProvider())),
+            logger
+        );
+        brokerClient.setLibraryTitle(new LibraryTitle(
+            "title-2",
+            "One Piece",
+            "manga",
+            "Manga",
+            "manga",
+            "active",
+            "1111",
+            "#de6d3a",
+            "",
+            "",
+            10,
+            10,
+            "",
+            List.of(),
+            List.of(),
+            "",
+            null,
+            List.of(),
+            "https://weebcentral.com/series/one-piece",
+            "",
+            "",
+            tempDir.resolve("downloaded").resolve("manga").resolve("One_Piece").toString(),
+            List.of(new LibraryChapter("title-2-c1", "Chapter 1", "1", 1, null, true, "", ""))
+        ));
+
+        MetadataService service = new MetadataService(
+            List.of(new MangaDexProvider()),
+            new RavenSettingsService(brokerClient, logger, List.of(new MangaDexProvider())),
+            brokerClient,
+            libraryService,
+            logger
+        ) {
+            @Override
+            public Map<String, Object> seriesDetails(String provider, String providerSeriesId) {
+                return Map.of(
+                    "provider", provider,
+                    "providerSeriesId", providerSeriesId,
+                    "title", "One Piece",
+                    "summary", "Pirates on the Grand Line.",
+                    "status", "Finished",
+                    "books", List.of()
+                );
+            }
+        };
+
+        Map<String, Object> accepted = service.identify("mangadex", "md-2", null, "title-2");
+
+        assertEquals(true, accepted.get("ok"));
+        assertEquals("completed", libraryService.findTitle("title-2").status());
+    }
 }

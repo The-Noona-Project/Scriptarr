@@ -56,6 +56,8 @@ moderation can queue the exact Raven target later.
 That intake is now edition-aware and grouped by concrete download target, so duplicate metadata rows collapse into one
 requestable result while real variants such as plain vs colored editions stay separate when the provider exposes
 different series URLs.
+Raven now keeps WeebCentral first by default, exposes MangaDex as a second normal download-provider option, and enables
+Anime-Planet ahead of MangaUpdates as a scrape-based metadata source for aliases, summaries, and lifecycle hints.
 Moon admin also exposes a dedicated Discord page at `/admin/discord` for guild workflow settings, onboarding template
 or channel management, per-command role gates, and Portal runtime visibility without exposing Discord credentials.
 Moon admin calendar is now backed by Raven chapter release dates captured from provider scrapes plus metadata
@@ -102,6 +104,7 @@ For end-to-end Docker verification, use:
 - The DM-only `downloadall` flow now stays provider-browse first but resolves metadata before queueing each title. It
   only queues titles with one confident metadata match and reports already-active, no-metadata, ambiguous-metadata,
   and failed skips back in the Discord DM summary instead of silently creating metadata-less library entries.
+  That owner-only command is intentionally locked to WeebCentral and will fail fast if WeebCentral is disabled.
 - Portal now prefers a minimal Discord runtime over going fully dark when privileged intents are unavailable, so slash
   commands and DMs can stay online while onboarding is shown as degraded in Moon admin.
 - Discord `/subscribe` reuses Moon's shared follow store, so Moon and Discord notifications stay aligned instead of

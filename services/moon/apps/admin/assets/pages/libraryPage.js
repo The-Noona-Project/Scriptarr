@@ -6,6 +6,7 @@ import {
   renderStatusBadge
 } from "../dom.js";
 import {formatDate} from "../format.js";
+import {buildAdminLibraryTitlePath} from "../routes.js";
 
 const DEFAULT_LIBRARY_STATE = Object.freeze({
   query: "",
@@ -151,7 +152,7 @@ const buildVisibleTitles = (titles, state) => sortLibraryTitles(
  */
 const renderLibraryRow = (title) => {
   const path = title.downloadRoot || title.workingRoot || "Path pending";
-  const titleHref = `/title/${encodeURIComponent(title.libraryTypeSlug)}/${encodeURIComponent(title.id)}`;
+  const titleHref = buildAdminLibraryTitlePath(title.libraryTypeSlug, title.id);
   return `
     <tr>
       <td>
@@ -159,7 +160,7 @@ const renderLibraryRow = (title) => {
           ${renderCoverThumb(title.coverUrl, title.title, "cover-thumb series-cover-thumb")}
           <div class="series-row-copy">
             <div class="series-row-heading">
-              <a class="series-row-link" href="${escapeHtml(titleHref)}" target="_blank" rel="noreferrer">${escapeHtml(title.title)}</a>
+              <a class="series-row-link" href="${escapeHtml(titleHref)}" data-link>${escapeHtml(title.title)}</a>
             </div>
             <div class="series-row-meta">
               ${renderChip(title.libraryTypeLabel)}
@@ -182,7 +183,7 @@ const renderLibraryRow = (title) => {
       <td><span class="path-copy">${escapeHtml(path)}</span></td>
       <td>
         <div class="library-row-actions">
-          <a class="ghost-button small" href="${escapeHtml(titleHref)}" target="_blank" rel="noreferrer">Open</a>
+          <a class="ghost-button small" href="${escapeHtml(titleHref)}" data-link>Open</a>
           ${title.sourceUrl ? `<a class="ghost-button small" href="${escapeHtml(title.sourceUrl)}" target="_blank" rel="noreferrer">Source</a>` : ""}
         </div>
       </td>

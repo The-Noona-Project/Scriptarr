@@ -218,6 +218,7 @@ export const createDirectMessageHandler = ({getSettings, sage, logger}) => async
 
   try {
     const result = await sage.bulkQueueDownload({
+      providerId: "weebcentral",
       ...parsed.filters,
       requestedBy: authorId
     });

@@ -13,6 +13,9 @@
 - Persist Raven and Oracle admin settings through Vault instead of service-local files.
 - Broker Portal's Discord workflow settings through the shared `portal.discord` setting, and keep Portal-facing broker
   routes for intake search, request creation, library search, follow updates, onboarding tests, and Raven bulk queue.
+- Portal's Raven bulk queue broker route now requires an explicit `providerId`. Keep `downloadall` locked to the
+  WeebCentral provider on the Sage side too so Portal cannot accidentally fall through to MangaDex when that owner-only
+  DM command is used.
 - Persist and expose `raven.download.providers` through the same brokered settings path as Raven metadata and VPN
   configuration.
 - Persist and expose brokered `raven.naming` settings, including the fallback naming profile plus the per-type naming
@@ -25,3 +28,6 @@
 - Legacy `/api/library` behavior must mirror Raven's real-or-empty library state instead of injecting scaffold titles.
 - Moon admin calendar now depends on richer Raven chapter data. Keep `/api/moon-v3/admin/calendar` focused on dated
   release entries with enough title context for Moon to render a calendar-first operational view.
+- `/api/moon-v3/admin/library/:titleId` is now the brokered admin drill-down payload for Moon's Sonarr-style title
+  detail route. Keep it rich enough to combine title lifecycle status, related requests, active or recent Raven tasks,
+  and chapter-level release or archive fields without forcing Moon to fan out into multiple browser calls.

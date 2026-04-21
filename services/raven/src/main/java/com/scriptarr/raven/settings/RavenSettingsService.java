@@ -85,13 +85,22 @@ public class RavenSettingsService {
                 return defaults;
             }
 
-            return new RavenNamingSettings(
+            RavenNamingSettings requestedDefaults = new RavenNamingSettings(
                 settingsNode.path("chapterTemplate").asText(defaults.chapterTemplate()),
                 settingsNode.path("pageTemplate").asText(defaults.pageTemplate()),
                 settingsNode.path("pagePad").asInt(defaults.pagePad()),
                 settingsNode.path("chapterPad").asInt(defaults.chapterPad()),
                 settingsNode.path("volumePad").asInt(defaults.volumePad()),
-                loadNamingProfiles(settingsNode.path("profiles"), defaults)
+                Map.of()
+            ).normalized();
+
+            return new RavenNamingSettings(
+                requestedDefaults.chapterTemplate(),
+                requestedDefaults.pageTemplate(),
+                requestedDefaults.pagePad(),
+                requestedDefaults.chapterPad(),
+                requestedDefaults.volumePad(),
+                loadNamingProfiles(settingsNode.path("profiles"), requestedDefaults)
             ).normalized();
         } catch (Exception error) {
             logger.warn("SETTINGS", "Failed to load Raven naming settings.", error.getMessage());
@@ -123,12 +132,17 @@ public class RavenSettingsService {
             int defaultPriority = switch (provider.id()) {
                 case "mangadex" -> 10;
                 case "anilist" -> 20;
+                case "animeplanet" -> 25;
                 case "mangaupdates" -> 30;
                 case "mal" -> 40;
                 case "comicvine" -> 50;
                 default -> 100;
             };
-            boolean enabled = configured != null ? configured.path("enabled").asBoolean("mangadex".equals(provider.id())) : "mangadex".equals(provider.id());
+            boolean enabledByDefault = switch (provider.id()) {
+                case "mangadex", "animeplanet" -> true;
+                default -> false;
+            };
+            boolean enabled = configured != null ? configured.path("enabled").asBoolean(enabledByDefault) : enabledByDefault;
             int priority = configured != null && configured.path("priority").canConvertToInt()
                 ? configured.path("priority").asInt(defaultPriority)
                 : defaultPriority;
@@ -170,6 +184,7 @@ public class RavenSettingsService {
 
         List<Map<String, Object>> normalized = new ArrayList<>();
         normalized.add(normalizeDownloadProvider("weebcentral", "WeebCentral", List.of("manga", "webtoon", "comic"), true, 10, configuredById.get("weebcentral")));
+        normalized.add(normalizeDownloadProvider("mangadex", "MangaDex", List.of("manga", "webtoon"), true, 20, configuredById.get("mangadex")));
         normalized.sort(
             Comparator
                 .comparingInt((Map<String, Object> entry) -> (Integer) entry.get("priority"))
@@ -190,6 +205,20 @@ public class RavenSettingsService {
             .findFirst()
             .map((entry) -> Boolean.TRUE.equals(entry.get("enabled")))
             .orElse(false);
+    }
+
+    /**
+     * Resolve the configured priority for a download provider.
+     *
+     * @param providerId provider id to inspect
+     * @return configured priority or a large fallback value
+     */
+    public int getDownloadProviderPriority(String providerId) {
+        return getDownloadProviderSettings().stream()
+            .filter((entry) -> providerId.equalsIgnoreCase(String.valueOf(entry.get("id"))))
+            .findFirst()
+            .map((entry) -> (Integer) entry.get("priority"))
+            .orElse(999);
     }
 
     /**

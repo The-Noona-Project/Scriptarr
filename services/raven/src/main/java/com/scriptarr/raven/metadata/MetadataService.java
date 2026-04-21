@@ -5,9 +5,13 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.scriptarr.raven.library.LibraryNaming;
 import com.scriptarr.raven.library.LibraryTitle;
 import com.scriptarr.raven.library.LibraryService;
+import com.scriptarr.raven.library.SeriesLifecycle;
 import com.scriptarr.raven.settings.RavenSettingsService;
 import com.scriptarr.raven.settings.RavenBrokerClient;
 import com.scriptarr.raven.support.ScriptarrLogger;
+import org.jsoup.Jsoup;
+import org.jsoup.nodes.Document;
+import org.jsoup.nodes.Element;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
@@ -31,6 +35,8 @@ import java.util.Map;
  */
 @Service
 public class MetadataService {
+    private static final String BROWSER_USER_AGENT =
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
     private final List<MetadataProvider> providers;
     private final RavenSettingsService settingsService;
     private final RavenBrokerClient brokerClient;
@@ -257,6 +263,7 @@ public class MetadataService {
             return switch (provider.toLowerCase(Locale.ROOT)) {
                 case "mangadex" -> fetchMangaDexSeriesDetails(providerSeriesId);
                 case "anilist" -> fetchAniListSeriesDetails(providerSeriesId);
+                case "animeplanet" -> fetchAnimePlanetSeriesDetails(providerSeriesId);
                 case "mangaupdates" -> fetchMangaUpdatesSeriesDetails(providerSeriesId);
                 case "mal" -> fetchMalSeriesDetails(providerSeriesId);
                 case "comicvine" -> fetchComicVineSeriesDetails(providerSeriesId);
@@ -277,6 +284,7 @@ public class MetadataService {
         return switch (providerId.toLowerCase(Locale.ROOT)) {
             case "mangadex" -> searchMangaDex(name);
             case "anilist" -> searchAniList(name);
+            case "animeplanet" -> searchAnimePlanet(name);
             case "mangaupdates" -> searchMangaUpdates(name);
             case "mal" -> searchMal(name);
             case "comicvine" -> searchComicVine(name);
@@ -319,6 +327,7 @@ public class MetadataService {
             "title", preferredLocalizedValue(root.path("attributes").path("title"), providerSeriesId),
             "summary", root.path("attributes").path("description").path("en").asText(""),
             "releaseLabel", root.path("attributes").path("year").asText(""),
+            "status", SeriesLifecycle.normalizeStatus(root.path("attributes").path("status").asText("")),
             "aliases", List.of(),
             "books", List.of()
         );
@@ -355,7 +364,7 @@ public class MetadataService {
     }
 
     private Map<String, Object> fetchAniListSeriesDetails(String providerSeriesId) throws IOException, InterruptedException {
-        String query = "query ($id: Int) { Media(id: $id, type: MANGA) { id title { romaji english } siteUrl description(asHtml: false) startDate { year month day } } }";
+        String query = "query ($id: Int) { Media(id: $id, type: MANGA) { id title { romaji english } siteUrl description(asHtml: false) startDate { year month day } status } }";
         String body = objectMapper.writeValueAsString(Map.of(
             "query", query,
             "variables", Map.of("id", Integer.parseInt(providerSeriesId))
@@ -374,12 +383,119 @@ public class MetadataService {
             "url", media.path("siteUrl").asText("https://anilist.co/manga/" + providerSeriesId),
             "summary", media.path("description").asText(""),
             "releaseLabel", formatPartialDate(media.path("startDate")),
+            "status", SeriesLifecycle.normalizeStatus(media.path("status").asText("")),
             "aliases", List.of(
                 media.path("title").path("english").asText(""),
                 media.path("title").path("romaji").asText("")
             ).stream().filter((value) -> !value.isBlank()).toList(),
             "books", List.of()
         );
+    }
+
+    private List<Map<String, Object>> searchAnimePlanet(String name) throws IOException, InterruptedException {
+        String encoded = URLEncoder.encode(name, StandardCharsets.UTF_8);
+        Document document = sendHtml(buildBrowserRequest("https://www.anime-planet.com/manga/all?name=" + encoded));
+        if (isCloudflareChallenge(document)) {
+            throw new IOException("Anime-Planet is blocking metadata search right now.");
+        }
+
+        List<Map<String, Object>> results = new ArrayList<>();
+        var seen = new java.util.LinkedHashSet<String>();
+        for (Element link : document.select("a[href^=/manga/], a[href^=https://www.anime-planet.com/manga/]")) {
+            String href = normalizeAnimePlanetUrl(link.absUrl("href"));
+            String slug = animePlanetSlug(href);
+            if (slug.isBlank() || "all".equalsIgnoreCase(slug) || !seen.add(slug)) {
+                continue;
+            }
+
+            String title = firstNonBlank(
+                link.attr("title"),
+                link.selectFirst("img[alt]") == null ? "" : link.selectFirst("img[alt]").attr("alt"),
+                link.text(),
+                prettifySlug(slug)
+            );
+            if (title.isBlank()) {
+                continue;
+            }
+
+            Map<String, Object> entry = new LinkedHashMap<>();
+            entry.put("provider", "animeplanet");
+            entry.put("providerSeriesId", slug);
+            entry.put("title", title);
+            entry.put("url", href);
+            entry.put("coverUrl", firstNonBlank(
+                imageUrl(link.selectFirst("img[data-src]")),
+                imageUrl(link.selectFirst("img[src]"))
+            ));
+            results.add(entry);
+            if (results.size() >= 5) {
+                break;
+            }
+        }
+        return List.copyOf(results);
+    }
+
+    private Map<String, Object> fetchAnimePlanetSeriesDetails(String providerSeriesId) throws IOException, InterruptedException {
+        String normalizedSeriesId = normalizeString(providerSeriesId);
+        if (normalizedSeriesId.isBlank()) {
+            return Map.of(
+                "provider", "animeplanet",
+                "providerSeriesId", providerSeriesId,
+                "books", List.of()
+            );
+        }
+
+        String url = "https://www.anime-planet.com/manga/" + normalizedSeriesId;
+        Document document = sendHtml(buildBrowserRequest(url));
+        if (isCloudflareChallenge(document)) {
+            throw new IOException("Anime-Planet is blocking metadata detail scraping right now.");
+        }
+
+        Map<String, String> definitions = readDefinitionMap(document);
+        List<String> aliases = extractAnimePlanetAliases(document, definitions);
+        String title = firstNonBlank(
+            metaContent(document, "og:title").replace(" Manga", "").trim(),
+            document.selectFirst("h1") == null ? "" : document.selectFirst("h1").text(),
+            prettifySlug(normalizedSeriesId)
+        );
+        String summary = firstNonBlank(
+            text(document.selectFirst(".entrySynopsis")),
+            text(document.selectFirst(".synopsis")),
+            metaContent(document, "description")
+        );
+        String status = SeriesLifecycle.normalizeStatus(firstNonBlank(
+            definitions.get("status"),
+            definitions.get("publishing status")
+        ));
+        String releaseLabel = firstNonBlank(
+            definitions.get("year"),
+            definitions.get("vintage"),
+            definitions.get("year published")
+        );
+        String type = firstNonBlank(
+            inferAnimePlanetType(definitions),
+            inferAnimePlanetTypeFromDocument(document),
+            "Manga"
+        );
+
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("provider", "animeplanet");
+        payload.put("providerSeriesId", normalizedSeriesId);
+        payload.put("title", title);
+        payload.put("url", normalizeAnimePlanetUrl(url));
+        payload.put("summary", summary);
+        payload.put("coverUrl", firstNonBlank(
+            metaContent(document, "og:image"),
+            imageUrl(document.selectFirst(".entryBar img[data-src]")),
+            imageUrl(document.selectFirst(".entryBar img[src]")),
+            imageUrl(document.selectFirst("img[src]"))
+        ));
+        payload.put("releaseLabel", releaseLabel);
+        payload.put("status", status);
+        payload.put("aliases", aliases);
+        payload.put("type", type);
+        payload.put("books", List.of());
+        return payload;
     }
 
     private List<Map<String, Object>> searchMangaUpdates(String name) throws IOException, InterruptedException {
@@ -425,6 +541,7 @@ public class MetadataService {
             "title", result.path("title").asText(providerSeriesId),
             "summary", result.path("description").asText(""),
             "releaseLabel", result.path("year").asText(""),
+            "status", SeriesLifecycle.normalizeStatus(extractMangaUpdatesStatus(result)),
             "author", result.path("authors").isArray() && result.path("authors").size() > 0
                 ? result.path("authors").get(0).path("name").asText("")
                 : "",
@@ -489,6 +606,7 @@ public class MetadataService {
             "title", result.path("title").asText(providerSeriesId),
             "summary", result.path("synopsis").asText(""),
             "releaseLabel", result.path("start_date").asText(""),
+            "status", SeriesLifecycle.normalizeStatus(result.path("status").asText("")),
             "author", author,
             "aliases", aliases.stream().filter((alias) -> !alias.isBlank()).toList(),
             "books", List.of()
@@ -569,11 +687,28 @@ public class MetadataService {
         return String.format(java.util.Locale.ROOT, "%04d-%02d-%02d", year, month, day);
     }
 
+    private String extractMangaUpdatesStatus(JsonNode result) {
+        String directStatus = result.path("status").asText("");
+        if (!directStatus.isBlank()) {
+            return directStatus;
+        }
+        String textStatus = result.path("status_text").asText("");
+        if (!textStatus.isBlank()) {
+            return textStatus;
+        }
+        String overallStatus = result.path("status").path("overall").asText("");
+        if (!overallStatus.isBlank()) {
+            return overallStatus;
+        }
+        return "";
+    }
+
     private Map<String, Object> normalizeAppliedMetadata(Map<String, Object> details) {
         return Map.of(
             "title", String.valueOf(details.getOrDefault("title", "")),
             "summary", String.valueOf(details.getOrDefault("summary", "")),
             "releaseLabel", String.valueOf(details.getOrDefault("releaseLabel", "")),
+            "status", String.valueOf(details.getOrDefault("status", "")),
             "author", String.valueOf(details.getOrDefault("author", "")),
             "aliases", details.getOrDefault("aliases", List.of()),
             "relations", details.getOrDefault("relations", List.of())
@@ -591,7 +726,31 @@ public class MetadataService {
 
     private JsonNode sendJson(HttpRequest request) throws IOException, InterruptedException {
         HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+        if (response.statusCode() >= 400) {
+            throw new IOException("Metadata provider returned HTTP " + response.statusCode() + ".");
+        }
         return objectMapper.readTree(response.body());
+    }
+
+    private Document sendHtml(HttpRequest request) throws IOException, InterruptedException {
+        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+        if (response.statusCode() >= 400) {
+            throw new IOException("Metadata provider returned HTTP " + response.statusCode() + ".");
+        }
+        return Jsoup.parse(response.body(), request.uri().toString());
+    }
+
+    private HttpRequest buildBrowserRequest(String url) {
+        return HttpRequest.newBuilder()
+            .uri(URI.create(url))
+            .timeout(Duration.ofSeconds(20))
+            .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+            .header("Accept-Language", "en-US,en;q=0.9")
+            .header("Cache-Control", "no-cache")
+            .header("Pragma", "no-cache")
+            .header("User-Agent", BROWSER_USER_AGENT)
+            .GET()
+            .build();
     }
 
     private boolean providerSupportsLibraryType(Map<String, Object> providerSettings, LibraryTitle title) {
@@ -641,8 +800,13 @@ public class MetadataService {
         };
     }
 
-    private String firstNonBlank(String primary, String fallback) {
-        return primary != null && !primary.isBlank() ? primary : (fallback == null ? "" : fallback);
+    private String firstNonBlank(String... values) {
+        for (String value : values) {
+            if (value != null && !value.isBlank()) {
+                return value.trim();
+            }
+        }
+        return "";
     }
 
     private String preferredLocalizedValue(JsonNode localizedNode, String fallback) {
@@ -661,5 +825,176 @@ public class MetadataService {
             }
         }
         return fallback;
+    }
+
+    private boolean isCloudflareChallenge(Document document) {
+        if (document == null) {
+            return false;
+        }
+        String title = normalizeString(document.title()).toLowerCase(Locale.ROOT);
+        return title.contains("just a moment")
+            || document.selectFirst("form#challenge-form") != null
+            || document.text().toLowerCase(Locale.ROOT).contains("enable javascript and cookies to continue");
+    }
+
+    private String normalizeAnimePlanetUrl(String value) {
+        String normalized = normalizeString(value);
+        if (normalized.endsWith("/")) {
+            return normalized.substring(0, normalized.length() - 1);
+        }
+        return normalized;
+    }
+
+    private String animePlanetSlug(String url) {
+        String normalized = normalizeAnimePlanetUrl(url);
+        if (normalized.isBlank()) {
+            return "";
+        }
+        try {
+            String[] parts = URI.create(normalized).getPath().split("/");
+            for (int index = 0; index < parts.length - 1; index++) {
+                if ("manga".equalsIgnoreCase(parts[index])) {
+                    return normalizeString(parts[index + 1]);
+                }
+            }
+        } catch (Exception ignored) {
+            return "";
+        }
+        return "";
+    }
+
+    private Map<String, String> readDefinitionMap(Document document) {
+        Map<String, String> definitions = new LinkedHashMap<>();
+        for (Element term : document.select("dt")) {
+            String key = normalizeDefinitionKey(term.text());
+            if (key.isBlank()) {
+                continue;
+            }
+            Element valueNode = term.nextElementSibling();
+            if (valueNode == null || !"dd".equalsIgnoreCase(valueNode.tagName())) {
+                continue;
+            }
+            String value = normalizeString(valueNode.text());
+            if (!value.isBlank() && !definitions.containsKey(key)) {
+                definitions.put(key, value);
+            }
+        }
+        return definitions;
+    }
+
+    private List<String> extractAnimePlanetAliases(Document document, Map<String, String> definitions) {
+        List<String> aliases = new ArrayList<>();
+        addAlias(aliases, definitions.get("alt titles"));
+        addAlias(aliases, definitions.get("alternate titles"));
+        addAlias(aliases, definitions.get("japanese title"));
+        addAlias(aliases, definitions.get("english title"));
+        addAlias(aliases, definitions.get("native title"));
+        for (Element chip : document.select(".aka, .alternateTitles li, .entryBar .tags li")) {
+            addAlias(aliases, chip.text());
+        }
+        return aliases.stream().distinct().filter((alias) -> !alias.isBlank()).toList();
+    }
+
+    private void addAlias(List<String> aliases, String rawValue) {
+        String normalized = normalizeString(rawValue);
+        if (normalized.isBlank()) {
+            return;
+        }
+        for (String part : normalized.split("\\s*(?:,|;|/|\\||\\n)\\s*")) {
+            String alias = normalizeString(part);
+            if (!alias.isBlank()) {
+                aliases.add(alias);
+            }
+        }
+    }
+
+    private String inferAnimePlanetType(Map<String, String> definitions) {
+        return normalizeScopeLabel(firstNonBlank(
+            definitions.get("type"),
+            definitions.get("format")
+        ));
+    }
+
+    private String inferAnimePlanetTypeFromDocument(Document document) {
+        for (Element chip : document.select(".tags li, .entryBar .tags a, .entryBar .tags span")) {
+            String value = normalizeScopeLabel(chip.text());
+            if (!value.isBlank()) {
+                return value;
+            }
+        }
+        return "";
+    }
+
+    private String normalizeScopeLabel(String value) {
+        String normalized = normalizeString(value).toLowerCase(Locale.ROOT);
+        if (normalized.contains("webtoon")) {
+            return "Webtoon";
+        }
+        if (normalized.contains("manhwa")) {
+            return "Manhwa";
+        }
+        if (normalized.contains("manhua")) {
+            return "Manhua";
+        }
+        if (normalized.contains("manga")) {
+            return "Manga";
+        }
+        return "";
+    }
+
+    private String normalizeDefinitionKey(String value) {
+        return normalizeString(value)
+            .toLowerCase(Locale.ROOT)
+            .replace(':', ' ')
+            .replaceAll("\\s+", " ")
+            .trim();
+    }
+
+    private String metaContent(Document document, String property) {
+        if (document == null) {
+            return "";
+        }
+        String escapedProperty = property.replace("\\", "\\\\").replace("\"", "\\\"");
+        Element meta = document.selectFirst("meta[property=\"" + escapedProperty + "\"], meta[name=\"" + escapedProperty + "\"]");
+        return meta == null ? "" : normalizeString(meta.attr("content"));
+    }
+
+    private String imageUrl(Element image) {
+        if (image == null) {
+            return "";
+        }
+        return firstNonBlank(
+            normalizeString(image.absUrl("data-src")),
+            normalizeString(image.absUrl("src")),
+            normalizeString(image.attr("data-src")),
+            normalizeString(image.attr("src"))
+        );
+    }
+
+    private String text(Element element) {
+        return element == null ? "" : normalizeString(element.text());
+    }
+
+    private String prettifySlug(String slug) {
+        String normalized = normalizeString(slug).replace('-', ' ').trim();
+        if (normalized.isBlank()) {
+            return "";
+        }
+        String[] parts = normalized.split("\\s+");
+        StringBuilder builder = new StringBuilder();
+        for (String part : parts) {
+            if (builder.length() > 0) {
+                builder.append(' ');
+            }
+            builder.append(Character.toUpperCase(part.charAt(0)));
+            if (part.length() > 1) {
+                builder.append(part.substring(1));
+            }
+        }
+        return builder.toString();
+    }
+
+    private String normalizeString(String value) {
+        return value == null ? "" : value.trim();
     }
 }

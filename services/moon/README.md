@@ -6,7 +6,9 @@ The user app is now installable as a same-origin PWA with a rolling recent-chapt
 The admin side now owns Raven VPN settings, Raven metadata provider order, and Oracle or LocalAI configuration while
 still proxying everything through Sage instead of sending the browser directly to internal services.
 Moon admin also owns the Raven download-provider settings so admins can decide which site-specific Raven scrapers are
-enabled as more providers land later.
+enabled as more providers land later. WeebCentral stays first by default, MangaDex is now available as a second normal
+download provider, and the Discord `downloadall` command remains intentionally pinned to WeebCentral for the
+configured owner account.
 Moon admin now also includes a dedicated Discord page at `/admin/discord` for guild workflow settings, slash-command
 role gates, onboarding template or channel management, and Portal runtime visibility without exposing Discord
 credentials in the browser.
@@ -30,11 +32,16 @@ download-ready match exists.
 Moon now renders those intake results one row per concrete download target instead of one row per metadata row, so
 duplicate metadata matches collapse cleanly while real edition targets such as plain vs colored remain visibly
 distinct.
+Moon admin settings now also surface Anime-Planet as a scrape-based metadata provider ahead of MangaUpdates so admins
+can keep lifecycle or alias enrichment on without relying only on API-backed sources.
 
 Admin routes follow the Arr-style operations model, including library, add/import, calendar, activity, wanted,
 requests, users, Discord, settings, and system sections under `/admin`.
 `/admin/library` now uses a denser Sonarr-inspired series index with live filtering, coverage bars, latest chapter,
 last release date, metadata state, and direct open or source actions.
+Each library row now opens a Sonarr-style admin title detail page at `/admin/library/<type>/<titleId>` with a
+backdrop hero, dense status and release stats, related requests, active or recent Raven task visibility, and a
+chapter table that keeps release dates and archive paths in one operational view.
 `/admin/mediamanagement` is now the dedicated Raven file-management page. It exposes a fallback naming profile plus
 per-type naming profiles for manga, manhwa, manhua, webtoon, comic, and OEL so admins can preview and save archive or
 page formats without digging through the broader settings surface.

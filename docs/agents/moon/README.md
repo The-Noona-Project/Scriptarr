@@ -4,6 +4,9 @@
 - User-facing library and reader flows live at `/`.
 - Admin moderation, health, metadata, and settings flows live at `/admin`.
 - Keep Raven VPN, Raven metadata, and Oracle or LocalAI controls behind Moon-owned admin routes.
+- Keep the Raven provider settings honest: WeebCentral first by default, MangaDex as a normal fallback download
+  provider, Anime-Planet as a scrape-based metadata provider ahead of MangaUpdates, and the owner-only Discord
+  `downloadall` command described as intentionally WeebCentral-only.
 - Keep Moon branding behind the admin settings flow. `moon.branding.siteName` is the brokered source of truth for user
   and admin headers, document titles, and PWA install metadata.
 - Moon source files should carry full JSDoc across exported functions, route modules, SPA controllers, and important internal helpers.
@@ -46,6 +49,9 @@
   availability, and the last meaningful runtime error should all be visible without forcing the admin to read logs.
 - `/admin/library` should stay dense and operational, closer to Sonarr's series index than to a marketing gallery.
   Favor sortable status, release, coverage, and path information over oversized cards.
+- `/admin/library/:type/:titleId` is the admin drill-down companion to that dense index. Keep it operational and
+  Sonarr-inspired: hero summary up top, then requests, Raven task state, and chapter-level release or archive detail
+  below instead of a reader-style consumer layout.
 - `/admin/mediamanagement` is the dedicated Raven naming surface. Keep one fallback naming profile plus per-type
   profiles for manga, manhwa, manhua, webtoon, comic, and OEL in sync with the brokered `raven.naming` payload.
 - `/admin/calendar` should consume real release entries, not just task history. Prefer chapter release dates captured

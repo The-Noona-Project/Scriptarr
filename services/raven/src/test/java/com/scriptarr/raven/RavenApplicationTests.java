@@ -41,10 +41,15 @@ class RavenApplicationTests {
         assertEquals("scriptarr-raven", payload.get("service"));
 
         List<Map<String, Object>> providers = (List<Map<String, Object>>) payload.get("metadataProviders");
-        assertEquals(5, providers.size());
+        assertEquals(6, providers.size());
         assertTrue(providers.stream().anyMatch(entry -> "mangadex".equals(entry.get("id")) && Boolean.TRUE.equals(entry.get("enabled"))));
+        assertTrue(providers.stream().anyMatch(entry -> "animeplanet".equals(entry.get("id")) && Boolean.TRUE.equals(entry.get("enabled"))));
         assertTrue(providers.stream().anyMatch(entry -> "mangaupdates".equals(entry.get("id"))));
         assertTrue(providers.stream().anyMatch(entry -> "mal".equals(entry.get("id")) && Boolean.FALSE.equals(entry.get("enabled"))));
+        List<Map<String, Object>> downloadProviders = (List<Map<String, Object>>) payload.get("downloadProviders");
+        assertEquals(2, downloadProviders.size());
+        assertTrue(downloadProviders.stream().anyMatch(entry -> "weebcentral".equals(entry.get("id")) && Boolean.TRUE.equals(entry.get("enabled"))));
+        assertTrue(downloadProviders.stream().anyMatch(entry -> "mangadex".equals(entry.get("id")) && Boolean.TRUE.equals(entry.get("enabled"))));
 
         Map<?, ?> vpn = (Map<?, ?>) payload.get("vpn");
         assertEquals(false, vpn.get("enabled"));

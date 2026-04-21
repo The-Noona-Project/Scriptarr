@@ -79,10 +79,15 @@ export const bootAdminApp = (root) => {
    * Navigate to a new route inside the admin SPA.
    *
    * @param {string} path
+   * @param {{replace?: boolean}} [options]
    * @returns {void}
    */
-  const navigate = (path) => {
-    window.history.pushState({}, "", path);
+  const navigate = (path, options = {}) => {
+    if (options.replace) {
+      window.history.replaceState({}, "", path);
+    } else {
+      window.history.pushState({}, "", path);
+    }
     void render();
   };
 

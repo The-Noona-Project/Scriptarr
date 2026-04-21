@@ -54,7 +54,7 @@ class DownloaderServiceBulkQueueTest {
             logger
         );
 
-        BulkQueueDownloadResult result = service.bulkQueueDownload("manga", false, "a", "owner-1");
+        BulkQueueDownloadResult result = service.bulkQueueDownload("weebcentral", "manga", false, "a", "owner-1");
 
         assertEquals(BulkQueueDownloadResult.STATUS_QUEUED, result.status());
         assertEquals(2, result.matchedCount());
@@ -85,7 +85,69 @@ class DownloaderServiceBulkQueueTest {
             logger
         );
 
-        BulkQueueDownloadResult result = service.bulkQueueDownload("", null, "", "owner-1");
+        BulkQueueDownloadResult result = service.bulkQueueDownload("", "", null, "", "owner-1");
+
+        assertEquals(BulkQueueDownloadResult.STATUS_INVALID_REQUEST, result.status());
+        assertEquals(0, service.requests.size());
+    }
+
+    /**
+     * Verify Raven rejects non-WeebCentral provider ids for the Discord bulk
+     * queue path even if other providers are enabled.
+     */
+    @Test
+    void bulkQueueRejectsNonWeebCentralProviders() {
+        FakeRavenBrokerClient brokerClient = new FakeRavenBrokerClient();
+        brokerClient.setSetting("raven.download.providers", Map.of(
+            "providers", List.of(
+                Map.of("id", "weebcentral", "enabled", true, "priority", 10),
+                Map.of("id", "mangadex", "enabled", true, "priority", 20)
+            )
+        ));
+        TestLogger logger = new TestLogger();
+        RavenSettingsService settingsService = new RavenSettingsService(brokerClient, logger, List.of());
+        DownloadProviderRegistry providerRegistry = new DownloadProviderRegistry(List.of(new FakeDownloadProvider()), settingsService);
+        RecordingDownloaderService service = new RecordingDownloaderService(
+            providerRegistry,
+            mock(DownloadIntakeService.class),
+            mock(MetadataService.class),
+            brokerClient,
+            settingsService,
+            logger
+        );
+
+        BulkQueueDownloadResult result = service.bulkQueueDownload("mangadex", "manga", false, "a", "owner-1");
+
+        assertEquals(BulkQueueDownloadResult.STATUS_INVALID_REQUEST, result.status());
+        assertEquals(0, service.requests.size());
+    }
+
+    /**
+     * Verify Raven fails fast when the owner-only bulk queue path targets
+     * WeebCentral but that provider is disabled in settings.
+     */
+    @Test
+    void bulkQueueRejectsDisabledWeebCentral() {
+        FakeRavenBrokerClient brokerClient = new FakeRavenBrokerClient();
+        brokerClient.setSetting("raven.download.providers", Map.of(
+            "providers", List.of(
+                Map.of("id", "weebcentral", "enabled", false, "priority", 10),
+                Map.of("id", "mangadex", "enabled", true, "priority", 20)
+            )
+        ));
+        TestLogger logger = new TestLogger();
+        RavenSettingsService settingsService = new RavenSettingsService(brokerClient, logger, List.of());
+        DownloadProviderRegistry providerRegistry = new DownloadProviderRegistry(List.of(new FakeDownloadProvider()), settingsService);
+        RecordingDownloaderService service = new RecordingDownloaderService(
+            providerRegistry,
+            mock(DownloadIntakeService.class),
+            mock(MetadataService.class),
+            brokerClient,
+            settingsService,
+            logger
+        );
+
+        BulkQueueDownloadResult result = service.bulkQueueDownload("weebcentral", "manga", false, "a", "owner-1");
 
         assertEquals(BulkQueueDownloadResult.STATUS_INVALID_REQUEST, result.status());
         assertEquals(0, service.requests.size());
@@ -120,7 +182,7 @@ class DownloaderServiceBulkQueueTest {
             logger
         );
 
-        BulkQueueDownloadResult result = service.bulkQueueDownload("manga", false, "a", "owner-1");
+        BulkQueueDownloadResult result = service.bulkQueueDownload("weebcentral", "manga", false, "a", "owner-1");
 
         assertEquals(BulkQueueDownloadResult.STATUS_PARTIAL, result.status());
         assertEquals(0, result.queuedCount());
@@ -157,7 +219,7 @@ class DownloaderServiceBulkQueueTest {
             logger
         );
 
-        BulkQueueDownloadResult result = service.bulkQueueDownload("manga", false, "a", "owner-1");
+        BulkQueueDownloadResult result = service.bulkQueueDownload("weebcentral", "manga", false, "a", "owner-1");
 
         assertEquals(BulkQueueDownloadResult.STATUS_PARTIAL, result.status());
         assertEquals(0, result.queuedCount());

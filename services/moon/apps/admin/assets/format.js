@@ -68,11 +68,11 @@ export const statusTone = (status) => {
     return "good";
   }
 
-  if (["pending", "queued", "watching", "warning", "degraded", "update available", "available"].includes(normalized)) {
+  if (["pending", "queued", "watching", "warning", "degraded", "update available", "available", "hiatus", "upcoming"].includes(normalized)) {
     return "warn";
   }
 
-  if (["failed", "denied", "blocked", "disabled", "offline", "error"].includes(normalized)) {
+  if (["failed", "denied", "blocked", "disabled", "offline", "error", "cancelled", "canceled"].includes(normalized)) {
     return "bad";
   }
 

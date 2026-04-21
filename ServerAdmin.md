@@ -181,8 +181,9 @@ temporarily unavailable.
 - manage the Discord bot workflow in `/admin/discord`, including guild id, onboarding channel or template, DM
   superuser id, and per-command role mapping
 - configure Raven VPN credentials and region for PIA/OpenVPN-backed downloads
-- review Raven metadata providers, with MangaDex enabled by default
-- review Raven download providers, with WeebCentral enabled by default
+- review Raven metadata providers, with MangaDex enabled by default, Anime-Planet enabled ahead of MangaUpdates, and
+  AniList, MyAnimeList, or ComicVine available for wider coverage
+- review Raven download providers, with WeebCentral first by default and MangaDex available as a second normal source
 - set the Moon site name branding that powers headers, document titles, and install metadata
 - manage the trusted public Moon automation API from `/admin/system/api`, including enable state, admin key rotation,
   and Swagger/OpenAPI links
@@ -216,6 +217,7 @@ installed like an app and keep a rolling cache of recently opened chapters on th
 Common admin routes:
 
 - `/admin/library`
+- `/admin/library/<type>/<titleId>`
 - `/admin/add`
 - `/admin/import`
 - `/admin/calendar`
@@ -229,6 +231,9 @@ Common admin routes:
 - `/admin/system/*`
 
 Legacy Moon paths such as `/downloads`, `/settings`, and `/setupwizard` now redirect into the new admin routes.
+The dense `/admin/library` index now links into a Sonarr-style admin title detail page where you can inspect one title
+at a time with its cover, backdrop, lifecycle status, source and metadata identity, related requests, active Raven
+tasks, and per-chapter release or archive details.
 
 ## Discord Bot Workflow
 
@@ -254,6 +259,8 @@ and only checks the configured DM superuser id.
 `downloadall` now bulk-browses the provider first, then metadata-resolves each matched title before queueing it. Only
 titles with one confident metadata match are queued. Portal's DM summary now breaks skipped titles out as already
 active, no-metadata, ambiguous-metadata, or failed instead of silently queueing metadata-less library entries.
+That owner-only command is intentionally pinned to WeebCentral. If WeebCentral is disabled in Raven settings,
+`downloadall` fails instead of falling back to MangaDex or another provider.
 Portal also sends requester DMs when a moderated request is approved, denied, or finishes downloading, and dedupes
 those notifications by request id plus decision state so retries and restarts do not spam Discord.
 Portal now prefers a minimal Discord runtime when privileged intents are unavailable. Slash commands and DM handling

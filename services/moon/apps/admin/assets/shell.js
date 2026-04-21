@@ -17,6 +17,7 @@ import {getAdminNavigationGroups} from "./routes.js";
  */
 export const renderAdminShell = ({route, content, user, branding, flash, loginUrl, bootstrap}) => {
   const groups = getAdminNavigationGroups();
+  const activeNavId = route?.id === "library-title" ? "library" : route?.id;
   const identityName = user?.username || "Not signed in";
   const authSummary = user
     ? `
@@ -59,7 +60,7 @@ export const renderAdminShell = ({route, content, user, branding, flash, loginUr
             <section class="nav-group">
               <div class="nav-label">${escapeHtml(group.label)}</div>
               ${group.routes.map((navRoute) => `
-                <a class="nav-link ${navRoute.path === route.path ? "is-active" : ""}" href="${navRoute.path}" data-link>
+                <a class="nav-link ${navRoute.id === activeNavId ? "is-active" : ""}" href="${navRoute.path}" data-link>
                   <span>${escapeHtml(navRoute.navLabel)}</span>
                 </a>
               `).join("")}

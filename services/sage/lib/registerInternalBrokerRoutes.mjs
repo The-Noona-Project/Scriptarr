@@ -247,6 +247,17 @@ const parseRequestNotificationId = (value) => {
   };
 };
 
+const validatePortalBulkQueueProvider = (providerId) => {
+  const normalizedProviderId = normalizeString(providerId).toLowerCase();
+  if (!normalizedProviderId) {
+    return "providerId is required.";
+  }
+  if (normalizedProviderId !== "weebcentral") {
+    return "Portal bulk queue is locked to the WeebCentral provider.";
+  }
+  return "";
+};
+
 const buildPortalStatusSummary = async ({config, vaultClient, serviceJson}) => {
   const [warden, portal, oracle, raven, requests, tasks, users] = await Promise.all([
     safeServiceJson(serviceJson(config.wardenBaseUrl, "/health")),
@@ -926,9 +937,15 @@ export const registerInternalBrokerRoutes = (app, {
   }));
 
   app.post("/api/internal/portal/raven/bulk-queue", withService(requireService, ["scriptarr-portal"], async (req, res) => {
+    const providerError = validatePortalBulkQueueProvider(req.body?.providerId);
+    if (providerError) {
+      res.status(400).json({error: providerError});
+      return;
+    }
     await proxyResult(res, serviceJson(config.ravenBaseUrl, "/v1/downloads/bulk-queue", {
       method: "POST",
       body: {
+        providerId: normalizeString(req.body?.providerId),
         type: normalizeString(req.body?.type),
         nsfw: req.body?.nsfw,
         titlePrefix: normalizeString(req.body?.titlePrefix),
@@ -938,9 +955,15 @@ export const registerInternalBrokerRoutes = (app, {
   }));
 
   app.post("/api/internal/portal/downloads/bulk-queue", withService(requireService, ["scriptarr-portal"], async (req, res) => {
+    const providerError = validatePortalBulkQueueProvider(req.body?.providerId);
+    if (providerError) {
+      res.status(400).json({error: providerError});
+      return;
+    }
     await proxyResult(res, serviceJson(config.ravenBaseUrl, "/v1/downloads/bulk-queue", {
       method: "POST",
       body: {
+        providerId: normalizeString(req.body?.providerId),
         type: normalizeString(req.body?.type),
         nsfw: req.body?.nsfw,
         titlePrefix: normalizeString(req.body?.titlePrefix),

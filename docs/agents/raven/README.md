@@ -4,8 +4,8 @@
 - Raven owns downloader, library, metadata, PIA/OpenVPN download support, and provider orchestration.
 - Raven must not call Vault directly anymore. Shared settings, secrets, titles, chapters, metadata matches, and task
   snapshots all flow through Sage's internal broker routes.
-- Launch defaults keep MangaDex enabled first, with AniList, MangaUpdates, MyAnimeList, and ComicVine following the
-  configured priority and credential gates.
+- Launch defaults keep MangaDex enabled first, Anime-Planet enabled ahead of MangaUpdates for scrape-based enrichment,
+  and AniList, MyAnimeList, and ComicVine following the configured priority and credential gates.
 - Download-provider selection is now explicit. Raven intake should search enabled metadata providers first, expand
   aliases from those matches, then run enabled site-specific download providers in registry order.
 - Raven intake results should group by concrete `providerId + titleUrl` identity. Metadata variants that hit the same
@@ -26,8 +26,11 @@
 - `raven.naming` is now profile-based by library type. Preserve the fallback profile plus the per-type profiles for
   manga, manhwa, manhua, webtoon, comic, and OEL when changing naming or parser code.
 - The brokered `raven.download.providers` setting controls which download providers are enabled and their priority.
-  This release only registers WeebCentral, but new sites should arrive as discrete provider implementations under the
-  registry contract instead of by growing one generic scraper class.
+  WeebCentral should stay first by default, MangaDex is now a second normal provider option, and future sites should
+  still arrive as discrete provider implementations under the registry contract instead of by growing one generic
+  scraper class.
+- `/downloadall` remains a special case even with multiple providers. That owner-only Discord bulk path must stay
+  pinned to WeebCentral and fail fast if WeebCentral is disabled instead of browsing MangaDex.
 - New Raven catalog entries should use opaque durable ids instead of title slugs. Treat title ids as opaque route
   parameters everywhere outside Raven's internals.
 - Download tasks should only reach `100%` after file promotion and brokered catalog persistence both succeed. When a
@@ -36,6 +39,9 @@
   duplicate restorable tasks so Moon queue views only see one logical download.
 - Preserve and enrich release-date data when Raven can observe it. Chapter release dates from provider scrapes and
   title-level release labels from metadata providers now feed Moon's dense admin library and calendar views.
+- Preserve lifecycle completion data too. Provider `status` values such as completed, finished, ongoing, hiatus, or
+  cancelled should be normalized once inside Raven so Moon admin can trust one canonical title status across its dense
+  library, title-detail, and calendar views.
 - Raven parity notes from the old Noona services:
   - keep WeebCentral search, title detail scrape, chapter scrape, and page image resolution
   - keep download task persistence across restarts

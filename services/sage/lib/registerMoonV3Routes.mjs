@@ -139,7 +139,9 @@ const toChapterSummary = (chapter = {}) => ({
   chapterNumber: normalizeString(chapter.chapterNumber),
   pageCount: Number.parseInt(String(chapter.pageCount || 0), 10) || 0,
   releaseDate: normalizeString(chapter.releaseDate),
-  available: chapter.available !== false
+  available: chapter.available !== false,
+  archivePath: normalizeString(chapter.archivePath),
+  sourceUrl: normalizeString(chapter.sourceUrl)
 });
 
 const toRequestSummary = (request = {}, userIndex = new Map()) => {
@@ -327,6 +329,14 @@ export const registerMoonV3Routes = (app, {
     return normalizeArray(payload?.titles).map(toTitleSummary);
   };
 
+  const loadLibraryTitle = async (titleId) => {
+    const result = await serviceJson(config.ravenBaseUrl, `/v1/library/${encodeURIComponent(titleId)}`);
+    if (!result.ok) {
+      return null;
+    }
+    return toTitleSummary(result.payload);
+  };
+
   const loadRequests = async () => {
     const [userIndex, requests] = await Promise.all([
       loadUserIndex(),
@@ -425,6 +435,19 @@ export const registerMoonV3Routes = (app, {
     );
   };
 
+  const requestMatchesTitle = (request, title) => (
+    normalizeString(request.title) === normalizeString(title.title)
+    || normalizeString(request.details?.selectedDownload?.titleUrl) === normalizeString(title.sourceUrl)
+    || normalizeString(request.details?.selectedMetadata?.title) === normalizeString(title.title)
+  );
+
+  const taskMatchesTitle = (task, title, requestIds = new Set()) => (
+    requestIds.has(normalizeString(task.requestId))
+    || normalizeString(task.titleId) === normalizeString(title.id)
+    || normalizeString(task.titleUrl) === normalizeString(title.sourceUrl)
+    || normalizeString(task.titleName) === normalizeString(title.title)
+  );
+
   const loadRequestGuardState = async () => {
     const [libraryTitles, requests, tasks] = await Promise.all([
       loadLibrary(),
@@ -521,6 +544,34 @@ export const registerMoonV3Routes = (app, {
 
   app.get("/api/moon-v3/admin/library", requireLibraryRead(async (_req, res) => {
     res.json({titles: await loadLibrary()});
+  }));
+
+  app.get("/api/moon-v3/admin/library/:titleId", requireLibraryRead(async (req, res) => {
+    const [title, requests, tasks] = await Promise.all([
+      loadLibraryTitle(req.params.titleId),
+      loadRequests(),
+      loadTasks()
+    ]);
+    if (!title?.id) {
+      res.status(404).json({error: "Title not found."});
+      return;
+    }
+
+    const relatedRequests = requests.filter((request) => requestMatchesTitle(request, title));
+    const relatedRequestIds = new Set(relatedRequests.map((request) => normalizeString(request.id)).filter(Boolean));
+    const relatedTasks = tasks.filter((task) => taskMatchesTitle(task, title, relatedRequestIds));
+
+    res.json({
+      title,
+      requests: relatedRequests.sort((left, right) => Date.parse(right.updatedAt || "") - Date.parse(left.updatedAt || "")),
+      activeTasks: relatedTasks
+        .filter((task) => task.status === "queued" || task.status === "running")
+        .sort((left, right) => Date.parse(right.updatedAt || "") - Date.parse(left.updatedAt || "")),
+      recentTasks: relatedTasks
+        .filter((task) => task.status === "completed" || task.status === "failed")
+        .sort((left, right) => Date.parse(right.updatedAt || "") - Date.parse(left.updatedAt || ""))
+        .slice(0, 8)
+    });
   }));
 
   app.get("/api/moon-v3/admin/add/search", requireLibraryRead(async (req, res) => {
@@ -644,6 +695,7 @@ export const registerMoonV3Routes = (app, {
         chapterLabel: chapter.label,
         chapterNumber: chapter.chapterNumber || "",
         pageCount: chapter.pageCount || 0,
+        titleStatus: title.status || "active",
         releaseDate: chapter.releaseDate,
         available: chapter.available
       }))

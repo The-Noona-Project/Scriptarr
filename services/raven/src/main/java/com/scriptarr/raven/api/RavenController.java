@@ -229,6 +229,7 @@ public class RavenController {
     @PostMapping("/v1/downloads/bulk-queue")
     public ResponseEntity<BulkQueueDownloadResult> bulkQueueDownloads(@RequestBody Map<String, Object> body) {
         BulkQueueDownloadResult result = downloaderService.bulkQueueDownload(
+            String.valueOf(body.getOrDefault("providerId", "")).trim(),
             String.valueOf(body.getOrDefault("type", "")).trim(),
             body.get("nsfw") instanceof Boolean nsfw ? nsfw : null,
             String.valueOf(body.getOrDefault("titlePrefix", "")).trim(),

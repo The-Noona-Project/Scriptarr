@@ -235,6 +235,48 @@ class LibraryServiceTest {
     }
 
     /**
+     * Verify source download lifecycle labels are normalized into the shared
+     * Scriptarr title status vocabulary.
+     *
+     * @param tempDir temporary test directory
+     * @throws Exception when the archive fixture cannot be prepared
+     */
+    @Test
+    void recordDownloadedTitleNormalizesLifecycleStatus(@TempDir Path tempDir) throws Exception {
+        FakeRavenBrokerClient brokerClient = new FakeRavenBrokerClient();
+        ScriptarrLogger logger = mock(ScriptarrLogger.class);
+        when(logger.getDownloadsRoot()).thenReturn(tempDir);
+        LibraryService service = new LibraryService(brokerClient, new RavenSettingsService(brokerClient, logger, List.of()), logger);
+
+        Path downloadRoot = tempDir.resolve("downloaded").resolve("manga").resolve("Bakuman");
+        Files.createDirectories(downloadRoot);
+        Path archivePath = writeArchive(downloadRoot.resolve("Bakuman ch001.cbz"));
+
+        LibraryTitle persisted = service.recordDownloadedTitle(
+            "Bakuman",
+            "Manga",
+            "https://weebcentral.com/series/bakuman",
+            "",
+            new TitleDetails(
+                "Creators chase serialization success.",
+                "Manga",
+                List.of(),
+                "Finished",
+                "2008",
+                false,
+                true,
+                true,
+                List.of()
+            ),
+            List.of(new LibraryChapter("", "Chapter 1", "1", 10, null, true, archivePath.toString(), "")),
+            downloadRoot,
+            downloadRoot
+        );
+
+        assertEquals("completed", persisted.status());
+    }
+
+    /**
      * Verify Raven collapses duplicate title records that point at the same
      * download root and keeps the richer metadata-backed payload.
      */
@@ -300,6 +342,7 @@ class LibraryServiceTest {
         assertEquals(1, titles.size());
         LibraryTitle canonical = titles.getFirst();
         assertEquals("newer-id", canonical.id());
+        assertEquals("completed", canonical.status());
         assertEquals("https://images.example/absolute-duo.jpg", canonical.coverUrl());
         assertEquals("Metadata-backed summary.", canonical.summary());
         assertEquals("https://weebcentral.com/series/absolute-duo", canonical.sourceUrl());

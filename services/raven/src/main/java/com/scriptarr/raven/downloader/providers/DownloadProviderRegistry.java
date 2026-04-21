@@ -6,6 +6,7 @@ import org.springframework.stereotype.Service;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
+import java.util.Comparator;
 
 /**
  * Registry and settings-aware selector for Raven download providers.
@@ -34,6 +35,7 @@ public class DownloadProviderRegistry {
     public List<DownloadProvider> enabledProviders() {
         return providers.stream()
             .filter((provider) -> settingsService.isDownloadProviderEnabled(provider.id()))
+            .sorted(Comparator.comparingInt((DownloadProvider provider) -> settingsService.getDownloadProviderPriority(provider.id())))
             .toList();
     }
 

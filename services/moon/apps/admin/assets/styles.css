@@ -588,6 +588,151 @@ button {
   gap: 8px;
 }
 
+.library-detail-hero {
+  position: relative;
+  overflow: hidden;
+}
+
+.library-detail-backdrop {
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(90deg, rgba(8, 12, 16, 0.96), rgba(8, 12, 16, 0.72) 46%, rgba(8, 12, 16, 0.9)),
+    radial-gradient(circle at top right, color-mix(in srgb, var(--detail-accent) 34%, transparent), transparent 56%),
+    var(--detail-backdrop) center/cover no-repeat;
+  filter: saturate(0.9) blur(0);
+  opacity: 0.92;
+}
+
+.library-detail-hero-inner {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1.8fr) minmax(220px, 0.7fr);
+  gap: 24px;
+  align-items: start;
+}
+
+.library-detail-poster-shell {
+  width: 210px;
+}
+
+.library-detail-poster,
+.library-detail-poster-fallback {
+  width: 100%;
+  height: 312px;
+  border-radius: 22px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow: 0 28px 42px rgba(0, 0, 0, 0.32);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.library-detail-poster {
+  object-fit: cover;
+}
+
+.library-detail-copy {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
+.library-detail-copy h2 {
+  margin: 0;
+  font-size: clamp(2.4rem, 4vw, 3.6rem);
+}
+
+.library-detail-copy p {
+  margin: 0;
+  color: rgba(238, 243, 249, 0.82);
+  line-height: 1.6;
+}
+
+.library-detail-badges,
+.library-detail-actions,
+.library-detail-meta-grid,
+.detail-stack-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.library-detail-stats {
+  display: grid;
+  gap: 12px;
+}
+
+.library-detail-stat,
+.library-detail-meta-line,
+.detail-stack-card {
+  padding: 14px 16px;
+  border-radius: 18px;
+  border: 1px solid var(--admin-line);
+  background: rgba(14, 20, 27, 0.82);
+}
+
+.library-detail-stat span,
+.library-detail-meta-line span {
+  display: block;
+  color: var(--admin-muted);
+  font-size: 0.75rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+.library-detail-stat strong,
+.library-detail-meta-line strong {
+  display: block;
+  margin-top: 8px;
+  color: var(--admin-ink);
+}
+
+.library-detail-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.detail-subsection {
+  display: grid;
+  gap: 12px;
+}
+
+.detail-subsection h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.detail-stack-list {
+  display: grid;
+  gap: 10px;
+}
+
+.detail-stack-card {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.detail-stack-card strong,
+.detail-chapter-copy strong {
+  display: block;
+}
+
+.detail-stack-card span,
+.detail-chapter-copy span {
+  color: var(--admin-muted);
+}
+
+.detail-table-wrap {
+  overflow-x: auto;
+}
+
+.detail-chapter-copy {
+  display: grid;
+  gap: 6px;
+}
+
 .panel-subsection {
   display: grid;
   gap: 16px;
@@ -964,6 +1109,7 @@ button {
 }
 
 .calendar-entry-copy span,
+.calendar-entry-copy small,
 .calendar-overflow-note,
 .calendar-empty-note,
 .agenda-day-header span,
@@ -1090,7 +1236,10 @@ button {
   .calendar-nav,
   .calendar-toolbar-controls,
   .agenda-entry-head,
-  .agenda-entry-links {
+  .agenda-entry-links,
+  .library-detail-actions,
+  .detail-stack-card,
+  .detail-stack-meta {
     flex-direction: column;
   }
 
@@ -1104,5 +1253,14 @@ button {
 
   .admin-calendar-cell {
     min-height: 0;
+  }
+
+  .library-detail-hero-inner,
+  .library-detail-meta-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .library-detail-poster-shell {
+    width: min(240px, 100%);
   }
 }
