@@ -7,6 +7,7 @@ import {registerLegacyApiRoutes} from "./registerLegacyApiRoutes.mjs";
 import {registerMoonV3ProxyRoutes} from "./registerMoonV3ProxyRoutes.mjs";
 import {registerPageRoutes} from "./registerPageRoutes.mjs";
 import {registerPublicApiRoutes} from "./registerPublicApiRoutes.mjs";
+import {createUserNextRuntime} from "./createUserNextRuntime.mjs";
 
 /**
  * Build the Scriptarr Moon HTTP application.
@@ -25,6 +26,7 @@ import {registerPublicApiRoutes} from "./registerPublicApiRoutes.mjs";
 export const createMoonApp = async ({logger = createLogger("MOON")} = {}) => {
   const config = resolveMoonConfig();
   const app = express();
+  const userNextRuntime = await createUserNextRuntime({logger});
 
   app.use(express.json());
 
@@ -48,7 +50,7 @@ export const createMoonApp = async ({logger = createLogger("MOON")} = {}) => {
   registerLegacyApiRoutes(app, {config, getSessionToken});
   registerMoonV3ProxyRoutes(app, {config, getSessionToken});
   registerPublicApiRoutes(app, {config});
-  registerPageRoutes(app, {config, getSessionToken});
+  registerPageRoutes(app, {config, getSessionToken, userNextRuntime});
 
   logger.info("Moon app initialized.", {
     sageBaseUrl: config.sageBaseUrl

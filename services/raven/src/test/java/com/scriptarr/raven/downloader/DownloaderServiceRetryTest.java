@@ -83,6 +83,7 @@ class DownloaderServiceRetryTest {
             "",
             Map.of(),
             Map.of(),
+            "",
             "normal"
         ));
 
@@ -116,6 +117,7 @@ class DownloaderServiceRetryTest {
             "",
             Map.of(),
             Map.of(),
+            "",
             "normal"
         ));
 
@@ -162,6 +164,7 @@ class DownloaderServiceRetryTest {
                 )
             ),
             Map.of(),
+            "",
             "normal"
         ));
 

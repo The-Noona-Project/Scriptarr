@@ -31,6 +31,7 @@
   - `/reader/:type/:titleId/:chapterId`
   - `/myrequests`
   - `/following`
+  - `/profile`
 - The old untyped `/title/:id` and `/reader/:titleId/:chapterId` paths are compatibility shims only. New Moon links
   should emit the typed canonical paths.
 - Moon stays responsible for browser-safe proxying into Sage. Browsers should not call Raven, Warden, Vault, Portal, or Oracle directly.
@@ -42,8 +43,15 @@
   without relying on manual hard refreshes.
 - Keep the user app installable. `manifest.webmanifest` and `/service-worker.js` are Moon-owned routes, and the
   service worker should cache the app shell plus only a small rolling set of recent reader chapters.
-- Reader preferences are now type-aware. Webtoon defaults should stay vertical, other types should stay paged, and user
-  overrides should not bleed across title types.
+- The user app now runs as an embedded Next.js App Router program. Preserve the existing public Moon routes and
+  same-origin APIs while keeping the Once UI shell, single-row megamenu navigation, minimal avatar dropdown,
+  `/profile` route for StylePanel or install actions, and simple footer inside Moon's runtime instead of bypassing
+  Moon.
+- The user home route should stay cover-led and shelf-based, not hero-heavy. Favor a personalized "Your Bookshelf"
+  continue-reading scroller first, then recent-by-type shelves and tag-driven shelves built from the reader's saved
+  progress history.
+- Reader preferences are now centered on the new immersive reader. Infinite scroll is the default mode, paged mode is
+  the secondary option, and progress, bookmarks, and typed route syncing should keep working even as the shell evolves.
 - `/admin/system/updates` is an actionable Moon surface that checks or starts managed-service update jobs through Sage.
 - `/admin/discord` should surface Portal capability state honestly: command runtime, command sync, onboarding
   availability, and the last meaningful runtime error should all be visible without forcing the admin to read logs.
@@ -52,6 +60,9 @@
 - `/admin/library/:type/:titleId` is the admin drill-down companion to that dense index. Keep it operational and
   Sonarr-inspired: hero summary up top, then requests, Raven task state, and chapter-level release or archive detail
   below instead of a reader-style consumer layout.
+- That admin title drill-down now also owns the source-repair UX. Keep alternate concrete provider targets, coverage
+  previews, warning chips, and the safe replacement queue action behind Moon -> Sage -> Raven instead of bypassing the
+  broker or exposing destructive delete-first flows in the browser.
 - `/admin/mediamanagement` is the dedicated Raven naming surface. Keep one fallback naming profile plus per-type
   profiles for manga, manhwa, manhua, webtoon, comic, and OEL in sync with the brokered `raven.naming` payload.
 - `/admin/calendar` should consume real release entries, not just task history. Prefer chapter release dates captured

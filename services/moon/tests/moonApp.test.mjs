@@ -269,18 +269,20 @@ test("moon serves branded split entry documents, typed routes, PWA assets, and M
   const server = app.listen(0);
   const baseUrl = `http://127.0.0.1:${server.address().port}`;
 
-  const [userPageResponse, adminPageResponse, libraryRouteResponse, titleRouteResponse, readerRouteResponse] = await Promise.all([
+  const [userPageResponse, adminPageResponse, libraryRouteResponse, titleRouteResponse, readerRouteResponse, profileRouteResponse] = await Promise.all([
     fetch(`${baseUrl}/`),
     fetch(`${baseUrl}/admin`),
     fetch(`${baseUrl}/library/webtoon`),
     fetch(`${baseUrl}/title/webtoon/dan-da-dan`),
-    fetch(`${baseUrl}/reader/webtoon/dan-da-dan/chapter-1`)
+    fetch(`${baseUrl}/reader/webtoon/dan-da-dan/chapter-1`),
+    fetch(`${baseUrl}/profile`)
   ]);
 
   const userPage = await userPageResponse.text();
   const adminPage = await adminPageResponse.text();
 
   assert.match(userPage, /Pax Library/);
+  assert.doesNotMatch(userPage, /Scriptarr Moon/);
   assert.match(adminPage, /Pax Library Admin/);
   assert.match(userPage, /\/user-assets\/styles\.css\?v=/);
   assert.match(userPage, /\/user-assets\/app\.js\?v=/);
@@ -291,9 +293,11 @@ test("moon serves branded split entry documents, typed routes, PWA assets, and M
   assert.equal(libraryRouteResponse.headers.get("cache-control"), "no-store");
   assert.equal(titleRouteResponse.headers.get("cache-control"), "no-store");
   assert.equal(readerRouteResponse.headers.get("cache-control"), "no-store");
+  assert.equal(profileRouteResponse.headers.get("cache-control"), "no-store");
   assert.match(await libraryRouteResponse.text(), /manifest\.webmanifest/);
   assert.match(await titleRouteResponse.text(), /manifest\.webmanifest/);
   assert.match(await readerRouteResponse.text(), /manifest\.webmanifest/);
+  assert.match(await profileRouteResponse.text(), /manifest\.webmanifest/);
 
   const adminAppResponse = await fetch(`${baseUrl}/admin-assets/app.js`);
   assert.equal(adminAppResponse.headers.get("cache-control"), "no-store");
@@ -424,10 +428,20 @@ test("moon serves branded split entry documents, typed routes, PWA assets, and M
     titles: [{id: "dan-da-dan", title: "Dandadan", libraryTypeSlug: "webtoon", libraryTypeLabel: "Webtoon"}]
   });
 
+  const libraryAliasResponse = await fetch(`${baseUrl}/api/moon-v3/user/library`);
+  assert.equal(libraryAliasResponse.status, 200);
+  assert.deepEqual(await libraryAliasResponse.json(), {
+    titles: [{id: "dan-da-dan", title: "Dandadan", libraryTypeSlug: "webtoon", libraryTypeLabel: "Webtoon"}]
+  });
+
   const pageResponse = await fetch(`${baseUrl}/api/moon/v3/user/reader/title/dan-da-dan/chapter/chapter-1/page/0`);
   assert.equal(pageResponse.status, 200);
   assert.match(pageResponse.headers.get("content-type") || "", /image\/svg\+xml/);
   assert.match(await pageResponse.text(), /reader-page/);
+
+  const missingApiResponse = await fetch(`${baseUrl}/api/not-a-real-route`);
+  assert.equal(missingApiResponse.status, 404);
+  assert.deepEqual(await missingApiResponse.json(), {error: "Not found"});
 
   const redirectResponse = await fetch(`${baseUrl}/downloads`, {redirect: "manual"});
   assert.equal(redirectResponse.status, 302);
@@ -494,6 +508,34 @@ test("moon redirects signed-in non-admin sessions away from admin while allowing
 
   const memberAuthLookups = requests.filter((entry) => entry.url === "/api/auth/status").length;
   assert.ok(memberAuthLookups >= 2);
+
+  await closeServer(server);
+  await closeServer(sageStub);
+  process.chdir(cwd);
+});
+
+test("moon clears the local session cookie on logout", async () => {
+  const cwd = process.cwd();
+  process.chdir(path.join(path.dirname(fileURLToPath(import.meta.url)), ".."));
+
+  const sageStub = await createSageStub();
+  sageStub.listen(0);
+  const sagePort = sageStub.address().port;
+  process.env.SCRIPTARR_SAGE_BASE_URL = `http://127.0.0.1:${sagePort}`;
+
+  const {app} = await createMoonApp();
+  const server = app.listen(0);
+  const baseUrl = `http://127.0.0.1:${server.address().port}`;
+
+  const response = await fetch(`${baseUrl}/api/moon/auth/logout`, {
+    method: "POST",
+    headers: {cookie: "scriptarr_session=member-token"}
+  });
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {ok: true});
+  assert.match(response.headers.get("set-cookie") || "", /scriptarr_session=/);
+  assert.match(response.headers.get("set-cookie") || "", /Max-Age=0/);
 
   await closeServer(server);
   await closeServer(sageStub);

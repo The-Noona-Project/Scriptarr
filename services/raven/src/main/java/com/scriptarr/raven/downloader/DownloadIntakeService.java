@@ -3,9 +3,11 @@ package com.scriptarr.raven.downloader;
 import com.scriptarr.raven.downloader.providers.DownloadProvider;
 import com.scriptarr.raven.downloader.providers.DownloadProviderRegistry;
 import com.scriptarr.raven.library.LibraryNaming;
+import com.scriptarr.raven.library.LibraryTitle;
 import com.scriptarr.raven.metadata.MetadataService;
 import org.springframework.stereotype.Service;
 
+import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
@@ -130,6 +132,201 @@ public class DownloadIntakeService {
             return BulkMetadataResolution.ambiguousResult();
         }
         return BulkMetadataResolution.matched(best.metadataSnapshot(), best.downloadSnapshot());
+    }
+
+    /**
+     * Resolve alternate concrete provider targets for an existing library title
+     * so admins can inspect source coverage and queue a safe replacement.
+     *
+     * @param title existing Raven library title
+     * @return one row per concrete provider target
+     */
+    public List<Map<String, Object>> repairOptions(LibraryTitle title) {
+        if (title == null) {
+            return List.of();
+        }
+
+        Map<String, Object> metadataSnapshot = buildLibraryMetadataSnapshot(title);
+        Set<String> searchTerms = new LinkedHashSet<>();
+        addSearchTerm(searchTerms, title.title());
+        for (String alias : title.aliases()) {
+            addSearchTerm(searchTerms, alias);
+        }
+
+        EditionSignals metadataEdition = detectEditionSignals(
+            stringValue(metadataSnapshot.get("title")),
+            stringValue(metadataSnapshot.get("editionLabel")),
+            metadataSnapshot.get("aliases")
+        );
+
+        Map<String, RepairCandidate> candidates = new LinkedHashMap<>();
+        for (DownloadProvider provider : downloadProviderRegistry.enabledProviders()) {
+            boolean currentProvider = provider.supportsUrl(title.sourceUrl());
+            if (currentProvider && !stringValue(title.sourceUrl()).isBlank()) {
+                Map<String, String> currentSnapshot = new LinkedHashMap<>();
+                currentSnapshot.put("title", title.title());
+                currentSnapshot.put("href", title.sourceUrl());
+                currentSnapshot.put("type", title.libraryTypeLabel());
+                currentSnapshot.put("coverUrl", title.coverUrl());
+                recordRepairCandidate(candidates, provider, metadataSnapshot, metadataEdition, currentSnapshot, 999, true, title);
+            }
+
+            for (String term : searchTerms) {
+                for (Map<String, String> candidate : provider.searchTitles(term)) {
+                    int score = scoreCandidate(metadataSnapshot, candidate, searchTerms, metadataEdition);
+                    if (score < 45) {
+                        continue;
+                    }
+                    recordRepairCandidate(candidates, provider, metadataSnapshot, metadataEdition, candidate, score, false, title);
+                }
+            }
+        }
+
+        return candidates.values().stream()
+            .map((candidate) -> candidate.toPayload(title))
+            .sorted((left, right) -> {
+                boolean leftCurrent = Boolean.TRUE.equals(left.get("current"));
+                boolean rightCurrent = Boolean.TRUE.equals(right.get("current"));
+                if (leftCurrent != rightCurrent) {
+                    return leftCurrent ? -1 : 1;
+                }
+                int coverageDelta = Integer.compare(parseInt(right.get("chapterCount")), parseInt(left.get("chapterCount")));
+                if (coverageDelta != 0) {
+                    return coverageDelta;
+                }
+                return Integer.compare(parseInt(right.get("matchScore")), parseInt(left.get("matchScore")));
+            })
+            .toList();
+    }
+
+    private void recordRepairCandidate(
+        Map<String, RepairCandidate> candidates,
+        DownloadProvider provider,
+        Map<String, Object> metadataSnapshot,
+        EditionSignals metadataEdition,
+        Map<String, String> candidate,
+        int score,
+        boolean currentCandidate,
+        LibraryTitle title
+    ) {
+        String titleUrl = stringValue(candidate.get("href"));
+        if (titleUrl.isBlank()) {
+            return;
+        }
+        String key = provider.id() + "::" + titleUrl;
+        RepairCandidate existing = candidates.get(key);
+        if (existing != null && existing.score() >= score && !(currentCandidate && !existing.current())) {
+            return;
+        }
+
+        String candidateType = LibraryNaming.normalizeTypeLabel(firstNonBlank(candidate.get("type"), title.libraryTypeLabel(), "manga"));
+        List<Map<String, String>> chapters = provider.getChapters(titleUrl);
+        int chapterCount = chapters.size();
+        String earliestChapter = chapters.stream()
+            .map((entry) -> normalizeChapterNumber(entry.get("chapter_number")))
+            .filter((value) -> !value.isBlank())
+            .min(this::compareChapterNumbers)
+            .orElse("");
+        String latestChapter = chapters.stream()
+            .map((entry) -> normalizeChapterNumber(entry.get("chapter_number")))
+            .filter((value) -> !value.isBlank())
+            .max(this::compareChapterNumbers)
+            .orElse("");
+
+        Map<String, Object> downloadSnapshot = new LinkedHashMap<>();
+        downloadSnapshot.put("providerId", provider.id());
+        downloadSnapshot.put("providerName", provider.name());
+        downloadSnapshot.put("titleName", firstNonBlank(candidate.get("title"), title.title(), "Untitled"));
+        downloadSnapshot.put("titleUrl", titleUrl);
+        downloadSnapshot.put("requestType", candidateType);
+        downloadSnapshot.put("libraryTypeLabel", candidateType);
+        downloadSnapshot.put("libraryTypeSlug", LibraryNaming.normalizeTypeSlug(candidateType));
+        downloadSnapshot.put("coverUrl", firstNonBlank(candidate.get("coverUrl"), title.coverUrl()));
+        downloadSnapshot.put("matchScore", score);
+        downloadSnapshot.put("editionLabel", firstNonBlank(
+            detectEditionSignals(candidate.get("title"), candidate.get("href")).label(),
+            metadataEdition.label()
+        ));
+
+        candidates.put(key, new RepairCandidate(
+            score,
+            currentCandidate,
+            Map.copyOf(downloadSnapshot),
+            chapterCount,
+            earliestChapter,
+            latestChapter,
+            buildRepairWarnings(title, provider, titleUrl, chapterCount, score, metadataEdition, candidate)
+        ));
+    }
+
+    private Map<String, Object> buildLibraryMetadataSnapshot(LibraryTitle title) {
+        Map<String, Object> snapshot = new LinkedHashMap<>();
+        snapshot.put("provider", stringValue(title.metadataProvider()));
+        snapshot.put("providerSeriesId", stringValue(title.id()));
+        snapshot.put("title", stringValue(title.title()));
+        snapshot.put("summary", stringValue(title.summary()));
+        snapshot.put("coverUrl", stringValue(title.coverUrl()));
+        snapshot.put("aliases", title.aliases() == null ? List.of() : title.aliases());
+        snapshot.put("type", firstNonBlank(title.libraryTypeLabel(), title.mediaType(), "manga"));
+        snapshot.put("typeSlug", LibraryNaming.normalizeTypeSlug(firstNonBlank(title.libraryTypeSlug(), title.mediaType(), "manga")));
+        snapshot.put("editionLabel", detectEditionSignals(title.title(), title.aliases()).label());
+        snapshot.put("details", Map.of(
+            "title", stringValue(title.title()),
+            "summary", stringValue(title.summary()),
+            "aliases", title.aliases() == null ? List.of() : title.aliases(),
+            "coverUrl", stringValue(title.coverUrl()),
+            "type", firstNonBlank(title.libraryTypeLabel(), title.mediaType(), "manga")
+        ));
+        return snapshot;
+    }
+
+    private List<String> buildRepairWarnings(
+        LibraryTitle title,
+        DownloadProvider provider,
+        String titleUrl,
+        int chapterCount,
+        int score,
+        EditionSignals metadataEdition,
+        Map<String, String> candidate
+    ) {
+        List<String> warnings = new ArrayList<>();
+        if (provider.supportsUrl(title.sourceUrl()) && titleUrl.equals(stringValue(title.sourceUrl()))) {
+            warnings.add("Current source");
+        }
+        if (chapterCount > 0 && title.chapterCount() > 0 && chapterCount < title.chapterCount()) {
+            warnings.add("Coverage appears lower than the current library");
+        }
+        if (chapterCount > 0 && title.chaptersDownloaded() > 0 && chapterCount < title.chaptersDownloaded()) {
+            warnings.add("Candidate exposes fewer chapters than are currently downloaded");
+        }
+        if (score < 100) {
+            warnings.add("Weak match confidence");
+        }
+        EditionSignals candidateEdition = detectEditionSignals(candidate.get("title"), candidate.get("href"));
+        if (metadataEdition.colored() != candidateEdition.colored()) {
+            warnings.add("Edition markers do not match the current title");
+        }
+        return List.copyOf(warnings);
+    }
+
+    private String normalizeChapterNumber(String value) {
+        String normalized = stringValue(value);
+        if (normalized.isBlank()) {
+            return "";
+        }
+        try {
+            return new BigDecimal(normalized).stripTrailingZeros().toPlainString();
+        } catch (NumberFormatException ignored) {
+            return normalized;
+        }
+    }
+
+    private int compareChapterNumbers(String left, String right) {
+        try {
+            return new BigDecimal(left).compareTo(new BigDecimal(right));
+        } catch (NumberFormatException ignored) {
+            return left.compareTo(right);
+        }
     }
 
     private Map<String, Object> buildMetadataSnapshot(Map<String, Object> metadataResult) {
@@ -832,5 +1029,34 @@ public class DownloadIntakeService {
         Map<String, Object> metadataSnapshot,
         Map<String, Object> downloadSnapshot
     ) {
+    }
+
+    private record RepairCandidate(
+        int score,
+        boolean current,
+        Map<String, Object> downloadSnapshot,
+        int chapterCount,
+        String earliestChapter,
+        String latestChapter,
+        List<String> warnings
+    ) {
+        private Map<String, Object> toPayload(LibraryTitle title) {
+            Map<String, Object> payload = new LinkedHashMap<>(downloadSnapshot);
+            payload.put("current", current);
+            payload.put("matchScore", score);
+            payload.put("chapterCount", chapterCount);
+            payload.put("earliestChapter", earliestChapter);
+            payload.put("latestChapter", latestChapter);
+            payload.put("warnings", warnings);
+            payload.put("coverageLabel", chapterCount <= 0
+                ? "No chapters discovered"
+                : (earliestChapter.isBlank() || latestChapter.isBlank()
+                    ? chapterCount + " chapters"
+                    : earliestChapter + "-" + latestChapter + " (" + chapterCount + " chapters)"));
+            payload.put("currentSourceUrl", title == null || title.sourceUrl() == null ? "" : title.sourceUrl().trim());
+            payload.put("currentChapterCount", title.chapterCount());
+            payload.put("currentDownloadedCount", title.chaptersDownloaded());
+            return payload;
+        }
     }
 }

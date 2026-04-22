@@ -71,6 +71,31 @@ const normalizeTask = (task = {}) => ({
   updatedAt: String(task.updatedAt || task.queuedAt || "").trim()
 });
 
+const hostFromUrl = (value) => {
+  try {
+    return new URL(String(value || "").trim()).hostname;
+  } catch {
+    return "";
+  }
+};
+
+const normalizeRepairOption = (option = {}) => ({
+  providerId: String(option.providerId || "").trim(),
+  providerName: String(option.providerName || option.providerId || "Provider").trim() || "Provider",
+  titleName: String(option.titleName || "Untitled").trim() || "Untitled",
+  titleUrl: String(option.titleUrl || "").trim(),
+  libraryTypeLabel: String(option.libraryTypeLabel || "Manga").trim() || "Manga",
+  libraryTypeSlug: String(option.libraryTypeSlug || "manga").trim() || "manga",
+  coverUrl: String(option.coverUrl || "").trim(),
+  current: option.current === true,
+  matchScore: Number.parseInt(String(option.matchScore || 0), 10) || 0,
+  chapterCount: Number.parseInt(String(option.chapterCount || 0), 10) || 0,
+  earliestChapter: String(option.earliestChapter || "").trim(),
+  latestChapter: String(option.latestChapter || "").trim(),
+  coverageLabel: String(option.coverageLabel || "").trim(),
+  warnings: Array.isArray(option.warnings) ? option.warnings.map((warning) => String(warning || "").trim()).filter(Boolean) : []
+});
+
 /**
  * Load the admin library detail payload.
  *
@@ -81,7 +106,16 @@ const normalizeTask = (task = {}) => ({
  * @returns {Promise<import("../api.js").ApiResult>}
  */
 export const loadLibraryTitlePage = ({api, route}) =>
-  api.get(`/api/moon/v3/admin/library/${encodeURIComponent(route.params?.titleId || "")}`);
+  Promise.all([
+    api.get(`/api/moon/v3/admin/library/${encodeURIComponent(route.params?.titleId || "")}`),
+    api.get(`/api/moon/v3/admin/library/${encodeURIComponent(route.params?.titleId || "")}/repair-options`)
+  ]).then(([detail, repair]) => ({
+    ...detail,
+    payload: {
+      ...(detail.payload || {}),
+      repair: repair.ok ? repair.payload : {options: [], error: repair.payload?.error || ""}
+    }
+  }));
 
 const renderStat = (label, value) => `
   <div class="library-detail-stat">
@@ -178,6 +212,86 @@ const renderChapterTable = (title) => {
   `;
 };
 
+const renderRepairPanel = (title, repairPayload) => {
+  const repairOptions = (Array.isArray(repairPayload?.options) ? repairPayload.options : []).map((option) => normalizeRepairOption(option));
+  const currentOption = repairOptions.find((option) => option.current)
+    || normalizeRepairOption({
+      providerId: hostFromUrl(title.sourceUrl),
+      providerName: title.metadataProvider || "Current source",
+      titleName: title.title,
+      titleUrl: title.sourceUrl,
+      libraryTypeLabel: title.libraryTypeLabel,
+      libraryTypeSlug: title.libraryTypeSlug,
+      coverUrl: title.coverUrl,
+      current: true,
+      chapterCount: title.chapterCount,
+      earliestChapter: title.chapters.at(-1)?.chapterNumber || "",
+      latestChapter: title.chapters[0]?.chapterNumber || "",
+      coverageLabel: `${title.chaptersDownloaded}/${title.chapterCount} cataloged`
+    });
+  const alternateOptions = repairOptions.filter((option) => !option.current);
+
+  return `
+    <section class="panel-section">
+      <div class="section-heading">
+        <div>
+          <span class="section-kicker">Repair</span>
+          <h2>Provider and source recovery</h2>
+          <p class="field-note">Inspect the current source, compare alternate provider targets, and queue a safe staged replacement if Raven needs to redownload from a different concrete source.</p>
+        </div>
+      </div>
+      <div class="repair-grid">
+        <article class="detail-stack-card repair-card repair-card-current">
+          <div>
+            <strong>${escapeHtml(currentOption.titleName)}</strong>
+            <span>${escapeHtml(currentOption.providerName)}</span>
+          </div>
+          <div class="detail-stack-meta">
+            ${renderChip(currentOption.coverageLabel || "Coverage unavailable")}
+            ${renderStatusBadge("Current")}
+          </div>
+          <p class="field-note path-copy">${escapeHtml(currentOption.titleUrl || "No source URL recorded.")}</p>
+        </article>
+        <div class="repair-option-list">
+          ${alternateOptions.length
+            ? alternateOptions.map((option) => `
+                <article class="detail-stack-card repair-card">
+                  <div>
+                    <strong>${escapeHtml(option.titleName)}</strong>
+                    <span>${escapeHtml(option.providerName)}</span>
+                  </div>
+                  <div class="detail-stack-meta">
+                    ${renderChip(option.coverageLabel || "Coverage unavailable")}
+                    ${renderChip(`Score ${option.matchScore}`)}
+                  </div>
+                  <p class="field-note path-copy">${escapeHtml(option.titleUrl)}</p>
+                  ${option.warnings.length ? `<div class="library-detail-badges">${option.warnings.map((warning) => renderChip(warning)).join("")}</div>` : ""}
+                  <div class="inline-actions">
+                    <button
+                      class="primary-button small"
+                      type="button"
+                      data-repair-action="replace-source"
+                      data-provider-id="${escapeHtml(option.providerId)}"
+                      data-provider-name="${escapeHtml(option.providerName)}"
+                      data-title-name="${escapeHtml(option.titleName)}"
+                      data-title-url="${escapeHtml(option.titleUrl)}"
+                      data-library-type-label="${escapeHtml(option.libraryTypeLabel)}"
+                      data-library-type-slug="${escapeHtml(option.libraryTypeSlug)}"
+                      data-cover-url="${escapeHtml(option.coverUrl)}"
+                    >Queue safe replacement</button>
+                  </div>
+                </article>
+              `).join("")
+            : renderEmptyState(
+              "No alternate sources available",
+              repairPayload?.error || "Raven could not find any alternate enabled-provider targets for this title yet."
+            )}
+        </div>
+      </div>
+    </section>
+  `;
+};
+
 /**
  * Render the Sonarr-inspired admin title detail page.
  *
@@ -193,6 +307,7 @@ export const renderLibraryTitlePage = (result) => {
   const requests = (Array.isArray(result.payload?.requests) ? result.payload.requests : []).map((request) => normalizeRequest(request));
   const activeTasks = (Array.isArray(result.payload?.activeTasks) ? result.payload.activeTasks : []).map((task) => normalizeTask(task));
   const recentTasks = (Array.isArray(result.payload?.recentTasks) ? result.payload.recentTasks : []).map((task) => normalizeTask(task));
+  const repairPayload = result.payload?.repair || {options: []};
   const canonicalUserPath = `/title/${encodeURIComponent(title.libraryTypeSlug)}/${encodeURIComponent(title.id)}`;
 
   return `
@@ -265,6 +380,7 @@ export const renderLibraryTitlePage = (result) => {
         </div>
       </section>
     </section>
+    ${renderRepairPanel(title, repairPayload)}
     <section class="panel-section">
       <div class="section-heading">
         <div>
@@ -288,7 +404,7 @@ export const renderLibraryTitlePage = (result) => {
  * @param {Awaited<ReturnType<typeof loadLibraryTitlePage>>} result
  * @returns {Promise<void>}
  */
-export const enhanceLibraryTitlePage = async (_root, {navigate}, result) => {
+export const enhanceLibraryTitlePage = async (root, {api, navigate, rerender, setFlash}, result) => {
   if (!result.ok) {
     return;
   }
@@ -298,6 +414,29 @@ export const enhanceLibraryTitlePage = async (_root, {navigate}, result) => {
   if (window.location.pathname !== canonicalPath) {
     navigate(canonicalPath, {replace: true});
   }
+
+  root.querySelectorAll("[data-repair-action='replace-source']").forEach((button) => {
+    button.addEventListener("click", async () => {
+      button.setAttribute("disabled", "disabled");
+      const response = await api.post(`/api/moon/v3/admin/library/${encodeURIComponent(title.id)}/replace-source`, {
+        providerId: button.getAttribute("data-provider-id") || "",
+        providerName: button.getAttribute("data-provider-name") || "",
+        titleName: button.getAttribute("data-title-name") || "",
+        titleUrl: button.getAttribute("data-title-url") || "",
+        libraryTypeLabel: button.getAttribute("data-library-type-label") || "",
+        libraryTypeSlug: button.getAttribute("data-library-type-slug") || "",
+        coverUrl: button.getAttribute("data-cover-url") || ""
+      });
+      if (response.ok) {
+        setFlash("success", "Queued a staged Raven replacement download.");
+        await rerender();
+        return;
+      }
+      setFlash("error", response.payload?.error || "Moon could not queue the Raven replacement download.");
+      button.removeAttribute("disabled");
+      await rerender();
+    });
+  });
 };
 
 export default {

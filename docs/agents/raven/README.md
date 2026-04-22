@@ -37,6 +37,11 @@
   persist step fails, fail the task loudly instead of leaving it running at `90%`.
 - Startup recovery should rescan finished `downloaded/<type>/...` content, backfill missing catalog rows, and collapse
   duplicate restorable tasks so Moon queue views only see one logical download.
+- Raven now also supports staged source replacement for existing library titles. Keep replacement downloads isolated in
+  fresh working and downloaded roots, then only swap the live folder and catalog identity after the replacement
+  succeeds.
+- WeebCentral chapter discovery must follow the provider's live continuation model, including HTMX-powered full list
+  requests for long-running series. Do not regress back to scraping only the initially visible chapter subset.
 - Preserve and enrich release-date data when Raven can observe it. Chapter release dates from provider scrapes and
   title-level release labels from metadata providers now feed Moon's dense admin library and calendar views.
 - Preserve lifecycle completion data too. Provider `status` values such as completed, finished, ongoing, hiatus, or

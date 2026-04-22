@@ -34,6 +34,7 @@ const MOON_PUBLIC_API_HASH_SECRET = "moon.publicApi.keyHash";
 const ORACLE_OPENAI_DEFAULT_MODEL = process.env.SCRIPTARR_ORACLE_OPENAI_MODEL || "gpt-4.1-mini";
 const ORACLE_LOCALAI_DEFAULT_MODEL = "gpt-4";
 const PUBLIC_API_SELECTION_TTL_MS = 5 * 60 * 1000;
+const INTERNAL_JSON_BODY_LIMIT = "10mb";
 
 const knownMetadataProviders = Object.freeze([
   {id: "mangadex", name: "MangaDex", scopes: ["manga", "webtoon"], enabled: true, priority: 10},
@@ -524,7 +525,7 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
   const requireService = createServiceAuth(config);
   const publicSelectionTokens = new Map();
 
-  app.use(express.json());
+  app.use(express.json({limit: INTERNAL_JSON_BODY_LIMIT}));
 
   const purgeExpiredPublicSelectionTokens = () => {
     const now = Date.now();

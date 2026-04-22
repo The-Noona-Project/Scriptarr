@@ -121,6 +121,85 @@ public class RavenController {
     }
 
     /**
+     * Load alternate repair candidates for an existing Raven library title.
+     *
+     * @param titleId title id to inspect
+     * @return one row per concrete provider target
+     */
+    @GetMapping("/v1/library/{titleId}/repair-options")
+    public ResponseEntity<?> libraryRepairOptions(@PathVariable("titleId") String titleId) {
+        var title = libraryService.findTitle(titleId);
+        if (title == null) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("error", "Title not found."));
+        }
+        return ResponseEntity.ok(Map.of(
+            "titleId", title.id(),
+            "currentSourceUrl", title.sourceUrl(),
+            "options", downloadIntakeService.repairOptions(title)
+        ));
+    }
+
+    /**
+     * Queue a safe replacement download for an existing Raven library title.
+     *
+     * @param titleId title id to replace
+     * @param body selected provider target payload
+     * @return accepted replacement task payload or a validation error
+     */
+    @PostMapping("/v1/library/{titleId}/replace-source")
+    public ResponseEntity<Map<String, Object>> replaceLibrarySource(
+        @PathVariable("titleId") String titleId,
+        @RequestBody Map<String, Object> body
+    ) {
+        var title = libraryService.findTitle(titleId);
+        if (title == null) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("error", "Title not found."));
+        }
+
+        String providerId = String.valueOf(body.getOrDefault("providerId", "")).trim();
+        String titleUrl = String.valueOf(body.getOrDefault("titleUrl", "")).trim();
+        if (providerId.isBlank() || titleUrl.isBlank()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "providerId and titleUrl are required."));
+        }
+
+        Map<String, Object> selectedDownload = new java.util.LinkedHashMap<>();
+        selectedDownload.put("providerId", providerId);
+        selectedDownload.put("providerName", String.valueOf(body.getOrDefault("providerName", providerId)).trim());
+        selectedDownload.put("titleName", String.valueOf(body.getOrDefault("titleName", title.title())).trim());
+        selectedDownload.put("titleUrl", titleUrl);
+        selectedDownload.put("requestType", String.valueOf(body.getOrDefault("requestType", title.libraryTypeLabel())).trim());
+        selectedDownload.put("libraryTypeLabel", String.valueOf(body.getOrDefault("libraryTypeLabel", title.libraryTypeLabel())).trim());
+        selectedDownload.put("libraryTypeSlug", String.valueOf(body.getOrDefault("libraryTypeSlug", title.libraryTypeSlug())).trim());
+        selectedDownload.put("coverUrl", String.valueOf(body.getOrDefault("coverUrl", title.coverUrl())).trim());
+
+        Map<String, Object> selectedMetadata = new java.util.LinkedHashMap<>();
+        selectedMetadata.put("provider", title.metadataProvider() == null ? "" : title.metadataProvider());
+        selectedMetadata.put("providerSeriesId", title.id());
+        selectedMetadata.put("title", title.title());
+        selectedMetadata.put("summary", title.summary() == null ? "" : title.summary());
+        selectedMetadata.put("coverUrl", title.coverUrl() == null ? "" : title.coverUrl());
+        selectedMetadata.put("aliases", title.aliases() == null ? List.of() : title.aliases());
+        selectedMetadata.put("type", title.libraryTypeLabel() == null ? "manga" : title.libraryTypeLabel());
+
+        try {
+            return ResponseEntity.status(HttpStatus.ACCEPTED).body(downloaderService.queueDownload(new DownloadRequest(
+                title.title(),
+                titleUrl,
+                title.libraryTypeLabel() == null ? "manga" : title.libraryTypeLabel(),
+                String.valueOf(body.getOrDefault("requestedBy", "scriptarr-admin")).trim(),
+                providerId,
+                "",
+                selectedMetadata,
+                selectedDownload,
+                title.id(),
+                "high"
+            )));
+        } catch (IllegalStateException error) {
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("error", error.getMessage()));
+        }
+    }
+
+    /**
      * Load the reader manifest for a title.
      *
      * @param titleId title id to resolve
@@ -211,6 +290,7 @@ public class RavenController {
             String.valueOf(body.getOrDefault("requestId", "")).trim(),
             body.get("selectedMetadata") instanceof Map<?, ?> selectedMetadata ? (Map<String, Object>) selectedMetadata : Map.of(),
             body.get("selectedDownload") instanceof Map<?, ?> selectedDownload ? (Map<String, Object>) selectedDownload : Map.of(),
+            String.valueOf(body.getOrDefault("replacementTitleId", "")).trim(),
             String.valueOf(body.getOrDefault("priority", "normal")).trim()
         );
         try {

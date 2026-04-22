@@ -22,6 +22,7 @@ Moon 3.0 also includes a native reader flow with:
 - typed series detail routes at `/title/<type>/<titleId>`
 - a typed native reader at `/reader/<type>/<titleId>/<chapterId>`
 - request and following views at `/myrequests` and `/following`
+- a signed-in profile route at `/profile`
 
 Moon still accepts the older untyped title and reader URLs as backward-compatible shims, but the typed paths above are
 the canonical links emitted by the user app.
@@ -29,6 +30,16 @@ Moon's request and admin add-title flows now share the same metadata-first intak
 concrete match, and Scriptarr saves the selected metadata plus download snapshot with the request so moderation can
 queue the exact Raven target later. Admin add-title uses the same intake results and queues immediately when a
 download-ready match exists.
+The forward-facing user app itself now runs through an embedded Next.js App Router program using Once UI shells. Moon
+keeps the same public routes and same-origin APIs, but the user experience now uses a single-row megamenu header with
+plain site-name branding, a minimal avatar dropdown, a simple footer, and a dedicated `/profile` page for local
+StylePanel preferences and install actions instead of the older plain-JS shell. Library type links now live only under
+the `Library` mega menu, and `/browse` is now a flat A-Z surface with a quick-jump index rail plus uniform art-first
+cards that clamp long copy until the reader opens the full title page. The home route is intentionally simpler too: it
+starts with a personalized "Your Bookshelf" continue-reading shelf, then stacks cover-led scroller rows for recently
+added titles by library type and tag-driven suggestions based on the titles the current reader has already opened.
+Moon's reader is now a full-page immersive workspace that defaults to infinite chapter scroll while keeping paged mode
+as a secondary preference. It still uses Moon's typed reader routes plus the existing progress and bookmark APIs.
 Moon now renders those intake results one row per concrete download target instead of one row per metadata row, so
 duplicate metadata matches collapse cleanly while real edition targets such as plain vs colored remain visibly
 distinct.
@@ -42,6 +53,8 @@ last release date, metadata state, and direct open or source actions.
 Each library row now opens a Sonarr-style admin title detail page at `/admin/library/<type>/<titleId>` with a
 backdrop hero, dense status and release stats, related requests, active or recent Raven task visibility, and a
 chapter table that keeps release dates and archive paths in one operational view.
+That admin title page now also shows provider repair candidates with chapter-coverage previews and warning chips, and
+it can queue a safe staged replacement download without deleting the current library files first.
 `/admin/mediamanagement` is now the dedicated Raven file-management page. It exposes a fallback naming profile plus
 per-type naming profiles for manga, manhwa, manhua, webtoon, comic, and OEL so admins can preview and save archive or
 page formats without digging through the broader settings surface.

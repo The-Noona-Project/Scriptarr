@@ -102,6 +102,8 @@ the provider exposes different series URLs.
 Raven now only marks download work complete after the promoted files also persist into the brokered catalog, and it
 rescans the existing `downloaded/<type>/...` tree on boot so already-finished archives can repopulate Moon's library
 without forcing a re-download.
+Raven's WeebCentral chapter scraper now follows the live source's HTMX full-chapter-list flow for long-running
+series, which is required for titles such as Tomb Raider King that hide older chapters behind a show-all request.
 
 ## MySQL Contract
 
@@ -207,12 +209,21 @@ Common user routes:
 - `/reader/<type>/<titleId>/<chapterId>`
 - `/myrequests`
 - `/following`
+- `/profile`
 
 Moon still accepts the older untyped `/title/<id>` and `/reader/<titleId>/<chapterId>` paths as compatibility shims,
 but the typed routes are the canonical links Moon now emits.
 
 Moon's user app also serves a same-origin `manifest.webmanifest` and `service-worker.js` so the reader can be
 installed like an app and keep a rolling cache of recently opened chapters on the current device.
+That same user app now runs through an embedded Next.js App Router frontend with Once UI shells, a single-row
+megamenu header with plain site-name branding, a minimal avatar dropdown for Profile and Logout, a dedicated
+`/profile` page for local StylePanel preferences and install actions, a simple footer, and an immersive reader that
+defaults to infinite chapter scroll while still exposing paged mode. Library type links now live only inside the
+`Library` mega menu, and `/browse` now renders as a flat A-Z grid with a quick-jump letter rail and uniform
+art-forward cards that clamp long copy until the user opens a title page. Its home route now favors a simpler
+media-library feel too, with a personalized "Your Bookshelf" continue-reading row followed by cover-led scrollers for
+recently added titles by type and tag-driven shelves based on the reader's existing progress.
 
 Common admin routes:
 
@@ -234,6 +245,8 @@ Legacy Moon paths such as `/downloads`, `/settings`, and `/setupwizard` now redi
 The dense `/admin/library` index now links into a Sonarr-style admin title detail page where you can inspect one title
 at a time with its cover, backdrop, lifecycle status, source and metadata identity, related requests, active Raven
 tasks, and per-chapter release or archive details.
+That title page now also exposes repair candidates with concrete provider URLs, chapter-coverage previews, warning
+chips, and a safe replacement queue action that stages the replacement download before it swaps the live files.
 
 ## Discord Bot Workflow
 

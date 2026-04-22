@@ -1,0 +1,5 @@
+1:"$Sreact.fragment"
+2:I[97367,["/_next/static/chunks/0_x1rgropa081.js","/_next/static/chunks/13f9-~q5owr2~.js","/_next/static/chunks/0kkd4gdf~bt~3.js","/_next/static/chunks/009txz~8o8cj9.js"],"ViewportBoundary"]
+3:I[97367,["/_next/static/chunks/0_x1rgropa081.js","/_next/static/chunks/13f9-~q5owr2~.js","/_next/static/chunks/0kkd4gdf~bt~3.js","/_next/static/chunks/009txz~8o8cj9.js"],"MetadataBoundary"]
+4:"$Sreact.suspense"
+0:{"rsc":["$","$1","h",{"children":[["$","meta",null,{"name":"robots","content":"noindex"}],["$","$L2",null,{"children":[["$","meta","0",{"charSet":"utf-8"}],["$","meta","1",{"name":"viewport","content":"width=device-width, initial-scale=1"}]]}],["$","div",null,{"hidden":true,"children":["$","$L3",null,{"children":["$","$4",null,{"name":"Next.Metadata","children":[["$","title","0",{"children":"Scriptarr"}],["$","meta","1",{"name":"description","content":"Moon's reading-first user surface built on Once UI."}]]}]}]}],null]}],"isPartial":false,"staleTime":300,"varyParams":null,"buildId":"ZcMvJjV5n4cZBQHnG4MMx"}

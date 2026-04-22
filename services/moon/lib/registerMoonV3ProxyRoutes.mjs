@@ -45,7 +45,7 @@ const toQueryString = (query) => {
  * @returns {void}
  */
 export const registerMoonV3ProxyRoutes = (app, {config, getSessionToken}) => {
-  app.all("/api/moon/v3/*splat", async (req, res) => {
+  const handleMoonV3Proxy = async (req, res) => {
     const targetPath = normalizeSplat(req.params.splat);
     const query = toQueryString(req.query);
     const response = await proxyRequest({
@@ -61,7 +61,10 @@ export const registerMoonV3ProxyRoutes = (app, {config, getSessionToken}) => {
     res.status(response.status);
     res.setHeader("Content-Type", contentType);
     res.send(response.body);
-  });
+  };
+
+  app.all("/api/moon/v3/*splat", handleMoonV3Proxy);
+  app.all("/api/moon-v3/*splat", handleMoonV3Proxy);
 };
 
 export default registerMoonV3ProxyRoutes;

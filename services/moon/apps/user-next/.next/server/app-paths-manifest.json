@@ -1,0 +1,12 @@
+{
+  "/_global-error/page": "app/_global-error/page.js",
+  "/_not-found/page": "app/_not-found/page.js",
+  "/browse/page": "app/browse/page.js",
+  "/following/page": "app/following/page.js",
+  "/library/[type]/page": "app/library/[type]/page.js",
+  "/library/page": "app/library/page.js",
+  "/myrequests/page": "app/myrequests/page.js",
+  "/page": "app/page.js",
+  "/reader/[...parts]/page": "app/reader/[...parts]/page.js",
+  "/title/[...parts]/page": "app/title/[...parts]/page.js"
+}

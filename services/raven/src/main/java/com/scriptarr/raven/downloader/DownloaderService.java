@@ -159,6 +159,7 @@ public class DownloaderService {
                 task.put("updatedAt", node.path("updatedAt").asText(Instant.now().toString()));
                 copyIfPresent(node, task, "providerId");
                 copyIfPresent(node, task, "requestId");
+                copyIfPresent(node, task, "replacementTitleId");
                 copyIfPresent(node, task, "libraryTypeLabel");
                 copyIfPresent(node, task, "libraryTypeSlug");
                 copyIfPresent(node, task, "workingRoot");
@@ -228,6 +229,7 @@ public class DownloaderService {
                     String.valueOf(task.getOrDefault("requestId", "")),
                     normalizeMap(task.get("selectedMetadata")),
                     normalizeMap(task.get("selectedDownload")),
+                    String.valueOf(task.getOrDefault("replacementTitleId", "")),
                     String.valueOf(task.getOrDefault("priority", PRIORITY_NORMAL))
                 ));
             }
@@ -424,6 +426,7 @@ public class DownloaderService {
                     "",
                     selectedMetadata,
                     selectedDownload,
+                    "",
                     "normal"
                 ));
                 queuedTitles.add(titleName);
@@ -491,6 +494,7 @@ public class DownloaderService {
         task.put("requestedBy", request.requestedBy());
         task.put("providerId", request.providerId() == null ? "" : request.providerId());
         task.put("requestId", request.requestId() == null ? "" : request.requestId());
+        task.put("replacementTitleId", request.replacementTitleId() == null ? "" : request.replacementTitleId());
         task.put("status", "queued");
         task.put("message", "Queued for Raven download.");
         task.put("percent", 0);
@@ -565,10 +569,16 @@ public class DownloaderService {
             String typeLabel = resolveLibraryTypeLabel(request, details);
             String typeSlug = LibraryNaming.normalizeTypeSlug(typeLabel);
             RavenNamingSettings namingSettings = settingsService.getNamingSettings();
-            Path workingRoot = resolveTitleRoot(DOWNLOADING_FOLDER_NAME, request.titleName(), typeSlug);
-            Path finalRoot = resolveTitleRoot(DOWNLOADED_FOLDER_NAME, request.titleName(), typeSlug);
+            Path canonicalFinalRoot = resolveReplacementTargetRoot(request, typeSlug);
+            boolean replacementDownload = isReplacementDownload(request);
+            Path workingRoot = replacementDownload
+                ? resolveStagedTitleRoot(DOWNLOADING_FOLDER_NAME, request.titleName(), typeSlug, taskId)
+                : resolveTitleRoot(DOWNLOADING_FOLDER_NAME, request.titleName(), typeSlug);
+            Path finalRoot = replacementDownload
+                ? resolveStagedTitleRoot(DOWNLOADED_FOLDER_NAME, request.titleName(), typeSlug, taskId)
+                : canonicalFinalRoot;
 
-            rememberRoots(taskId, typeLabel, typeSlug, workingRoot, finalRoot);
+            rememberRoots(taskId, typeLabel, typeSlug, workingRoot, canonicalFinalRoot);
             Files.createDirectories(workingRoot);
 
             int total = chapters.size();
@@ -586,6 +596,11 @@ public class DownloaderService {
 
             update(taskId, "running", "Promoting completed files into the Raven library.", 95);
             promoteTitleFolder(workingRoot, finalRoot);
+            if (replacementDownload) {
+                update(taskId, "running", "Swapping the staged replacement into the live Raven library.", 97);
+                swapReplacementFolder(finalRoot, canonicalFinalRoot);
+                finalRoot = canonicalFinalRoot;
+            }
             LibraryTitle title = libraryService.recordDownloadedTitle(
                 request.titleName(),
                 typeLabel,
@@ -972,6 +987,7 @@ public class DownloaderService {
         details.put("workingRoot", String.valueOf(task.getOrDefault("workingRoot", "")));
         details.put("downloadRoot", String.valueOf(task.getOrDefault("downloadRoot", "")));
         details.put("coverUrl", String.valueOf(task.getOrDefault("coverUrl", "")));
+        details.put("replacementTitleId", String.valueOf(task.getOrDefault("replacementTitleId", "")));
         details.put("priority", String.valueOf(task.getOrDefault("priority", PRIORITY_NORMAL)));
         return details;
     }
@@ -1102,6 +1118,29 @@ public class DownloaderService {
             .resolve(LibraryNaming.sanitizeTitleFolder(titleName));
     }
 
+    private Path resolveStagedTitleRoot(String stateFolder, String titleName, String typeSlug, String taskId) {
+        return logger.getDownloadsRoot()
+            .resolve(stateFolder)
+            .resolve(typeSlug)
+            .resolve(LibraryNaming.sanitizeTitleFolder(titleName) + "__repair_" + LibraryNaming.slugifySegment(taskId));
+    }
+
+    private boolean isReplacementDownload(DownloadRequest request) {
+        return request != null && request.replacementTitleId() != null && !request.replacementTitleId().isBlank();
+    }
+
+    private Path resolveReplacementTargetRoot(DownloadRequest request, String typeSlug) {
+        if (!isReplacementDownload(request)) {
+            return resolveTitleRoot(DOWNLOADED_FOLDER_NAME, request.titleName(), typeSlug);
+        }
+
+        LibraryTitle existing = libraryService.findTitle(request.replacementTitleId());
+        if (existing != null && existing.downloadRoot() != null && !existing.downloadRoot().isBlank()) {
+            return Path.of(existing.downloadRoot());
+        }
+        return resolveTitleRoot(DOWNLOADED_FOLDER_NAME, request.titleName(), typeSlug);
+    }
+
     private void promoteTitleFolder(Path sourceFolder, Path targetFolder) throws IOException {
         if (sourceFolder == null || targetFolder == null) {
             return;
@@ -1126,6 +1165,46 @@ public class DownloaderService {
         }
 
         pruneEmptyManagedParents(normalizedSource.getParent(), logger.getDownloadsRoot().resolve(DOWNLOADING_FOLDER_NAME).normalize());
+    }
+
+    private void swapReplacementFolder(Path stagedFolder, Path targetFolder) throws IOException {
+        if (stagedFolder == null || targetFolder == null) {
+            return;
+        }
+
+        Path normalizedStaged = stagedFolder.normalize();
+        Path normalizedTarget = targetFolder.normalize();
+        if (!Files.exists(normalizedStaged) || !Files.isDirectory(normalizedStaged) || normalizedStaged.equals(normalizedTarget)) {
+            return;
+        }
+
+        Path targetParent = normalizedTarget.getParent();
+        if (targetParent != null) {
+            Files.createDirectories(targetParent);
+        }
+
+        Path backupFolder = normalizedTarget.resolveSibling(
+            normalizedTarget.getFileName().toString() + "__backup_" + Instant.now().toEpochMilli()
+        );
+        boolean backedUp = false;
+        try {
+            if (Files.exists(normalizedTarget)) {
+                Files.move(normalizedTarget, backupFolder, StandardCopyOption.REPLACE_EXISTING);
+                backedUp = true;
+            }
+
+            Files.move(normalizedStaged, normalizedTarget, StandardCopyOption.REPLACE_EXISTING);
+            if (backedUp) {
+                deleteDirectoryQuietly(backupFolder);
+            }
+        } catch (IOException error) {
+            if (!Files.exists(normalizedTarget) && backedUp && Files.exists(backupFolder)) {
+                Files.move(backupFolder, normalizedTarget, StandardCopyOption.REPLACE_EXISTING);
+            }
+            throw error;
+        } finally {
+            pruneEmptyManagedParents(normalizedStaged.getParent(), logger.getDownloadsRoot().resolve(DOWNLOADED_FOLDER_NAME).normalize());
+        }
     }
 
     private void moveDirectoryContents(Path sourceFolder, Path targetFolder) throws IOException {

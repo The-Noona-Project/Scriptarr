@@ -4,7 +4,8 @@ import {resolveVaultConfig} from "./config.mjs";
 import {serviceAuth} from "./serviceAuth.mjs";
 import {createStore} from "./createStore.mjs";
 
-const requireJson = express.json();
+const JSON_BODY_LIMIT = "10mb";
+const requireJson = express.json({limit: JSON_BODY_LIMIT});
 const sendStoreError = (logger, res, error, context = {}) => {
   if (error?.code === "OWNER_ALREADY_CLAIMED") {
     logger.warn("Owner claim was rejected because an owner already exists.", context);

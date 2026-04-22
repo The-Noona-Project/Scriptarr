@@ -12,6 +12,8 @@ COPY services/moon ./services/moon
 
 WORKDIR /app/services/moon
 
+RUN npm run build
+
 EXPOSE 3000
 
 CMD ["npm", "start"]

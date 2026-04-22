@@ -724,6 +724,21 @@ button {
   color: var(--admin-muted);
 }
 
+.repair-grid,
+.repair-option-list,
+.inline-actions {
+  display: grid;
+  gap: 14px;
+}
+
+.repair-card {
+  align-items: flex-start;
+}
+
+.repair-card-current {
+  border-style: dashed;
+}
+
 .detail-table-wrap {
   overflow-x: auto;
 }

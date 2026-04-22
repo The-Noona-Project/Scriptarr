@@ -60,6 +60,10 @@ labels from metadata providers, which Moon admin reuses for its library and cale
 Raven now also normalizes lifecycle status from both source scrapes and metadata providers, including completed or
 finished series states, so Moon's admin library, title-detail, and calendar views can distinguish active titles from
 completed, hiatus, cancelled, or upcoming work without guessing from chapter gaps alone.
+Raven now also exposes repair candidates per library title so Moon admin can compare alternate concrete provider
+targets, review chapter coverage, and queue a staged replacement download without deleting the current title first.
+Replacement downloads stage into a fresh working and downloaded root, then only swap the live files after the
+replacement succeeds.
 
 Download completion now waits for both file promotion and brokered catalog persistence before a task can reach `100%`.
 If catalog persistence fails, Raven marks the task failed instead of leaving it stuck at `90%`. On boot, Raven also
@@ -68,3 +72,5 @@ rescans the existing `downloaded/<type>/...` tree to backfill missing catalog ro
 Raven still runs one title at a time for provider and VPN safety, but page fetches inside a title now use bounded
 concurrency, preserve archive ordering, skip already-written files on retry, and collapse duplicate restorable tasks
 for the same logical request during recovery.
+For long-running WeebCentral series, Raven now follows the source page's HTMX full-chapter-list flow instead of only
+the initial visible subset, which fixes partial-history titles such as Tomb Raider King.

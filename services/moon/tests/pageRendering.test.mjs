@@ -386,13 +386,34 @@ test("admin library title page renders Sonarr-style hero stats and chapter table
         percent: 100,
         message: "Catalog persisted.",
         updatedAt: "2026-04-20T08:05:00.000Z"
-      }]
+      }],
+      repair: {
+        options: [{
+          providerId: "weebcentral",
+          providerName: "WeebCentral",
+          titleName: "Akame ga Kill!",
+          titleUrl: "https://weebcentral.com/series/akame-ga-kill",
+          current: true,
+          coverageLabel: "1-24 (24 chapters)"
+        }, {
+          providerId: "mangadex",
+          providerName: "MangaDex",
+          titleName: "Akame ga Kill!",
+          titleUrl: "https://mangadex.org/title/akame-ga-kill",
+          current: false,
+          matchScore: 182,
+          coverageLabel: "1-24 (24 chapters)",
+          warnings: ["Manual verification recommended"]
+        }]
+      }
     }
   });
 
   assert.match(html, /Series facts/);
+  assert.match(html, /Provider and source recovery/);
   assert.match(html, /Cataloged chapter table/);
   assert.match(html, /Open user title page/);
+  assert.match(html, /Queue safe replacement/);
   assert.match(html, /Lifecycle/);
   assert.match(html, /completed/i);
   assert.match(html, /Akame ga Kill ch024\.cbz/);

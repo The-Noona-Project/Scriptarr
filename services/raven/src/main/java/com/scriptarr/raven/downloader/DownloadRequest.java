@@ -13,6 +13,8 @@ import java.util.Map;
  * @param requestId linked moderated request id when the queue came from intake
  * @param selectedMetadata saved metadata snapshot from intake
  * @param selectedDownload saved download snapshot from intake
+ * @param replacementTitleId existing Raven title id when this queue is a
+ * replacement or repair download
  * @param priority relative Raven queue priority
  */
 public record DownloadRequest(
@@ -24,6 +26,7 @@ public record DownloadRequest(
     String requestId,
     Map<String, Object> selectedMetadata,
     Map<String, Object> selectedDownload,
+    String replacementTitleId,
     String priority
 ) {
 }

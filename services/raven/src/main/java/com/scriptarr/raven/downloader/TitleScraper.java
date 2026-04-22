@@ -191,14 +191,24 @@ public class TitleScraper {
         }
 
         try {
-            String listUrl = resolveFullChapterListUrl(titleUrl);
+            ChapterListRequest chapterListRequest = resolveChapterListRequest(titleUrl);
+            String listUrl = chapterListRequest.url();
             if (listUrl == null || listUrl.isBlank()) {
                 return List.of();
             }
 
             Document doc = executeWithRetries(
                 "chapter list request",
-                () -> connect(listUrl).referrer(titleUrl.trim()).get()
+                () -> {
+                    Connection connection = connect(listUrl).referrer(titleUrl.trim());
+                    if (chapterListRequest.hxRequest()) {
+                        connection.header("HX-Request", "true");
+                    }
+                    if (chapterListRequest.hxTarget() != null && !chapterListRequest.hxTarget().isBlank()) {
+                        connection.header("HX-Target", chapterListRequest.hxTarget());
+                    }
+                    return connection.get();
+                }
             );
 
             List<Map<String, String>> rawChapters = new ArrayList<>();
@@ -336,6 +346,7 @@ public class TitleScraper {
     private Connection connect(String url) {
         return Jsoup.connect(url)
             .userAgent(USER_AGENT)
+            .maxBodySize(0)
             .timeout((int) SCRAPE_TIMEOUT.toMillis());
     }
 
@@ -381,6 +392,28 @@ public class TitleScraper {
             : error.getMessage().trim();
     }
 
+    private ChapterListRequest resolveChapterListRequest(String titleUrl) {
+        try {
+            Document titleDocument = executeWithRetries("title chapter list preflight", () -> connect(titleUrl.trim()).get());
+            Element showAllButton = titleDocument.selectFirst("button[hx-get*=\"/full-chapter-list\"], [hx-get*=\"/full-chapter-list\"]");
+            if (showAllButton != null) {
+                String hxUrl = normalizeChapterListUrl(titleUrl, showAllButton.attr("hx-get"));
+                if (!hxUrl.isBlank()) {
+                    return new ChapterListRequest(
+                        hxUrl,
+                        true,
+                        showAllButton.attr("hx-target")
+                    );
+                }
+            }
+        } catch (Exception error) {
+            logger.warn("SCRAPER", "Title chapter list preflight failed, falling back to the derived full list URL.", error.getMessage());
+        }
+
+        String fallbackUrl = resolveFullChapterListUrl(titleUrl);
+        return new ChapterListRequest(fallbackUrl, false, "");
+    }
+
     private String resolveFullChapterListUrl(String titleUrl) {
         try {
             URI uri = URI.create(titleUrl.trim());
@@ -408,9 +441,27 @@ public class TitleScraper {
         }
     }
 
+    private String normalizeChapterListUrl(String titleUrl, String value) {
+        String normalized = value == null ? "" : value.trim();
+        if (normalized.isBlank()) {
+            return "";
+        }
+        if (normalized.startsWith("http://") || normalized.startsWith("https://")) {
+            return normalized;
+        }
+        try {
+            return URI.create(titleUrl.trim()).resolve(normalized).toString();
+        } catch (Exception ignored) {
+            return "";
+        }
+    }
+
     @FunctionalInterface
     private interface DocumentSupplier {
         Document get() throws Exception;
+    }
+
+    private record ChapterListRequest(String url, boolean hxRequest, String hxTarget) {
     }
 
     private List<Map<String, String>> dedupeExactChapters(List<Map<String, String>> chapters) {

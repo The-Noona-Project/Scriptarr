@@ -60,6 +60,10 @@ Raven now keeps WeebCentral first by default, exposes MangaDex as a second norma
 Anime-Planet ahead of MangaUpdates as a scrape-based metadata source for aliases, summaries, and lifecycle hints.
 Moon admin also exposes a dedicated Discord page at `/admin/discord` for guild workflow settings, onboarding template
 or channel management, per-command role gates, and Portal runtime visibility without exposing Discord credentials.
+Moon's user app now runs as an embedded Next.js App Router frontend with Once UI shells, a megamenu header, avatar
+profile controls, a simple footer, and an immersive full-page reader.
+That reader now defaults to seamless infinite chapter scroll while keeping a secondary paged mode, and it still
+persists Moon-native progress plus bookmarks behind the same typed reader routes.
 Moon admin calendar is now backed by Raven chapter release dates captured from provider scrapes plus metadata
 enrichment, so the calendar view can surface real title-release timing instead of only generic task history.
 Moon admin also exposes `/admin/system/api` for trusted automation settings, API key generation, and same-origin
@@ -128,6 +132,10 @@ For end-to-end Docker verification, use:
 - Raven VPN should fail closed when VPN-backed downloads are enabled and the tunnel cannot be established.
 - Raven should only report download completion after promote plus catalog persistence succeed, and it now rescans the
   `downloaded/<type>/...` tree on boot to recover missing catalog records from finished files.
+- Raven admin repair now exposes concrete alternate provider targets per title and can queue a staged replacement
+  download that keeps the current catalog row and files intact until the replacement succeeds.
+- Raven's WeebCentral scraper now follows the live source's HTMX full-chapter-list flow for long-running series, so
+  titles such as Tomb Raider King can recover earlier chapters instead of silently stopping at the visible subset.
 - Moon admin stays dark by default, serves versioned browser assets, and exposes the managed-service updates flow for
   Vault, Sage, Moon, Raven, Portal, and Oracle.
 - Moon's user app is now installable as a PWA, keeps HTML uncached, and uses a rolling recent-chapter reader cache on

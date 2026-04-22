@@ -283,11 +283,12 @@ self.addEventListener("fetch", (event) => {
  * @param {import("express").Express} app
  * @param {{
  *   config?: {sageBaseUrl?: string},
- *   getSessionToken?: (request: import("express").Request) => string
+ *   getSessionToken?: (request: import("express").Request) => string,
+ *   userNextRuntime?: {handle: (request: import("http").IncomingMessage, response: import("http").ServerResponse) => Promise<void>} | null
  * }} [options]
  * @returns {void}
  */
-export const registerPageRoutes = (app, {config = {}, getSessionToken = () => ""} = {}) => {
+export const registerPageRoutes = (app, {config = {}, getSessionToken = () => "", userNextRuntime = null} = {}) => {
   const userHtmlPath = path.join(process.cwd(), "apps", "user", "index.html");
   const adminHtmlPath = path.join(process.cwd(), "apps", "admin", "index.html");
   const userAssetsPath = path.join(process.cwd(), "apps", "user", "assets");
@@ -431,11 +432,29 @@ export const registerPageRoutes = (app, {config = {}, getSessionToken = () => ""
 
   app.get("/", async (_req, res) => {
     res.setHeader("Cache-Control", "no-store");
+    if (userNextRuntime) {
+      await userNextRuntime.handle(_req, res);
+      return;
+    }
     res.type("html").send(await renderUserHtml());
+  });
+
+  if (userNextRuntime) {
+    app.all("/_next/*splat", async (req, res) => {
+      await userNextRuntime.handle(req, res);
+    });
+  }
+
+  app.all("/api/*splat", (_req, res) => {
+    res.status(404).json({error: "Not found"});
   });
 
   app.get("/*splat", async (_req, res) => {
     res.setHeader("Cache-Control", "no-store");
+    if (userNextRuntime) {
+      await userNextRuntime.handle(_req, res);
+      return;
+    }
     res.type("html").send(await renderUserHtml());
   });
 };

@@ -194,6 +194,15 @@ public record RavenNamingSettings(
         return normalized == null ? "" : normalized;
     }
 
+    /**
+     * Keep only naming templates that reference at least one allowed token.
+     *
+     * @param template requested template value
+     * @param fallback fallback template when the requested value is invalid
+     * @param rawToken non-padded token Raven accepts for this field
+     * @param paddedToken padded token Raven accepts for this field
+     * @return normalized template or the fallback
+     */
     static String normalizeTemplate(String template, String fallback, String rawToken, String paddedToken) {
         String normalized = template == null ? "" : template.trim();
         if (normalized.isBlank()) {

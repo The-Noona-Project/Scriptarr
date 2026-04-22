@@ -15,6 +15,9 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  * Unit coverage for Raven's settings-aware provider ordering.
  */
 class DownloadProviderRegistryTest {
+    /**
+     * Verify enabled Raven download providers sort by configured priority.
+     */
     @Test
     void enabledProvidersHonorConfiguredPriority() {
         FakeRavenBrokerClient brokerClient = new FakeRavenBrokerClient();

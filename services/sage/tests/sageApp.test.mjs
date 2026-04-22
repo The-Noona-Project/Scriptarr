@@ -38,6 +38,7 @@ const defaultLibraryTitle = Object.freeze({
   status: "watching",
   latestChapter: "166",
   coverAccent: "#ff6a3d",
+  coverUrl: "https://images.example/dandadan.jpg",
   summary: "Aliens and yokai.",
   releaseLabel: "2021",
   chapterCount: 166,
@@ -576,7 +577,10 @@ test("sage signs in the first owner through the Discord callback and moderates r
   assert.equal(home.continueReading[0].titleId, "dan-da-dan");
   assert.equal(home.continueReading[0].title, "Dandadan");
   assert.equal(home.continueReading[0].coverAccent, "#ff6a3d");
+  assert.equal(home.continueReading[0].coverUrl, "https://images.example/dandadan.jpg");
   assert.equal(home.continueReading[0].bookmark.chapterId, "dandadan-c166");
+  assert.equal(home.shelves[0].title, "Your Bookshelf");
+  assert.equal(home.shelves[1].title, "Recently added to Webtoon");
   assert.ok(dependencyStub.calls.health >= 1);
   assert.ok(dependencyStub.calls.bootstrap >= 1);
   assert.ok(dependencyStub.calls.runtime >= 1);
@@ -1648,6 +1652,84 @@ test("sage brokers service-to-service routes with internal service auth", async 
     headers: portalHeaders
   });
   assert.equal(forbidden.status, 403);
+
+  await closeServer(sageServer);
+  await closeServer(vaultServer);
+  await closeServer(dependencyStub.server);
+});
+
+test("sage brokers oversized Raven title payloads without tripping internal JSON limits", async () => {
+  const {app: vaultApp} = await createVaultApp();
+  const vaultServer = vaultApp.listen(0);
+  const vaultPort = vaultServer.address().port;
+
+  const dependencyStub = await createDependencyStub();
+  dependencyStub.server.listen(0);
+  const dependencyPort = dependencyStub.server.address().port;
+
+  process.env.SCRIPTARR_VAULT_BASE_URL = `http://127.0.0.1:${vaultPort}`;
+  process.env.SCRIPTARR_WARDEN_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_PORTAL_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_ORACLE_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_RAVEN_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+
+  const {app: sageApp} = await createSageApp();
+  const sageServer = sageApp.listen(0);
+  const sagePort = sageServer.address().port;
+  const baseUrl = `http://127.0.0.1:${sagePort}`;
+  const ravenHeaders = {
+    "Authorization": "Bearer raven-dev-token",
+    "Content-Type": "application/json"
+  };
+
+  const oversizedTitle = {
+    id: "title-large",
+    title: "Oversized Title Payload",
+    mediaType: "manhwa",
+    libraryTypeLabel: "Manhwa",
+    libraryTypeSlug: "manhwa",
+    status: "active",
+    latestChapter: "411",
+    coverAccent: "#ff6a3d",
+    summary: "x".repeat(150_000),
+    releaseLabel: "2026",
+    chapterCount: 411,
+    chaptersDownloaded: 411,
+    author: "Scriptarr",
+    tags: ["action"],
+    aliases: ["Oversized"],
+    metadataProvider: "mangadex",
+    metadataMatchedAt: "2026-04-21T00:00:00.000Z",
+    relations: [],
+    sourceUrl: "https://weebcentral.com/series/oversized-title",
+    coverUrl: "https://cdn.example.com/oversized.jpg",
+    workingRoot: "/downloads/downloading/manhwa/Oversized_Title",
+    downloadRoot: "/downloads/downloaded/manhwa/Oversized_Title",
+    chapters: Array.from({length: 411}, (_value, index) => ({
+      id: `title-large-c${index + 1}`,
+      label: `Chapter ${index + 1}`,
+      chapterNumber: String(index + 1),
+      pageCount: 12,
+      releaseDate: "2026-04-21T00:00:00.000Z",
+      available: true,
+      archivePath: `/downloads/downloaded/manhwa/Oversized_Title/Chapter_${index + 1}.cbz`,
+      sourceUrl: `https://weebcentral.com/chapters/oversized-${index + 1}`
+    }))
+  };
+
+  const stored = await fetch(`${baseUrl}/api/internal/vault/raven/titles/title-large`, {
+    method: "PUT",
+    headers: ravenHeaders,
+    body: JSON.stringify(oversizedTitle)
+  });
+  assert.equal(stored.status, 200);
+
+  const loaded = await fetch(`${baseUrl}/api/internal/vault/raven/titles/title-large`, {
+    headers: ravenHeaders
+  }).then((response) => response.json());
+  assert.equal(loaded.id, "title-large");
+  assert.equal(loaded.chapters.length, 411);
+  assert.equal(loaded.summary.length, 150_000);
 
   await closeServer(sageServer);
   await closeServer(vaultServer);

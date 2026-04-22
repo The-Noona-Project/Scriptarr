@@ -106,6 +106,125 @@ class TitleScraperRetryTest {
     }
 
     /**
+     * Verify chapter discovery follows the source page's HTMX full-list link so
+     * long-running series are not truncated to the visible subset.
+     *
+     * @throws Exception when the local test server cannot start
+     */
+    @Test
+    void getChaptersUsesHtmxFullListRequestWhenAvailable() throws Exception {
+        AtomicInteger preflightRequests = new AtomicInteger();
+        AtomicInteger htmxListRequests = new AtomicInteger();
+        server = HttpServer.create(new InetSocketAddress(0), 0);
+        server.createContext("/series/demo/Example-Title", (exchange) -> {
+            preflightRequests.incrementAndGet();
+            respond(
+                exchange,
+                200,
+                """
+                    <html><body>
+                      <button
+                        hx-get="/series/demo/full-chapter-list"
+                        hx-target="chapter-list"
+                      >Show All Chapters</button>
+                    </body></html>
+                    """
+            );
+        });
+        server.createContext("/series/demo/full-chapter-list", (exchange) -> {
+            htmxListRequests.incrementAndGet();
+            String hxRequest = exchange.getRequestHeaders().getFirst("HX-Request");
+            String hxTarget = exchange.getRequestHeaders().getFirst("HX-Target");
+            if (!"true".equalsIgnoreCase(hxRequest) || !"chapter-list".equalsIgnoreCase(hxTarget)) {
+                respond(exchange, 400, "missing htmx headers");
+                return;
+            }
+            respond(
+                exchange,
+                200,
+                """
+                    <html><body>
+                      <a href="https://weebcentral.com/chapters/chapter-001">Chapter 1</a>
+                      <a href="https://weebcentral.com/chapters/chapter-206">Chapter 206</a>
+                      <a href="https://weebcentral.com/chapters/chapter-411">Chapter 411</a>
+                    </body></html>
+                    """
+            );
+        });
+        server.start();
+
+        TitleScraper scraper = new TitleScraper(new TestLogger());
+        String titleUrl = "http://127.0.0.1:" + server.getAddress().getPort() + "/series/demo/Example-Title";
+
+        List<Map<String, String>> chapters = scraper.getChapters(titleUrl);
+
+        assertEquals(1, preflightRequests.get());
+        assertEquals(1, htmxListRequests.get());
+        assertEquals(3, chapters.size());
+        assertEquals("1", chapters.getFirst().get("chapter_number"));
+        assertEquals("411", chapters.getLast().get("chapter_number"));
+    }
+
+    /**
+     * Verify long WeebCentral full-list responses are not truncated at the old
+     * Jsoup default body-size cap, which previously clipped long series like
+     * Tomb Raider King down to the later chapter range only.
+     *
+     * @throws Exception when the local test server cannot start
+     */
+    @Test
+    void getChaptersHandlesLargeFullChapterListResponses() throws Exception {
+        server = HttpServer.create(new InetSocketAddress(0), 0);
+        server.createContext("/series/demo/Example-Title", (exchange) -> respond(
+            exchange,
+            200,
+            """
+                <html><body>
+                  <button
+                    hx-get="/series/demo/full-chapter-list"
+                    hx-target="chapter-list"
+                  >Show All Chapters</button>
+                </body></html>
+                """
+        ));
+        server.createContext("/series/demo/full-chapter-list", (exchange) -> {
+            StringBuilder body = new StringBuilder("<html><body>");
+            for (int chapter = 1; chapter <= 205; chapter++) {
+                body
+                    .append("<a href=\"https://weebcentral.com/chapters/chapter-")
+                    .append(String.format("%03d", chapter))
+                    .append("\">Chapter ")
+                    .append(chapter)
+                    .append("</a>");
+            }
+            body.append("<!--");
+            body.append("x".repeat(2_300_000));
+            body.append("-->");
+            for (int chapter = 206; chapter <= 411; chapter++) {
+                body
+                    .append("<a href=\"https://weebcentral.com/chapters/chapter-")
+                    .append(String.format("%03d", chapter))
+                    .append("\">Chapter ")
+                    .append(chapter)
+                    .append("</a>");
+            }
+            body.append("</body></html>");
+            respond(exchange, 200, body.toString());
+        });
+        server.start();
+
+        TitleScraper scraper = new TitleScraper(new TestLogger());
+        String titleUrl = "http://127.0.0.1:" + server.getAddress().getPort() + "/series/demo/Example-Title";
+
+        List<Map<String, String>> chapters = scraper.getChapters(titleUrl);
+
+        assertEquals(411, chapters.size());
+        assertEquals("1", chapters.getFirst().get("chapter_number"));
+        assertEquals("206", chapters.get(205).get("chapter_number"));
+        assertEquals("411", chapters.getLast().get("chapter_number"));
+    }
+
+    /**
      * Send a fixed HTTP response for the lightweight local server.
      *
      * @param exchange active HTTP exchange

@@ -1,0 +1,12 @@
+{
+  "/_global-error/page": "/_global-error",
+  "/_not-found/page": "/_not-found",
+  "/browse/page": "/browse",
+  "/following/page": "/following",
+  "/library/[type]/page": "/library/[type]",
+  "/library/page": "/library",
+  "/myrequests/page": "/myrequests",
+  "/page": "/",
+  "/reader/[...parts]/page": "/reader/[...parts]",
+  "/title/[...parts]/page": "/title/[...parts]"
+}

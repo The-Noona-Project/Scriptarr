@@ -31,3 +31,6 @@
 - `/api/moon-v3/admin/library/:titleId` is now the brokered admin drill-down payload for Moon's Sonarr-style title
   detail route. Keep it rich enough to combine title lifecycle status, related requests, active or recent Raven tasks,
   and chapter-level release or archive fields without forcing Moon to fan out into multiple browser calls.
+- Sage now also brokers admin title repair APIs. Keep `/api/moon-v3/admin/library/:titleId/repair-options` and
+  `/api/moon-v3/admin/library/:titleId/replace-source` as thin Moon-safe wrappers around Raven's concrete provider
+  repair flow instead of leaking Raven directly into the browser.

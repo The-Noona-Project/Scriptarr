@@ -4,9 +4,10 @@
 import {hasPermission} from "./auth.mjs";
 import {buildIntakeSelection, evaluateSelectionAgainstGuardState} from "./requestSelectionGuards.mjs";
 import {buildRequestWorkConflictPayload, isRequestWorkConflictError} from "./requestConflict.mjs";
+import {buildMoonHomePayload} from "./buildMoonHomePayload.mjs";
 
 const defaultReaderPreferences = Object.freeze({
-  readingMode: "paged",
+  readingMode: "infinite",
   pageFit: "width",
   showSidebar: false,
   showPageNumbers: true
@@ -40,11 +41,11 @@ const parseIso = (value) => {
 
 const defaultReaderPreferencesForType = (typeSlug) => ({
   ...defaultReaderPreferences,
-  readingMode: normalizeTypeSlug(typeSlug) === "webtoon" ? "webtoon" : "paged"
+  readingMode: normalizeTypeSlug(typeSlug) === "webtoon" ? "infinite" : "infinite"
 });
 
 const normalizeStoredReaderPreferenceLeaf = (value = {}) => ({
-  ...(["paged", "webtoon"].includes(normalizeString(value.readingMode))
+  ...(["paged", "webtoon", "infinite"].includes(normalizeString(value.readingMode))
     ? {readingMode: normalizeString(value.readingMode)}
     : {}),
   ...(["width", "contain", "height"].includes(normalizeString(value.pageFit))
@@ -57,7 +58,7 @@ const normalizeStoredReaderPreferenceLeaf = (value = {}) => ({
 const normalizeReaderPreferenceLeaf = (value = {}, typeSlug = "manga") => {
   const defaults = defaultReaderPreferencesForType(typeSlug);
   return {
-    readingMode: ["paged", "webtoon"].includes(normalizeString(value.readingMode))
+    readingMode: ["paged", "webtoon", "infinite"].includes(normalizeString(value.readingMode))
       ? normalizeString(value.readingMode)
       : defaults.readingMode,
     pageFit: ["width", "contain", "height"].includes(normalizeString(value.pageFit))
@@ -126,6 +127,7 @@ const toTitleSummary = (title = {}) => ({
   aliases: normalizeArray(title.aliases),
   metadataProvider: normalizeString(title.metadataProvider),
   metadataMatchedAt: parseIso(title.metadataMatchedAt),
+  updatedAt: parseIso(title.updatedAt),
   relations: normalizeArray(title.relations),
   sourceUrl: normalizeString(title.sourceUrl),
   workingRoot: normalizeString(title.workingRoot),
@@ -247,8 +249,13 @@ const enrichProgressEntry = (entry = {}, titleIndex = new Map()) => {
     libraryTypeLabel: normalizeString(title.libraryTypeLabel, normalizeString(title.mediaType, "Manga")),
     libraryTypeSlug: normalizeTypeSlug(title.libraryTypeSlug || title.mediaType),
     coverAccent: normalizeString(title.coverAccent, "#4f8f88"),
+    coverUrl: normalizeString(title.coverUrl),
     latestChapter: normalizeString(title.latestChapter, entry.chapterLabel || "In progress"),
-    summary: normalizeString(title.summary)
+    summary: normalizeString(title.summary),
+    tags: normalizeArray(title.tags),
+    chapterCount: Number.parseInt(String(title.chapterCount || 0), 10) || 0,
+    chaptersDownloaded: Number.parseInt(String(title.chaptersDownloaded || 0), 10) || 0,
+    updatedAt: parseIso(entry.updatedAt)
   };
 };
 
@@ -572,6 +579,31 @@ export const registerMoonV3Routes = (app, {
         .sort((left, right) => Date.parse(right.updatedAt || "") - Date.parse(left.updatedAt || ""))
         .slice(0, 8)
     });
+  }));
+
+  app.get("/api/moon-v3/admin/library/:titleId/repair-options", requireLibraryRead(async (req, res) => {
+    const result = await serviceJson(config.ravenBaseUrl, `/v1/library/${encodeURIComponent(req.params.titleId)}/repair-options`);
+    if (!result.ok) {
+      res.status(result.status || 502).json(result.payload || {error: "Moon could not load Raven repair options."});
+      return;
+    }
+    res.json(result.payload);
+  }));
+
+  app.post("/api/moon-v3/admin/library/:titleId/replace-source", requireLibraryRead(async (req, res) => {
+    const requestBody = normalizeObject(req.body, {}) || {};
+    const result = await serviceJson(config.ravenBaseUrl, `/v1/library/${encodeURIComponent(req.params.titleId)}/replace-source`, {
+      method: "POST",
+      body: {
+        ...requestBody,
+        requestedBy: req.user?.discordUserId || "scriptarr-admin"
+      }
+    });
+    if (!result.ok) {
+      res.status(result.status || 502).json(result.payload || {error: "Moon could not queue the Raven replacement download."});
+      return;
+    }
+    res.status(202).json(result.payload);
   }));
 
   app.get("/api/moon-v3/admin/add/search", requireLibraryRead(async (req, res) => {
@@ -957,17 +989,19 @@ export const registerMoonV3Routes = (app, {
       readUserScopedSetting(vaultClient, "moon.following", req.user.discordUserId, [])
     ]);
     const titleIndex = new Map(titles.map((title) => [title.id, title]));
+    const continueReading = normalizeArray(progress).map((entry) => enrichProgressEntry(entry, titleIndex));
 
-    res.json({
-      latestTitles: titles.slice(0, 8),
-      continueReading: normalizeArray(progress).map((entry) => enrichProgressEntry(entry, titleIndex)),
-      requests: requests.filter((entry) => entry.requestedBy.discordUserId === req.user.discordUserId),
+    res.json(buildMoonHomePayload({
+      titles,
+      requests,
+      progress: continueReading,
       following: normalizeArray(following).map((entry) => ({
         ...entry,
         libraryTypeLabel: normalizeString(entry.libraryTypeLabel, normalizeString(entry.mediaType, "Manga")),
         libraryTypeSlug: normalizeTypeSlug(entry.libraryTypeSlug || entry.mediaType)
-      }))
-    });
+      })),
+      discordUserId: req.user.discordUserId
+    }));
   }));
 
   app.get("/api/moon-v3/user/library", withUser(requireUser, async (_req, res) => {

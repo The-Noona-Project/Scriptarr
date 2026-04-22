@@ -77,6 +77,11 @@ export const registerAuthRoutes = (app, {config, getSessionToken, logger}) => {
     const result = await proxyToSage(req, "/api/auth/status");
     res.status(result.status).json(result.payload);
   });
+
+  app.post("/api/moon/auth/logout", (_req, res) => {
+    res.setHeader("Set-Cookie", serializeCookie(config.sessionCookieName, "", {maxAge: 0}));
+    res.json({ok: true});
+  });
 };
 
 export default registerAuthRoutes;
