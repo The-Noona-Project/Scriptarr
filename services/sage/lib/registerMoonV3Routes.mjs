@@ -1,7 +1,9 @@
 /**
  * @file Scriptarr Sage module: services/sage/lib/registerMoonV3Routes.mjs.
  */
-import {hasPermission} from "./auth.mjs";
+import {ADMIN_ACCESS_DOMAINS} from "@scriptarr/access";
+import {hasDomainAccess, hasPermission} from "./auth.mjs";
+import {appendDurableEvent, appendUserEvent, buildServiceActor, buildUserActor} from "./adminEvents.mjs";
 import {buildIntakeSelection, evaluateSelectionAgainstGuardState} from "./requestSelectionGuards.mjs";
 import {buildRequestWorkConflictPayload, isRequestWorkConflictError} from "./requestConflict.mjs";
 import {buildMoonHomePayload} from "./buildMoonHomePayload.mjs";
@@ -30,6 +32,26 @@ const normalizeString = (value, fallback = "") => {
 
 const normalizeArray = (value) => Array.isArray(value) ? value : [];
 const normalizeObject = (value, fallback = null) => value && typeof value === "object" && !Array.isArray(value) ? value : fallback;
+const EVENT_DOMAIN_ACCESS = Object.freeze({
+  auth: "users",
+  users: "users",
+  access: "users",
+  overview: "overview",
+  library: "library",
+  add: "add",
+  import: "import",
+  calendar: "calendar",
+  mediamanagement: "mediamanagement",
+  activity: "activity",
+  wanted: "wanted",
+  requests: "requests",
+  discord: "discord",
+  settings: "settings",
+  system: "system",
+  publicapi: "publicapi",
+  follow: "library",
+  reader: "library"
+});
 
 const normalizeTypeSlug = (value, fallback = "manga") => {
   const normalized = normalizeString(value, fallback)
@@ -324,6 +346,7 @@ const mergeDisplayStrings = (...values) => {
  *   vaultClient: ReturnType<import("./vaultClient.mjs").createVaultClient>,
  *   requireUser: ReturnType<import("./auth.mjs").requireSession>,
  *   requirePermission: (permission: string) => import("express").RequestHandler,
+ *   requireAdminGrant: (domain: string, level?: "" | "read" | "write" | "root") => import("express").RequestHandler,
  *   readRavenVpnSettings: () => Promise<Record<string, unknown>>,
  *   readRavenNamingSettings: () => Promise<Record<string, unknown>>,
  *   readMetadataProviderSettings: () => Promise<Record<string, unknown>>,
@@ -343,6 +366,7 @@ export const registerMoonV3Routes = (app, {
   vaultClient,
   requireUser,
   requirePermission,
+  requireAdminGrant,
   readRavenVpnSettings,
   readRavenNamingSettings,
   readMetadataProviderSettings,
@@ -580,6 +604,7 @@ export const registerMoonV3Routes = (app, {
     requestSummary,
     requestedBy,
     actor,
+    actorUser,
     comment,
     eventMessage
   }) => {
@@ -607,6 +632,22 @@ export const registerMoonV3Routes = (app, {
         sourceFoundOptions: [],
         jobId: normalizeString(queueResult.payload?.jobId),
         taskId: normalizeString(queueResult.payload?.taskId)
+      }
+    });
+
+    await appendEvent({
+      ...(actorUser ? buildUserActor(actorUser, "admin") : buildServiceActor("scriptarr-sage", normalizeString(actor, "Scriptarr Sage"))),
+      domain: "requests",
+      eventType: "request-approved",
+      severity: "info",
+      targetType: "request",
+      targetId: normalizeString(requestId),
+      message: normalizeString(eventMessage, normalizeString(comment, "Request approved and queued.")),
+      metadata: {
+        requestId: normalizeString(requestId),
+        requestedBy: normalizeString(requestedBy),
+        title: normalizeString(requestSummary?.title),
+        queue: queueResult.payload || {}
       }
     });
 
@@ -695,15 +736,61 @@ export const registerMoonV3Routes = (app, {
     return {warden, portal, oracle, raven};
   };
 
-  const requireAdminSettings = (handler) => withPermission(requirePermission, "manage_settings", handler);
-  const requireLibraryRead = (handler) => withPermission(requirePermission, "read_library", handler);
-  const requireRequestRead = (handler) => withPermission(requirePermission, "read_requests", handler);
+  const withAdminAccess = (domain, level, handler) => async (req, res, next) => {
+    await requireAdminGrant(domain, level)(req, res, async () => {
+      try {
+        await handler(req, res, next);
+      } catch (error) {
+        next(error);
+      }
+    });
+  };
+  const requireOverviewRead = (handler) => withAdminAccess("overview", "read", handler);
+  const requireLibraryRead = (handler) => withAdminAccess("library", "read", handler);
+  const requireLibraryRoot = (handler) => withAdminAccess("library", "root", handler);
+  const requireAddRead = (handler) => withAdminAccess("add", "read", handler);
+  const requireAddWrite = (handler) => withAdminAccess("add", "write", handler);
+  const requireImportRead = (handler) => withAdminAccess("import", "read", handler);
+  const requireCalendarRead = (handler) => withAdminAccess("calendar", "read", handler);
+  const requireActivityRead = (handler) => withAdminAccess("activity", "read", handler);
+  const requireWantedRead = (handler) => withAdminAccess("wanted", "read", handler);
+  const requireRequestRead = (handler) => withAdminAccess("requests", "read", handler);
+  const requireRequestWrite = (handler) => withAdminAccess("requests", "write", handler);
+  const requireRequestRoot = (handler) => withAdminAccess("requests", "root", handler);
+  const requireUsersRead = (handler) => withAdminAccess("users", "read", handler);
+  const requireUsersRoot = (handler) => withAdminAccess("users", "root", handler);
+  const requireDiscordRead = (handler) => withAdminAccess("discord", "read", handler);
+  const requireMediaManagementRead = (handler) => withAdminAccess("mediamanagement", "read", handler);
+  const requireSettingsRead = (handler) => withAdminAccess("settings", "read", handler);
+  const requireSettingsWrite = (handler) => withAdminAccess("settings", "write", handler);
+  const requireSystemRead = (handler) => withAdminAccess("system", "read", handler);
+  const requireSystemRoot = (handler) => withAdminAccess("system", "root", handler);
+  const requirePublicApiRead = (handler) => withAdminAccess("publicapi", "read", handler);
+  const requirePublicApiRoot = (handler) => withAdminAccess("publicapi", "root", handler);
+  const appendEvent = (payload) => appendDurableEvent(vaultClient, payload, logger);
+  const appendEventForUser = (payload) => appendUserEvent(vaultClient, payload, logger);
+  const normalizeRequestedEventDomains = (value) => Array.isArray(value)
+    ? value.map((entry) => normalizeString(entry)).filter(Boolean)
+    : value
+      ? [normalizeString(value)].filter(Boolean)
+      : [];
+  const ensureEventReadAccess = (user, domains = []) => {
+    const normalizedDomains = normalizeRequestedEventDomains(domains);
+    if (!normalizedDomains.length) {
+      return hasDomainAccess(user, "system", "read");
+    }
+    return normalizedDomains.every((domain) => hasDomainAccess(
+      user,
+      EVENT_DOMAIN_ACCESS[domain] || "system",
+      "read"
+    ));
+  };
 
   app.get("/api/moon-v3/public/branding", async (_req, res) => {
     res.json(await readMoonBrandingSettings());
   });
 
-  app.get("/api/moon-v3/admin/overview", requireLibraryRead(async (_req, res) => {
+  app.get("/api/moon-v3/admin/overview", requireOverviewRead(async (_req, res) => {
     const [titles, tasks, requests, services] = await Promise.all([
       loadLibrary(),
       loadTasks(),
@@ -772,7 +859,7 @@ export const registerMoonV3Routes = (app, {
     res.json(result.payload);
   }));
 
-  app.post("/api/moon-v3/admin/library/:titleId/replace-source", requireLibraryRead(async (req, res) => {
+  app.post("/api/moon-v3/admin/library/:titleId/replace-source", requireLibraryRoot(async (req, res) => {
     const requestBody = normalizeObject(req.body, {}) || {};
     const result = await serviceJson(config.ravenBaseUrl, `/v1/library/${encodeURIComponent(req.params.titleId)}/replace-source`, {
       method: "POST",
@@ -785,18 +872,32 @@ export const registerMoonV3Routes = (app, {
       res.status(result.status || 502).json(result.payload || {error: "Moon could not queue the Raven replacement download."});
       return;
     }
+    await appendEvent({
+      ...buildUserActor(req.user, "admin"),
+      domain: "library",
+      eventType: "source-replacement-queued",
+      severity: "info",
+      targetType: "title",
+      targetId: normalizeString(req.params.titleId),
+      message: `${req.user.username} queued a replacement source download.`,
+      metadata: {
+        titleId: normalizeString(req.params.titleId),
+        providerId: normalizeString(requestBody?.providerId),
+        titleUrl: normalizeString(requestBody?.titleUrl)
+      }
+    });
     res.status(202).json(result.payload);
   }));
 
-  app.get("/api/moon-v3/admin/add/search", requireLibraryRead(async (req, res) => {
+  app.get("/api/moon-v3/admin/add/search", requireAddRead(async (req, res) => {
     res.json(await fetchIntakeResults(req.query.query));
   }));
 
-  app.get("/api/moon-v3/admin/add/metadata-search", requireLibraryRead(async (req, res) => {
+  app.get("/api/moon-v3/admin/add/metadata-search", requireAddRead(async (req, res) => {
     res.json(await fetchMetadataSearchResults(req.query.query));
   }));
 
-  app.post("/api/moon-v3/admin/add/download-options", requireLibraryRead(async (req, res) => {
+  app.post("/api/moon-v3/admin/add/download-options", requireAddRead(async (req, res) => {
     const selectedMetadata = normalizeObject(req.body?.selectedMetadata);
     if (!selectedMetadata?.provider || !selectedMetadata?.providerSeriesId) {
       res.status(400).json({error: "selectedMetadata with provider and providerSeriesId is required."});
@@ -808,7 +909,7 @@ export const registerMoonV3Routes = (app, {
     }));
   }));
 
-  app.post("/api/moon-v3/admin/add/queue", requireLibraryRead(async (req, res) => {
+  app.post("/api/moon-v3/admin/add/queue", requireAddWrite(async (req, res) => {
     const selectedMetadata = normalizeObject(req.body?.selectedMetadata);
     if (!selectedMetadata?.provider || !selectedMetadata?.providerSeriesId) {
       res.status(400).json({error: "A concrete metadata result is required."});
@@ -862,6 +963,23 @@ export const registerMoonV3Routes = (app, {
       throw error;
     }
 
+    await appendEvent({
+      ...buildUserActor(req.user, "admin"),
+      domain: "add",
+      eventType: selectedDownload?.titleUrl ? "admin-add-request-created" : "admin-add-unavailable",
+      severity: "info",
+      targetType: "request",
+      targetId: normalizeString(request.id),
+      message: selectedDownload?.titleUrl
+        ? `${req.user.username} created an admin add request with a concrete source.`
+        : `${req.user.username} saved an unavailable admin add request.`,
+      metadata: {
+        requestId: normalizeString(request.id),
+        title: normalizeString(request.title),
+        requestType: normalizeString(request.requestType)
+      }
+    });
+
     if (!selectedDownload?.titleUrl) {
       res.status(201).json({
         request,
@@ -897,6 +1015,19 @@ export const registerMoonV3Routes = (app, {
         taskId: normalizeString(queueResult.payload?.taskId)
       }
     });
+    await appendEvent({
+      ...buildUserActor(req.user, "admin"),
+      domain: "add",
+      eventType: "admin-add-queued",
+      severity: "info",
+      targetType: "request",
+      targetId: normalizeString(request.id),
+      message: `${req.user.username} queued an admin add download immediately.`,
+      metadata: {
+        requestId: normalizeString(request.id),
+        queue: queueResult.payload || {}
+      }
+    });
 
     res.status(202).json({
       request: await vaultClient.getRequest(request.id),
@@ -905,7 +1036,7 @@ export const registerMoonV3Routes = (app, {
     });
   }));
 
-  app.get("/api/moon-v3/admin/import", requireLibraryRead(async (_req, res) => {
+  app.get("/api/moon-v3/admin/import", requireImportRead(async (_req, res) => {
     res.json({
       imports: [],
       summary: {
@@ -915,7 +1046,7 @@ export const registerMoonV3Routes = (app, {
     });
   }));
 
-  app.get("/api/moon-v3/admin/calendar", requireLibraryRead(async (_req, res) => {
+  app.get("/api/moon-v3/admin/calendar", requireCalendarRead(async (_req, res) => {
     const titles = await loadLibrary();
     const rawEntries = titles.flatMap((title) =>
       normalizeArray(title.chapters).map((chapter) => ({
@@ -946,24 +1077,24 @@ export const registerMoonV3Routes = (app, {
     });
   }));
 
-  app.get("/api/moon-v3/admin/activity/queue", requireLibraryRead(async (_req, res) => {
+  app.get("/api/moon-v3/admin/activity/queue", requireActivityRead(async (_req, res) => {
     const tasks = await loadTasks();
     res.json({tasks: tasks.filter((entry) => entry.status === "queued" || entry.status === "running")});
   }));
 
-  app.get("/api/moon-v3/admin/activity/history", requireLibraryRead(async (_req, res) => {
+  app.get("/api/moon-v3/admin/activity/history", requireActivityRead(async (_req, res) => {
     const tasks = await loadTasks();
     res.json({tasks: tasks.filter((entry) => entry.status === "completed" || entry.status === "failed")});
   }));
 
-  app.get("/api/moon-v3/admin/activity/blocklist", requireRequestRead(async (_req, res) => {
+  app.get("/api/moon-v3/admin/activity/blocklist", requireActivityRead(async (_req, res) => {
     const requests = await loadRequests();
     res.json({
       entries: requests.filter((entry) => entry.status === "denied" || entry.status === "blocked")
     });
   }));
 
-  app.get("/api/moon-v3/admin/wanted/missing-chapters", requireLibraryRead(async (_req, res) => {
+  app.get("/api/moon-v3/admin/wanted/missing-chapters", requireWantedRead(async (_req, res) => {
     const titles = await loadLibrary();
     res.json({
       entries: titles
@@ -975,7 +1106,7 @@ export const registerMoonV3Routes = (app, {
     });
   }));
 
-  app.get("/api/moon-v3/admin/wanted/metadata-gaps", requireLibraryRead(async (_req, res) => {
+  app.get("/api/moon-v3/admin/wanted/metadata-gaps", requireWantedRead(async (_req, res) => {
     const titles = await loadLibrary();
     res.json({
       entries: titles
@@ -995,11 +1126,11 @@ export const registerMoonV3Routes = (app, {
     res.json({requests: await loadRequests()});
   }));
 
-  app.get("/api/moon-v3/admin/requests/metadata-search", withPermission(requirePermission, "moderate_requests", async (req, res) => {
+  app.get("/api/moon-v3/admin/requests/metadata-search", requireRequestWrite(async (req, res) => {
     res.json(await fetchMetadataSearchResults(req.query.query));
   }));
 
-  app.post("/api/moon-v3/admin/requests/download-options", withPermission(requirePermission, "moderate_requests", async (req, res) => {
+  app.post("/api/moon-v3/admin/requests/download-options", requireRequestWrite(async (req, res) => {
     const selectedMetadata = normalizeObject(req.body?.selectedMetadata);
     if (!selectedMetadata?.provider || !selectedMetadata?.providerSeriesId) {
       res.status(400).json({error: "selectedMetadata with provider and providerSeriesId is required."});
@@ -1011,7 +1142,7 @@ export const registerMoonV3Routes = (app, {
     }));
   }));
 
-  app.post("/api/moon-v3/admin/requests/:id/approve", withPermission(requirePermission, "moderate_requests", async (req, res) => {
+  app.post("/api/moon-v3/admin/requests/:id/approve", requireRequestWrite(async (req, res) => {
     const existing = await loadRequestById(req.params.id);
     if (!existing) {
       res.status(404).json({error: "Request not found."});
@@ -1041,7 +1172,15 @@ export const registerMoonV3Routes = (app, {
       return;
     }
     if (guard.alreadyQueuedOrRequested) {
-      res.status(409).json({error: "That title is already queued or has an active request."});
+      const duplicateRequest = await resolveDuplicateRequestSummary(guard);
+      res.status(409).json(buildRequestWorkConflictPayload({
+        payload: {
+          code: "REQUEST_WORK_KEY_CONFLICT",
+          requestId: normalizeString(duplicateRequest?.id),
+          workKey: normalizeString(duplicateRequest?.workKey),
+          workKeyKind: normalizeString(duplicateRequest?.workKeyKind)
+        }
+      }));
       return;
     }
 
@@ -1075,13 +1214,14 @@ export const registerMoonV3Routes = (app, {
       requestSummary: await loadRequestById(req.params.id),
       requestedBy: existing.requestedBy.discordUserId || req.user.discordUserId,
       actor: req.user.username,
+      actorUser: req.user,
       comment: normalizeString(req.body?.comment, "Approved from Moon admin."),
       eventMessage: normalizeString(req.body?.comment, "Approved from Moon admin.")
     });
     res.status(approved.status).json(approved.payload);
   }));
 
-  app.post("/api/moon-v3/admin/requests/:id/override", withPermission(requirePermission, "moderate_requests", async (req, res) => {
+  app.post("/api/moon-v3/admin/requests/:id/override", requireRequestRoot(async (req, res) => {
     const existing = await loadRequestById(req.params.id);
     if (!existing) {
       res.status(404).json({error: "Request not found."});
@@ -1108,7 +1248,15 @@ export const registerMoonV3Routes = (app, {
       return;
     }
     if (guard.alreadyQueuedOrRequested) {
-      res.status(409).json({error: "That title is already queued or has an active request."});
+      const duplicateRequest = await resolveDuplicateRequestSummary(guard);
+      res.status(409).json(buildRequestWorkConflictPayload({
+        payload: {
+          code: "REQUEST_WORK_KEY_CONFLICT",
+          requestId: normalizeString(duplicateRequest?.id),
+          workKey: normalizeString(duplicateRequest?.workKey),
+          workKeyKind: normalizeString(duplicateRequest?.workKeyKind)
+        }
+      }));
       return;
     }
 
@@ -1136,10 +1284,24 @@ export const registerMoonV3Routes = (app, {
       }
       throw error;
     }
+    await appendEvent({
+      ...buildUserActor(req.user, "admin"),
+      domain: "requests",
+      eventType: "request-overridden",
+      severity: "warn",
+      targetType: "request",
+      targetId: normalizeString(req.params.id),
+      message: `${req.user.username} overrode the saved metadata or source for a request.`,
+      metadata: {
+        requestId: normalizeString(req.params.id),
+        title: normalizeString(selectedMetadata.title, existing.title),
+        availability: selectedDownload?.titleUrl ? "available" : "unavailable"
+      }
+    });
     res.json(await loadRequestById(req.params.id));
   }));
 
-  app.post("/api/moon-v3/admin/requests/:id/resolve", withPermission(requirePermission, "moderate_requests", async (req, res) => {
+  app.post("/api/moon-v3/admin/requests/:id/resolve", requireRequestWrite(async (req, res) => {
     const existing = await loadRequestById(req.params.id);
     if (!existing) {
       res.status(404).json({error: "Request not found."});
@@ -1165,7 +1327,15 @@ export const registerMoonV3Routes = (app, {
       return;
     }
     if (guard.alreadyQueuedOrRequested) {
-      res.status(409).json({error: "That title is already queued or has an active request."});
+      const duplicateRequest = await resolveDuplicateRequestSummary(guard);
+      res.status(409).json(buildRequestWorkConflictPayload({
+        payload: {
+          code: "REQUEST_WORK_KEY_CONFLICT",
+          requestId: normalizeString(duplicateRequest?.id),
+          workKey: normalizeString(duplicateRequest?.workKey),
+          workKeyKind: normalizeString(duplicateRequest?.workKeyKind)
+        }
+      }));
       return;
     }
 
@@ -1215,6 +1385,19 @@ export const registerMoonV3Routes = (app, {
         taskId: normalizeString(queueResult.payload?.taskId)
       }
     });
+    await appendEvent({
+      ...buildUserActor(req.user, "admin"),
+      domain: "requests",
+      eventType: "request-resolved",
+      severity: "info",
+      targetType: "request",
+      targetId: normalizeString(req.params.id),
+      message: `${req.user.username} resolved an unavailable request and queued it.`,
+      metadata: {
+        requestId: normalizeString(req.params.id),
+        queue: queueResult.payload || {}
+      }
+    });
 
     res.status(202).json({
       request: await vaultClient.getRequest(req.params.id),
@@ -1222,7 +1405,7 @@ export const registerMoonV3Routes = (app, {
     });
   }));
 
-  app.post("/api/moon-v3/admin/requests/:id/refresh-sources", withPermission(requirePermission, "moderate_requests", async (req, res) => {
+  app.post("/api/moon-v3/admin/requests/:id/refresh-sources", requireRequestWrite(async (req, res) => {
     const existing = await loadRequestById(req.params.id);
     if (!existing) {
       res.status(404).json({error: "Request not found."});
@@ -1252,6 +1435,20 @@ export const registerMoonV3Routes = (app, {
         sourceFoundOptions: nextOptions
       }
     });
+    await appendEvent({
+      ...buildUserActor(req.user, "admin"),
+      domain: "requests",
+      eventType: "request-sources-refreshed",
+      severity: "info",
+      targetType: "request",
+      targetId: normalizeString(req.params.id),
+      message: `${req.user.username} refreshed download candidates for a request.`,
+      metadata: {
+        requestId: normalizeString(req.params.id),
+        availability: nextOptions.length ? "available" : "unavailable",
+        optionCount: nextOptions.length
+      }
+    });
 
     res.json({
       request: await loadRequestById(req.params.id),
@@ -1260,40 +1457,221 @@ export const registerMoonV3Routes = (app, {
     });
   }));
 
-  app.get("/api/moon-v3/admin/users", requireAdminSettings(async (_req, res) => {
-    const users = normalizeArray(await vaultClient.listUsers());
-    res.json({users});
+  app.get("/api/moon-v3/admin/users", requireUsersRead(async (_req, res) => {
+    const [accessOverview, recentEvents] = await Promise.all([
+      vaultClient.getAccessOverview(),
+      vaultClient.listEvents({
+        domains: ["auth", "users", "access"],
+        limit: 40
+      })
+    ]);
+    res.json({
+      users: normalizeArray(accessOverview?.users),
+      groups: normalizeArray(accessOverview?.groups),
+      defaultGroupId: normalizeString(accessOverview?.defaultGroupId),
+      domains: ADMIN_ACCESS_DOMAINS,
+      events: normalizeArray(recentEvents)
+    });
   }));
 
-  app.get("/api/moon-v3/admin/settings", requireAdminSettings(async (_req, res) => {
-    const [ravenVpn, naming, metadataProviders, downloadProviders, requestWorkflow, oracle, branding, publicApi, discord, wardenStatus] = await Promise.all([
+  app.post("/api/moon-v3/admin/users/groups", requireUsersRoot(async (req, res) => {
+    const group = await vaultClient.createPermissionGroup(req.body || {});
+    await appendEventForUser({
+      domain: "users",
+      eventType: "group-created",
+      user: req.user,
+      targetType: "permission-group",
+      targetId: normalizeString(group?.id),
+      message: `${req.user.username} created the ${normalizeString(group?.name, "new")} permission group.`,
+      metadata: {
+        groupId: normalizeString(group?.id),
+        name: normalizeString(group?.name)
+      }
+    });
+    res.status(201).json(group);
+  }));
+
+  app.patch("/api/moon-v3/admin/users/groups/:groupId", requireUsersRoot(async (req, res) => {
+    const group = await vaultClient.updatePermissionGroup(req.params.groupId, req.body || {});
+    if (!group) {
+      res.status(404).json({error: "Permission group not found."});
+      return;
+    }
+    await appendEventForUser({
+      domain: "users",
+      eventType: "group-updated",
+      user: req.user,
+      targetType: "permission-group",
+      targetId: normalizeString(group.id),
+      message: `${req.user.username} updated the ${normalizeString(group.name, "permission")} group.`,
+      metadata: {
+        groupId: normalizeString(group.id),
+        name: normalizeString(group.name),
+        isDefault: Boolean(group.isDefault)
+      }
+    });
+    res.json(group);
+  }));
+
+  app.delete("/api/moon-v3/admin/users/groups/:groupId", requireUsersRoot(async (req, res) => {
+    const group = await vaultClient.deletePermissionGroup(req.params.groupId);
+    if (!group) {
+      res.status(404).json({error: "Permission group not found."});
+      return;
+    }
+    await appendEventForUser({
+      domain: "users",
+      eventType: "group-deleted",
+      user: req.user,
+      targetType: "permission-group",
+      targetId: normalizeString(group.id),
+      message: `${req.user.username} deleted the ${normalizeString(group.name, "permission")} group.`,
+      metadata: {
+        groupId: normalizeString(group.id),
+        name: normalizeString(group.name)
+      }
+    });
+    res.json(group);
+  }));
+
+  app.put("/api/moon-v3/admin/users/:discordUserId/groups", requireUsersRoot(async (req, res) => {
+    const user = await vaultClient.assignUserGroups(
+      req.params.discordUserId,
+      normalizeArray(req.body?.groupIds).map((entry) => normalizeString(entry)).filter(Boolean)
+    );
+    if (!user) {
+      res.status(404).json({error: "User not found."});
+      return;
+    }
+    await appendEventForUser({
+      domain: "access",
+      eventType: "user-groups-updated",
+      user: req.user,
+      targetType: "user",
+      targetId: normalizeString(user.discordUserId),
+      message: `${req.user.username} updated access groups for ${normalizeString(user.username, "that user")}.`,
+      metadata: {
+        discordUserId: normalizeString(user.discordUserId),
+        username: normalizeString(user.username),
+        groupIds: normalizeArray(user.groups).map((group) => normalizeString(group.id))
+      }
+    });
+    res.json(user);
+  }));
+
+  app.delete("/api/moon-v3/admin/users/:discordUserId", requireUsersRoot(async (req, res) => {
+    const user = await vaultClient.deleteUser(req.params.discordUserId);
+    if (!user) {
+      res.status(404).json({error: "User not found."});
+      return;
+    }
+    await appendEventForUser({
+      domain: "users",
+      eventType: "user-deleted",
+      user: req.user,
+      targetType: "user",
+      targetId: normalizeString(user.discordUserId),
+      message: `${req.user.username} removed ${normalizeString(user.username, "a user")} from local Moon access.`,
+      metadata: {
+        discordUserId: normalizeString(user.discordUserId),
+        username: normalizeString(user.username)
+      }
+    });
+    res.json(user);
+  }));
+
+  app.get("/api/moon-v3/admin/mediamanagement", requireMediaManagementRead(async (_req, res) => {
+    const naming = await readRavenNamingSettings();
+    res.json({naming});
+  }));
+
+  app.get("/api/moon-v3/admin/settings", requireSettingsRead(async (_req, res) => {
+    const [ravenVpn, metadataProviders, downloadProviders, requestWorkflow, oracle, branding, discord, wardenStatus] = await Promise.all([
       readRavenVpnSettings(),
-      readRavenNamingSettings(),
       readMetadataProviderSettings(),
       readDownloadProviderSettings(),
       readRequestWorkflowSettings(),
       readOracleSettings(),
       readMoonBrandingSettings(),
-      readMoonPublicApiSettings(),
       readPortalDiscordSettings(),
       safeJson(serviceJson(config.wardenBaseUrl, "/api/localai/status"))
     ]);
 
     res.json({
       ravenVpn,
-      naming,
       metadataProviders,
       downloadProviders,
       requestWorkflow,
       oracle,
       branding,
-      publicApi,
       discord,
       warden: wardenStatus.payload || wardenStatus
     });
   }));
 
-  app.get("/api/moon-v3/admin/system/status", requireAdminSettings(async (_req, res) => {
+  app.get("/api/moon-v3/admin/events", withUser(requireUser, async (req, res) => {
+    const domains = normalizeRequestedEventDomains(req.query.domain);
+    if (!ensureEventReadAccess(req.user, domains)) {
+      res.status(403).json({error: "Missing admin grant for the requested event domains."});
+      return;
+    }
+    res.json({
+      events: normalizeArray(await vaultClient.listEvents({
+        domains,
+        actorId: normalizeString(req.query.actorId),
+        targetId: normalizeString(req.query.targetId),
+        afterSequence: req.query.afterSequence || req.query.after || 0,
+        limit: req.query.limit || 100,
+        newestFirst: req.query.newestFirst !== "false"
+      }))
+    });
+  }));
+
+  app.get("/api/moon-v3/admin/events/stream", withUser(requireUser, async (req, res) => {
+    const domains = normalizeRequestedEventDomains(req.query.domain);
+    if (!ensureEventReadAccess(req.user, domains)) {
+      res.status(403).json({error: "Missing admin grant for the requested event domains."});
+      return;
+    }
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-store");
+    res.setHeader("Connection", "keep-alive");
+    res.flushHeaders?.();
+
+    let cursor = Number.parseInt(String(req.query.afterSequence || req.query.after || req.get("Last-Event-ID") || 0), 10) || 0;
+
+    const writeEvents = async () => {
+      const events = normalizeArray(await vaultClient.listEvents({
+        domains,
+        afterSequence: cursor,
+        limit: 100,
+        newestFirst: false
+      }));
+      for (const event of events) {
+        cursor = Math.max(cursor, Number.parseInt(String(event.sequence || 0), 10) || cursor);
+        res.write(`id: ${cursor}\n`);
+        res.write("event: admin-event\n");
+        res.write(`data: ${JSON.stringify(event)}\n\n`);
+      }
+    };
+
+    const heartbeat = setInterval(() => {
+      res.write(": keepalive\n\n");
+    }, 15000);
+    const poller = setInterval(() => {
+      void writeEvents();
+    }, 3000);
+
+    await writeEvents();
+
+    req.on("close", () => {
+      clearInterval(heartbeat);
+      clearInterval(poller);
+      res.end();
+    });
+  }));
+
+  app.get("/api/moon-v3/admin/system/status", requireSystemRead(async (_req, res) => {
     const [services, bootstrap, runtime] = await Promise.all([
       loadServiceStatus(),
       safeJson(serviceJson(config.wardenBaseUrl, "/api/bootstrap")),
@@ -1307,7 +1685,7 @@ export const registerMoonV3Routes = (app, {
     });
   }));
 
-  app.get("/api/moon-v3/admin/system/tasks", requireAdminSettings(async (_req, res) => {
+  app.get("/api/moon-v3/admin/system/tasks", requireSystemRead(async (_req, res) => {
     const [tasks, requests] = await Promise.all([loadTasks(), loadRequests()]);
     res.json({
       tasks,
@@ -1315,12 +1693,12 @@ export const registerMoonV3Routes = (app, {
     });
   }));
 
-  app.get("/api/moon-v3/admin/system/updates", requireAdminSettings(async (_req, res) => {
+  app.get("/api/moon-v3/admin/system/updates", requireSystemRead(async (_req, res) => {
     const updates = await serviceJson(config.wardenBaseUrl, "/api/updates");
     res.status(updates.status).json(updates.payload);
   }));
 
-  app.post("/api/moon-v3/admin/system/updates/check", requireAdminSettings(async (req, res) => {
+  app.post("/api/moon-v3/admin/system/updates/check", requireSystemRoot(async (req, res) => {
     const updates = await serviceJson(config.wardenBaseUrl, "/api/updates/check", {
       method: "POST",
       body: {
@@ -1330,7 +1708,7 @@ export const registerMoonV3Routes = (app, {
     res.status(updates.status).json(updates.payload);
   }));
 
-  app.post("/api/moon-v3/admin/system/updates/install", requireAdminSettings(async (req, res) => {
+  app.post("/api/moon-v3/admin/system/updates/install", requireSystemRoot(async (req, res) => {
     const updates = await serviceJson(config.wardenBaseUrl, "/api/updates/install", {
       method: "POST",
       body: {
@@ -1340,12 +1718,15 @@ export const registerMoonV3Routes = (app, {
     res.status(updates.status).json(updates.payload);
   }));
 
-  app.get("/api/moon-v3/admin/system/events", requireAdminSettings(async (_req, res) => {
-    const [requests, tasks] = await Promise.all([loadRequests(), loadTasks()]);
-    res.json({events: buildEventRows(requests, tasks)});
+  app.get("/api/moon-v3/admin/system/events", requireSystemRead(async (_req, res) => {
+    res.json({
+      events: normalizeArray(await vaultClient.listEvents({
+        limit: 120
+      }))
+    });
   }));
 
-  app.get("/api/moon-v3/admin/system/logs", requireAdminSettings(async (_req, res) => {
+  app.get("/api/moon-v3/admin/system/logs", requireSystemRead(async (_req, res) => {
     const [bootstrap, oracle, portal, raven, titles, tasks, requests] = await Promise.all([
       safeJson(serviceJson(config.wardenBaseUrl, "/api/bootstrap")),
       safeJson(fetch(`${config.oracleBaseUrl}/health`).then((response) => response.json())),
@@ -1555,12 +1936,31 @@ export const registerMoonV3Routes = (app, {
       throw error;
     }
 
+    await appendEventForUser({
+      domain: "requests",
+      eventType: nextStatus === "unavailable" ? "request-unavailable" : "request-created",
+      user: req.user,
+      targetType: "request",
+      targetId: normalizeString(request.id),
+      message: nextStatus === "unavailable"
+        ? `${req.user.username} created an unavailable metadata-backed request.`
+        : `${req.user.username} created a new metadata-backed request.`,
+      metadata: {
+        requestId: normalizeString(request.id),
+        title: normalizeString(request.title),
+        status: normalizeString(request.status),
+        availability: nextAvailability,
+        autoApproved: Boolean(autoSelectedDownload?.titleUrl)
+      }
+    });
+
     if (autoSelectedDownload?.titleUrl) {
       const queued = await approveAndQueueRequest({
         requestId: request.id,
         requestSummary: await loadRequestById(request.id),
         requestedBy: req.user.discordUserId,
         actor: "scriptarr-sage",
+        actorUser: null,
         eventMessage: "Scriptarr auto-approved and queued this request because the download match was high confidence."
       });
       if (queued.ok) {
@@ -1596,6 +1996,17 @@ export const registerMoonV3Routes = (app, {
       actor: req.user.username,
       appendStatusEvent: false
     });
+    await appendEventForUser({
+      domain: "requests",
+      eventType: "request-notes-updated",
+      user: req.user,
+      targetType: "request",
+      targetId: normalizeString(req.params.id),
+      message: `${req.user.username} updated request notes.`,
+      metadata: {
+        requestId: normalizeString(req.params.id)
+      }
+    });
     res.json(await loadRequestById(req.params.id));
   }));
 
@@ -1619,6 +2030,17 @@ export const registerMoonV3Routes = (app, {
       eventType: "cancelled",
       eventMessage: "Requester canceled this request.",
       actor: req.user.username
+    });
+    await appendEventForUser({
+      domain: "requests",
+      eventType: "request-cancelled",
+      user: req.user,
+      targetType: "request",
+      targetId: normalizeString(req.params.id),
+      message: `${req.user.username} canceled their request.`,
+      metadata: {
+        requestId: normalizeString(req.params.id)
+      }
     });
     res.json(await loadRequestById(req.params.id));
   }));
@@ -1645,13 +2067,34 @@ export const registerMoonV3Routes = (app, {
     };
     const deduped = [...current.filter((entry) => entry.titleId !== nextEntry.titleId), nextEntry];
     await writeUserScopedSetting(vaultClient, "moon.following", req.user.discordUserId, deduped);
+    await appendEventForUser({
+      domain: "follow",
+      eventType: "follow-added",
+      user: req.user,
+      targetType: "title",
+      targetId: normalizeString(nextEntry.titleId),
+      message: `${req.user.username} followed ${normalizeString(nextEntry.title, "a title")}.`,
+      metadata: nextEntry
+    });
     res.status(201).json({following: deduped});
   }));
 
   app.delete("/api/moon-v3/user/following/:titleId", withUser(requireUser, async (req, res) => {
     const current = normalizeArray(await readUserScopedSetting(vaultClient, "moon.following", req.user.discordUserId, []));
+    const removed = current.find((entry) => entry.titleId === req.params.titleId) || null;
     const next = current.filter((entry) => entry.titleId !== req.params.titleId);
     await writeUserScopedSetting(vaultClient, "moon.following", req.user.discordUserId, next);
+    if (removed) {
+      await appendEventForUser({
+        domain: "follow",
+        eventType: "follow-removed",
+        user: req.user,
+        targetType: "title",
+        targetId: normalizeString(removed.titleId),
+        message: `${req.user.username} unfollowed ${normalizeString(removed.title, "a title")}.`,
+        metadata: removed
+      });
+    }
     res.status(204).end();
   }));
 
@@ -1692,13 +2135,34 @@ export const registerMoonV3Routes = (app, {
     };
     const next = [...bookmarks.filter((entry) => entry.id !== nextEntry.id), nextEntry];
     await writeUserScopedSetting(vaultClient, "moon.reader.bookmarks", req.user.discordUserId, next);
+    await appendEventForUser({
+      domain: "reader",
+      eventType: "bookmark-created",
+      user: req.user,
+      targetType: "bookmark",
+      targetId: normalizeString(nextEntry.id),
+      message: `${req.user.username} saved a reader bookmark.`,
+      metadata: nextEntry
+    });
     res.status(201).json(nextEntry);
   }));
 
   app.delete("/api/moon-v3/user/reader/bookmarks/:bookmarkId", withUser(requireUser, async (req, res) => {
     const bookmarks = normalizeArray(await readUserScopedSetting(vaultClient, "moon.reader.bookmarks", req.user.discordUserId, []));
+    const removed = bookmarks.find((entry) => entry.id === req.params.bookmarkId) || null;
     const next = bookmarks.filter((entry) => entry.id !== req.params.bookmarkId);
     await writeUserScopedSetting(vaultClient, "moon.reader.bookmarks", req.user.discordUserId, next);
+    if (removed) {
+      await appendEventForUser({
+        domain: "reader",
+        eventType: "bookmark-deleted",
+        user: req.user,
+        targetType: "bookmark",
+        targetId: normalizeString(removed.id),
+        message: `${req.user.username} removed a reader bookmark.`,
+        metadata: removed
+      });
+    }
     res.status(204).end();
   }));
 
@@ -1707,6 +2171,8 @@ export const registerMoonV3Routes = (app, {
   }));
 
   app.put("/api/moon-v3/user/reader/progress", withUser(requireUser, async (req, res) => {
+    const currentProgress = normalizeArray(await vaultClient.getProgress(req.user.discordUserId));
+    const previousEntry = currentProgress.find((entry) => entry.mediaId === normalizeString(req.body.mediaId)) || null;
     const payload = await vaultClient.upsertProgress({
       mediaId: req.body.mediaId,
       discordUserId: req.user.discordUserId,
@@ -1714,6 +2180,40 @@ export const registerMoonV3Routes = (app, {
       positionRatio: req.body.positionRatio,
       bookmark: req.body.bookmark || null
     });
+    const nextRatio = Number.parseFloat(String(payload?.positionRatio ?? req.body?.positionRatio ?? 0)) || 0;
+    const previousRatio = Number.parseFloat(String(previousEntry?.positionRatio ?? 0)) || 0;
+    const previousChapter = normalizeString(previousEntry?.chapterLabel);
+    const nextChapter = normalizeString(payload?.chapterLabel, normalizeString(req.body?.chapterLabel));
+    if (nextChapter && nextChapter !== previousChapter) {
+      await appendEventForUser({
+        domain: "reader",
+        eventType: "chapter-progressed",
+        user: req.user,
+        targetType: "media",
+        targetId: normalizeString(payload?.mediaId, normalizeString(req.body?.mediaId)),
+        message: `${req.user.username} moved to ${nextChapter}.`,
+        metadata: {
+          mediaId: normalizeString(payload?.mediaId, normalizeString(req.body?.mediaId)),
+          chapterLabel: nextChapter,
+          positionRatio: nextRatio
+        }
+      });
+    }
+    if (nextRatio >= 0.999 && previousRatio < 0.999) {
+      await appendEventForUser({
+        domain: "reader",
+        eventType: "chapter-completed",
+        user: req.user,
+        targetType: "media",
+        targetId: normalizeString(payload?.mediaId, normalizeString(req.body?.mediaId)),
+        message: `${req.user.username} completed ${nextChapter || "a chapter"}.`,
+        metadata: {
+          mediaId: normalizeString(payload?.mediaId, normalizeString(req.body?.mediaId)),
+          chapterLabel: nextChapter,
+          positionRatio: nextRatio
+        }
+      });
+    }
     res.json(payload);
   }));
 

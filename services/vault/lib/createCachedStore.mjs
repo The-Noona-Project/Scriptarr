@@ -110,11 +110,65 @@ export const createCachedStore = (
     async listUsers() {
       return readThrough("users:list", () => baseStore.listUsers());
     },
+    async listPermissionGroups() {
+      return readThrough("permission-groups:list", () => baseStore.listPermissionGroups());
+    },
+    async getPermissionGroup(groupId) {
+      return readThrough(`permission-group:${groupId}`, () => baseStore.getPermissionGroup(groupId));
+    },
+    async createPermissionGroup(payload) {
+      const group = await baseStore.createPermissionGroup(payload);
+      invalidate("permission-groups:list");
+      writeEntry(`permission-group:${group.id}`, group);
+      invalidate("users:list");
+      invalidatePrefix("user:", "session-user:");
+      return group;
+    },
+    async updatePermissionGroup(groupId, payload) {
+      const group = await baseStore.updatePermissionGroup(groupId, payload);
+      invalidate("permission-groups:list", `permission-group:${groupId}`, "users:list");
+      invalidatePrefix("user:", "session-user:");
+      if (group) {
+        writeEntry(`permission-group:${group.id}`, group);
+      }
+      return group;
+    },
+    async deletePermissionGroup(groupId) {
+      const group = await baseStore.deletePermissionGroup(groupId);
+      invalidate("permission-groups:list", `permission-group:${groupId}`, "users:list");
+      invalidatePrefix("user:", "session-user:");
+      return group;
+    },
+    async assignUserGroups(discordUserId, groupIds) {
+      const user = await baseStore.assignUserGroups(discordUserId, groupIds);
+      invalidate("users:list", `user:${discordUserId}`);
+      invalidatePrefix("session-user:");
+      return user;
+    },
+    async deleteUser(discordUserId) {
+      const user = await baseStore.deleteUser(discordUserId);
+      invalidate("users:list", `user:${discordUserId}`);
+      invalidatePrefix("session:", "session-user:");
+      return user;
+    },
+    async getAccessOverview() {
+      return readThrough("access:overview", () => baseStore.getAccessOverview());
+    },
     async createSession(payload) {
       const session = await baseStore.createSession(payload);
       writeEntry(`session:${session.token}`, session);
       invalidate(`session-user:${session.token}`);
       return session;
+    },
+    async clearSession(token) {
+      const session = await baseStore.clearSession(token);
+      invalidate(`session:${token}`, `session-user:${token}`);
+      return session;
+    },
+    async clearSessionsForUser(discordUserId) {
+      const result = await baseStore.clearSessionsForUser(discordUserId);
+      invalidatePrefix("session:", "session-user:");
+      return result;
     },
     async getSession(token) {
       return readThrough(`session:${token}`, () => baseStore.getSession(token));
@@ -143,6 +197,20 @@ export const createCachedStore = (
     },
     async getSecret(key) {
       return readThrough(`secret:${key}`, () => baseStore.getSecret(key));
+    },
+    async appendEvent(payload) {
+      const event = await baseStore.appendEvent(payload);
+      invalidatePrefix("events:");
+      invalidate("access:overview");
+      return event;
+    },
+    async listEvents(filters = {}) {
+      return readThrough(makeListKey("events", filters), () => baseStore.listEvents(filters));
+    },
+    async pruneEvents(retentionDays) {
+      const result = await baseStore.pruneEvents(retentionDays);
+      invalidatePrefix("events:");
+      return result;
     },
     async listRequests() {
       return readThrough("requests:list", () => baseStore.listRequests());

@@ -66,6 +66,20 @@ const defaultLibraryTitle = Object.freeze({
   }]
 });
 
+const ownerSmokeLibraryTitle = Object.freeze({
+  ...defaultLibraryTitle,
+  id: "mob-psycho-100",
+  title: "Mob Psycho 100",
+  aliases: ["Mob Psycho Hyaku"],
+  coverUrl: "https://images.example/mob-psycho-100.jpg",
+  chapters: defaultLibraryTitle.chapters.map((chapter, index) => ({
+    ...chapter,
+    id: `mob-psycho-100-c${index + 1}`,
+    label: `Chapter ${index + 1}`,
+    chapterNumber: String(index + 1)
+  }))
+});
+
 const defaultIntakePayload = Object.freeze({
   query: "dandadan",
   requestType: "webtoon",
@@ -480,7 +494,7 @@ test("sage signs in the first owner through the Discord callback and moderates r
   const vaultServer = vaultApp.listen(0);
   const vaultPort = vaultServer.address().port;
 
-  const dependencyStub = await createDependencyStub();
+  const dependencyStub = await createDependencyStub({libraryTitles: [ownerSmokeLibraryTitle]});
   dependencyStub.server.listen(0);
   const dependencyPort = dependencyStub.server.address().port;
 
@@ -571,7 +585,7 @@ test("sage signs in the first owner through the Discord callback and moderates r
     }
   }).then((response) => response.json());
 
-  assert.equal(moonLibrary.titles[0].title, "Dandadan");
+  assert.equal(moonLibrary.titles[0].title, ownerSmokeLibraryTitle.title);
 
   const overview = await fetch(`${baseUrl}/api/moon-v3/admin/overview`, {
     headers: {
@@ -598,17 +612,17 @@ test("sage signs in the first owner through the Discord callback and moderates r
       "Authorization": `Bearer ${ownerClaim.token}`
     },
     body: JSON.stringify({
-      mediaId: "dan-da-dan",
-      chapterLabel: "Chapter 166",
+      mediaId: ownerSmokeLibraryTitle.id,
+      chapterLabel: ownerSmokeLibraryTitle.chapters[0].label,
       positionRatio: 0.5,
       bookmark: {
-        chapterId: "dandadan-c166",
+        chapterId: ownerSmokeLibraryTitle.chapters[0].id,
         pageIndex: 8
       }
     })
   }).then((response) => response.json());
 
-  assert.equal(progress.mediaId, "dan-da-dan");
+  assert.equal(progress.mediaId, ownerSmokeLibraryTitle.id);
 
   const systemStatus = await fetch(`${baseUrl}/api/moon-v3/admin/system/status`, {
     headers: {
@@ -627,11 +641,11 @@ test("sage signs in the first owner through the Discord callback and moderates r
     }
   }).then((response) => response.json());
 
-  assert.equal(home.continueReading[0].titleId, "dan-da-dan");
-  assert.equal(home.continueReading[0].title, "Dandadan");
-  assert.equal(home.continueReading[0].coverAccent, "#ff6a3d");
-  assert.equal(home.continueReading[0].coverUrl, "https://images.example/dandadan.jpg");
-  assert.equal(home.continueReading[0].bookmark.chapterId, "dandadan-c166");
+  assert.equal(home.continueReading[0].titleId, ownerSmokeLibraryTitle.id);
+  assert.equal(home.continueReading[0].title, ownerSmokeLibraryTitle.title);
+  assert.equal(home.continueReading[0].coverAccent, ownerSmokeLibraryTitle.coverAccent);
+  assert.equal(home.continueReading[0].coverUrl, ownerSmokeLibraryTitle.coverUrl);
+  assert.equal(home.continueReading[0].bookmark.chapterId, ownerSmokeLibraryTitle.chapters[0].id);
   assert.equal(home.shelves[0].title, "Your Bookshelf");
   assert.equal(home.shelves[1].title, "Recently added to Webtoon");
   assert.ok(dependencyStub.calls.health >= 1);
@@ -657,6 +671,7 @@ test("sage keeps Moon library routes empty when Raven has no imported titles", a
   process.env.SCRIPTARR_PORTAL_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
   process.env.SCRIPTARR_ORACLE_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
   process.env.SCRIPTARR_RAVEN_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_PUBLIC_BASE_URL = "https://pax-kun.com";
   process.env.SCRIPTARR_DISCORD_CLIENT_ID = "discord-client-id";
   process.env.SCRIPTARR_DISCORD_CLIENT_SECRET = "discord-client-secret";
 
@@ -703,6 +718,7 @@ test("sage round-trips Moon branding and exposes typed Moon reader payloads", as
   process.env.SCRIPTARR_PORTAL_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
   process.env.SCRIPTARR_ORACLE_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
   process.env.SCRIPTARR_RAVEN_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_PUBLIC_BASE_URL = "https://pax-kun.com";
   process.env.SCRIPTARR_DISCORD_CLIENT_ID = "discord-client-id";
   process.env.SCRIPTARR_DISCORD_CLIENT_SECRET = "discord-client-secret";
 
@@ -811,7 +827,7 @@ test("sage round-trips Moon branding and exposes typed Moon reader payloads", as
   assert.equal(readerChapter.title.libraryTypeLabel, "Webtoon");
   assert.equal(readerChapter.manifest.title.libraryTypeSlug, "webtoon");
   assert.equal(readerChapter.manifest.title.libraryTypeLabel, "Webtoon");
-  assert.equal(readerChapter.preferences.readingMode, "webtoon");
+  assert.equal(readerChapter.preferences.readingMode, "infinite");
   assert.equal(readerChapter.pages[0].src, "/api/moon/v3/user/reader/title/dan-da-dan/chapter/dandadan-c166/page/0");
 
   const home = await fetch(`${baseUrl}/api/moon-v3/user/home`, {
@@ -841,6 +857,7 @@ test("sage blocks duplicate active intake requests across Moon and Portal create
   process.env.SCRIPTARR_PORTAL_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
   process.env.SCRIPTARR_ORACLE_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
   process.env.SCRIPTARR_RAVEN_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_PUBLIC_BASE_URL = "https://pax-kun.com";
   process.env.SCRIPTARR_DISCORD_CLIENT_ID = "discord-client-id";
   process.env.SCRIPTARR_DISCORD_CLIENT_SECRET = "discord-client-secret";
 
@@ -968,7 +985,7 @@ test("sage surfaces Vault's durable request work-key conflict when concurrent cr
     headers: ownerHeaders
   }).then((response) => response.json());
   assert.equal(requests.requests.length, 1);
-  assert.equal(requests.requests[0].workKey, "download:weebcentral::https://weebcentral.com/series/dan-da-dan");
+  assert.equal(requests.requests[0].workKey, "metadata:mangadex::md-1");
 
   await closeServer(sageServer);
   await closeServer(vaultServer);
@@ -1181,6 +1198,114 @@ test("sage allows newly signed-in members to create requests by default after th
   }
 });
 
+test("sage exposes group-based admin users access and domain-scoped event reads", async () => {
+  const {app: vaultApp} = await createVaultApp();
+  const vaultServer = vaultApp.listen(0);
+  const vaultPort = vaultServer.address().port;
+
+  const dependencyStub = await createDependencyStub({libraryTitles: []});
+  dependencyStub.server.listen(0);
+  const dependencyPort = dependencyStub.server.address().port;
+
+  process.env.SCRIPTARR_VAULT_BASE_URL = `http://127.0.0.1:${vaultPort}`;
+  process.env.SCRIPTARR_WARDEN_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_PORTAL_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_ORACLE_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_RAVEN_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_DISCORD_CLIENT_ID = "discord-client-id";
+  process.env.SCRIPTARR_DISCORD_CLIENT_SECRET = "discord-client-secret";
+
+  const {app: sageApp} = await createSageApp();
+  const sageServer = sageApp.listen(0);
+  const sagePort = sageServer.address().port;
+  const baseUrl = `http://127.0.0.1:${sagePort}`;
+
+  try {
+    installDiscordFetchStub({
+      id: "owner-1",
+      username: "Owner",
+      global_name: "Owner",
+      avatar: null
+    });
+    const ownerClaim = await signInViaDiscord(baseUrl);
+    assert.equal(ownerClaim.user.role, "owner");
+
+    installDiscordFetchStub({
+      id: "reader-2",
+      username: "ReaderTwo",
+      global_name: "Reader Two",
+      avatar: null
+    });
+    const readerClaim = await signInViaDiscord(baseUrl);
+    assert.equal(readerClaim.user.role, "member");
+
+    const ownerHeaders = {
+      "Authorization": `Bearer ${ownerClaim.token}`,
+      "Content-Type": "application/json"
+    };
+    const readerHeaders = {
+      "Authorization": `Bearer ${readerClaim.token}`
+    };
+
+    const groupResponse = await fetch(`${baseUrl}/api/moon-v3/admin/users/groups`, {
+      method: "POST",
+      headers: ownerHeaders,
+      body: JSON.stringify({
+        name: "User Managers",
+        description: "Can manage users and read access events.",
+        permissions: ["read_library"],
+        adminGrants: {
+          users: "read"
+        }
+      })
+    });
+    assert.equal(groupResponse.status, 201);
+    const group = await groupResponse.json();
+    assert.equal(group.id, "user-managers");
+
+    const assignmentResponse = await fetch(`${baseUrl}/api/moon-v3/admin/users/reader-2/groups`, {
+      method: "PUT",
+      headers: ownerHeaders,
+      body: JSON.stringify({
+        groupIds: ["user-managers"]
+      })
+    });
+    assert.equal(assignmentResponse.status, 200);
+    const assignedUser = await assignmentResponse.json();
+    assert.deepEqual(assignedUser.groups.map((entry) => entry.id), ["user-managers"]);
+
+    const usersResponse = await fetch(`${baseUrl}/api/moon-v3/admin/users`, {
+      headers: readerHeaders
+    });
+    assert.equal(usersResponse.status, 200);
+    const usersPayload = await usersResponse.json();
+    assert.equal(usersPayload.defaultGroupId, "member");
+    assert.equal(usersPayload.groups.some((entry) => entry.id === "user-managers"), true);
+    assert.equal(usersPayload.users.some((entry) =>
+      entry.discordUserId === "reader-2"
+      && entry.groups.some((groupEntry) => groupEntry.id === "user-managers")
+    ), true);
+    assert.equal(usersPayload.events.some((event) => ["auth", "users", "access"].includes(event.domain)), true);
+
+    const eventsResponse = await fetch(`${baseUrl}/api/moon-v3/admin/events?domain=users`, {
+      headers: readerHeaders
+    });
+    assert.equal(eventsResponse.status, 200);
+    const eventsPayload = await eventsResponse.json();
+    assert.equal(eventsPayload.events.some((event) => event.domain === "users"), true);
+
+    const forbiddenEvents = await fetch(`${baseUrl}/api/moon-v3/admin/events?domain=system`, {
+      headers: readerHeaders
+    });
+    assert.equal(forbiddenEvents.status, 403);
+
+  } finally {
+    await closeServer(sageServer);
+    await closeServer(vaultServer);
+    await closeServer(dependencyStub.server);
+  }
+});
+
 test("sage admin resolve surfaces durable work-key conflicts from Vault cleanly", async () => {
   const {app: vaultApp} = await createVaultApp();
   const vaultServer = vaultApp.listen(0);
@@ -1308,6 +1433,7 @@ test("sage emits request and follow completion notifications with Moon links eve
   process.env.SCRIPTARR_PORTAL_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
   process.env.SCRIPTARR_ORACLE_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
   process.env.SCRIPTARR_RAVEN_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_PUBLIC_BASE_URL = "https://pax-kun.com";
   process.env.SCRIPTARR_DISCORD_CLIENT_ID = "discord-client-id";
   process.env.SCRIPTARR_DISCORD_CLIENT_SECRET = "discord-client-secret";
 
@@ -1990,6 +2116,9 @@ test("sage brokers service-to-service routes with internal service auth", async 
     "Authorization": "Bearer raven-dev-token",
     "Content-Type": "application/json"
   };
+  const vaultHeaders = {
+    "Authorization": "Bearer sage-dev-token"
+  };
 
   const createdUser = await fetch(`${baseUrl}/api/internal/vault/users/upsert-discord`, {
     method: "POST",
@@ -2047,6 +2176,23 @@ test("sage brokers service-to-service routes with internal service auth", async 
   }).then((response) => response.json());
   assert.equal(discordRequest.status, "pending");
   assert.equal(discordRequest.details.selectedDownload, null);
+
+  const ravenPatchedRequest = await fetch(`${baseUrl}/api/internal/vault/requests/${discordRequest.id}`, {
+    method: "PATCH",
+    headers: ravenHeaders,
+    body: JSON.stringify({
+      status: "downloading",
+      detailsMerge: {
+        availability: "available",
+        selectedDownload: {
+          providerId: "weebcentral",
+          titleName: "Dandadan",
+          titleUrl: "https://weebcentral.com/series/dan-da-dan"
+        }
+      }
+    })
+  }).then((response) => response.json());
+  assert.equal(ravenPatchedRequest.status, "downloading");
 
   const following = await fetch(`${baseUrl}/api/internal/portal/following`, {
     method: "POST",
@@ -2136,6 +2282,43 @@ test("sage brokers service-to-service routes with internal service auth", async 
     })
   }).then((response) => response.json());
   assert.equal(ravenJob.jobId, "raven-job-1");
+
+  const ravenTask = await fetch(`${baseUrl}/api/internal/vault/raven/download-tasks/task-broker-1`, {
+    method: "PUT",
+    headers: ravenHeaders,
+    body: JSON.stringify({
+      taskId: "task-broker-1",
+      titleId: "dan-da-dan",
+      titleName: "Dandadan",
+      titleUrl: "https://weebcentral.com/series/dan-da-dan",
+      providerId: "weebcentral",
+      requestId: String(discordRequest.id),
+      requestType: "webtoon",
+      requestedBy: "discord-123",
+      status: "queued",
+      percent: 0
+    })
+  }).then((response) => response.json());
+  assert.equal(ravenTask.taskId, "task-broker-1");
+
+  const durableEvents = await fetch(`http://127.0.0.1:${vaultPort}/api/service/events?domain=requests&domain=activity&domain=system`, {
+    headers: vaultHeaders
+  }).then((response) => response.json());
+  assert.equal(durableEvents.some((event) =>
+    event.domain === "requests"
+    && event.eventType === "request-downloading"
+    && event.targetId === String(discordRequest.id)
+  ), true);
+  assert.equal(durableEvents.some((event) =>
+    event.domain === "activity"
+    && event.eventType === "download-task-created"
+    && event.targetId === "task-broker-1"
+  ), true);
+  assert.equal(durableEvents.some((event) =>
+    event.domain === "system"
+    && event.eventType === "job-created"
+    && event.targetId === "raven-job-1"
+  ), true);
 
   const forbidden = await fetch(`${baseUrl}/api/internal/jobs/raven-job-1`, {
     headers: portalHeaders

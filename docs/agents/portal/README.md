@@ -12,6 +12,8 @@
   or command-sync problem back through Moon admin.
 - Portal now also owns requester approval, denial, and completion DMs. Keep those notifications deduped by request id
   plus decision state, and reuse the shared `coverUrl` plus Moon public base URL when they are available.
+- Portal-originated async request and Discord-runtime state that matters to operators should now be mirrored into the
+  shared durable event log through Sage's internal broker routes instead of living only in Portal-local memory.
 - `/request` now mirrors Moon's metadata-first wizard. Portal should search raw metadata rows first, then submit one
   exact metadata choice for moderated review instead of asking the requester to pick a download provider.
 - Duplicate blockers should not create visible extra requests. Portal should surface the blocked state, rely on Sage's
@@ -21,7 +23,8 @@
   review or auto-approved; do not reintroduce requester-side source picking in Discord.
 - DM-only `downloadall` is still provider-browse first, but it must now go through Raven's metadata-safe bulk resolver
   before queueing anything. Queue only titles with one confident metadata match and surface already-active,
-  no-metadata, ambiguous-metadata, and failed outcomes in the DM summary.
+  adult-content, no-metadata, ambiguous-metadata, and failed outcomes in the DM summary. When the requester uses
+  `nsfw:false`, Raven must require an explicit WeebCentral `Adult Content: No` before queueing.
 - That DM bulk path stays owner-only and WeebCentral-only. Even when MangaDex is enabled for normal intake or direct
   requests, Portal should always send `providerId=weebcentral` for `downloadall` and surface a clear error when
   WeebCentral is disabled.

@@ -50,9 +50,11 @@ Raven intake is also edition-aware and grouped by concrete provider target, so m
 same download URL collapse into one requestable result while plain vs colored editions stay separate when the provider
 exposes different series URLs.
 The DM-only Discord `downloadall` flow now uses the same metadata-aware path for each bulk-browsed provider title. It
-only queues titles with one confident metadata match and reports already-active, no-metadata, ambiguous-metadata, and
-failed skips back to Portal instead of bulk-queueing metadata-less library entries. That command is intentionally
-locked to the WeebCentral provider and fails when WeebCentral is disabled rather than falling back to MangaDex.
+only queues titles with one confident metadata match and reports already-active, adult-content, no-metadata,
+ambiguous-metadata, and failed skips back to Portal instead of bulk-queueing metadata-less library entries. When the
+command uses `nsfw:false`, Raven verifies the concrete WeebCentral title page and only queues titles with an explicit
+`Adult Content: No`; adult or unverified titles are skipped. That command is intentionally locked to the WeebCentral
+provider and fails when WeebCentral is disabled rather than falling back to MangaDex.
 Raven now also treats cover art as first-class title metadata, carries it through intake, queue state, and library
 records, and exposes the same imagery Moon and Portal reuse in their UIs and embeds.
 Raven now also preserves chapter release dates from provider chapter scrapes and blends in richer title-level release

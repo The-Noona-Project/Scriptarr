@@ -26,4 +26,6 @@
   services. Warden and MySQL are informational or manual in the current product scope.
 - Warden should inject Sage broker settings into Portal, Oracle, and Raven instead of direct first-party base URLs.
 - Update jobs should be mirrored into the shared broker as durable jobs and job tasks, not left as Warden-only memory.
+- Warden-originated runtime or update transitions that matter to operators should be reported through Sage's internal
+  broker routes so Vault's shared durable event log stays authoritative for Moon admin timelines.
 - Keep full JSDoc on exported Warden `.mjs` source and tests so the ESLint doc gate stays green.

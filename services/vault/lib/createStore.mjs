@@ -1,7 +1,16 @@
 import {createHash, randomUUID} from "node:crypto";
 
 import mysql from "mysql2/promise";
+import {deriveLegacyPermissions, seedPermissionGroups} from "@scriptarr/access";
 import {createCachedStore} from "./createCachedStore.mjs";
+import {
+  buildEffectiveUserAccess,
+  ensureSeedPermissionGroups,
+  ensureSingleDefaultGroup,
+  getDefaultGroupId,
+  normalizePermissionGroup
+} from "./accessControl.mjs";
+import {DEFAULT_EVENT_RETENTION_DAYS, normalizeEventFilters, normalizeVaultEvent} from "./vaultEvents.mjs";
 
 const nowIso = () => new Date().toISOString();
 const randomToken = (prefix) => `${prefix}_${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
@@ -44,6 +53,24 @@ const normalizeScalarString = (value, fallback = "") => {
   if (typeof value === "number" || typeof value === "bigint" || typeof value === "boolean") {
     const normalized = String(value).trim();
     return normalized || fallback;
+  }
+  return fallback;
+};
+const normalizeBoolean = (value, fallback = false) => {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "number") {
+    return value !== 0;
+  }
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (["1", "true", "yes", "on"].includes(normalized)) {
+      return true;
+    }
+    if (["0", "false", "no", "off"].includes(normalized)) {
+      return false;
+    }
   }
   return fallback;
 };
@@ -365,18 +392,6 @@ const buildRequestFromPayload = (payload, requestId) => {
   });
 };
 
-const defaultPermissionsForRole = (role) => {
-  switch (role) {
-    case "owner":
-    case "admin":
-      return ["admin", "manage_users", "manage_settings", "moderate_requests", "read_requests", "read_library", "read_ai_status"];
-    case "moderator":
-      return ["moderate_requests", "read_requests", "read_library", "read_ai_status"];
-    default:
-      return ["read_library", "create_requests", "read_requests", "read_ai_status"];
-  }
-};
-
 const createConflictError = (message, code) => {
   const error = new Error(message);
   error.code = code;
@@ -386,6 +401,8 @@ const createConflictError = (message, code) => {
 const createMemoryStore = () => {
   const state = {
     users: new Map(),
+    permissionGroups: new Map(),
+    userGroupAssignments: new Map(),
     sessions: new Map(),
     settings: new Map(),
     secrets: new Map(),
@@ -398,12 +415,81 @@ const createMemoryStore = () => {
     ravenMetadataMatches: new Map(),
     jobs: new Map(),
     jobTasks: new Map(),
-    requestSeq: 1
+    events: new Map(),
+    requestSeq: 1,
+    eventSeq: 1
+  };
+
+  const readMemoryGroups = () => ensureSingleDefaultGroup(Array.from(state.permissionGroups.values()));
+  const persistMemoryGroups = (groups) => {
+    state.permissionGroups.clear();
+    for (const group of ensureSingleDefaultGroup(groups)) {
+      state.permissionGroups.set(group.id, group);
+    }
+  };
+  const seedMemoryGroups = () => {
+    persistMemoryGroups(ensureSeedPermissionGroups(Array.from(state.permissionGroups.values()), nowIso));
+  };
+  const getMemoryGroupIdsForUser = (discordUserId) => Array.from(state.userGroupAssignments.get(discordUserId) || []);
+  const getMemoryGroupsForUser = (discordUserId) => getMemoryGroupIdsForUser(discordUserId)
+    .map((groupId) => state.permissionGroups.get(groupId))
+    .filter(Boolean);
+  const refreshMemoryUserAccess = (discordUserId) => {
+    const existing = state.users.get(discordUserId);
+    if (!existing) {
+      return null;
+    }
+    const next = buildEffectiveUserAccess(existing, existing.role === "owner" ? [] : getMemoryGroupsForUser(discordUserId));
+    state.users.set(discordUserId, next);
+    return next;
+  };
+  const refreshUsersForGroupIds = (groupIds = []) => {
+    const affected = new Set();
+    for (const [discordUserId, assignments] of state.userGroupAssignments.entries()) {
+      if (Array.from(assignments).some((groupId) => groupIds.includes(groupId))) {
+        affected.add(discordUserId);
+      }
+    }
+    for (const discordUserId of affected) {
+      refreshMemoryUserAccess(discordUserId);
+    }
+  };
+  const ensureDefaultGroupAssignment = (discordUserId) => {
+    const existing = state.userGroupAssignments.get(discordUserId);
+    if (existing?.size) {
+      return;
+    }
+    const defaultGroupId = getDefaultGroupId(readMemoryGroups());
+    if (!defaultGroupId) {
+      return;
+    }
+    state.userGroupAssignments.set(discordUserId, new Set([defaultGroupId]));
+  };
+  const clearMemorySessionsForUser = (discordUserId) => {
+    for (const [token, session] of state.sessions.entries()) {
+      if (session.discordUserId === discordUserId) {
+        state.sessions.delete(token);
+      }
+    }
+  };
+  const listMemoryEvents = (filters = {}) => {
+    const normalized = normalizeEventFilters(filters);
+    const filtered = Array.from(state.events.values()).filter((event) =>
+      (!normalized.domains.length || normalized.domains.includes(event.domain))
+      && (!normalized.actorId || event.actorId === normalized.actorId)
+      && (!normalized.targetId || event.targetId === normalized.targetId)
+      && (!normalized.afterSequence || Number(event.sequence || 0) > normalized.afterSequence)
+    );
+    filtered.sort((left, right) => normalized.newestFirst
+      ? Number(right.sequence || 0) - Number(left.sequence || 0)
+      : Number(left.sequence || 0) - Number(right.sequence || 0));
+    return filtered.slice(0, normalized.limit);
   };
 
   return {
     driver: "memory",
     async init() {
+      seedMemoryGroups();
       return true;
     },
     async health() {
@@ -433,18 +519,116 @@ const createMemoryStore = () => {
         username,
         avatarUrl: avatarUrl || null,
         role: nextRole,
-        permissions: permissions?.length ? permissions : defaultPermissionsForRole(nextRole),
+        permissions: Array.isArray(permissions) ? permissions : existing?.permissions || deriveLegacyPermissions({
+          role: nextRole,
+          isOwner: nextRole === "owner"
+        }),
         createdAt: existing?.createdAt || nowIso(),
         updatedAt: nowIso()
       };
       state.users.set(discordUserId, next);
-      return next;
+      if (nextRole !== "owner") {
+        ensureDefaultGroupAssignment(discordUserId);
+      }
+      return refreshMemoryUserAccess(discordUserId);
     },
     async getUserByDiscordId(discordUserId) {
-      return state.users.get(discordUserId) || null;
+      const user = state.users.get(discordUserId);
+      return user ? refreshMemoryUserAccess(discordUserId) : null;
     },
     async listUsers() {
-      return Array.from(state.users.values()).sort((left, right) => left.username.localeCompare(right.username));
+      return Array.from(state.users.keys())
+        .map((discordUserId) => refreshMemoryUserAccess(discordUserId))
+        .filter(Boolean)
+        .sort((left, right) => left.username.localeCompare(right.username));
+    },
+    async listPermissionGroups() {
+      return readMemoryGroups();
+    },
+    async getPermissionGroup(groupId) {
+      return state.permissionGroups.get(normalizeString(groupId)) || null;
+    },
+    async createPermissionGroup(payload) {
+      const group = normalizePermissionGroup({
+        ...payload,
+        id: payload?.id || payload?.name,
+        createdAt: nowIso(),
+        updatedAt: nowIso()
+      });
+      if (state.permissionGroups.has(group.id)) {
+        throw createConflictError("Permission group already exists.", "PERMISSION_GROUP_CONFLICT");
+      }
+      persistMemoryGroups([...readMemoryGroups(), group]);
+      return state.permissionGroups.get(group.id) || group;
+    },
+    async updatePermissionGroup(groupId, payload) {
+      const existing = state.permissionGroups.get(normalizeString(groupId));
+      if (!existing) {
+        return null;
+      }
+      const next = normalizePermissionGroup({
+        ...existing,
+        ...payload,
+        id: existing.id,
+        createdAt: existing.createdAt,
+        updatedAt: nowIso()
+      }, existing);
+      persistMemoryGroups(readMemoryGroups().map((group) => group.id === existing.id ? next : group));
+      refreshUsersForGroupIds([existing.id]);
+      return state.permissionGroups.get(existing.id) || next;
+    },
+    async deletePermissionGroup(groupId) {
+      const existing = state.permissionGroups.get(normalizeString(groupId));
+      if (!existing) {
+        return null;
+      }
+      if (existing.isDefault) {
+        throw createConflictError("Choose a new default group before deleting the current default.", "DEFAULT_GROUP_REQUIRED");
+      }
+      const affectedUserIds = Array.from(state.userGroupAssignments.entries())
+        .filter(([, assignments]) => assignments.has(existing.id))
+        .map(([discordUserId]) => discordUserId);
+      state.permissionGroups.delete(existing.id);
+      for (const assignments of state.userGroupAssignments.values()) {
+        assignments.delete(existing.id);
+      }
+      affectedUserIds.forEach((discordUserId) => refreshMemoryUserAccess(discordUserId));
+      return existing;
+    },
+    async assignUserGroups(discordUserId, groupIds = []) {
+      const user = state.users.get(discordUserId);
+      if (!user) {
+        return null;
+      }
+      if (user.role === "owner") {
+        throw createConflictError("The protected owner cannot be reassigned.", "PROTECTED_OWNER");
+      }
+      const validGroupIds = Array.from(new Set((Array.isArray(groupIds) ? groupIds : [])
+        .map((groupId) => normalizeString(groupId))
+        .filter((groupId) => state.permissionGroups.has(groupId))));
+      state.userGroupAssignments.set(discordUserId, new Set(validGroupIds));
+      return refreshMemoryUserAccess(discordUserId);
+    },
+    async deleteUser(discordUserId) {
+      const existing = state.users.get(discordUserId);
+      if (!existing) {
+        return null;
+      }
+      if (existing.role === "owner") {
+        throw createConflictError("The protected owner cannot be deleted.", "PROTECTED_OWNER");
+      }
+      clearMemorySessionsForUser(discordUserId);
+      state.userGroupAssignments.delete(discordUserId);
+      state.users.delete(discordUserId);
+      return existing;
+    },
+    async getAccessOverview() {
+      const groups = readMemoryGroups();
+      return {
+        users: await this.listUsers(),
+        groups,
+        defaultGroupId: getDefaultGroupId(groups)
+      };
     },
     async createSession({discordUserId}) {
       const token = randomToken("sess");
@@ -455,6 +639,17 @@ const createMemoryStore = () => {
       };
       state.sessions.set(token, session);
       return session;
+    },
+    async clearSession(token) {
+      const session = state.sessions.get(token) || null;
+      if (session) {
+        state.sessions.delete(token);
+      }
+      return session;
+    },
+    async clearSessionsForUser(discordUserId) {
+      clearMemorySessionsForUser(discordUserId);
+      return {ok: true};
     },
     async getSession(token) {
       return state.sessions.get(token) || null;
@@ -479,6 +674,29 @@ const createMemoryStore = () => {
     },
     async getSecret(key) {
       return state.secrets.get(key) || null;
+    },
+    async appendEvent(payload) {
+      const event = normalizeVaultEvent({
+        ...payload,
+        sequence: state.eventSeq++
+      }, nowIso);
+      state.events.set(event.sequence, event);
+      return event;
+    },
+    async listEvents(filters = {}) {
+      return listMemoryEvents(filters);
+    },
+    async pruneEvents(retentionDays = DEFAULT_EVENT_RETENTION_DAYS) {
+      const cutoff = Date.now() - (Number(retentionDays) * 24 * 60 * 60 * 1000);
+      let removed = 0;
+      for (const [sequence, event] of state.events.entries()) {
+        const timestamp = Date.parse(event.createdAt || "");
+        if (Number.isFinite(timestamp) && timestamp < cutoff) {
+          state.events.delete(sequence);
+          removed += 1;
+        }
+      }
+      return {removed};
     },
     async listRequests() {
       return Array.from(state.requests.values()).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
@@ -691,6 +909,28 @@ const createMysqlStore = (config) => {
       )
     `);
     await pool.query(`
+      CREATE TABLE IF NOT EXISTS permission_groups (
+        group_id VARCHAR(64) PRIMARY KEY,
+        group_name VARCHAR(255) NOT NULL,
+        description_text TEXT NULL,
+        is_default TINYINT(1) NOT NULL DEFAULT 0,
+        permissions_json JSON NOT NULL,
+        admin_grants_json JSON NOT NULL,
+        created_at DATETIME NOT NULL,
+        updated_at DATETIME NOT NULL
+      )
+    `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS user_permission_groups (
+        discord_user_id VARCHAR(64) NOT NULL,
+        group_id VARCHAR(64) NOT NULL,
+        created_at DATETIME NOT NULL,
+        updated_at DATETIME NOT NULL,
+        PRIMARY KEY (discord_user_id, group_id),
+        INDEX idx_user_permission_groups_group (group_id)
+      )
+    `);
+    await pool.query(`
       CREATE TABLE IF NOT EXISTS sessions (
         token VARCHAR(128) PRIMARY KEY,
         discord_user_id VARCHAR(64) NOT NULL,
@@ -854,6 +1094,26 @@ const createMysqlStore = (config) => {
         INDEX idx_vault_job_tasks_job (job_id)
       )
     `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS vault_events (
+        event_seq BIGINT PRIMARY KEY AUTO_INCREMENT,
+        event_id VARCHAR(191) NOT NULL UNIQUE,
+        domain_name VARCHAR(64) NOT NULL,
+        event_type VARCHAR(128) NOT NULL,
+        severity_name VARCHAR(32) NOT NULL,
+        actor_type VARCHAR(64) NOT NULL,
+        actor_id VARCHAR(191) NULL,
+        actor_label VARCHAR(255) NULL,
+        target_type VARCHAR(64) NULL,
+        target_id VARCHAR(191) NULL,
+        message_text TEXT NOT NULL,
+        metadata_json JSON NOT NULL,
+        created_at DATETIME NOT NULL,
+        INDEX idx_vault_events_domain_created (domain_name, created_at),
+        INDEX idx_vault_events_actor (actor_id),
+        INDEX idx_vault_events_target (target_id)
+      )
+    `);
     await ignoreKnownAlterError("ALTER TABLE requests ADD COLUMN request_details_json JSON NULL AFTER moderator_comment");
     await ignoreKnownAlterError("ALTER TABLE requests ADD COLUMN request_work_key TEXT NULL AFTER request_details_json");
     await ignoreKnownAlterError("ALTER TABLE requests ADD COLUMN request_work_key_hash CHAR(64) NULL AFTER request_work_key");
@@ -893,9 +1153,78 @@ const createMysqlStore = (config) => {
       ]);
       claimedWorkKeys.add(request.workKeyHash);
     }
+
+    const [groupRows] = await pool.query("SELECT * FROM permission_groups ORDER BY created_at ASC, group_name ASC");
+    const seededGroups = ensureSeedPermissionGroups(groupRows.map((row) => ({
+      id: row.group_id,
+      name: row.group_name,
+      description: row.description_text,
+      isDefault: row.is_default === 1,
+      permissions: parseJsonColumn(row.permissions_json, []),
+      adminGrants: parseJsonColumn(row.admin_grants_json, {}),
+      createdAt: row.created_at.toISOString(),
+      updatedAt: row.updated_at.toISOString()
+    })), nowIso);
+    for (const group of seededGroups) {
+      await pool.query(`
+        INSERT INTO permission_groups (
+          group_id, group_name, description_text, is_default, permissions_json, admin_grants_json, created_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON DUPLICATE KEY UPDATE
+          group_name = VALUES(group_name),
+          description_text = VALUES(description_text),
+          is_default = VALUES(is_default),
+          permissions_json = VALUES(permissions_json),
+          admin_grants_json = VALUES(admin_grants_json),
+          updated_at = VALUES(updated_at)
+      `, [
+        group.id,
+        group.name,
+        group.description || null,
+        group.isDefault ? 1 : 0,
+        JSON.stringify(group.permissions || []),
+        JSON.stringify(group.adminGrants || {}),
+        toMysqlDateTime(group.createdAt, toMysqlDateTime(nowIso())),
+        toMysqlDateTime(group.updatedAt, toMysqlDateTime(nowIso()))
+      ]);
+    }
+
+    const defaultGroupId = getDefaultGroupId(seededGroups);
+    if (defaultGroupId) {
+      const [userRows] = await pool.query("SELECT discord_user_id, role_name FROM users WHERE role_name <> 'owner'");
+      for (const row of userRows) {
+        const [assignmentRows] = await pool.query(
+          "SELECT group_id FROM user_permission_groups WHERE discord_user_id = ? LIMIT 1",
+          [row.discord_user_id]
+        );
+        if (!assignmentRows[0]) {
+          await pool.query(`
+            INSERT INTO user_permission_groups (discord_user_id, group_id, created_at, updated_at)
+            VALUES (?, ?, NOW(), NOW())
+          `, [row.discord_user_id, defaultGroupId]);
+        }
+      }
+      for (const row of userRows) {
+        await refreshStoredUserAccess(pool, row.discord_user_id);
+      }
+    }
+
+    const retentionCutoff = new Date(Date.now() - (DEFAULT_EVENT_RETENTION_DAYS * 24 * 60 * 60 * 1000));
+    await pool.query("DELETE FROM vault_events WHERE created_at < ?", [toMysqlDateTime(retentionCutoff)]);
   };
 
-  const toUser = (row) => ({
+  const toPermissionGroup = (row) => normalizePermissionGroup({
+    id: row.group_id,
+    name: row.group_name,
+    description: row.description_text,
+    isDefault: row.is_default === 1,
+    permissions: parseJsonColumn(row.permissions_json, []),
+    adminGrants: parseJsonColumn(row.admin_grants_json, {}),
+    createdAt: row.created_at.toISOString(),
+    updatedAt: row.updated_at.toISOString()
+  });
+  const toStoredUser = (row) => ({
     id: row.discord_user_id,
     discordUserId: row.discord_user_id,
     username: row.username,
@@ -905,6 +1234,90 @@ const createMysqlStore = (config) => {
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString()
   });
+  const toVaultEvent = (row) => normalizeVaultEvent({
+    sequence: Number.parseInt(String(row.event_seq || 0), 10) || 0,
+    eventId: row.event_id,
+    domain: row.domain_name,
+    eventType: row.event_type,
+    severity: row.severity_name,
+    actorType: row.actor_type,
+    actorId: row.actor_id,
+    actorLabel: row.actor_label,
+    targetType: row.target_type,
+    targetId: row.target_id,
+    message: row.message_text,
+    metadata: parseJsonColumn(row.metadata_json, {}),
+    createdAt: row.created_at.toISOString()
+  });
+  const listPermissionGroupsFrom = async (executor = pool) => {
+    const [rows] = await executor.query("SELECT * FROM permission_groups ORDER BY group_name ASC");
+    return ensureSingleDefaultGroup(rows.map(toPermissionGroup));
+  };
+  const getPermissionGroupByIdFrom = async (executor, groupId) => {
+    const [rows] = await executor.query("SELECT * FROM permission_groups WHERE group_id = ? LIMIT 1", [groupId]);
+    return rows[0] ? toPermissionGroup(rows[0]) : null;
+  };
+  const listUserGroupAssignmentsFrom = async (executor = pool) => {
+    const [rows] = await executor.query("SELECT * FROM user_permission_groups");
+    return rows.map((row) => ({
+      discordUserId: row.discord_user_id,
+      groupId: row.group_id,
+      createdAt: row.created_at.toISOString(),
+      updatedAt: row.updated_at.toISOString()
+    }));
+  };
+  const listGroupsForUserFrom = async (executor, discordUserId) => {
+    const [rows] = await executor.query(`
+      SELECT permission_groups.*
+      FROM user_permission_groups
+      INNER JOIN permission_groups ON permission_groups.group_id = user_permission_groups.group_id
+      WHERE user_permission_groups.discord_user_id = ?
+      ORDER BY permission_groups.group_name ASC
+    `, [discordUserId]);
+    return rows.map(toPermissionGroup);
+  };
+  const hydrateUserRow = async (executor, row) => buildEffectiveUserAccess(
+    toStoredUser(row),
+    row.role_name === "owner" ? [] : await listGroupsForUserFrom(executor, row.discord_user_id)
+  );
+  const refreshStoredUserAccess = async (connection, discordUserId) => {
+    const [rows] = await connection.query("SELECT * FROM users WHERE discord_user_id = ? LIMIT 1", [discordUserId]);
+    if (!rows[0]) {
+      return null;
+    }
+    const next = await hydrateUserRow(connection, rows[0]);
+    await connection.query(`
+      UPDATE users
+      SET role_name = ?, permissions_json = ?, updated_at = NOW()
+      WHERE discord_user_id = ?
+    `, [next.role, JSON.stringify(next.permissions || []), discordUserId]);
+    return {
+      ...next,
+      updatedAt: nowIso()
+    };
+  };
+  const refreshUsersForGroups = async (connection, groupIds = []) => {
+    const normalizedGroupIds = Array.from(new Set((Array.isArray(groupIds) ? groupIds : [])
+      .map((groupId) => normalizeString(groupId))
+      .filter(Boolean)));
+    if (!normalizedGroupIds.length) {
+      return [];
+    }
+    const placeholders = normalizedGroupIds.map(() => "?").join(", ");
+    const [rows] = await connection.query(`
+      SELECT DISTINCT discord_user_id
+      FROM user_permission_groups
+      WHERE group_id IN (${placeholders})
+    `, normalizedGroupIds);
+    const refreshed = [];
+    for (const row of rows) {
+      const user = await refreshStoredUserAccess(connection, row.discord_user_id);
+      if (user) {
+        refreshed.push(user);
+      }
+    }
+    return refreshed;
+  };
   const toRavenChapter = (row) => ({
     id: row.chapter_id,
     label: row.label_name,
@@ -1110,28 +1523,226 @@ const createMysqlStore = (config) => {
         }
 
         const nextRole = role || existing?.role_name || (claimOwner ? "owner" : "member");
-        const nextPermissions = permissions?.length ? permissions : defaultPermissionsForRole(nextRole);
+        const nextPermissions = Array.isArray(permissions) && permissions.length
+          ? permissions
+          : deriveLegacyPermissions({
+            role: nextRole,
+            isOwner: nextRole === "owner"
+          });
         await connection.query(`
           INSERT INTO users (discord_user_id, username, avatar_url, role_name, permissions_json, created_at, updated_at)
           VALUES (?, ?, ?, ?, ?, NOW(), NOW())
           ON DUPLICATE KEY UPDATE username = VALUES(username), avatar_url = VALUES(avatar_url), role_name = VALUES(role_name),
           permissions_json = VALUES(permissions_json), updated_at = NOW()
         `, [discordUserId, username, avatarUrl || null, nextRole, JSON.stringify(nextPermissions)]);
+
+        if (nextRole !== "owner") {
+          const groups = await listPermissionGroupsFrom(connection);
+          const defaultGroupId = getDefaultGroupId(groups);
+          const [assignmentRows] = await connection.query(
+            "SELECT group_id FROM user_permission_groups WHERE discord_user_id = ? LIMIT 1",
+            [discordUserId]
+          );
+          if (!assignmentRows[0] && defaultGroupId) {
+            await connection.query(`
+              INSERT INTO user_permission_groups (discord_user_id, group_id, created_at, updated_at)
+              VALUES (?, ?, NOW(), NOW())
+            `, [discordUserId, defaultGroupId]);
+          }
+          await refreshStoredUserAccess(connection, discordUserId);
+        }
       });
       return this.getUserByDiscordId(discordUserId);
     },
     async getUserByDiscordId(discordUserId) {
       const [rows] = await pool.query("SELECT * FROM users WHERE discord_user_id = ? LIMIT 1", [discordUserId]);
-      return rows[0] ? toUser(rows[0]) : null;
+      return rows[0] ? hydrateUserRow(pool, rows[0]) : null;
     },
     async listUsers() {
       const [rows] = await pool.query("SELECT * FROM users ORDER BY username ASC");
-      return rows.map(toUser);
+      return Promise.all(rows.map((row) => hydrateUserRow(pool, row)));
+    },
+    async listPermissionGroups() {
+      return listPermissionGroupsFrom(pool);
+    },
+    async getPermissionGroup(groupId) {
+      return getPermissionGroupByIdFrom(pool, normalizeString(groupId));
+    },
+    async createPermissionGroup(payload) {
+      const group = normalizePermissionGroup({
+        ...payload,
+        id: payload?.id || payload?.name,
+        createdAt: nowIso(),
+        updatedAt: nowIso()
+      });
+      return withTransaction(async (connection) => {
+        const [existingRows] = await connection.query("SELECT group_id FROM permission_groups WHERE group_id = ? LIMIT 1 FOR UPDATE", [group.id]);
+        if (existingRows[0]) {
+          throw createConflictError("Permission group already exists.", "PERMISSION_GROUP_CONFLICT");
+        }
+        const currentGroups = await listPermissionGroupsFrom(connection);
+        const nextGroups = ensureSingleDefaultGroup([...currentGroups, group]);
+        for (const entry of nextGroups) {
+          await connection.query(`
+            INSERT INTO permission_groups (
+              group_id, group_name, description_text, is_default, permissions_json, admin_grants_json, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON DUPLICATE KEY UPDATE
+              group_name = VALUES(group_name),
+              description_text = VALUES(description_text),
+              is_default = VALUES(is_default),
+              permissions_json = VALUES(permissions_json),
+              admin_grants_json = VALUES(admin_grants_json),
+              updated_at = VALUES(updated_at)
+          `, [
+            entry.id,
+            entry.name,
+            entry.description || null,
+            entry.isDefault ? 1 : 0,
+            JSON.stringify(entry.permissions || []),
+            JSON.stringify(entry.adminGrants || {}),
+            toMysqlDateTime(entry.createdAt, toMysqlDateTime(nowIso())),
+            toMysqlDateTime(entry.updatedAt, toMysqlDateTime(nowIso()))
+          ]);
+        }
+        return getPermissionGroupByIdFrom(connection, group.id);
+      });
+    },
+    async updatePermissionGroup(groupId, payload) {
+      const normalizedGroupId = normalizeString(groupId);
+      return withTransaction(async (connection) => {
+        const existing = await getPermissionGroupByIdFrom(connection, normalizedGroupId);
+        if (!existing) {
+          return null;
+        }
+        const next = normalizePermissionGroup({
+          ...existing,
+          ...payload,
+          id: existing.id,
+          createdAt: existing.createdAt,
+          updatedAt: nowIso()
+        }, existing);
+        const currentGroups = await listPermissionGroupsFrom(connection);
+        const nextGroups = ensureSingleDefaultGroup(currentGroups.map((group) => group.id === existing.id ? next : group));
+        for (const entry of nextGroups) {
+          await connection.query(`
+            UPDATE permission_groups
+            SET group_name = ?, description_text = ?, is_default = ?, permissions_json = ?, admin_grants_json = ?, updated_at = ?
+            WHERE group_id = ?
+          `, [
+            entry.name,
+            entry.description || null,
+            entry.isDefault ? 1 : 0,
+            JSON.stringify(entry.permissions || []),
+            JSON.stringify(entry.adminGrants || {}),
+            toMysqlDateTime(entry.updatedAt, toMysqlDateTime(nowIso())),
+            entry.id
+          ]);
+        }
+        await refreshUsersForGroups(connection, [existing.id]);
+        return getPermissionGroupByIdFrom(connection, existing.id);
+      });
+    },
+    async deletePermissionGroup(groupId) {
+      const normalizedGroupId = normalizeString(groupId);
+      return withTransaction(async (connection) => {
+        const existing = await getPermissionGroupByIdFrom(connection, normalizedGroupId);
+        if (!existing) {
+          return null;
+        }
+        if (existing.isDefault) {
+          throw createConflictError("Choose a new default group before deleting the current default.", "DEFAULT_GROUP_REQUIRED");
+        }
+        const [affectedRows] = await connection.query(
+          "SELECT DISTINCT discord_user_id FROM user_permission_groups WHERE group_id = ?",
+          [existing.id]
+        );
+        await connection.query("DELETE FROM user_permission_groups WHERE group_id = ?", [existing.id]);
+        await connection.query("DELETE FROM permission_groups WHERE group_id = ?", [existing.id]);
+        for (const row of affectedRows) {
+          await refreshStoredUserAccess(connection, row.discord_user_id);
+        }
+        return existing;
+      });
+    },
+    async assignUserGroups(discordUserId, groupIds = []) {
+      const normalizedDiscordUserId = normalizeString(discordUserId);
+      return withTransaction(async (connection) => {
+        const [userRows] = await connection.query("SELECT * FROM users WHERE discord_user_id = ? LIMIT 1 FOR UPDATE", [normalizedDiscordUserId]);
+        if (!userRows[0]) {
+          return null;
+        }
+        if (userRows[0].role_name === "owner") {
+          throw createConflictError("The protected owner cannot be reassigned.", "PROTECTED_OWNER");
+        }
+        const validGroupIds = Array.from(new Set((Array.isArray(groupIds) ? groupIds : [])
+          .map((entry) => normalizeString(entry))
+          .filter(Boolean)));
+        if (validGroupIds.length) {
+          const placeholders = validGroupIds.map(() => "?").join(", ");
+          const [groupRows] = await connection.query(
+            `SELECT group_id FROM permission_groups WHERE group_id IN (${placeholders})`,
+            validGroupIds
+          );
+          const allowedIds = new Set(groupRows.map((row) => row.group_id));
+          await connection.query("DELETE FROM user_permission_groups WHERE discord_user_id = ?", [normalizedDiscordUserId]);
+          for (const groupId of validGroupIds.filter((entry) => allowedIds.has(entry))) {
+            await connection.query(`
+              INSERT INTO user_permission_groups (discord_user_id, group_id, created_at, updated_at)
+              VALUES (?, ?, NOW(), NOW())
+            `, [normalizedDiscordUserId, groupId]);
+          }
+        } else {
+          await connection.query("DELETE FROM user_permission_groups WHERE discord_user_id = ?", [normalizedDiscordUserId]);
+        }
+        return refreshStoredUserAccess(connection, normalizedDiscordUserId);
+      });
+    },
+    async deleteUser(discordUserId) {
+      const normalizedDiscordUserId = normalizeString(discordUserId);
+      return withTransaction(async (connection) => {
+        const [userRows] = await connection.query("SELECT * FROM users WHERE discord_user_id = ? LIMIT 1 FOR UPDATE", [normalizedDiscordUserId]);
+        if (!userRows[0]) {
+          return null;
+        }
+        if (userRows[0].role_name === "owner") {
+          throw createConflictError("The protected owner cannot be deleted.", "PROTECTED_OWNER");
+        }
+        const hydrated = await hydrateUserRow(connection, userRows[0]);
+        await connection.query("DELETE FROM sessions WHERE discord_user_id = ?", [normalizedDiscordUserId]);
+        await connection.query("DELETE FROM user_permission_groups WHERE discord_user_id = ?", [normalizedDiscordUserId]);
+        await connection.query("DELETE FROM users WHERE discord_user_id = ?", [normalizedDiscordUserId]);
+        return hydrated;
+      });
+    },
+    async getAccessOverview() {
+      const [users, groups] = await Promise.all([
+        this.listUsers(),
+        this.listPermissionGroups()
+      ]);
+      return {
+        users,
+        groups,
+        defaultGroupId: getDefaultGroupId(groups)
+      };
     },
     async createSession({discordUserId}) {
       const token = randomToken("sess");
       await pool.query("INSERT INTO sessions (token, discord_user_id, created_at) VALUES (?, ?, NOW())", [token, discordUserId]);
       return {token, discordUserId};
+    },
+    async clearSession(token) {
+      const session = await this.getSession(token);
+      if (!session) {
+        return null;
+      }
+      await pool.query("DELETE FROM sessions WHERE token = ?", [token]);
+      return session;
+    },
+    async clearSessionsForUser(discordUserId) {
+      await pool.query("DELETE FROM sessions WHERE discord_user_id = ?", [discordUserId]);
+      return {ok: true};
     },
     async getSession(token) {
       const [rows] = await pool.query("SELECT * FROM sessions WHERE token = ? LIMIT 1", [token]);
@@ -1173,6 +1784,64 @@ const createMysqlStore = (config) => {
       return rows[0]
         ? {key: rows[0].secret_key, value: parseJsonColumn(rows[0].secret_value), updatedAt: rows[0].updated_at.toISOString()}
         : null;
+    },
+    async appendEvent(payload) {
+      const normalized = normalizeVaultEvent(payload, nowIso);
+      const [result] = await pool.query(`
+        INSERT INTO vault_events (
+          event_id, domain_name, event_type, severity_name, actor_type, actor_id, actor_label, target_type, target_id, message_text,
+          metadata_json, created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, [
+        normalized.eventId,
+        normalized.domain,
+        normalized.eventType,
+        normalized.severity,
+        normalized.actorType,
+        normalized.actorId || null,
+        normalized.actorLabel || null,
+        normalized.targetType || null,
+        normalized.targetId || null,
+        normalized.message,
+        JSON.stringify(normalized.metadata || {}),
+        toMysqlDateTime(normalized.createdAt, toMysqlDateTime(nowIso()))
+      ]);
+      const [rows] = await pool.query("SELECT * FROM vault_events WHERE event_seq = ? LIMIT 1", [result.insertId]);
+      return rows[0] ? toVaultEvent(rows[0]) : null;
+    },
+    async listEvents(filters = {}) {
+      const normalized = normalizeEventFilters(filters);
+      const where = [];
+      const params = [];
+      if (normalized.domains.length) {
+        where.push(`domain_name IN (${normalized.domains.map(() => "?").join(", ")})`);
+        params.push(...normalized.domains);
+      }
+      if (normalized.actorId) {
+        where.push("actor_id = ?");
+        params.push(normalized.actorId);
+      }
+      if (normalized.targetId) {
+        where.push("target_id = ?");
+        params.push(normalized.targetId);
+      }
+      if (normalized.afterSequence) {
+        where.push("event_seq > ?");
+        params.push(normalized.afterSequence);
+      }
+      const [rows] = await pool.query(`
+        SELECT * FROM vault_events
+        ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
+        ORDER BY event_seq ${normalized.newestFirst ? "DESC" : "ASC"}
+        LIMIT ?
+      `, [...params, normalized.limit]);
+      return rows.map(toVaultEvent);
+    },
+    async pruneEvents(retentionDays = DEFAULT_EVENT_RETENTION_DAYS) {
+      const cutoff = new Date(Date.now() - (Number(retentionDays) * 24 * 60 * 60 * 1000));
+      const [result] = await pool.query("DELETE FROM vault_events WHERE created_at < ?", [toMysqlDateTime(cutoff)]);
+      return {removed: Number(result.affectedRows || 0)};
     },
     async listRequests() {
       const [rows] = await pool.query("SELECT * FROM requests ORDER BY created_at DESC");

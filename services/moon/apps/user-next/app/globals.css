@@ -195,12 +195,17 @@ a {
 }
 
 .moon-title-card-media img,
-.moon-reader-page img,
-.moon-reader-paged-surface img,
 .moon-title-cover img {
   width: 100%;
   height: 100%;
   object-fit: cover;
+  display: block;
+}
+
+.moon-reader-page img,
+.moon-reader-paged-image {
+  width: 100%;
+  height: auto;
   display: block;
 }
 
@@ -408,14 +413,21 @@ a {
 }
 
 .moon-reader-canvas {
+  position: relative;
   display: grid;
-  gap: 18px;
+  gap: 0;
 }
 
-.moon-reader-topbar {
+.moon-reader-topbar-shell {
   position: sticky;
   top: 122px;
   z-index: 10;
+  padding-bottom: 16px;
+  background: linear-gradient(180deg, rgba(8, 14, 20, 0.98), rgba(8, 14, 20, 0.96) 76%, rgba(8, 14, 20, 0));
+}
+
+.moon-reader-topbar {
+  position: relative;
   display: flex;
   justify-content: space-between;
   gap: 20px;
@@ -435,7 +447,7 @@ a {
 }
 
 .moon-reader-stage {
-  padding: 22px;
+  padding: 0;
   min-height: 72vh;
 }
 
@@ -446,42 +458,48 @@ a {
 
 .moon-reader-chapter-section {
   display: grid;
-  gap: 16px;
+  gap: 14px;
+}
+
+.moon-reader-chapter-section.is-lead {
+  gap: 0;
+}
+
+.moon-reader-chapter-section:not(.is-lead) {
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
 }
 
 .moon-reader-chapter-header {
-  position: sticky;
-  top: 210px;
-  z-index: 6;
   margin: 0;
-  padding: 14px 16px;
-  border-radius: 18px;
-  background: rgba(8, 14, 20, 0.84);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  backdrop-filter: blur(18px);
+  padding: 0 20px;
+  display: grid;
+  gap: 4px;
+  background: transparent;
+  border: 0;
 }
 
 .moon-reader-pages {
   display: grid;
-  gap: 18px;
+  gap: 0;
 }
 
 .moon-reader-page {
-  border-radius: 20px;
   overflow: hidden;
-  background: rgba(0, 0, 0, 0.22);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: transparent;
+  border: 0;
 }
 
 .moon-reader-page.is-active {
-  border-color: rgba(255, 143, 92, 0.44);
-  box-shadow: 0 24px 50px rgba(255, 102, 59, 0.16);
+  box-shadow: none;
 }
 
 .moon-reader-paged-surface {
   display: grid;
-  gap: 16px;
+  gap: 0;
   justify-items: center;
+  padding: 22px;
 }
 
 .moon-reader-paged-toolbar {
@@ -496,9 +514,8 @@ a {
 
 .moon-reader-paged-frame {
   width: min(1100px, 100%);
-  max-height: 82vh;
-  border-radius: 22px;
-  overflow: hidden;
+  border-radius: 0;
+  overflow: visible;
   background: rgba(0, 0, 0, 0.18);
 }
 

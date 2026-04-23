@@ -841,6 +841,150 @@ button {
   box-shadow: inset 0 0 0 1px rgba(222, 93, 41, 0.18);
 }
 
+.access-metric-grid {
+  margin-bottom: 18px;
+}
+
+.access-workspace,
+.access-groups-grid {
+  margin-top: 18px;
+}
+
+.access-workspace {
+  display: grid;
+  grid-template-columns: minmax(320px, 0.9fr) minmax(0, 1.1fr);
+  gap: 16px;
+}
+
+.access-directory-panel,
+.access-detail-panel,
+.access-groups-panel,
+.access-group-editor-panel {
+  display: grid;
+  gap: 16px;
+}
+
+.access-list-toolbar,
+.access-user-card-head,
+.access-user-identity,
+.access-user-meta,
+.access-user-foot,
+.access-group-card-head,
+.event-feed-head,
+.event-feed-meta,
+.access-detail-columns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.access-list-toolbar,
+.access-user-card-head,
+.access-user-foot,
+.access-group-card-head,
+.event-feed-head {
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
+.access-user-list,
+.access-group-list,
+.event-feed,
+.permission-matrix,
+.capability-grid,
+.access-user-chip-stack {
+  display: grid;
+  gap: 12px;
+}
+
+.access-user-card,
+.access-group-card,
+.event-feed-card,
+.access-toggle-card {
+  border: 1px solid var(--admin-line);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.access-user-card.is-selected,
+.access-group-card.is-selected-group,
+.access-toggle-card.is-selected-group {
+  border-color: rgba(222, 93, 41, 0.4);
+  box-shadow: inset 0 0 0 1px rgba(222, 93, 41, 0.18);
+}
+
+.access-user-card.is-owner {
+  border-style: dashed;
+}
+
+.access-user-card-main,
+.access-group-card-main {
+  width: 100%;
+  border: 0;
+  padding: 14px 16px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  display: grid;
+  gap: 12px;
+}
+
+.access-user-meta,
+.access-user-foot,
+.event-feed-meta,
+.event-feed-card p {
+  color: var(--admin-muted);
+  font-size: 0.9rem;
+}
+
+.access-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.access-summary-card,
+.access-detail-column {
+  display: grid;
+  gap: 8px;
+}
+
+.access-detail-column {
+  flex: 1 1 280px;
+}
+
+.access-toggle-card {
+  padding: 14px;
+  cursor: pointer;
+}
+
+.access-toggle-card input {
+  accent-color: var(--admin-accent);
+}
+
+.access-toggle-card.is-disabled-access {
+  opacity: 0.72;
+  cursor: not-allowed;
+}
+
+.capability-grid {
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+}
+
+.permission-matrix-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 140px;
+  gap: 12px;
+  align-items: center;
+}
+
+.event-feed-card {
+  padding: 14px 16px;
+  display: grid;
+  gap: 10px;
+}
+
 .detail-chapter-copy {
   display: grid;
   gap: 6px;
@@ -1307,7 +1451,9 @@ button {
   }
 
   .content-grid.two-up,
-  .settings-form.three-column {
+  .settings-form.three-column,
+  .access-workspace,
+  .access-detail-grid {
     grid-template-columns: 1fr;
   }
 }
@@ -1352,7 +1498,14 @@ button {
   .agenda-entry-links,
   .library-detail-actions,
   .detail-stack-card,
-  .detail-stack-meta {
+  .detail-stack-meta,
+  .access-list-toolbar,
+  .access-user-card-head,
+  .access-user-foot,
+  .access-group-card-head,
+  .event-feed-head,
+  .event-feed-meta,
+  .access-detail-columns {
     flex-direction: column;
   }
 
@@ -1374,7 +1527,8 @@ button {
 
   .library-detail-hero-inner,
   .library-detail-meta-grid,
-  .request-detail-meta-grid {
+  .request-detail-meta-grid,
+  .permission-matrix-row {
     grid-template-columns: 1fr;
   }
 

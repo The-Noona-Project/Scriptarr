@@ -66,6 +66,7 @@ export const requestJson = async (url, options = {}) => {
  * @returns {{
  *   get: (url: string) => Promise<ApiResult>,
  *   post: (url: string, json?: unknown) => Promise<ApiResult>,
+ *   patch: (url: string, json?: unknown) => Promise<ApiResult>,
  *   put: (url: string, json?: unknown) => Promise<ApiResult>,
  *   delete: (url: string) => Promise<ApiResult>,
  *   getAuthStatus: () => Promise<ApiResult>,
@@ -77,6 +78,7 @@ export const requestJson = async (url, options = {}) => {
 export const createAdminApi = () => ({
   get: (url) => requestJson(url),
   post: (url, json) => requestJson(url, {method: "POST", json}),
+  patch: (url, json) => requestJson(url, {method: "PATCH", json}),
   put: (url, json) => requestJson(url, {method: "PUT", json}),
   delete: (url) => requestJson(url, {method: "DELETE"}),
   getAuthStatus: () => requestJson("/api/moon/auth/status"),

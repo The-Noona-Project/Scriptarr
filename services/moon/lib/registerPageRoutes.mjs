@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
+import {canAccessAdmin as canAccessMoonAdmin} from "@scriptarr/access";
 import {deriveShortSiteName, normalizeSiteName, readMoonBranding} from "./branding.mjs";
 import {proxyJson} from "./proxy.mjs";
 
@@ -67,14 +68,7 @@ const appendAssetVersion = (assetPath, version) => {
   return assetPath.includes("?") ? `${assetPath}&v=${version}` : `${assetPath}?v=${version}`;
 };
 
-const canAccessAdmin = (user) => Boolean(
-  user
-  && (
-    user.role === "owner"
-    || user.role === "admin"
-    || (Array.isArray(user.permissions) && user.permissions.includes("admin"))
-  )
-);
+const canAccessAdmin = (user) => canAccessMoonAdmin(user);
 
 const rewriteJavascriptImports = (source, version) =>
   source

@@ -26,9 +26,11 @@ the metadata exists but there is no source yet, Portal can still create an `unav
 finds a source it DMs the requester that the title is back in admin review or was auto-approved.
 
 `downloadall` stays provider-browse first, but it now asks Raven to metadata-resolve each matched bulk title before
-queueing it. Portal only queues titles with one confident metadata match and reports already-active, no-metadata,
-ambiguous-metadata, and failed skips in the DM summary. The command is still owner-only and intentionally pinned to
-WeebCentral, so it fails if that provider is disabled instead of browsing MangaDex.
+queueing it. Portal only queues titles with one confident metadata match and reports already-active, adult-content,
+no-metadata, ambiguous-metadata, and failed skips in the DM summary. For `nsfw:false`, Raven only queues titles whose
+WeebCentral detail page explicitly says `Adult Content: No`; adult or unverified titles are skipped. The command is
+still owner-only and intentionally pinned to WeebCentral, so it fails if that provider is disabled instead of browsing
+MangaDex.
 
 Guild id, onboarding settings, DM superuser id, and per-command role gates are managed from Moon admin at
 `/admin/discord`. Discord bot credentials remain env-managed.

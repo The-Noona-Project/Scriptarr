@@ -3,8 +3,10 @@ import {createLogger} from "@scriptarr/logging";
 import {resolveVaultConfig} from "./config.mjs";
 import {serviceAuth} from "./serviceAuth.mjs";
 import {createStore} from "./createStore.mjs";
+import {DEFAULT_EVENT_RETENTION_DAYS} from "./vaultEvents.mjs";
 
 const JSON_BODY_LIMIT = "10mb";
+const EVENT_PRUNE_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const requireJson = express.json({limit: JSON_BODY_LIMIT});
 const sendStoreError = (logger, res, error, context = {}) => {
   if (error?.code === "OWNER_ALREADY_CLAIMED") {
@@ -32,6 +34,14 @@ const sendStoreError = (logger, res, error, context = {}) => {
     });
     return true;
   }
+  if (["PROTECTED_OWNER", "DEFAULT_GROUP_REQUIRED", "PERMISSION_GROUP_CONFLICT"].includes(error?.code)) {
+    logger.warn("Vault rejected an access-control mutation.", {
+      ...context,
+      code: error.code
+    });
+    res.status(409).json({error: error.message, code: error.code});
+    return true;
+  }
   return false;
 };
 
@@ -39,6 +49,15 @@ export const createVaultApp = async ({logger = createLogger("VAULT")} = {}) => {
   const config = resolveVaultConfig();
   const store = createStore(config);
   await store.init();
+  const pruneTimer = setInterval(() => {
+    void store.pruneEvents(DEFAULT_EVENT_RETENTION_DAYS).catch((error) => {
+      logger.warn("Vault failed to prune expired durable events.", {
+        retentionDays: DEFAULT_EVENT_RETENTION_DAYS,
+        error
+      });
+    });
+  }, EVENT_PRUNE_INTERVAL_MS);
+  pruneTimer.unref?.();
 
   const app = express();
   const auth = serviceAuth(config);
@@ -75,6 +94,92 @@ export const createVaultApp = async ({logger = createLogger("VAULT")} = {}) => {
     res.json(await store.listUsers());
   });
 
+  app.get("/api/service/access", async (_req, res) => {
+    res.json(await store.getAccessOverview());
+  });
+
+  app.get("/api/service/permission-groups", async (_req, res) => {
+    res.json(await store.listPermissionGroups());
+  });
+
+  app.post("/api/service/permission-groups", requireJson, async (req, res) => {
+    try {
+      res.status(201).json(await store.createPermissionGroup(req.body || {}));
+    } catch (error) {
+      if (sendStoreError(logger, res, error, {groupId: req.body?.id || req.body?.name})) {
+        return;
+      }
+      throw error;
+    }
+  });
+
+  app.patch("/api/service/permission-groups/:groupId", requireJson, async (req, res) => {
+    try {
+      const group = await store.updatePermissionGroup(req.params.groupId, req.body || {});
+      if (!group) {
+        res.status(404).json({error: "Permission group not found."});
+        return;
+      }
+      res.json(group);
+    } catch (error) {
+      if (sendStoreError(logger, res, error, {groupId: req.params.groupId})) {
+        return;
+      }
+      throw error;
+    }
+  });
+
+  app.delete("/api/service/permission-groups/:groupId", async (req, res) => {
+    try {
+      const group = await store.deletePermissionGroup(req.params.groupId);
+      if (!group) {
+        res.status(404).json({error: "Permission group not found."});
+        return;
+      }
+      res.json(group);
+    } catch (error) {
+      if (sendStoreError(logger, res, error, {groupId: req.params.groupId})) {
+        return;
+      }
+      throw error;
+    }
+  });
+
+  app.put("/api/service/users/:discordUserId/groups", requireJson, async (req, res) => {
+    try {
+      const user = await store.assignUserGroups(
+        req.params.discordUserId,
+        Array.isArray(req.body?.groupIds) ? req.body.groupIds : []
+      );
+      if (!user) {
+        res.status(404).json({error: "User not found."});
+        return;
+      }
+      res.json(user);
+    } catch (error) {
+      if (sendStoreError(logger, res, error, {discordUserId: req.params.discordUserId})) {
+        return;
+      }
+      throw error;
+    }
+  });
+
+  app.delete("/api/service/users/:discordUserId", async (req, res) => {
+    try {
+      const user = await store.deleteUser(req.params.discordUserId);
+      if (!user) {
+        res.status(404).json({error: "User not found."});
+        return;
+      }
+      res.json(user);
+    } catch (error) {
+      if (sendStoreError(logger, res, error, {discordUserId: req.params.discordUserId})) {
+        return;
+      }
+      throw error;
+    }
+  });
+
   app.get("/api/service/users/by-discord/:discordUserId", async (req, res) => {
     const user = await store.getUserByDiscordId(req.params.discordUserId);
     if (!user) {
@@ -103,6 +208,19 @@ export const createVaultApp = async ({logger = createLogger("VAULT")} = {}) => {
     res.json(user);
   });
 
+  app.delete("/api/service/sessions/:token", async (req, res) => {
+    const session = await store.clearSession(req.params.token);
+    if (!session) {
+      res.status(404).json({error: "Session not found."});
+      return;
+    }
+    res.json(session);
+  });
+
+  app.delete("/api/service/sessions/user/:discordUserId", async (req, res) => {
+    res.json(await store.clearSessionsForUser(req.params.discordUserId));
+  });
+
   app.get("/api/service/settings/:key", async (req, res) => {
     const setting = await store.getSetting(req.params.key);
     res.json(setting || {key: req.params.key, value: null});
@@ -119,6 +237,30 @@ export const createVaultApp = async ({logger = createLogger("VAULT")} = {}) => {
 
   app.put("/api/service/secrets/:key", requireJson, async (req, res) => {
     res.json(await store.setSecret(req.params.key, req.body.value));
+  });
+
+  app.get("/api/service/events", async (req, res) => {
+    const domains = Array.isArray(req.query.domain)
+      ? req.query.domain.map((value) => String(value))
+      : req.query.domain
+        ? [String(req.query.domain)]
+        : [];
+    res.json(await store.listEvents({
+      domains,
+      actorId: req.query.actorId ? String(req.query.actorId) : "",
+      targetId: req.query.targetId ? String(req.query.targetId) : "",
+      afterSequence: req.query.afterSequence || req.query.after || 0,
+      limit: req.query.limit || 100,
+      newestFirst: req.query.newestFirst !== "false"
+    }));
+  });
+
+  app.post("/api/service/events", requireJson, async (req, res) => {
+    res.status(201).json(await store.appendEvent(req.body || {}));
+  });
+
+  app.delete("/api/service/events/prune", async (req, res) => {
+    res.json(await store.pruneEvents(req.query.retentionDays || DEFAULT_EVENT_RETENTION_DAYS));
   });
 
   app.get("/api/service/requests", async (_req, res) => {
@@ -211,10 +353,15 @@ export const createVaultApp = async ({logger = createLogger("VAULT")} = {}) => {
   });
 
   app.put("/api/service/raven/titles/:titleId", requireJson, async (req, res) => {
-    res.json(await store.upsertRavenTitle({
+    const chapters = Array.isArray(req.body?.chapters) ? req.body.chapters : null;
+    const title = await store.upsertRavenTitle({
       ...req.body,
       id: req.params.titleId
-    }));
+    });
+    if (chapters) {
+      await store.replaceRavenChapters(req.params.titleId, chapters);
+    }
+    res.json(await store.getRavenTitle(req.params.titleId) || title);
   });
 
   app.put("/api/service/raven/titles/:titleId/chapters", requireJson, async (req, res) => {
@@ -283,5 +430,12 @@ export const createVaultApp = async ({logger = createLogger("VAULT")} = {}) => {
     driver: config.driver
   });
 
-  return {app, config, store};
+  return {
+    app,
+    config,
+    store,
+    close() {
+      clearInterval(pruneTimer);
+    }
+  };
 };

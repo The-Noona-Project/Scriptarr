@@ -105,6 +105,10 @@ Admins then choose the concrete download-provider target from `/admin/requests`,
 download` setting lets Sage queue one high-confidence source automatically. If no source exists yet, Sage stores the
 request as `unavailable`, re-checks it every 4 hours, DMs the requester when the title moves back into admin review,
 and expires it after 90 days if it still cannot be matched.
+Moon admin `/admin/users` now owns access control too. The bootstrap owner stays protected outside normal edits, while
+all other staff access is group-based: reusable permission groups with per-route-family `read`, `write`, or `root`
+grants plus baseline user capabilities. New and returning Discord users land in the current default onboarding group,
+and admin activity now comes from one shared durable event log instead of page-local summaries.
 Raven now only marks download work complete after the promoted files also persist into the brokered catalog, and it
 rescans the existing `downloaded/<type>/...` tree on boot so already-finished archives can repopulate Moon's library
 without forcing a re-download.
@@ -186,6 +190,8 @@ temporarily unavailable.
 - configure libraries and storage paths
 - manage request moderation
 - review metadata-first request matches, re-resolve unavailable requests, and approve concrete Raven download targets
+- manage reusable permission groups, user-group assignments, protected-owner visibility, and access audit feeds in
+  `/admin/users`
 - manage the Discord bot workflow in `/admin/discord`, including guild id, onboarding channel or template, DM
   superuser id, and per-command role mapping
 - configure Raven VPN credentials and region for PIA/OpenVPN-backed downloads
@@ -257,6 +263,10 @@ at a time with its cover, backdrop, lifecycle status, source and metadata identi
 tasks, and per-chapter release or archive details.
 That title page now also exposes repair candidates with concrete provider URLs, chapter-coverage previews, warning
 chips, and a safe replacement queue action that stages the replacement download before it swaps the live files.
+`/admin/users` is now the access-control workspace: a dense user directory, reusable permission-group editor, group
+assignment panel, and recent auth or access events in one page. Staff access is no longer a flat role toggle. Moon now
+evaluates unioned permission groups with route-family `read`, `write`, or `root` grants, while the bootstrap owner
+stays visible but protected from deletion or demotion.
 
 ## Discord Bot Workflow
 
@@ -283,8 +293,10 @@ Discord `/request` now uses the same metadata-first flow as Moon web: search raw
 one exact metadata choice for moderated review. Requesters no longer choose download providers in Discord; staff do
 that from `/admin/requests`.
 `downloadall` now bulk-browses the provider first, then metadata-resolves each matched title before queueing it. Only
-titles with one confident metadata match are queued. Portal's DM summary now breaks skipped titles out as already
-active, no-metadata, ambiguous-metadata, or failed instead of silently queueing metadata-less library entries.
+titles with one confident metadata match are queued. For `nsfw:false`, Raven also verifies the concrete WeebCentral
+detail page and only queues titles with an explicit `Adult Content: No`; adult or unverified titles are skipped.
+Portal's DM summary now breaks skipped titles out as already active, adult-content, no-metadata, ambiguous-metadata,
+or failed instead of silently queueing metadata-less library entries.
 That owner-only command is intentionally pinned to WeebCentral. If WeebCentral is disabled in Raven settings,
 `downloadall` fails instead of falling back to MangaDex or another provider.
 Portal also sends requester DMs when a moderated request is approved, denied, or finishes downloading, and dedupes
@@ -352,6 +364,10 @@ Request records now persist the original search query, selected metadata snapsho
 linked Raven job or task ids so Moon admin can moderate or retry the exact saved target later.
 Vault now also stores a durable request work key derived from the concrete download target when one exists, or from the
 metadata identity when no download match exists yet, and active duplicate work keys are rejected.
+Vault now also stores reusable permission groups, user-group assignments, and immutable durable events. Deleting a user
+from `/admin/users` clears local access plus active sessions, but preserves their requests, follows, bookmarks,
+progress, and audit history. If that Discord user signs in again later, Scriptarr recreates them on the current
+default onboarding group.
 
 Moon admin library and calendar are now denser operational views:
 

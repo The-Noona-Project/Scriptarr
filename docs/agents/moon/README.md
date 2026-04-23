@@ -56,8 +56,9 @@
 - The user home route should stay cover-led and shelf-based, not hero-heavy. Favor a personalized "Your Bookshelf"
   continue-reading scroller first, then recent-by-type shelves and tag-driven shelves built from the reader's saved
   progress history.
-- Reader preferences are now centered on the new immersive reader. Infinite scroll is the default mode, paged mode is
-  the secondary option, and progress, bookmarks, and typed route syncing should keep working even as the shell evolves.
+- Reader preferences are now centered on the new immersive reader. Seamless infinite scroll is the default mode,
+  fit-width paged mode is the secondary option, and progress, bookmarks, and typed route syncing should keep working
+  even as the shell evolves.
 - `/admin/system/updates` is an actionable Moon surface that checks or starts managed-service update jobs through Sage.
 - `/admin/discord` should surface Portal capability state honestly: command runtime, command sync, onboarding
   availability, and the last meaningful runtime error should all be visible without forcing the admin to read logs.
@@ -77,6 +78,12 @@
   the resolve path for `unavailable` requests instead of assuming every request is immediately approvable.
 - `/admin/requests` now also owns the source-pick and override path for requester metadata picks. Moderators can
   replace metadata or download selections before they approve or resolve the request.
+- `/admin/users` now owns the group-based access model. Keep the protected owner visible but read-only, keep one
+  required default onboarding group, and treat group assignment as the way to make moderators or other admins instead
+  of reviving flat role toggles.
+- Moon's shared admin event feeds now come from `/api/moon-v3/admin/events` and `/api/moon-v3/admin/events/stream`.
+  Those routes are same-origin, Sage-backed, and domain-scoped, so pages such as `/admin/users` and `/admin/requests`
+  can subscribe with their own route-family grants instead of requiring blanket system access.
 - Keep the brokered `Auto approve and download` setting in Moon admin aligned with Sage's high-confidence-only
   behavior. Moon should present it as an optimization toggle, not as a promise that every request will skip review.
 - `/admin/system/api` is the admin control point for Moon's trusted public API. Keep the docs and key-management

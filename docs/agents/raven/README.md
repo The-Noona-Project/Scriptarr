@@ -12,8 +12,9 @@
   provider series should collapse into one requestable target, while true separate edition URLs should stay separate.
 - Raven's DM-only bulk queue flow (`/downloadall`) should stay provider-browse first, then metadata-resolve each
   concrete provider target before queueing it. Only queue titles with one confident metadata match, persist that
-  metadata snapshot into the queued download, and report already-active, no-metadata, ambiguous-metadata, and failed
-  outcomes separately.
+  metadata snapshot into the queued download, and report already-active, adult-content, no-metadata,
+  ambiguous-metadata, and failed outcomes separately. For `nsfw:false`, queue only concrete WeebCentral targets whose
+  detail page explicitly says `Adult Content: No`; skip adult and unknown adult flags.
 - Keep full JavaDoc on Raven main and test Java sources and let `gradlew check` fail when doc coverage regresses.
 - Fresh installs must not reintroduce demo titles; Raven's default library state is empty until real ingest exists.
 - Raven library storage now uses dynamic source-backed type labels and the managed folder lifecycle:
@@ -35,6 +36,8 @@
   parameters everywhere outside Raven's internals.
 - Download tasks should only reach `100%` after file promotion and brokered catalog persistence both succeed. When a
   persist step fails, fail the task loudly instead of leaving it running at `90%`.
+- Raven-originated task, catalog, and request-lifecycle changes that matter to Moon admin should now be forwarded
+  through Sage's internal broker routes so Vault can append them into the shared durable event log.
 - Startup recovery should rescan finished `downloaded/<type>/...` content, backfill missing catalog rows, and collapse
   duplicate restorable tasks so Moon queue views only see one logical download.
 - Raven now also supports staged source replacement for existing library titles. Keep replacement downloads isolated in

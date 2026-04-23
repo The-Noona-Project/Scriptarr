@@ -1,19 +1,11 @@
 import {createAdminApi} from "./api.js";
+import {canAccessAdmin} from "./access.js";
 import {matchAdminRoute} from "./routes.js";
 import {renderEmptyState} from "./dom.js";
 import {renderAdminShell} from "./shell.js";
 import {enhanceAdminPage, loadAdminPage, renderAdminPage} from "./pages/index.js";
 
 const DEFAULT_SITE_NAME = "Scriptarr";
-
-const canAccessAdmin = (user) => Boolean(
-  user
-  && (
-    user.role === "owner"
-    || user.role === "admin"
-    || (Array.isArray(user.permissions) && user.permissions.includes("admin"))
-  )
-);
 
 /**
  * Load the shared auth and bootstrap context used by the admin chrome.

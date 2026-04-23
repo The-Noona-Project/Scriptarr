@@ -1,4 +1,4 @@
-import {proxyRequest} from "./proxy.mjs";
+import {proxyRequest, proxyStream} from "./proxy.mjs";
 
 /**
  * Normalize an Express splat parameter into a slash-delimited path segment.
@@ -48,6 +48,26 @@ export const registerMoonV3ProxyRoutes = (app, {config, getSessionToken}) => {
   const handleMoonV3Proxy = async (req, res) => {
     const targetPath = normalizeSplat(req.params.splat);
     const query = toQueryString(req.query);
+    const isEventStream = targetPath === "admin/events/stream";
+    if (isEventStream) {
+      const response = await proxyStream({
+        baseUrl: config.sageBaseUrl,
+        path: `/api/moon-v3/${targetPath}${query ? `?${query}` : ""}`,
+        method: req.method,
+        body: ["GET", "HEAD"].includes(req.method) ? undefined : req.body,
+        sessionToken: getSessionToken(req),
+        headers: req.headers.accept ? {"Accept": req.headers.accept} : {}
+      });
+      res.status(response.status);
+      for (const [key, value] of Object.entries(response.headers)) {
+        if (["transfer-encoding", "content-length"].includes(String(key).toLowerCase())) {
+          continue;
+        }
+        res.setHeader(key, value);
+      }
+      response.body?.pipe(res);
+      return;
+    }
     const response = await proxyRequest({
       baseUrl: config.sageBaseUrl,
       path: `/api/moon-v3/${targetPath}${query ? `?${query}` : ""}`,

@@ -43,8 +43,9 @@ It keeps a quick-jump index rail on the left and tighter search against titles, 
 cards clamp long copy until the reader opens the full title page. The home route is intentionally simpler too: it
 starts with a personalized "Your Bookshelf" continue-reading shelf, then stacks cover-led scroller rows for recently
 added titles by library type and tag-driven suggestions based on the titles the current reader has already opened.
-Moon's reader is now a full-page immersive workspace that defaults to infinite chapter scroll while keeping paged mode
-as a secondary preference. It still uses Moon's typed reader routes plus the existing progress and bookmark APIs.
+Moon's reader is now a full-page immersive workspace that defaults to seamless infinite chapter scroll while keeping
+fit-width paged mode as a secondary preference. It still uses Moon's typed reader routes plus the existing progress
+and bookmark APIs.
 Moon now renders those intake results one row per concrete download target instead of one row per metadata row, so
 duplicate metadata matches collapse cleanly while real edition targets such as plain vs colored remain visibly
 distinct.
@@ -62,6 +63,10 @@ can keep lifecycle or alias enrichment on without relying only on API-backed sou
 
 Admin routes follow the Arr-style operations model, including library, add/import, calendar, activity, wanted,
 requests, users, Discord, settings, and system sections under `/admin`.
+`/admin/users` now acts as the full access-control surface: a dense user directory, reusable permission-group editor,
+group assignment panel, and recent auth or access event feed in one place. The bootstrap owner remains protected, and
+all other admin access is now derived from one or more permission groups with per-route-family `read`, `write`, or
+`root` grants.
 `/admin/library` now uses a denser Sonarr-inspired series index with live filtering, coverage bars, latest chapter,
 last release date, metadata state, and direct open or source actions.
 Each library row now opens a Sonarr-style admin title detail page at `/admin/library/<type>/<titleId>` with a
@@ -81,6 +86,8 @@ program now ships in a dark-only theme by default.
 Moon no longer exposes a dev-session claim path. Discord login is the supported first-owner and admin sign-in flow, and
 Moon serves versioned CSS or JS asset URLs with `no-store` HTML responses so new publishes invalidate stale browser
 bundles automatically.
+Moon's admin event history now comes from the shared Vault-backed durable event log, and the admin SPA subscribes to
+same-origin `/api/moon-v3/admin/events*` feeds for live updates instead of page-specific ad hoc polling.
 Moon admin also owns the brokered `moon.branding` setting so admins can rename the site in headers, document titles,
 and install metadata without changing the underlying Scriptarr service names.
 The signed-in admin shell now also uses the Discord-backed user avatar when one is available, with an initials fallback

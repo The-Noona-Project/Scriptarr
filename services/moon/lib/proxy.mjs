@@ -8,6 +8,7 @@
  *   headers?: Record<string, string>
  * }} ProxyRequestOptions
  */
+import {Readable} from "node:stream";
 
 /**
  * Parse a proxied response body into JSON when possible.
@@ -64,6 +65,42 @@ export const proxyRequest = async ({
 };
 
 /**
+ * Proxy a request from Moon to an upstream service while preserving the
+ * response stream for long-lived transports such as SSE.
+ *
+ * @param {ProxyRequestOptions} options
+ * @returns {Promise<{
+ *   status: number,
+ *   headers: Record<string, string>,
+ *   body: import("node:stream").Readable | null
+ * }>}
+ */
+export const proxyStream = async ({
+  baseUrl,
+  path,
+  method = "GET",
+  body,
+  sessionToken,
+  headers = {}
+}) => {
+  const response = await fetch(`${baseUrl}${path}`, {
+    method,
+    headers: {
+      ...(body == null ? {} : {"Content-Type": "application/json"}),
+      ...(sessionToken ? {"Authorization": `Bearer ${sessionToken}`} : {}),
+      ...headers
+    },
+    body: body == null ? undefined : JSON.stringify(body)
+  });
+
+  return {
+    status: response.status,
+    headers: Object.fromEntries(response.headers.entries()),
+    body: response.body ? Readable.fromWeb(response.body) : null
+  };
+};
+
+/**
  * Proxy a request and parse the response body as JSON when possible.
  *
  * @param {ProxyRequestOptions} options
@@ -84,5 +121,6 @@ export const proxyJson = async (options) => {
 
 export default {
   proxyJson,
-  proxyRequest
+  proxyRequest,
+  proxyStream
 };

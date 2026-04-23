@@ -130,30 +130,6 @@ export const TitlePageClient = ({titleId, typeSlug = ""}) => {
       <section className="moon-panel moon-section">
         <div className="moon-section-head">
           <div>
-            <span className="moon-kicker">Requests</span>
-            <h2>Your related requests</h2>
-          </div>
-        </div>
-        {data.requests?.length ? (
-          <div className="moon-list">
-            {data.requests.map((request) => (
-              <div key={request.id} className="moon-list-row">
-                <div>
-                  <strong>{request.title}</strong>
-                  <div className="moon-muted">{request.notes || "Moon request"}</div>
-                </div>
-                <div className="moon-muted">{request.status}</div>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <EmptyView title="No requests for this title" detail="If a title still needs more chapters, request it from Moon or Discord and it will show here." />
-        )}
-      </section>
-
-      <section className="moon-panel moon-section">
-        <div className="moon-section-head">
-          <div>
             <span className="moon-kicker">Chapters</span>
             <h2>Read from Moon</h2>
           </div>

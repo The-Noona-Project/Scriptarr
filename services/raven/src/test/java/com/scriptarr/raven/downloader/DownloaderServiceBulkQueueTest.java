@@ -228,6 +228,111 @@ class DownloaderServiceBulkQueueTest {
     }
 
     /**
+     * Verify the owner-only bulk queue refuses adult WeebCentral titles when
+     * the DM command asks for nsfw:false.
+     */
+    @Test
+    void bulkQueueSkipsAdultTitlesWhenNsfwIsFalse() {
+        FakeRavenBrokerClient brokerClient = new FakeRavenBrokerClient();
+        brokerClient.setSetting("raven.download.providers", Map.of(
+            "providers", List.of(Map.of(
+                "id", "weebcentral",
+                "enabled", true,
+                "priority", 10
+            ))
+        ));
+        TestLogger logger = new TestLogger();
+        RavenSettingsService settingsService = new RavenSettingsService(brokerClient, logger, List.of());
+        DownloadProviderRegistry providerRegistry = new DownloadProviderRegistry(List.of(new SingleTitleDownloadProvider(true)), settingsService);
+        RecordingDownloaderService service = new RecordingDownloaderService(
+            providerRegistry,
+            mock(DownloadIntakeService.class),
+            mock(MetadataService.class),
+            brokerClient,
+            settingsService,
+            logger
+        );
+
+        BulkQueueDownloadResult result = service.bulkQueueDownload("weebcentral", "manga", false, "a", "owner-1");
+
+        assertEquals(BulkQueueDownloadResult.STATUS_PARTIAL, result.status());
+        assertEquals(0, result.queuedCount());
+        assertEquals(1, result.skippedAdultContentCount());
+        assertEquals(List.of("Alpha Start"), result.skippedAdultContentTitles());
+    }
+
+    /**
+     * Verify nsfw:false is strict and skips titles whose WeebCentral adult flag
+     * cannot be verified as an explicit No.
+     */
+    @Test
+    void bulkQueueSkipsUnknownAdultFlagsWhenNsfwIsFalse() {
+        FakeRavenBrokerClient brokerClient = new FakeRavenBrokerClient();
+        brokerClient.setSetting("raven.download.providers", Map.of(
+            "providers", List.of(Map.of(
+                "id", "weebcentral",
+                "enabled", true,
+                "priority", 10
+            ))
+        ));
+        TestLogger logger = new TestLogger();
+        RavenSettingsService settingsService = new RavenSettingsService(brokerClient, logger, List.of());
+        DownloadProviderRegistry providerRegistry = new DownloadProviderRegistry(List.of(new SingleTitleDownloadProvider(null)), settingsService);
+        RecordingDownloaderService service = new RecordingDownloaderService(
+            providerRegistry,
+            mock(DownloadIntakeService.class),
+            mock(MetadataService.class),
+            brokerClient,
+            settingsService,
+            logger
+        );
+
+        BulkQueueDownloadResult result = service.bulkQueueDownload("weebcentral", "manga", false, "a", "owner-1");
+
+        assertEquals(BulkQueueDownloadResult.STATUS_PARTIAL, result.status());
+        assertEquals(0, result.queuedCount());
+        assertEquals(1, result.skippedAdultContentCount());
+        assertEquals(List.of("Alpha Start"), result.skippedAdultContentTitles());
+    }
+
+    /**
+     * Verify nsfw:true may queue adult titles and carries the verified provider
+     * adult flag into the selected download snapshot.
+     */
+    @Test
+    void bulkQueueKeepsAdultFlagWhenNsfwIsTrue() {
+        FakeRavenBrokerClient brokerClient = new FakeRavenBrokerClient();
+        brokerClient.setSetting("raven.download.providers", Map.of(
+            "providers", List.of(Map.of(
+                "id", "weebcentral",
+                "enabled", true,
+                "priority", 10
+            ))
+        ));
+        TestLogger logger = new TestLogger();
+        RavenSettingsService settingsService = new RavenSettingsService(brokerClient, logger, List.of());
+        DownloadProviderRegistry providerRegistry = new DownloadProviderRegistry(List.of(new SingleTitleDownloadProvider(true)), settingsService);
+        DownloadIntakeService downloadIntakeService = mock(DownloadIntakeService.class);
+        when(downloadIntakeService.resolveBulkMetadata("weebcentral", "https://weebcentral.com/series/alpha-start", "Alpha Start", "Manga"))
+            .thenReturn(matchedResolution("Alpha Start", "alpha-md", "https://weebcentral.com/series/alpha-start"));
+        RecordingDownloaderService service = new RecordingDownloaderService(
+            providerRegistry,
+            downloadIntakeService,
+            mock(MetadataService.class),
+            brokerClient,
+            settingsService,
+            logger
+        );
+
+        BulkQueueDownloadResult result = service.bulkQueueDownload("weebcentral", "manga", true, "a", "owner-1");
+
+        assertEquals(BulkQueueDownloadResult.STATUS_QUEUED, result.status());
+        assertEquals(1, result.queuedCount());
+        assertEquals(Boolean.TRUE, service.requests.getFirst().selectedDownload().get("adultContent"));
+        assertEquals(Boolean.TRUE, service.requests.getFirst().selectedDownload().get("nsfw"));
+    }
+
+    /**
      * Lightweight logger test double that keeps Raven unit tests off the real
      * filesystem and console.
      */
@@ -306,7 +411,7 @@ class DownloaderServiceBulkQueueTest {
 
         @Override
         public TitleDetails getTitleDetails(String titleUrl) {
-            return null;
+            return safeTitleDetails(false);
         }
 
         @Override
@@ -324,6 +429,16 @@ class DownloaderServiceBulkQueueTest {
      * Single-title browse provider used for metadata skip scenarios.
      */
     private static final class SingleTitleDownloadProvider implements DownloadProvider {
+        private final Boolean adultContent;
+
+        SingleTitleDownloadProvider() {
+            this(false);
+        }
+
+        SingleTitleDownloadProvider(Boolean adultContent) {
+            this.adultContent = adultContent;
+        }
+
         @Override
         public String id() {
             return "weebcentral";
@@ -355,7 +470,7 @@ class DownloaderServiceBulkQueueTest {
 
         @Override
         public TitleDetails getTitleDetails(String titleUrl) {
-            return null;
+            return safeTitleDetails(adultContent);
         }
 
         @Override
@@ -367,6 +482,21 @@ class DownloaderServiceBulkQueueTest {
         public List<String> resolvePages(String chapterUrl) {
             return List.of();
         }
+    }
+
+    private static TitleDetails safeTitleDetails(Boolean adultContent) {
+        return new TitleDetails(
+            "Summary",
+            "Manga",
+            List.of(),
+            "Ongoing",
+            "2024",
+            adultContent,
+            false,
+            false,
+            List.of(),
+            List.of()
+        );
     }
 
     /**

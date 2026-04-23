@@ -429,19 +429,41 @@ test("vault persists Raven titles with cover and managed roots", async () => {
       chaptersDownloaded: 46,
       coverUrl: "https://cdn.example.com/solo.jpg",
       workingRoot: "/downloads/downloading/manhwa/Solo_Leveling_Ragnarok",
-      downloadRoot: "/downloads/downloaded/manhwa/Solo_Leveling_Ragnarok"
+      downloadRoot: "/downloads/downloaded/manhwa/Solo_Leveling_Ragnarok",
+      chapters: [{
+        id: "title-1-c45",
+        label: "Chapter 45",
+        chapterNumber: "45",
+        pageCount: 18,
+        releaseDate: "2026-04-20",
+        available: true,
+        archivePath: "/downloads/downloaded/manhwa/Solo_Leveling_Ragnarok/Chapter_45.cbz",
+        sourceUrl: "https://weebcentral.com/chapters/title-1-45"
+      }, {
+        id: "title-1-c46",
+        label: "Chapter 46",
+        chapterNumber: "46",
+        pageCount: 21,
+        releaseDate: "2026-04-21",
+        available: true,
+        archivePath: "/downloads/downloaded/manhwa/Solo_Leveling_Ragnarok/Chapter_46.cbz",
+        sourceUrl: "https://weebcentral.com/chapters/title-1-46"
+      }]
     })
   }).then((response) => response.json());
 
   assert.equal(title.id, "title-1");
   assert.equal(title.coverUrl, "https://cdn.example.com/solo.jpg");
   assert.equal(title.downloadRoot, "/downloads/downloaded/manhwa/Solo_Leveling_Ragnarok");
+  assert.equal(title.chapters.length, 2);
+  assert.equal(title.chapters[0].id, "title-1-c45");
 
   const listed = await fetch(`${baseUrl}/api/service/raven/titles`, {
     headers
   }).then((response) => response.json());
   assert.equal(listed.length, 1);
   assert.equal(listed[0].workingRoot, "/downloads/downloading/manhwa/Solo_Leveling_Ragnarok");
+  assert.equal(listed[0].chapters.length, 2);
 
   server.close();
 });
@@ -514,6 +536,152 @@ test("vault returns conflicts for duplicate owner claims and stale request revis
   });
   assert.equal(stale.status, 409);
   assert.equal((await stale.json()).code, "REQUEST_REVISION_CONFLICT");
+
+  server.close();
+});
+
+test("vault manages permission groups, durable events, and deleted-user recreation through the default group", async () => {
+  const {app} = await createVaultApp();
+  const server = app.listen(0);
+  const {port} = server.address();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const headers = {
+    "Authorization": "Bearer sage-dev-token",
+    "Content-Type": "application/json"
+  };
+
+  const owner = await fetch(`${baseUrl}/api/service/users/upsert-discord`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      discordUserId: "owner-1",
+      username: "Owner One",
+      claimOwner: true
+    })
+  }).then((response) => response.json());
+  assert.equal(owner.role, "owner");
+
+  const reader = await fetch(`${baseUrl}/api/service/users/upsert-discord`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      discordUserId: "reader-1",
+      username: "Reader One"
+    })
+  }).then((response) => response.json());
+  assert.equal(reader.role, "member");
+  assert.equal(reader.groups[0].id, "member");
+
+  const accessOverview = await fetch(`${baseUrl}/api/service/access`, {
+    headers
+  }).then((response) => response.json());
+  assert.equal(accessOverview.defaultGroupId, "member");
+  assert.equal(accessOverview.groups.length >= 3, true);
+
+  const opsGroup = await fetch(`${baseUrl}/api/service/permission-groups`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      name: "Requests Ops",
+      description: "Custom request moderators",
+      permissions: ["read_library", "read_requests"],
+      adminGrants: {
+        requests: "root",
+        users: "read"
+      }
+    })
+  }).then((response) => response.json());
+  assert.equal(opsGroup.id, "requests-ops");
+  assert.equal(opsGroup.adminGrants.requests, "root");
+
+  const updatedReader = await fetch(`${baseUrl}/api/service/users/reader-1/groups`, {
+    method: "PUT",
+    headers,
+    body: JSON.stringify({
+      groupIds: ["requests-ops"]
+    })
+  }).then((response) => response.json());
+  assert.deepEqual(updatedReader.groups.map((group) => group.id), ["requests-ops"]);
+  assert.equal(updatedReader.adminGrants.requests, "root");
+
+  await fetch(`${baseUrl}/api/service/progress`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      mediaId: "dice",
+      discordUserId: "reader-1",
+      chapterLabel: "Chapter 388",
+      positionRatio: 0.5,
+      bookmark: {
+        page: 12
+      }
+    })
+  });
+
+  await fetch(`${baseUrl}/api/service/events`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      domain: "users",
+      eventType: "group-updated",
+      actorType: "owner",
+      actorId: "owner-1",
+      actorLabel: "Owner One",
+      targetType: "permission-group",
+      targetId: "requests-ops",
+      message: "Owner One updated the Requests Ops group.",
+      createdAt: "2025-01-01T00:00:00.000Z"
+    })
+  });
+  await fetch(`${baseUrl}/api/service/events`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      domain: "access",
+      eventType: "user-groups-updated",
+      actorType: "owner",
+      actorId: "owner-1",
+      actorLabel: "Owner One",
+      targetType: "user",
+      targetId: "reader-1",
+      message: "Owner One updated Reader One's groups."
+    })
+  });
+
+  const accessEvents = await fetch(`${baseUrl}/api/service/events?domain=access`, {
+    headers
+  }).then((response) => response.json());
+  assert.equal(accessEvents.length, 1);
+  assert.equal(accessEvents[0].domain, "access");
+
+  const pruneResult = await fetch(`${baseUrl}/api/service/events/prune?retentionDays=30`, {
+    method: "DELETE",
+    headers
+  }).then((response) => response.json());
+  assert.equal(pruneResult.removed >= 1, true);
+
+  const deletedUser = await fetch(`${baseUrl}/api/service/users/reader-1`, {
+    method: "DELETE",
+    headers
+  }).then((response) => response.json());
+  assert.equal(deletedUser.discordUserId, "reader-1");
+
+  const preservedProgress = await fetch(`${baseUrl}/api/service/progress/reader-1`, {
+    headers
+  }).then((response) => response.json());
+  assert.equal(preservedProgress.length, 1);
+  assert.equal(preservedProgress[0].chapterLabel, "Chapter 388");
+
+  const recreatedReader = await fetch(`${baseUrl}/api/service/users/upsert-discord`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      discordUserId: "reader-1",
+      username: "Reader One Again"
+    })
+  }).then((response) => response.json());
+  assert.equal(recreatedReader.role, "member");
+  assert.equal(recreatedReader.groups[0].id, "member");
 
   server.close();
 });

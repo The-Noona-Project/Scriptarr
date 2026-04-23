@@ -644,6 +644,20 @@ export const enhanceRequestsPage = async (root, {api, rerender, setFlash}) => {
     });
   });
 
+  const stream = new EventSource("/api/moon/v3/admin/events/stream?domain=requests");
+  const refreshSoon = () => {
+    globalThis.setTimeout(() => {
+      void rerender();
+    }, 150);
+  };
+  stream.addEventListener("admin-event", refreshSoon);
+  stream.addEventListener("error", () => {
+    stream.close();
+  });
+  root.addEventListener("DOMNodeRemoved", () => {
+    stream.close();
+  }, {once: true});
+
   renderList();
   renderDetail();
 };

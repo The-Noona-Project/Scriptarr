@@ -1,6 +1,7 @@
 /**
  * @file Route helpers for Moon's Next-based user application.
  */
+import {canAccessAdmin as canAccessMoonAdmin} from "@scriptarr/access";
 
 const normalizeTypeSlug = (value, fallback = "manga") => {
   const normalized = String(value || "")
@@ -15,17 +16,10 @@ const normalizeTypeSlug = (value, fallback = "manga") => {
 /**
  * Resolve whether the active session can open Moon admin.
  *
- * @param {{role?: string, permissions?: string[]} | null | undefined} user
+ * @param {{role?: string, isOwner?: boolean, adminGrants?: Record<string, string>} | null | undefined} user
  * @returns {boolean}
  */
-export const canAccessAdmin = (user) => Boolean(
-  user
-  && (
-    user.role === "owner"
-    || user.role === "admin"
-    || (Array.isArray(user.permissions) && user.permissions.includes("admin"))
-  )
-);
+export const canAccessAdmin = (user) => canAccessMoonAdmin(user);
 
 /**
  * Build the canonical profile route.

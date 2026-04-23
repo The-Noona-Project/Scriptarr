@@ -1,4 +1,5 @@
 import {escapeHtml, renderAvatar} from "./dom.js";
+import {filterRoutesForUser} from "./access.js";
 import {getAdminNavigationGroups} from "./routes.js";
 
 /**
@@ -16,7 +17,12 @@ import {getAdminNavigationGroups} from "./routes.js";
  * @returns {string}
  */
 export const renderAdminShell = ({route, content, user, branding, flash, loginUrl, bootstrap}) => {
-  const groups = getAdminNavigationGroups();
+  const groups = getAdminNavigationGroups()
+    .map((group) => ({
+      ...group,
+      routes: filterRoutesForUser(group.routes, user)
+    }))
+    .filter((group) => group.routes.length > 0);
   const activeNavId = route?.id === "library-title" ? "library" : route?.id;
   const identityName = user?.username || "Not signed in";
   const authSummary = user

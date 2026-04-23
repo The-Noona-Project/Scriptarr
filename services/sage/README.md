@@ -23,6 +23,13 @@ days if no stable source appears.
 Sage also owns the brokered `sage.requests.autoApproveAndDownload` setting. When that toggle is enabled, Sage may
 queue a request automatically only if Raven resolves one high-confidence source with no conflicting warnings; anything
 weaker stays in manual admin review.
+Sage now also brokers group-based Moon admin access and the shared admin event backbone. It exposes reusable
+permission-group CRUD plus user-group assignment flows for `/admin/users`, keeps canonical route-family grants in Moon
+session payloads while temporarily deriving the old flat permission array for compatibility, and appends immutable
+durable events into Vault after authoritative mutations or async service updates.
+Moon now reads those shared events through same-origin `/api/moon-v3/admin/events` and
+`/api/moon-v3/admin/events/stream` routes. Sage authorizes those reads by the requested event domains instead of
+falling back to one blanket system permission.
 
 Moon's legacy and v3 library routes should mirror Raven's real-or-empty library state. Sage no longer seeds preview
 titles on behalf of Moon.

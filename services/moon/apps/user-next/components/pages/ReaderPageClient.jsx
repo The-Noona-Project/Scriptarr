@@ -221,18 +221,73 @@ export const ReaderPageClient = ({titleId, chapterId, typeSlug = ""}) => {
   const currentPagedChapter = chapterMap.get(pagedChapterId) || loadedChapters.find((entry) => entry.chapter.id === pagedChapterId) || data;
   const currentPagedPages = currentPagedChapter?.pages || [];
   const currentPagedPage = currentPagedPages[Math.max(0, Math.min(pagedPageIndex, currentPagedPages.length - 1))] || null;
+  const leadInfiniteChapterId = data?.chapter?.id || chapterId;
 
   const openPagedChapter = useCallback(async (nextChapterId, nextPageIndex = 0) => {
     const payload = await ensureChapter(nextChapterId);
     if (!payload || !title) {
       return;
     }
+    const safePageIndex = Math.max(0, Math.min(nextPageIndex, (payload.pages?.length || 1) - 1));
     setPagedChapterId(nextChapterId);
-    setPagedPageIndex(nextPageIndex);
+    setPagedPageIndex(safePageIndex);
     setActiveChapterId(nextChapterId);
-    setActivePageIndex(nextPageIndex);
+    setActivePageIndex(safePageIndex);
     router.replace(buildReaderPathForTitle(title, nextChapterId));
   }, [ensureChapter, router, title]);
+
+  const goPreviousPaged = useCallback(async () => {
+    if (pagedPageIndex > 0) {
+      setPagedPageIndex((value) => Math.max(0, value - 1));
+      setActivePageIndex((value) => Math.max(0, value - 1));
+      return;
+    }
+    const index = manifest.findIndex((entry) => entry.id === pagedChapterId);
+    const previous = manifest[index - 1];
+    if (!previous) {
+      return;
+    }
+    const payload = await ensureChapter(previous.id);
+    if (payload) {
+      await openPagedChapter(previous.id, Math.max(0, (payload.pages?.length || 1) - 1));
+    }
+  }, [ensureChapter, manifest, openPagedChapter, pagedChapterId, pagedPageIndex]);
+
+  const goNextPaged = useCallback(async () => {
+    if (pagedPageIndex + 1 < currentPagedPages.length) {
+      setPagedPageIndex((value) => Math.min(currentPagedPages.length - 1, value + 1));
+      setActivePageIndex((value) => Math.min(currentPagedPages.length - 1, value + 1));
+      return;
+    }
+    const index = manifest.findIndex((entry) => entry.id === pagedChapterId);
+    const next = manifest[index + 1];
+    if (next) {
+      await openPagedChapter(next.id, 0);
+    }
+  }, [currentPagedPages.length, manifest, openPagedChapter, pagedChapterId, pagedPageIndex]);
+
+  useEffect(() => {
+    if (mode !== "paged") {
+      return undefined;
+    }
+    const onKeyDown = (event) => {
+      const target = event.target;
+      const tagName = target instanceof HTMLElement ? target.tagName.toLowerCase() : "";
+      if (tagName === "input" || tagName === "textarea" || event.defaultPrevented) {
+        return;
+      }
+      if (event.key === "ArrowLeft") {
+        event.preventDefault();
+        void goPreviousPaged();
+      }
+      if (event.key === "ArrowRight") {
+        event.preventDefault();
+        void goNextPaged();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [goNextPaged, goPreviousPaged, mode]);
 
   const addBookmark = useCallback(async () => {
     if (!title) {
@@ -371,20 +426,22 @@ export const ReaderPageClient = ({titleId, chapterId, typeSlug = ""}) => {
       </aside>
 
       <section className="moon-reader-canvas">
-        <header className="moon-reader-topbar">
-          <div>
-            <span className="moon-kicker">{title.libraryTypeLabel || title.mediaType || "Reader"}</span>
-            <h1>{title.title}</h1>
-          </div>
-          <div className="moon-reader-progress">
-            <span className="moon-pill">{mode === "paged" ? "Paged mode" : "Infinite mode"}</span>
-            <span className="moon-pill">
-              {mode === "paged"
-                ? `Page ${Math.max(1, pagedPageIndex + 1)} of ${currentPagedPages.length || 1}`
-                : `${formatProgress(getPageRatio(activePageIndex, chapterMap.get(activeChapterId)?.pages || data.pages || []))} read`}
-            </span>
-          </div>
-        </header>
+        <div className="moon-reader-topbar-shell">
+          <header className="moon-reader-topbar">
+            <div>
+              <span className="moon-kicker">{title.libraryTypeLabel || title.mediaType || "Reader"}</span>
+              <h1>{title.title}</h1>
+            </div>
+            <div className="moon-reader-progress">
+              <span className="moon-pill">{mode === "paged" ? "Paged mode" : "Infinite mode"}</span>
+              <span className="moon-pill">
+                {mode === "paged"
+                  ? `Page ${Math.max(1, pagedPageIndex + 1)} of ${currentPagedPages.length || 1}`
+                  : `${formatProgress(getPageRatio(activePageIndex, chapterMap.get(activeChapterId)?.pages || data.pages || []))} read`}
+              </span>
+            </div>
+          </header>
+        </div>
 
         <section className="moon-panel moon-reader-stage">
           {mode === "paged" ? (
@@ -393,20 +450,7 @@ export const ReaderPageClient = ({titleId, chapterId, typeSlug = ""}) => {
                 <Button
                   variant="secondary"
                   size="m"
-                  onClick={async () => {
-                    if (pagedPageIndex > 0) {
-                      setPagedPageIndex((value) => Math.max(0, value - 1));
-                      setActivePageIndex((value) => Math.max(0, value - 1));
-                      return;
-                    }
-                    const index = manifest.findIndex((entry) => entry.id === pagedChapterId);
-                    const previous = manifest[index - 1];
-                    if (previous) {
-                      const payload = await ensureChapter(previous.id);
-                      void payload;
-                      await openPagedChapter(previous.id, Math.max(0, (chapterMap.get(previous.id)?.pages?.length || 1) - 1));
-                    }
-                  }}
+                  onClick={goPreviousPaged}
                 >
                   Previous
                 </Button>
@@ -416,18 +460,7 @@ export const ReaderPageClient = ({titleId, chapterId, typeSlug = ""}) => {
                 <Button
                   variant="secondary"
                   size="m"
-                  onClick={async () => {
-                    if (pagedPageIndex + 1 < currentPagedPages.length) {
-                      setPagedPageIndex((value) => Math.min(currentPagedPages.length - 1, value + 1));
-                      setActivePageIndex((value) => Math.min(currentPagedPages.length - 1, value + 1));
-                      return;
-                    }
-                    const index = manifest.findIndex((entry) => entry.id === pagedChapterId);
-                    const next = manifest[index + 1];
-                    if (next) {
-                      await openPagedChapter(next.id, 0);
-                    }
-                  }}
+                  onClick={goNextPaged}
                 >
                   Next
                 </Button>
@@ -437,7 +470,7 @@ export const ReaderPageClient = ({titleId, chapterId, typeSlug = ""}) => {
                   <img
                     src={currentPagedPage.src}
                     alt={currentPagedPage.label}
-                    style={{objectFit: pageFit === "contain" ? "contain" : "cover"}}
+                    className="moon-reader-paged-image"
                   />
                 ) : (
                   <div className="moon-reader-empty">No pages are available for this chapter.</div>
@@ -451,11 +484,17 @@ export const ReaderPageClient = ({titleId, chapterId, typeSlug = ""}) => {
               loading={loading}
               loadMore={loadMore}
               renderItem={(chapterPayload) => (
-                <section key={chapterPayload.chapter.id} className="moon-reader-chapter-section" data-reader-chapter={chapterPayload.chapter.id}>
-                  <div className="moon-reader-chapter-header">
+                <section
+                  key={chapterPayload.chapter.id}
+                  className={`moon-reader-chapter-section ${chapterPayload.chapter.id === leadInfiniteChapterId ? "is-lead" : ""}`}
+                  data-reader-chapter={chapterPayload.chapter.id}
+                >
+                  {chapterPayload.chapter.id === leadInfiniteChapterId ? null : (
+                    <div className="moon-reader-chapter-header">
                     <strong>{chapterPayload.chapter.label}</strong>
                     <div className="moon-muted">{formatDate(chapterPayload.chapter.releaseDate)} · {chapterPayload.pages.length} pages</div>
-                  </div>
+                    </div>
+                  )}
                   <div className="moon-reader-pages">
                     {chapterPayload.pages.map((page) => (
                       <div

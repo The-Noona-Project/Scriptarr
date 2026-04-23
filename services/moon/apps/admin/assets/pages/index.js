@@ -15,7 +15,7 @@ import {loadOverviewPage, renderOverviewPage} from "./overviewPage.js";
 import {enhanceRequestsPage, loadRequestsPage, renderRequestsPage} from "./requestsPage.js";
 import {enhanceSettingsPage, loadSettingsPage, renderSettingsPage} from "./settingsPage.js";
 import {enhanceSystemPage, loadSystemPage, renderSystemPage} from "./systemPage.js";
-import {loadUsersPage, renderUsersPage} from "./usersPage.js";
+import {enhanceUsersPage, loadUsersPage, renderUsersPage} from "./usersPage.js";
 import {loadWantedPage, renderWantedPage} from "./wantedPage.js";
 
 /**
@@ -44,7 +44,7 @@ const pageModules = {
   "wanted-missing": {load: loadWantedPage, render: renderWantedPage},
   "wanted-metadata": {load: loadWantedPage, render: renderWantedPage},
   requests: {load: loadRequestsPage, render: renderRequestsPage, enhance: enhanceRequestsPage},
-  users: {load: loadUsersPage, render: renderUsersPage},
+  users: {load: loadUsersPage, render: renderUsersPage, enhance: enhanceUsersPage},
   discord: {load: loadDiscordPage, render: renderDiscordPage, enhance: enhanceDiscordPage},
   mediamanagement: {load: loadMediaManagementPage, render: renderMediaManagementPage, enhance: enhanceMediaManagementPage},
   settings: {load: loadSettingsPage, render: renderSettingsPage, enhance: enhanceSettingsPage},

@@ -1,6 +1,12 @@
 import {escapeHtml, renderEmptyState, renderStatusBadge, renderTable} from "../dom.js";
 import {formatDate} from "../format.js";
 
+const normalizeArray = (value) => Array.isArray(value) ? value : [];
+const normalizeString = (value, fallback = "") => {
+  const normalized = typeof value === "string" ? value.trim() : "";
+  return normalized || fallback;
+};
+
 /**
  * Resolve system route config.
  *
@@ -203,13 +209,13 @@ export const renderSystemPage = (result) => {
           </div>
         </div>
         ${renderTable({
-          columns: ["Service", "Type", "Actor", "Message", "When"],
-          rows: (result.payload?.events || []).map((event) => [
-            escapeHtml(event.service),
-            renderStatusBadge(event.type),
-            escapeHtml(event.actor || "system"),
-            escapeHtml(event.message),
-            escapeHtml(formatDate(event.at, {includeTime: true}))
+          columns: ["Domain", "Type", "Actor", "Message", "When"],
+          rows: normalizeArray(result.payload?.events).map((event) => [
+            escapeHtml(normalizeString(event.domain, "system")),
+            renderStatusBadge(normalizeString(event.eventType, "updated")),
+            escapeHtml(normalizeString(event.actorLabel, normalizeString(event.actorId, "system"))),
+            escapeHtml(normalizeString(event.message, "Scriptarr recorded an event.")),
+            escapeHtml(formatDate(event.createdAt, {includeTime: true}))
           ]),
           emptyTitle: "No recent events",
           emptyBody: "Recent request and task activity will be summarized here."
@@ -245,6 +251,23 @@ export const renderSystemPage = (result) => {
  * @returns {Promise<void>}
  */
 export const enhanceSystemPage = async (root, {api, rerender, setFlash}, result) => {
+  if (result.routeId === "system-events") {
+    const stream = new EventSource("/api/moon/v3/admin/events/stream");
+    const refreshSoon = () => {
+      globalThis.setTimeout(() => {
+        void rerender();
+      }, 150);
+    };
+    stream.addEventListener("admin-event", refreshSoon);
+    stream.addEventListener("error", () => {
+      stream.close();
+    });
+    root.addEventListener("DOMNodeRemoved", () => {
+      stream.close();
+    }, {once: true});
+    return;
+  }
+
   if (result.routeId !== "system-updates") {
     return;
   }

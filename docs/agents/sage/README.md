@@ -17,6 +17,9 @@
   details instead of creating a second visible record, and Portal should notify those users when the title is ready.
 - `unavailable` requests are first-class Sage records. Keep the background 4-hour recheck loop, `sourceFoundAt` plus
   `sourceFoundOptions` detail fields, and the automatic 90-day expiry flow in sync with Portal's request DMs.
+- Sage now brokers group-based admin access too. Keep canonical route-family grants in session payloads, preserve the
+  temporary derived legacy permission array for compatibility, and use reusable permission groups instead of reviving
+  direct role or flat-permission mutation flows for non-owner users.
 - Keep `sage.requests.autoApproveAndDownload` high-confidence only. Auto-pick one source only when Raven's confidence
   signals and warnings make that safe; otherwise leave the request in manual admin review.
 - Persist Raven and Oracle admin settings through Vault instead of service-local files.
@@ -24,7 +27,8 @@
   routes for intake search, request creation, library search, follow updates, onboarding tests, and Raven bulk queue.
 - Portal's Raven bulk queue broker route now requires an explicit `providerId`. Keep `downloadall` locked to the
   WeebCentral provider on the Sage side too so Portal cannot accidentally fall through to MangaDex when that owner-only
-  DM command is used.
+  DM command is used. Preserve the `nsfw` flag exactly as Portal sends it so Raven can enforce explicit
+  WeebCentral `Adult Content: No` verification for `nsfw:false`.
 - Persist and expose `raven.download.providers` through the same brokered settings path as Raven metadata and VPN
   configuration.
 - Persist and expose brokered `raven.naming` settings, including the fallback naming profile plus the per-type naming
@@ -43,3 +47,9 @@
 - Sage now also brokers admin title repair APIs. Keep `/api/moon-v3/admin/library/:titleId/repair-options` and
   `/api/moon-v3/admin/library/:titleId/replace-source` as thin Moon-safe wrappers around Raven's concrete provider
   repair flow instead of leaking Raven directly into the browser.
+- Sage now owns the shared admin event read path too. Keep `/api/moon-v3/admin/events` and
+  `/api/moon-v3/admin/events/stream` same-origin and Moon-safe, authorize them by the requested event domains, and use
+  internal broker routes plus Vault's durable event log instead of ad hoc page-specific aggregations.
+- Service-originated async changes from Raven, Portal, or Warden should append immutable summary events through Sage's
+  internal broker routes after the authoritative mutation succeeds so `/admin/users`, `/admin/requests`, and
+  `/admin/system/events` all reflect the same truth.

@@ -72,19 +72,23 @@ test("formatBulkQueueSummary includes counts and title sections", () => {
     matchedCount: 3,
     queuedCount: 2,
     skippedActiveCount: 1,
+    skippedAdultContentCount: 1,
     skippedNoMetadataCount: 1,
     skippedAmbiguousMetadataCount: 1,
     failedCount: 0,
     queuedTitles: ["Alya Sometimes Hides Her Feelings in Russian"],
+    skippedAdultContentTitles: ["Adult Academy"],
     skippedNoMetadataTitles: ["Ambiguous Academy"],
     skippedAmbiguousMetadataTitles: ["Another World"]
   });
 
   assert.match(text, /Queued: 2/);
+  assert.match(text, /Skipped adult content: 1/);
   assert.match(text, /Skipped no metadata: 1/);
   assert.match(text, /Skipped ambiguous metadata: 1/);
   assert.match(text, /Queued titles/);
   assert.match(text, /Alya Sometimes Hides/);
+  assert.match(text, /Adult Academy/);
   assert.match(text, /Ambiguous Academy/);
   assert.match(text, /Another World/);
 });

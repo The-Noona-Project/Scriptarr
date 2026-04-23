@@ -62,14 +62,19 @@ the concrete download source from `/admin/requests`, unless the optional `auto a
 queue one high-confidence source automatically. If Scriptarr cannot find a source yet, it saves the request as
 `unavailable`, re-checks it every 4 hours, DMs the requester when the title moves back into admin review, and expires
 it after 90 days if it still cannot be matched.
+Moon admin `/admin/users` now also runs on a group-based access model instead of a flat role toggle. The bootstrap
+owner stays protected outside normal reassignment, while everyone else receives one or more reusable permission groups
+with admin route-family `read`, `write`, or `root` grants plus baseline user capabilities. Scriptarr seeds `Member`,
+`Moderator`, and `Admin`, keeps exactly one default onboarding group for new or returning Discord sign-ins, and now
+backs admin activity feeds with a shared durable event log plus same-origin SSE updates.
 Raven now keeps WeebCentral first by default, exposes MangaDex as a second normal download-provider option, and enables
 Anime-Planet ahead of MangaUpdates as a scrape-based metadata source for aliases, summaries, and lifecycle hints.
 Moon admin also exposes a dedicated Discord page at `/admin/discord` for guild workflow settings, onboarding template
 or channel management, per-command role gates, and Portal runtime visibility without exposing Discord credentials.
 Moon's user app now runs as an embedded Next.js App Router frontend with Once UI shells, a megamenu header, avatar
 profile controls, a simple footer, and an immersive full-page reader.
-That reader now defaults to seamless infinite chapter scroll while keeping a secondary paged mode, and it still
-persists Moon-native progress plus bookmarks behind the same typed reader routes.
+That reader now defaults to seamless infinite chapter scroll while keeping a secondary fit-width paged mode, and it
+still persists Moon-native progress plus bookmarks behind the same typed reader routes.
 Moon admin calendar is now backed by Raven chapter release dates captured from provider scrapes plus metadata
 enrichment, so the calendar view can surface real title-release timing instead of only generic task history.
 Moon admin also exposes `/admin/system/api` for trusted automation settings, API key generation, and same-origin
@@ -112,14 +117,17 @@ For end-to-end Docker verification, use:
   flow instead of a single fuzzy picker or a requester-side source choice.
 - Vault now enforces one active request per concrete work identity, so duplicate submissions that resolve to the same
   provider target cannot create parallel active requests.
+- Vault now also persists reusable permission groups, user-group assignments, and the shared durable event log that
+  powers `/admin/users`, `/admin/requests`, `/admin/system/events`, and other live admin timelines.
 - Duplicate request attempts now attach the requester to a hidden waitlist instead of creating a second visible row.
   If the title is already in the library, Scriptarr links directly to the title page. If the title is already queued,
   Scriptarr blocks the duplicate row and sends a Discord DM when the title becomes ready.
 - Portal now owns a real Discord command runtime again. The supported command set is `/ding`, `/status`, `/chat`,
   `/search`, `/request`, `/subscribe`, plus the DM-only `downloadall` command for the configured Discord superuser.
 - The DM-only `downloadall` flow now stays provider-browse first but resolves metadata before queueing each title. It
-  only queues titles with one confident metadata match and reports already-active, no-metadata, ambiguous-metadata,
-  and failed skips back in the Discord DM summary instead of silently creating metadata-less library entries.
+  only queues titles with one confident metadata match and reports already-active, adult-content, no-metadata,
+  ambiguous-metadata, and failed skips back in the Discord DM summary instead of silently creating metadata-less
+  library entries. When `nsfw:false` is used, Raven requires an explicit WeebCentral `Adult Content: No`.
   That owner-only command is intentionally locked to WeebCentral and will fail fast if WeebCentral is disabled.
 - Portal now prefers a minimal Discord runtime over going fully dark when privileged intents are unavailable, so slash
   commands and DMs can stay online while onboarding is shown as degraded in Moon admin.
@@ -129,6 +137,9 @@ For end-to-end Docker verification, use:
   title art and Moon links the rest of the stack exposes.
 - Portal also sends DMs when duplicate blockers attach a user to the ready-notify waitlist, when an unavailable
   request later finds a source, and when an unavailable request expires after 90 days.
+- Sage and Moon now treat admin events as a first-class brokered contract. Browsers read event history and SSE updates
+  only through Moon-owned `/api/moon-v3/admin/events*` routes, while async service state changes append immutable
+  summaries into Vault instead of building page-specific ad hoc timelines.
 - Raven now merges metadata-provider tags plus download-provider tags into one canonical tag set for library titles,
   admin review, browse/search, and personalization surfaces while preserving internal source attribution for debugging.
 - Vault is the only supported broker to the shared MySQL database.

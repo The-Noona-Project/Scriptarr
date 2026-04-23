@@ -52,8 +52,20 @@ const requestJson = async (baseUrl, headers, path, {method = "GET", body, allowS
  *   upsertDiscordUser: (payload: Record<string, unknown>) => Promise<any>,
  *   getUserByDiscordId: (discordUserId: string) => Promise<any>,
  *   listUsers: () => Promise<any>,
+ *   getAccessOverview: () => Promise<any>,
+ *   listPermissionGroups: () => Promise<any>,
+ *   createPermissionGroup: (payload: Record<string, unknown>) => Promise<any>,
+ *   updatePermissionGroup: (groupId: string, payload: Record<string, unknown>) => Promise<any>,
+ *   deletePermissionGroup: (groupId: string) => Promise<any>,
+ *   assignUserGroups: (discordUserId: string, groupIds: string[]) => Promise<any>,
+ *   deleteUser: (discordUserId: string) => Promise<any>,
  *   createSession: (discordUserId: string) => Promise<any>,
+ *   clearSession: (token: string) => Promise<any>,
+ *   clearSessionsForUser: (discordUserId: string) => Promise<any>,
  *   getSessionUser: (token: string) => Promise<any>,
+ *   listEvents: (filters?: Record<string, unknown>) => Promise<any>,
+ *   appendEvent: (payload: Record<string, unknown>) => Promise<any>,
+ *   pruneEvents: (retentionDays?: number) => Promise<any>,
  *   listRequests: () => Promise<any>,
  *   getRequest: (id: string | number) => Promise<any>,
  *   getSetting: (key: string) => Promise<any>,
@@ -96,6 +108,57 @@ export const createVaultClient = (config) => {
       });
       return json(response);
     },
+    async getAccessOverview() {
+      return (await requestJson(baseUrl, headers, "/api/service/access", {
+        context: "Failed to load access overview from Vault"
+      })).payload;
+    },
+    async listPermissionGroups() {
+      return (await requestJson(baseUrl, headers, "/api/service/permission-groups", {
+        context: "Failed to list permission groups from Vault"
+      })).payload;
+    },
+    async createPermissionGroup(payload) {
+      return (await requestJson(baseUrl, headers, "/api/service/permission-groups", {
+        method: "POST",
+        body: payload,
+        context: "Failed to create a permission group in Vault"
+      })).payload;
+    },
+    async updatePermissionGroup(groupId, payload) {
+      const {status, payload: responsePayload} = await requestJson(baseUrl, headers, `/api/service/permission-groups/${encodeURIComponent(groupId)}`, {
+        method: "PATCH",
+        body: payload,
+        allowStatuses: [404],
+        context: "Failed to update a permission group in Vault"
+      });
+      return status === 404 ? null : responsePayload;
+    },
+    async deletePermissionGroup(groupId) {
+      const {status, payload} = await requestJson(baseUrl, headers, `/api/service/permission-groups/${encodeURIComponent(groupId)}`, {
+        method: "DELETE",
+        allowStatuses: [404],
+        context: "Failed to delete a permission group in Vault"
+      });
+      return status === 404 ? null : payload;
+    },
+    async assignUserGroups(discordUserId, groupIds) {
+      const {status, payload} = await requestJson(baseUrl, headers, `/api/service/users/${encodeURIComponent(discordUserId)}/groups`, {
+        method: "PUT",
+        body: {groupIds},
+        allowStatuses: [404],
+        context: "Failed to assign permission groups in Vault"
+      });
+      return status === 404 ? null : payload;
+    },
+    async deleteUser(discordUserId) {
+      const {status, payload} = await requestJson(baseUrl, headers, `/api/service/users/${encodeURIComponent(discordUserId)}`, {
+        method: "DELETE",
+        allowStatuses: [404],
+        context: "Failed to delete a user in Vault"
+      });
+      return status === 404 ? null : payload;
+    },
     async createSession(discordUserId) {
       const response = await fetch(`${baseUrl}/api/service/sessions`, {
         method: "POST",
@@ -104,11 +167,58 @@ export const createVaultClient = (config) => {
       });
       return json(response);
     },
+    async clearSession(token) {
+      const {status, payload} = await requestJson(baseUrl, headers, `/api/service/sessions/${encodeURIComponent(token)}`, {
+        method: "DELETE",
+        allowStatuses: [404],
+        context: "Failed to clear a session in Vault"
+      });
+      return status === 404 ? null : payload;
+    },
+    async clearSessionsForUser(discordUserId) {
+      return (await requestJson(baseUrl, headers, `/api/service/sessions/user/${encodeURIComponent(discordUserId)}`, {
+        method: "DELETE",
+        context: "Failed to clear user sessions in Vault"
+      })).payload;
+    },
     async getSessionUser(token) {
       const response = await fetch(`${baseUrl}/api/service/sessions/${encodeURIComponent(token)}`, {
         headers
       });
       return response.status === 404 ? null : json(response);
+    },
+    async listEvents(filters = {}) {
+      const searchParams = new URLSearchParams();
+      const domains = Array.isArray(filters.domains) ? filters.domains : [];
+      for (const domain of domains) {
+        searchParams.append("domain", String(domain));
+      }
+      for (const [key, value] of Object.entries(filters)) {
+        if (key === "domains") {
+          continue;
+        }
+        if (value != null && value !== "") {
+          searchParams.set(key, String(value));
+        }
+      }
+      const suffix = searchParams.size ? `?${searchParams.toString()}` : "";
+      return (await requestJson(baseUrl, headers, `/api/service/events${suffix}`, {
+        context: "Failed to list durable events from Vault"
+      })).payload;
+    },
+    async appendEvent(payload) {
+      return (await requestJson(baseUrl, headers, "/api/service/events", {
+        method: "POST",
+        body: payload,
+        context: "Failed to append a durable event in Vault"
+      })).payload;
+    },
+    async pruneEvents(retentionDays) {
+      const suffix = retentionDays == null ? "" : `?retentionDays=${encodeURIComponent(retentionDays)}`;
+      return (await requestJson(baseUrl, headers, `/api/service/events/prune${suffix}`, {
+        method: "DELETE",
+        context: "Failed to prune durable events in Vault"
+      })).payload;
     },
     async listRequests() {
       return (await requestJson(baseUrl, headers, "/api/service/requests", {

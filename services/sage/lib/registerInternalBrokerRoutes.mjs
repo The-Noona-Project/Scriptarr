@@ -1,6 +1,7 @@
 /**
  * @file Scriptarr Sage module: services/sage/lib/registerInternalBrokerRoutes.mjs.
  */
+import {appendDurableEvent, buildServiceActor} from "./adminEvents.mjs";
 import {knownPortalDiscordCommands, readPortalDiscordSettings} from "./portalDiscordSettings.mjs";
 import {buildIntakeSelection, evaluateSelectionAgainstGuardState} from "./requestSelectionGuards.mjs";
 import {buildRequestWorkConflictPayload, isRequestWorkConflictError} from "./requestConflict.mjs";
@@ -691,7 +692,11 @@ const buildRequestNotifications = async ({config, vaultClient, serviceJson}) => 
       }
     }
 
-    if (["queued", "downloading", "completed"].includes(requestStatus) && !isRequestNotificationAcked(notificationState, "approved")) {
+    if (
+      (["queued", "downloading"].includes(requestStatus)
+        || (requestStatus === "completed" && normalizeString(request?.source).toLowerCase() !== "discord"))
+      && !isRequestNotificationAcked(notificationState, "approved")
+    ) {
       notifications.push({
         ...baseNotification,
         id: buildRequestNotificationId(requestId, "approved"),
@@ -806,6 +811,191 @@ export const registerInternalBrokerRoutes = (app, {
   readRequestWorkflowSettings,
   serviceJson
 }) => {
+  const appendServiceEvent = (serviceName, payload) => appendDurableEvent(vaultClient, {
+    ...buildServiceActor(serviceName),
+    ...payload
+  });
+  const describeService = (serviceName) => {
+    const normalized = normalizeString(serviceName, "scriptarr-service");
+    return normalized.replace(/^scriptarr-/, "");
+  };
+  const appendRequestLifecycleEvent = async (serviceName, beforeRequest, afterRequest) => {
+    if (!afterRequest) {
+      return;
+    }
+    const previousStatus = normalizeString(beforeRequest?.status);
+    const nextStatus = normalizeString(afterRequest?.status);
+    const previousAvailability = normalizeString(beforeRequest?.details?.availability);
+    const nextAvailability = normalizeString(afterRequest?.details?.availability);
+    const previousDownload = normalizeString(beforeRequest?.details?.selectedDownload?.titleUrl);
+    const nextDownload = normalizeString(afterRequest?.details?.selectedDownload?.titleUrl);
+    const nextSourceOptions = normalizeArray(afterRequest?.details?.sourceFoundOptions);
+    let eventType = "";
+    let message = "";
+    let severity = "info";
+
+    if (!beforeRequest) {
+      eventType = nextStatus === "unavailable" ? "request-unavailable" : "request-created";
+      message = `${describeService(serviceName)} created the ${normalizeString(afterRequest.title, "request")} request.`;
+    } else if (previousStatus !== nextStatus && nextStatus) {
+      eventType = `request-${nextStatus}`;
+      message = `${describeService(serviceName)} moved ${normalizeString(afterRequest.title, "that request")} to ${nextStatus}.`;
+      if (nextStatus === "failed") {
+        severity = "warning";
+      }
+    } else if (
+      (!previousDownload && nextDownload)
+      || (previousAvailability !== "available" && nextAvailability === "available")
+      || (!normalizeArray(beforeRequest?.details?.sourceFoundOptions).length && nextSourceOptions.length)
+    ) {
+      eventType = "request-source-found";
+      message = `${describeService(serviceName)} found download candidates for ${normalizeString(afterRequest.title, "that request")}.`;
+    }
+
+    if (!eventType) {
+      return;
+    }
+
+    await appendServiceEvent(serviceName, {
+      domain: "requests",
+      eventType,
+      severity,
+      targetType: "request",
+      targetId: normalizeScalarString(afterRequest.id),
+      message,
+      metadata: {
+        requestId: normalizeScalarString(afterRequest.id),
+        title: normalizeString(afterRequest.title),
+        status: nextStatus,
+        availability: nextAvailability,
+        requestedBy: normalizeString(afterRequest.requestedBy),
+        providerId: normalizeString(afterRequest.details?.selectedDownload?.providerId),
+        titleUrl: normalizeString(afterRequest.details?.selectedDownload?.titleUrl),
+        sourceOptionCount: nextSourceOptions.length
+      }
+    });
+  };
+  const appendRavenTitleEvent = async (serviceName, beforeTitle, afterTitle) => {
+    if (!afterTitle) {
+      return;
+    }
+    const isNewTitle = !beforeTitle?.id;
+    const changed =
+      isNewTitle
+      || normalizeString(beforeTitle?.status) !== normalizeString(afterTitle?.status)
+      || normalizeString(beforeTitle?.latestChapter) !== normalizeString(afterTitle?.latestChapter)
+      || Number(beforeTitle?.chapterCount || 0) !== Number(afterTitle?.chapterCount || 0)
+      || Number(beforeTitle?.chaptersDownloaded || 0) !== Number(afterTitle?.chaptersDownloaded || 0)
+      || normalizeString(beforeTitle?.sourceUrl) !== normalizeString(afterTitle?.sourceUrl)
+      || normalizeString(beforeTitle?.metadataProvider) !== normalizeString(afterTitle?.metadataProvider);
+    if (!changed) {
+      return;
+    }
+    await appendServiceEvent(serviceName, {
+      domain: "library",
+      eventType: isNewTitle ? "title-cataloged" : "title-updated",
+      severity: "info",
+      targetType: "title",
+      targetId: normalizeString(afterTitle.id),
+      message: isNewTitle
+        ? `${describeService(serviceName)} cataloged ${normalizeString(afterTitle.title, "a title")} in the library.`
+        : `${describeService(serviceName)} refreshed ${normalizeString(afterTitle.title, "a library title")}.`,
+      metadata: {
+        titleId: normalizeString(afterTitle.id),
+        title: normalizeString(afterTitle.title),
+        status: normalizeString(afterTitle.status),
+        latestChapter: normalizeString(afterTitle.latestChapter),
+        chapterCount: Number(afterTitle.chapterCount || 0),
+        chaptersDownloaded: Number(afterTitle.chaptersDownloaded || 0),
+        sourceUrl: normalizeString(afterTitle.sourceUrl),
+        metadataProvider: normalizeString(afterTitle.metadataProvider)
+      }
+    });
+  };
+  const appendDownloadTaskEvent = async (serviceName, beforeTask, afterTask) => {
+    if (!afterTask) {
+      return;
+    }
+    const previousStatus = normalizeString(beforeTask?.status);
+    const nextStatus = normalizeString(afterTask?.status);
+    if (beforeTask?.taskId && previousStatus === nextStatus) {
+      return;
+    }
+    await appendServiceEvent(serviceName, {
+      domain: "activity",
+      eventType: beforeTask?.taskId ? `download-task-${nextStatus || "updated"}` : "download-task-created",
+      severity: nextStatus === "failed" ? "warning" : "info",
+      targetType: "download-task",
+      targetId: normalizeString(afterTask.taskId),
+      message: beforeTask?.taskId
+        ? `${describeService(serviceName)} moved the ${normalizeString(afterTask.titleName, "download")} task to ${nextStatus || "updated"}.`
+        : `${describeService(serviceName)} created a download task for ${normalizeString(afterTask.titleName, "a title")}.`,
+      metadata: {
+        taskId: normalizeString(afterTask.taskId),
+        requestId: normalizeString(afterTask.requestId),
+        titleId: normalizeString(afterTask.titleId),
+        titleName: normalizeString(afterTask.titleName),
+        providerId: normalizeString(afterTask.providerId),
+        status: nextStatus,
+        percent: Number(afterTask.percent || 0)
+      }
+    });
+  };
+  const appendJobEvent = async (serviceName, beforeJob, afterJob) => {
+    if (!afterJob) {
+      return;
+    }
+    const previousStatus = normalizeString(beforeJob?.status);
+    const nextStatus = normalizeString(afterJob?.status);
+    if (beforeJob?.jobId && previousStatus === nextStatus) {
+      return;
+    }
+    await appendServiceEvent(serviceName, {
+      domain: "system",
+      eventType: beforeJob?.jobId ? `job-${nextStatus || "updated"}` : "job-created",
+      severity: nextStatus === "failed" ? "warning" : "info",
+      targetType: "job",
+      targetId: normalizeString(afterJob.jobId),
+      message: beforeJob?.jobId
+        ? `${describeService(serviceName)} moved the ${normalizeString(afterJob.label, afterJob.kind || "job")} job to ${nextStatus || "updated"}.`
+        : `${describeService(serviceName)} created the ${normalizeString(afterJob.label, afterJob.kind || "job")} job.`,
+      metadata: {
+        jobId: normalizeString(afterJob.jobId),
+        kind: normalizeString(afterJob.kind),
+        ownerService: normalizeString(afterJob.ownerService),
+        status: nextStatus,
+        requestedBy: normalizeString(afterJob.requestedBy)
+      }
+    });
+  };
+  const appendJobTaskEvent = async (serviceName, beforeTask, afterTask) => {
+    if (!afterTask) {
+      return;
+    }
+    const previousStatus = normalizeString(beforeTask?.status);
+    const nextStatus = normalizeString(afterTask?.status);
+    if (beforeTask?.taskId && previousStatus === nextStatus) {
+      return;
+    }
+    await appendServiceEvent(serviceName, {
+      domain: "system",
+      eventType: beforeTask?.taskId ? `job-task-${nextStatus || "updated"}` : "job-task-created",
+      severity: nextStatus === "failed" ? "warning" : "info",
+      targetType: "job-task",
+      targetId: normalizeString(afterTask.taskId),
+      message: beforeTask?.taskId
+        ? `${describeService(serviceName)} moved the ${normalizeString(afterTask.label, afterTask.taskKey || "job task")} task to ${nextStatus || "updated"}.`
+        : `${describeService(serviceName)} created the ${normalizeString(afterTask.label, afterTask.taskKey || "job task")} task.`,
+      metadata: {
+        jobId: normalizeString(afterTask.jobId),
+        taskId: normalizeString(afterTask.taskId),
+        taskKey: normalizeString(afterTask.taskKey),
+        status: nextStatus,
+        percent: Number(afterTask.percent || 0)
+      }
+    });
+  };
+
   const mergeDisplayStrings = (...values) => {
     const seen = new Set();
     const merged = [];
@@ -989,7 +1179,26 @@ export const registerInternalBrokerRoutes = (app, {
 
   app.post("/api/internal/vault/requests", withService(requireService, ["scriptarr-portal"], async (req, res) => {
     try {
-      res.status(201).json(await vaultClient.createRequest(req.body || {}));
+      const request = await vaultClient.createRequest(req.body || {});
+      await appendDurableEvent(vaultClient, {
+        actorType: "user",
+        actorId: normalizeString(req.body?.requestedBy),
+        actorLabel: normalizeString(req.body?.username, normalizeString(req.body?.requestedBy, "Discord user")),
+        domain: "requests",
+        eventType: normalizeString(request?.status) === "unavailable" ? "request-unavailable" : "request-created",
+        severity: "info",
+        targetType: "request",
+        targetId: normalizeScalarString(request?.id),
+        message: `${normalizeString(req.body?.username, "Discord user")} created the ${normalizeString(request?.title, "request")} request from Discord.`,
+        metadata: {
+          requestId: normalizeScalarString(request?.id),
+          requestedBy: normalizeString(req.body?.requestedBy),
+          source: normalizeString(req.body?.source, "discord"),
+          status: normalizeString(request?.status),
+          availability: normalizeString(request?.details?.availability)
+        }
+      });
+      res.status(201).json(request);
     } catch (error) {
       if (isRequestWorkConflictError(error)) {
         res.status(409).json(buildRequestWorkConflictPayload(error));
@@ -1009,6 +1218,7 @@ export const registerInternalBrokerRoutes = (app, {
   }));
 
   app.patch("/api/internal/vault/requests/:id", withService(requireService, ["scriptarr-raven"], async (req, res) => {
+    const previous = await vaultClient.getRequest(req.params.id);
     let request;
     try {
       request = await vaultClient.updateRequest(req.params.id, req.body || {});
@@ -1023,15 +1233,18 @@ export const registerInternalBrokerRoutes = (app, {
       res.status(404).json({error: "Request not found."});
       return;
     }
+    await appendRequestLifecycleEvent(req.serviceName, previous, request);
     res.json(request);
   }));
 
   app.post("/api/internal/vault/requests/:id/review", withService(requireService, ["scriptarr-warden"], async (req, res) => {
+    const previous = await vaultClient.getRequest(req.params.id);
     const reviewed = await vaultClient.reviewRequest(req.params.id, req.body || {});
     if (!reviewed) {
       res.status(404).json({error: "Request not found."});
       return;
     }
+    await appendRequestLifecycleEvent(req.serviceName, previous, reviewed);
     res.json(reviewed);
   }));
 
@@ -1049,10 +1262,13 @@ export const registerInternalBrokerRoutes = (app, {
   }));
 
   app.put("/api/internal/vault/raven/titles/:titleId", withService(requireService, ["scriptarr-raven"], async (req, res) => {
-    res.json(await vaultClient.upsertRavenTitle(req.params.titleId, {
+    const previous = await vaultClient.getRavenTitle(req.params.titleId);
+    const title = await vaultClient.upsertRavenTitle(req.params.titleId, {
       ...req.body,
       id: req.params.titleId
-    }));
+    });
+    await appendRavenTitleEvent(req.serviceName, previous, title);
+    res.json(title);
   }));
 
   app.put("/api/internal/vault/raven/titles/:titleId/chapters", withService(requireService, ["scriptarr-raven"], async (req, res) => {
@@ -1064,10 +1280,14 @@ export const registerInternalBrokerRoutes = (app, {
   }));
 
   app.put("/api/internal/vault/raven/download-tasks/:taskId", withService(requireService, ["scriptarr-raven"], async (req, res) => {
-    res.json(await vaultClient.upsertRavenDownloadTask(req.params.taskId, {
+    const previous = normalizeArray(await vaultClient.listRavenDownloadTasks())
+      .find((task) => normalizeString(task.taskId) === normalizeString(req.params.taskId)) || null;
+    const task = await vaultClient.upsertRavenDownloadTask(req.params.taskId, {
       ...req.body,
       taskId: req.params.taskId
-    }));
+    });
+    await appendDownloadTaskEvent(req.serviceName, previous, task);
+    res.json(task);
   }));
 
   app.get("/api/internal/vault/raven/metadata-matches/:titleId", withService(requireService, ["scriptarr-raven"], async (req, res) => {
@@ -1096,10 +1316,13 @@ export const registerInternalBrokerRoutes = (app, {
   }));
 
   app.put("/api/internal/jobs/:jobId", withService(requireService, ["scriptarr-raven", "scriptarr-warden"], async (req, res) => {
-    res.json(await vaultClient.upsertJob(req.params.jobId, {
+    const previous = await vaultClient.getJob(req.params.jobId);
+    const job = await vaultClient.upsertJob(req.params.jobId, {
       ...req.body,
       jobId: req.params.jobId
-    }));
+    });
+    await appendJobEvent(req.serviceName, previous, job);
+    res.json(job);
   }));
 
   app.get("/api/internal/jobs/:jobId/tasks", withService(requireService, ["scriptarr-raven", "scriptarr-warden"], async (req, res) => {
@@ -1109,10 +1332,15 @@ export const registerInternalBrokerRoutes = (app, {
   }));
 
   app.put("/api/internal/jobs/:jobId/tasks/:taskId", withService(requireService, ["scriptarr-raven", "scriptarr-warden"], async (req, res) => {
-    res.json(await vaultClient.upsertJobTask(req.params.jobId, req.params.taskId, {
+    const previous = normalizeArray(await vaultClient.listJobTasks({
+      jobId: req.params.jobId
+    })).find((task) => normalizeString(task.taskId) === normalizeString(req.params.taskId)) || null;
+    const task = await vaultClient.upsertJobTask(req.params.jobId, req.params.taskId, {
       ...req.body,
       taskId: req.params.taskId
-    }));
+    });
+    await appendJobTaskEvent(req.serviceName, previous, task);
+    res.json(task);
   }));
 
   app.get("/api/internal/warden/bootstrap", withService(requireService, ["scriptarr-oracle"], async (_req, res) => {

@@ -7,7 +7,8 @@ import {createLogger} from "@scriptarr/logging";
 import {resolveSageConfig} from "./config.mjs";
 import {createVaultClient} from "./vaultClient.mjs";
 import {buildCallbackUrl, buildDiscordOauthUrl, exchangeDiscordCode} from "./discordAuth.mjs";
-import {requirePermission, requireSession} from "./auth.mjs";
+import {hasPermission, requireAdminGrant, requirePermission, requireSession} from "./auth.mjs";
+import {appendUserEvent} from "./adminEvents.mjs";
 import {registerMoonV3Routes} from "./registerMoonV3Routes.mjs";
 import {createServiceAuth} from "./serviceAuth.mjs";
 import {registerInternalBrokerRoutes} from "./registerInternalBrokerRoutes.mjs";
@@ -541,6 +542,10 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
   const requireUser = requireSession(vaultClient);
   const requireService = createServiceAuth(config);
   const publicSelectionTokens = new Map();
+  const appendAdminUserEvent = (user, payload) => appendUserEvent(vaultClient, {
+    ...payload,
+    user
+  }, logger);
 
   app.use(express.json({limit: INTERNAL_JSON_BODY_LIMIT}));
 
@@ -785,9 +790,24 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
         res.status(400).json({error: "Discord OAuth code is required."});
         return;
       }
+      const bootstrapBefore = await vaultClient.getBootstrapStatus();
       const identity = await exchangeDiscordCode(config, code);
       const user = await upsertUserFromDiscord({vaultClient, config, identity});
       const session = await vaultClient.createSession(user.discordUserId);
+      await appendUserEvent(vaultClient, {
+        domain: "auth",
+        eventType: bootstrapBefore.ownerClaimed ? "login" : "bootstrap-owner",
+        user,
+        targetType: "session",
+        targetId: session.token,
+        message: bootstrapBefore.ownerClaimed
+          ? `${user.username} signed in through Discord.`
+          : `${user.username} claimed the protected bootstrap owner session.`,
+        metadata: {
+          discordUserId: user.discordUserId,
+          role: user.role
+        }
+      }, logger);
       res.json({token: session.token, user});
     } catch (error) {
       logger.warn("Discord callback login failed.", {
@@ -803,6 +823,22 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
       authenticated: true,
       user: req.user
     });
+  });
+
+  app.post("/api/auth/logout", requireUser, async (req, res) => {
+    await vaultClient.clearSession(req.sessionToken);
+    await appendUserEvent(vaultClient, {
+      domain: "auth",
+      eventType: "logout",
+      user: req.user,
+      targetType: "session",
+      targetId: req.sessionToken,
+      message: `${req.user.username} signed out of Moon.`,
+      metadata: {
+        discordUserId: req.user.discordUserId
+      }
+    }, logger);
+    res.json({ok: true});
   });
 
   app.get("/api/library", requireUser, async (req, res) => {
@@ -841,7 +877,7 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
   });
 
   app.post("/api/requests", requireUser, async (req, res) => {
-    const canCreate = req.user.permissions.includes("create_requests") || req.user.permissions.includes("admin");
+    const canCreate = hasPermission(req.user, "create_requests");
     if (!canCreate) {
       logger.warn("Request creation denied by policy.", {
         discordUserId: req.user.discordUserId,
@@ -1001,15 +1037,15 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
     });
   });
 
-  app.get("/api/admin/metadata/providers", requirePermission(vaultClient, "manage_settings"), async (_req, res) => {
+  app.get("/api/admin/metadata/providers", requireAdminGrant(vaultClient, "settings", "read"), async (_req, res) => {
     res.json(await readMetadataProviderSettings(vaultClient));
   });
 
-  app.get("/api/admin/settings/raven/vpn", requirePermission(vaultClient, "manage_settings"), async (_req, res) => {
+  app.get("/api/admin/settings/raven/vpn", requireAdminGrant(vaultClient, "settings", "read"), async (_req, res) => {
     res.json(await readRavenVpnSettings(vaultClient));
   });
 
-  app.put("/api/admin/settings/raven/vpn", requirePermission(vaultClient, "manage_settings"), async (req, res) => {
+  app.put("/api/admin/settings/raven/vpn", requireAdminGrant(vaultClient, "settings", "write"), async (req, res) => {
     const password = normalizeString(req.body.piaPassword);
     const nextSettings = normalizeRavenVpnSettings(req.body, password || await readSecret(vaultClient, RAVEN_VPN_PASSWORD_SECRET));
     await vaultClient.setSetting(RAVEN_VPN_KEY, {
@@ -1021,54 +1057,113 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
     if (password) {
       await vaultClient.setSecret(RAVEN_VPN_PASSWORD_SECRET, password);
     }
+    await appendAdminUserEvent(req.user, {
+      domain: "settings",
+      eventType: "raven-vpn-updated",
+      targetType: "setting",
+      targetId: RAVEN_VPN_KEY,
+      message: `${req.user.username} updated Raven VPN settings.`,
+      metadata: {
+        enabled: nextSettings.enabled,
+        region: nextSettings.region
+      }
+    });
     res.json(await readRavenVpnSettings(vaultClient));
   });
 
-  app.get("/api/admin/settings/raven/naming", requirePermission(vaultClient, "manage_settings"), async (_req, res) => {
+  app.get("/api/admin/settings/raven/naming", requireAdminGrant(vaultClient, "mediamanagement", "read"), async (_req, res) => {
     res.json(await readRavenNamingSettings(vaultClient));
   });
 
-  app.put("/api/admin/settings/raven/naming", requirePermission(vaultClient, "manage_settings"), async (req, res) => {
+  app.put("/api/admin/settings/raven/naming", requireAdminGrant(vaultClient, "mediamanagement", "write"), async (req, res) => {
     const nextSettings = normalizeRavenNamingSettings(req.body);
     await vaultClient.setSetting(RAVEN_NAMING_KEY, nextSettings);
+    await appendAdminUserEvent(req.user, {
+      domain: "mediamanagement",
+      eventType: "naming-updated",
+      targetType: "setting",
+      targetId: RAVEN_NAMING_KEY,
+      message: `${req.user.username} updated Raven naming profiles.`,
+      metadata: {
+        profileCount: Object.keys(nextSettings.profiles || {}).length
+      }
+    });
     res.json(await readRavenNamingSettings(vaultClient));
   });
 
-  app.get("/api/admin/settings/raven/metadata", requirePermission(vaultClient, "manage_settings"), async (_req, res) => {
+  app.get("/api/admin/settings/raven/metadata", requireAdminGrant(vaultClient, "settings", "read"), async (_req, res) => {
     res.json(await readMetadataProviderSettings(vaultClient));
   });
 
-  app.put("/api/admin/settings/raven/metadata", requirePermission(vaultClient, "manage_settings"), async (req, res) => {
+  app.put("/api/admin/settings/raven/metadata", requireAdminGrant(vaultClient, "settings", "write"), async (req, res) => {
     const nextSettings = normalizeMetadataProviderSettings(req.body);
     await vaultClient.setSetting(RAVEN_METADATA_KEY, nextSettings);
+    await appendAdminUserEvent(req.user, {
+      domain: "settings",
+      eventType: "metadata-providers-updated",
+      targetType: "setting",
+      targetId: RAVEN_METADATA_KEY,
+      message: `${req.user.username} updated the metadata provider stack.`,
+      metadata: {
+        providers: normalizeArray(nextSettings.providers).map((provider) => ({
+          id: provider.id,
+          enabled: provider.enabled,
+          priority: provider.priority
+        }))
+      }
+    });
     res.json(await readMetadataProviderSettings(vaultClient));
   });
 
-  app.get("/api/admin/settings/raven/download-providers", requirePermission(vaultClient, "manage_settings"), async (_req, res) => {
+  app.get("/api/admin/settings/raven/download-providers", requireAdminGrant(vaultClient, "settings", "read"), async (_req, res) => {
     res.json(await readDownloadProviderSettings(vaultClient));
   });
 
-  app.put("/api/admin/settings/raven/download-providers", requirePermission(vaultClient, "manage_settings"), async (req, res) => {
+  app.put("/api/admin/settings/raven/download-providers", requireAdminGrant(vaultClient, "settings", "write"), async (req, res) => {
     const nextSettings = normalizeDownloadProviderSettings(req.body);
     await vaultClient.setSetting(RAVEN_DOWNLOAD_PROVIDERS_KEY, nextSettings);
+    await appendAdminUserEvent(req.user, {
+      domain: "settings",
+      eventType: "download-providers-updated",
+      targetType: "setting",
+      targetId: RAVEN_DOWNLOAD_PROVIDERS_KEY,
+      message: `${req.user.username} updated the download provider stack.`,
+      metadata: {
+        providers: normalizeArray(nextSettings.providers).map((provider) => ({
+          id: provider.id,
+          enabled: provider.enabled,
+          priority: provider.priority
+        }))
+      }
+    });
     res.json(await readDownloadProviderSettings(vaultClient));
   });
 
-  app.get("/api/admin/settings/sage/requests", requirePermission(vaultClient, "manage_settings"), async (_req, res) => {
+  app.get("/api/admin/settings/sage/requests", requireAdminGrant(vaultClient, "settings", "read"), async (_req, res) => {
     res.json(await readRequestWorkflowSettings(vaultClient));
   });
 
-  app.put("/api/admin/settings/sage/requests", requirePermission(vaultClient, "manage_settings"), async (req, res) => {
+  app.put("/api/admin/settings/sage/requests", requireAdminGrant(vaultClient, "settings", "write"), async (req, res) => {
     const nextSettings = normalizeRequestWorkflowSettings(req.body);
     await vaultClient.setSetting(SAGE_REQUESTS_KEY, nextSettings);
+    await appendAdminUserEvent(req.user, {
+      domain: "settings",
+      eventType: "request-workflow-updated",
+      targetType: "setting",
+      targetId: SAGE_REQUESTS_KEY,
+      message: `${req.user.username} updated request workflow automation.`,
+      metadata: {
+        autoApproveAndDownload: nextSettings.autoApproveAndDownload
+      }
+    });
     res.json(await readRequestWorkflowSettings(vaultClient));
   });
 
-  app.get("/api/admin/settings/oracle", requirePermission(vaultClient, "manage_settings"), async (_req, res) => {
+  app.get("/api/admin/settings/oracle", requireAdminGrant(vaultClient, "settings", "read"), async (_req, res) => {
     res.json(await readOracleSettings(vaultClient));
   });
 
-  app.put("/api/admin/settings/oracle", requirePermission(vaultClient, "manage_settings"), async (req, res) => {
+  app.put("/api/admin/settings/oracle", requireAdminGrant(vaultClient, "settings", "write"), async (req, res) => {
     const password = normalizeString(req.body.openAiApiKey);
     const nextSettings = normalizeOracleSettings(req.body, password || await readSecret(vaultClient, ORACLE_OPENAI_API_KEY_SECRET));
     await vaultClient.setSetting(ORACLE_SETTINGS_KEY, {
@@ -1085,27 +1180,49 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
       await vaultClient.setSecret(ORACLE_OPENAI_API_KEY_SECRET, password);
     }
     const wardenSync = await syncWardenLocalAiConfig(config, nextSettings);
+    await appendAdminUserEvent(req.user, {
+      domain: "settings",
+      eventType: "oracle-settings-updated",
+      targetType: "setting",
+      targetId: ORACLE_SETTINGS_KEY,
+      message: `${req.user.username} updated Oracle settings.`,
+      metadata: {
+        enabled: nextSettings.enabled,
+        provider: nextSettings.provider,
+        model: nextSettings.model
+      }
+    });
     res.json({
       ...(await readOracleSettings(vaultClient)),
       wardenSync: wardenSync.payload || wardenSync
     });
   });
 
-  app.get("/api/admin/settings/moon/branding", requirePermission(vaultClient, "manage_settings"), async (_req, res) => {
+  app.get("/api/admin/settings/moon/branding", requireAdminGrant(vaultClient, "settings", "read"), async (_req, res) => {
     res.json(await readMoonBrandingSettings(vaultClient));
   });
 
-  app.put("/api/admin/settings/moon/branding", requirePermission(vaultClient, "manage_settings"), async (req, res) => {
+  app.put("/api/admin/settings/moon/branding", requireAdminGrant(vaultClient, "settings", "write"), async (req, res) => {
     const nextSettings = normalizeMoonBrandingSettings(req.body);
     await vaultClient.setSetting(MOON_BRANDING_KEY, nextSettings);
+    await appendAdminUserEvent(req.user, {
+      domain: "settings",
+      eventType: "branding-updated",
+      targetType: "setting",
+      targetId: MOON_BRANDING_KEY,
+      message: `${req.user.username} updated Moon branding.`,
+      metadata: {
+        siteName: nextSettings.siteName
+      }
+    });
     res.json(await readMoonBrandingSettings(vaultClient));
   });
 
-  app.get("/api/admin/settings/moon/public-api", requirePermission(vaultClient, "manage_settings"), async (_req, res) => {
+  app.get("/api/admin/settings/moon/public-api", requireAdminGrant(vaultClient, "publicapi", "read"), async (_req, res) => {
     res.json(await readMoonPublicApiSettings(vaultClient));
   });
 
-  app.put("/api/admin/settings/moon/public-api", requirePermission(vaultClient, "manage_settings"), async (req, res) => {
+  app.put("/api/admin/settings/moon/public-api", requireAdminGrant(vaultClient, "publicapi", "root"), async (req, res) => {
     const existing = await readMoonPublicApiSettings(vaultClient);
     const nextSettings = normalizeMoonPublicApiSettings({
       ...existing,
@@ -1117,10 +1234,20 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
       enabled: nextSettings.enabled,
       lastRotatedAt: nextSettings.lastRotatedAt
     });
+    await appendAdminUserEvent(req.user, {
+      domain: "publicapi",
+      eventType: "public-api-updated",
+      targetType: "setting",
+      targetId: MOON_PUBLIC_API_KEY,
+      message: `${req.user.username} updated public API access.`,
+      metadata: {
+        enabled: nextSettings.enabled
+      }
+    });
     res.json(await readMoonPublicApiSettings(vaultClient));
   });
 
-  app.post("/api/admin/settings/moon/public-api/key", requirePermission(vaultClient, "manage_settings"), async (_req, res) => {
+  app.post("/api/admin/settings/moon/public-api/key", requireAdminGrant(vaultClient, "publicapi", "root"), async (req, res) => {
     const nextApiKey = randomBytes(24).toString("hex");
     const nextSettings = {
       ...(await readMoonPublicApiSettings(vaultClient)),
@@ -1135,13 +1262,23 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
         lastRotatedAt: nextSettings.lastRotatedAt
       })
     ]);
+    await appendAdminUserEvent(req.user, {
+      domain: "publicapi",
+      eventType: "public-api-key-rotated",
+      targetType: "setting",
+      targetId: MOON_PUBLIC_API_KEY,
+      message: `${req.user.username} rotated the Moon public API key.`,
+      metadata: {
+        lastRotatedAt: nextSettings.lastRotatedAt
+      }
+    });
     res.json({
       ...(await readMoonPublicApiSettings(vaultClient)),
       apiKey: nextApiKey
     });
   });
 
-  app.get("/api/admin/settings/portal/discord", requirePermission(vaultClient, "manage_settings"), async (_req, res) => {
+  app.get("/api/admin/settings/portal/discord", requireAdminGrant(vaultClient, "discord", "read"), async (_req, res) => {
     const settings = await readPortalDiscordSettings(vaultClient);
     const runtime = await loadPortalDiscordRuntime(config, settings);
     res.json({
@@ -1150,12 +1287,23 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
     });
   });
 
-  app.put("/api/admin/settings/portal/discord", requirePermission(vaultClient, "manage_settings"), async (req, res) => {
+  app.put("/api/admin/settings/portal/discord", requireAdminGrant(vaultClient, "discord", "write"), async (req, res) => {
     const nextSettings = normalizePortalDiscordSettings(req.body);
     await vaultClient.setSetting(PORTAL_DISCORD_KEY, nextSettings);
     const reload = await reloadPortalDiscordRuntime(config);
     const settings = await readPortalDiscordSettings(vaultClient);
     const runtime = await loadPortalDiscordRuntime(config, settings);
+    await appendAdminUserEvent(req.user, {
+      domain: "discord",
+      eventType: "discord-settings-updated",
+      targetType: "setting",
+      targetId: PORTAL_DISCORD_KEY,
+      message: `${req.user.username} updated Discord integration settings.`,
+      metadata: {
+        guildId: settings.guildId,
+        superuserId: settings.superuserId
+      }
+    });
     res.json({
       ...settings,
       runtime: {
@@ -1165,7 +1313,7 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
     });
   });
 
-  app.post("/api/admin/settings/portal/discord/onboarding/test", requirePermission(vaultClient, "manage_settings"), async (req, res) => {
+  app.post("/api/admin/settings/portal/discord/onboarding/test", requireAdminGrant(vaultClient, "discord", "write"), async (req, res) => {
     const [discordSettings, branding] = await Promise.all([
       readPortalDiscordSettings(vaultClient),
       readMoonBrandingSettings(vaultClient)
@@ -1369,7 +1517,7 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
     res.json({request: normalizePublicRequestSummary(request)});
   });
 
-  app.get("/api/admin/warden/localai", requirePermission(vaultClient, "manage_settings"), async (_req, res) => {
+  app.get("/api/admin/warden/localai", requireAdminGrant(vaultClient, "system", "read"), async (_req, res) => {
     const [oracleSettings, localAiStatus] = await Promise.all([
       readOracleSettings(vaultClient),
       safeJson(serviceJson(config.wardenBaseUrl, "/api/localai/status"))
@@ -1380,43 +1528,83 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
     });
   });
 
-  app.post("/api/admin/warden/localai/install", requirePermission(vaultClient, "manage_settings"), async (_req, res) => {
+  app.post("/api/admin/warden/localai/install", requireAdminGrant(vaultClient, "system", "root"), async (req, res) => {
     const oracleSettings = await readOracleSettings(vaultClient);
     await syncWardenLocalAiConfig(config, oracleSettings);
     const result = await safeJson(serviceJson(config.wardenBaseUrl, "/api/localai/actions/install", {
       method: "POST"
     }));
+    await appendAdminUserEvent(req.user, {
+      domain: "system",
+      eventType: "localai-install-started",
+      targetType: "service",
+      targetId: "scriptarr-warden",
+      message: `${req.user.username} started the LocalAI install flow.`,
+      metadata: {
+        result: result.payload || result
+      }
+    });
     res.status(result.status || 200).json(result.payload || result);
   });
 
-  app.post("/api/admin/warden/localai/start", requirePermission(vaultClient, "manage_settings"), async (_req, res) => {
+  app.post("/api/admin/warden/localai/start", requireAdminGrant(vaultClient, "system", "root"), async (req, res) => {
     const oracleSettings = await readOracleSettings(vaultClient);
     await syncWardenLocalAiConfig(config, oracleSettings);
     const result = await safeJson(serviceJson(config.wardenBaseUrl, "/api/localai/actions/start", {
       method: "POST"
     }));
+    await appendAdminUserEvent(req.user, {
+      domain: "system",
+      eventType: "localai-started",
+      targetType: "service",
+      targetId: "scriptarr-warden",
+      message: `${req.user.username} started LocalAI.`,
+      metadata: {
+        result: result.payload || result
+      }
+    });
     res.status(result.status || 200).json(result.payload || result);
   });
 
-  app.get("/api/updates", requirePermission(vaultClient, "manage_settings"), async (_req, res) => {
+  app.get("/api/updates", requireAdminGrant(vaultClient, "system", "read"), async (_req, res) => {
     const result = await serviceJson(config.wardenBaseUrl, "/api/updates");
     res.status(result.status).json(result.payload);
   });
 
-  app.post("/api/updates/check", requirePermission(vaultClient, "manage_settings"), async (req, res) => {
+  app.post("/api/updates/check", requireAdminGrant(vaultClient, "system", "root"), async (req, res) => {
     const result = await serviceJson(config.wardenBaseUrl, "/api/updates/check", {
       method: "POST",
       body: {
         services: normalizeArray(req.body?.services)
       }
     });
+    await appendAdminUserEvent(req.user, {
+      domain: "system",
+      eventType: "updates-check-started",
+      targetType: "service",
+      targetId: "scriptarr-warden",
+      message: `${req.user.username} started an update check.`,
+      metadata: {
+        services: normalizeArray(req.body?.services)
+      }
+    });
     res.status(result.status).json(result.payload);
   });
 
-  app.post("/api/updates/install", requirePermission(vaultClient, "manage_settings"), async (req, res) => {
+  app.post("/api/updates/install", requireAdminGrant(vaultClient, "system", "root"), async (req, res) => {
     const result = await serviceJson(config.wardenBaseUrl, "/api/updates/install", {
       method: "POST",
       body: {
+        services: normalizeArray(req.body?.services)
+      }
+    });
+    await appendAdminUserEvent(req.user, {
+      domain: "system",
+      eventType: "updates-install-started",
+      targetType: "service",
+      targetId: "scriptarr-warden",
+      message: `${req.user.username} started a managed service update job.`,
+      metadata: {
         services: normalizeArray(req.body?.services)
       }
     });
@@ -1437,6 +1625,7 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
     vaultClient,
     requireUser,
     requirePermission: (permission) => requirePermission(vaultClient, permission),
+    requireAdminGrant: (domain, level = "read") => requireAdminGrant(vaultClient, domain, level),
     readRavenVpnSettings: () => readRavenVpnSettings(vaultClient),
     readRavenNamingSettings: () => readRavenNamingSettings(vaultClient),
     readMetadataProviderSettings: () => readMetadataProviderSettings(vaultClient),

@@ -43,6 +43,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.PriorityBlockingQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
@@ -66,6 +67,9 @@ public class DownloaderService {
     private static final int IMAGE_DOWNLOAD_RETRY_ATTEMPTS = 3;
     private static final int CHAPTER_DOWNLOAD_PROGRESS_CAP = 90;
     private static final Duration IMAGE_DOWNLOAD_TIMEOUT = Duration.ofSeconds(30);
+    private static final Duration PAGE_DOWNLOAD_TIMEOUT = Duration.ofMinutes(2);
+    private static final int RESTORE_RETRY_ATTEMPTS = 6;
+    private static final Duration RESTORE_RETRY_BACKOFF = Duration.ofSeconds(5);
     private static final long RETRY_BACKOFF_MS = 1_500L;
     private static final String WEBCENTRAL_PROVIDER_ID = "weebcentral";
     private static final String WEBCENTRAL_REFERER = "https://weebcentral.com";
@@ -134,7 +138,25 @@ public class DownloaderService {
      */
     @PostConstruct
     public void restorePersistedTasks() {
-        try {
+        for (int attempt = 1; attempt <= RESTORE_RETRY_ATTEMPTS; attempt++) {
+            try {
+                restorePersistedTasksOnce();
+                return;
+            } catch (Exception error) {
+                logger.warn(
+                    "DOWNLOAD",
+                    "Failed to restore persisted Raven tasks.",
+                    "attempt=" + attempt + "/" + RESTORE_RETRY_ATTEMPTS + " reason="
+                        + normalizeString(error.getMessage(), "unknown")
+                );
+                if (attempt < RESTORE_RETRY_ATTEMPTS && !sleepBeforeRestoreRetry()) {
+                    return;
+                }
+            }
+        }
+    }
+
+    private void restorePersistedTasksOnce() throws Exception {
             var payload = brokerClient.listDownloadTasks();
             if (payload == null || !payload.isArray()) {
                 return;
@@ -209,6 +231,9 @@ public class DownloaderService {
                 persistTask(taskId);
 
                 String status = String.valueOf(task.getOrDefault("status", ""));
+                if ("failed".equals(status) && isRecoverablePersistFailure(task) && recoverCompletedTask(taskId)) {
+                    continue;
+                }
                 if (!"queued".equals(status) && !"running".equals(status)) {
                     continue;
                 }
@@ -232,9 +257,23 @@ public class DownloaderService {
                     String.valueOf(task.getOrDefault("replacementTitleId", "")),
                     String.valueOf(task.getOrDefault("priority", PRIORITY_NORMAL))
                 ));
-            }
-        } catch (Exception error) {
-            logger.warn("DOWNLOAD", "Failed to restore persisted Raven tasks.", error.getMessage());
+        }
+    }
+
+    private boolean isRecoverablePersistFailure(Map<String, Object> task) {
+        String message = normalizeString(task.get("message")).toLowerCase(Locale.ROOT);
+        return "failed".equals(normalizeString(task.get("status")).toLowerCase(Locale.ROOT))
+            && (message.contains("persist raven title") || message.contains("persist raven chapters"));
+    }
+
+    private boolean sleepBeforeRestoreRetry() {
+        try {
+            Thread.sleep(RESTORE_RETRY_BACKOFF.toMillis());
+            return true;
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            logger.warn("DOWNLOAD", "Interrupted while retrying Raven task restore.", interrupted.getMessage());
+            return false;
         }
     }
 
@@ -294,6 +333,8 @@ public class DownloaderService {
                 0,
                 0,
                 0,
+                0,
+                List.of(),
                 List.of(),
                 List.of(),
                 List.of(),
@@ -314,6 +355,8 @@ public class DownloaderService {
                 0,
                 0,
                 0,
+                0,
+                List.of(),
                 List.of(),
                 List.of(),
                 List.of(),
@@ -336,6 +379,8 @@ public class DownloaderService {
                 0,
                 0,
                 0,
+                0,
+                List.of(),
                 List.of(),
                 List.of(),
                 List.of(),
@@ -359,6 +404,8 @@ public class DownloaderService {
                 0,
                 0,
                 0,
+                0,
+                List.of(),
                 List.of(),
                 List.of(),
                 List.of(),
@@ -369,14 +416,17 @@ public class DownloaderService {
 
         List<String> queuedTitles = new ArrayList<>();
         List<String> skippedActiveTitles = new ArrayList<>();
+        List<String> skippedAdultContentTitles = new ArrayList<>();
         List<String> skippedNoMetadataTitles = new ArrayList<>();
         List<String> skippedAmbiguousMetadataTitles = new ArrayList<>();
         List<String> failedTitles = new ArrayList<>();
         String actor = normalizeString(requestedBy, "scriptarr-portal");
+        List<LibraryTitle> existingLibraryTitles = libraryService == null ? List.of() : libraryService.listTitles();
 
         for (Map<String, String> selectedTitle : matchedTitles) {
             String titleName = normalizeString(selectedTitle.get("title"), "Unknown title");
             String titleUrl = normalizeString(selectedTitle.get("href"));
+            String requestType = LibraryNaming.normalizeTypeLabel(selectedTitle.getOrDefault("type", normalizedType));
             String activeKey = activeBulkTaskKey(Map.of(
                 "providerId", selectedProvider.get().id(),
                 "titleUrl", titleUrl
@@ -385,13 +435,18 @@ public class DownloaderService {
                 failedTitles.add(titleName);
                 continue;
             }
-            if (isTaskAlreadyActive(activeKey, titleName)) {
+            if (isTaskAlreadyActive(activeKey, titleName) || isTitleAlreadyInLibrary(existingLibraryTitles, titleUrl, titleName, requestType)) {
                 skippedActiveTitles.add(titleName);
                 continue;
             }
 
             try {
-                String requestType = LibraryNaming.normalizeTypeLabel(selectedTitle.getOrDefault("type", normalizedType));
+                TitleDetails providerDetails = selectedProvider.get().getTitleDetails(titleUrl);
+                if (!Boolean.TRUE.equals(nsfw) && (providerDetails == null || !Boolean.FALSE.equals(providerDetails.adultContent()))) {
+                    skippedAdultContentTitles.add(titleName);
+                    continue;
+                }
+
                 DownloadIntakeService.BulkMetadataResolution metadataResolution = downloadIntakeService.resolveBulkMetadata(
                     selectedProvider.get().id(),
                     titleUrl,
@@ -416,6 +471,10 @@ public class DownloaderService {
                 selectedDownload.putIfAbsent("requestType", requestType);
                 selectedDownload.putIfAbsent("libraryTypeLabel", requestType);
                 selectedDownload.putIfAbsent("libraryTypeSlug", LibraryNaming.normalizeTypeSlug(requestType));
+                if (providerDetails != null && providerDetails.adultContent() != null) {
+                    selectedDownload.put("adultContent", providerDetails.adultContent());
+                    selectedDownload.put("nsfw", providerDetails.adultContent());
+                }
 
                 queueDownload(new DownloadRequest(
                     titleName,
@@ -440,6 +499,7 @@ public class DownloaderService {
             resolveBulkQueueStatus(
                 queuedTitles,
                 skippedActiveTitles,
+                skippedAdultContentTitles,
                 skippedNoMetadataTitles,
                 skippedAmbiguousMetadataTitles,
                 failedTitles
@@ -447,6 +507,7 @@ public class DownloaderService {
             buildBulkQueueMessage(
                 queuedTitles,
                 skippedActiveTitles,
+                skippedAdultContentTitles,
                 skippedNoMetadataTitles,
                 skippedAmbiguousMetadataTitles,
                 failedTitles,
@@ -457,11 +518,13 @@ public class DownloaderService {
             matchedTitles.size(),
             queuedTitles.size(),
             skippedActiveTitles.size(),
+            skippedAdultContentTitles.size(),
             skippedNoMetadataTitles.size(),
             skippedAmbiguousMetadataTitles.size(),
             failedTitles.size(),
             queuedTitles,
             skippedActiveTitles,
+            skippedAdultContentTitles,
             skippedNoMetadataTitles,
             skippedAmbiguousMetadataTitles,
             failedTitles
@@ -904,13 +967,11 @@ public class DownloaderService {
             .header("Referer", normalizeString(chapterUrl, WEBCENTRAL_REFERER))
             .GET()
             .build();
-        HttpResponse<InputStream> response = httpClient.send(request, HttpResponse.BodyHandlers.ofInputStream());
+        HttpResponse<byte[]> response = httpClient.send(request, HttpResponse.BodyHandlers.ofByteArray());
         if (response.statusCode() < 200 || response.statusCode() >= 300) {
             throw new IOException("Image download failed with status " + response.statusCode() + " for " + imageUrl);
         }
-        try (InputStream stream = response.body()) {
-            return stream.readAllBytes();
-        }
+        return response.body();
     }
 
     private boolean sleepBeforeRetry(String stage, String titleName, String chapterNumber, int attempt, Exception error) throws InterruptedException {
@@ -1496,7 +1557,10 @@ public class DownloaderService {
 
     private Path awaitDownloadedPage(Future<Path> download) throws IOException, InterruptedException {
         try {
-            return download.get();
+            return download.get(PAGE_DOWNLOAD_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+        } catch (TimeoutException error) {
+            download.cancel(true);
+            throw new IOException("Page download timed out after " + PAGE_DOWNLOAD_TIMEOUT.toSeconds() + " seconds.", error);
         } catch (ExecutionException error) {
             Throwable cause = error.getCause();
             if (cause instanceof IOException ioException) {
@@ -1665,6 +1729,21 @@ public class DownloaderService {
         });
     }
 
+    private boolean isTitleAlreadyInLibrary(List<LibraryTitle> titles, String titleUrl, String titleName, String requestType) {
+        String normalizedUrl = normalizeString(titleUrl);
+        String normalizedTitle = normalizeString(titleName).toLowerCase(Locale.ROOT);
+        String normalizedType = LibraryNaming.normalizeTypeSlug(requestType);
+        return titles != null && titles.stream().anyMatch((title) -> {
+            String existingUrl = normalizeString(title.sourceUrl());
+            if (!normalizedUrl.isBlank() && normalizedUrl.equals(existingUrl)) {
+                return true;
+            }
+            return !normalizedTitle.isBlank()
+                && normalizedTitle.equals(normalizeString(title.title()).toLowerCase(Locale.ROOT))
+                && normalizedType.equals(LibraryNaming.normalizeTypeSlug(normalizeString(title.libraryTypeSlug(), title.mediaType())));
+        });
+    }
+
     private String activeBulkTaskKey(Map<String, ?> task) {
         String providerId = normalizeString(task.get("providerId"));
         String titleUrl = normalizeString(task.get("titleUrl"));
@@ -1677,20 +1756,22 @@ public class DownloaderService {
     private String resolveBulkQueueStatus(
         List<String> queuedTitles,
         List<String> skippedActiveTitles,
+        List<String> skippedAdultContentTitles,
         List<String> skippedNoMetadataTitles,
         List<String> skippedAmbiguousMetadataTitles,
         List<String> failedTitles
     ) {
         boolean hasQueued = queuedTitles != null && !queuedTitles.isEmpty();
         boolean hasSkippedActive = skippedActiveTitles != null && !skippedActiveTitles.isEmpty();
+        boolean hasSkippedAdultContent = skippedAdultContentTitles != null && !skippedAdultContentTitles.isEmpty();
         boolean hasSkippedNoMetadata = skippedNoMetadataTitles != null && !skippedNoMetadataTitles.isEmpty();
         boolean hasSkippedAmbiguous = skippedAmbiguousMetadataTitles != null && !skippedAmbiguousMetadataTitles.isEmpty();
         boolean hasFailed = failedTitles != null && !failedTitles.isEmpty();
 
-        if (hasQueued && !hasSkippedActive && !hasSkippedNoMetadata && !hasSkippedAmbiguous && !hasFailed) {
+        if (hasQueued && !hasSkippedActive && !hasSkippedAdultContent && !hasSkippedNoMetadata && !hasSkippedAmbiguous && !hasFailed) {
             return BulkQueueDownloadResult.STATUS_QUEUED;
         }
-        if (!hasQueued && hasSkippedActive && !hasSkippedNoMetadata && !hasSkippedAmbiguous && !hasFailed) {
+        if (!hasQueued && hasSkippedActive && !hasSkippedAdultContent && !hasSkippedNoMetadata && !hasSkippedAmbiguous && !hasFailed) {
             return BulkQueueDownloadResult.STATUS_ALREADY_ACTIVE;
         }
         return BulkQueueDownloadResult.STATUS_PARTIAL;
@@ -1699,6 +1780,7 @@ public class DownloaderService {
     private String buildBulkQueueMessage(
         List<String> queuedTitles,
         List<String> skippedActiveTitles,
+        List<String> skippedAdultContentTitles,
         List<String> skippedNoMetadataTitles,
         List<String> skippedAmbiguousMetadataTitles,
         List<String> failedTitles,
@@ -1706,6 +1788,7 @@ public class DownloaderService {
     ) {
         int queuedCount = queuedTitles == null ? 0 : queuedTitles.size();
         int skippedActiveCount = skippedActiveTitles == null ? 0 : skippedActiveTitles.size();
+        int skippedAdultContentCount = skippedAdultContentTitles == null ? 0 : skippedAdultContentTitles.size();
         int skippedNoMetadataCount = skippedNoMetadataTitles == null ? 0 : skippedNoMetadataTitles.size();
         int skippedAmbiguousCount = skippedAmbiguousMetadataTitles == null ? 0 : skippedAmbiguousMetadataTitles.size();
         int failedCount = failedTitles == null ? 0 : failedTitles.size();
@@ -1713,18 +1796,21 @@ public class DownloaderService {
         if (matchedCount <= 0) {
             return "No titles matched the supplied filters.";
         }
-        if (queuedCount > 0 && skippedActiveCount == 0 && skippedNoMetadataCount == 0 && skippedAmbiguousCount == 0 && failedCount == 0) {
+        if (queuedCount > 0 && skippedActiveCount == 0 && skippedAdultContentCount == 0 && skippedNoMetadataCount == 0
+            && skippedAmbiguousCount == 0 && failedCount == 0) {
             return "Queued " + queuedCount + " title(s) for download.";
         }
-        if (queuedCount == 0 && skippedActiveCount > 0 && skippedNoMetadataCount == 0 && skippedAmbiguousCount == 0 && failedCount == 0) {
+        if (queuedCount == 0 && skippedActiveCount > 0 && skippedAdultContentCount == 0 && skippedNoMetadataCount == 0
+            && skippedAmbiguousCount == 0 && failedCount == 0) {
             return skippedActiveCount == 1
                 ? "Download already in progress for: " + skippedActiveTitles.getFirst()
                 : "Downloads already in progress for: " + String.join(", ", skippedActiveTitles);
         }
 
         return "Queued " + queuedCount + " title(s). Skipped " + skippedActiveCount
-            + " already-active title(s), " + skippedNoMetadataCount + " without confident metadata, "
-            + skippedAmbiguousCount + " with ambiguous metadata. Failed " + failedCount + " title(s).";
+            + " already-active title(s), " + skippedAdultContentCount + " adult or unverified adult title(s), "
+            + skippedNoMetadataCount + " without confident metadata, " + skippedAmbiguousCount
+            + " with ambiguous metadata. Failed " + failedCount + " title(s).";
     }
 
     private String normalizePrefixComparableTitle(String rawTitle) {

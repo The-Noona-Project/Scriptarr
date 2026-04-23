@@ -179,7 +179,7 @@ const renderProfileCard = (typeId, label, profile) => {
  * @param {{api: ReturnType<import("../api.js").createAdminApi>}} context
  * @returns {Promise<import("../api.js").ApiResult>}
  */
-export const loadMediaManagementPage = ({api}) => api.get("/api/moon/v3/admin/settings");
+export const loadMediaManagementPage = ({api}) => api.get("/api/moon/v3/admin/mediamanagement");
 
 /**
  * Render the Moon admin media management page.
