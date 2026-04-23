@@ -284,8 +284,8 @@ test("moon serves branded split entry documents, typed routes, PWA assets, and M
   assert.match(userPage, /Pax Library/);
   assert.doesNotMatch(userPage, /Scriptarr Moon/);
   assert.match(adminPage, /Pax Library Admin/);
-  assert.match(userPage, /\/user-assets\/styles\.css\?v=/);
-  assert.match(userPage, /\/user-assets\/app\.js\?v=/);
+  assert.match(userPage, /manifest\.webmanifest/);
+  assert.match(userPage, /icon\.svg/);
   assert.match(adminPage, /\/admin-assets\/styles\.css\?v=/);
   assert.match(adminPage, /\/admin-assets\/app\.js\?v=/);
   assert.equal(userPageResponse.headers.get("cache-control"), "no-store");
@@ -303,21 +303,42 @@ test("moon serves branded split entry documents, typed routes, PWA assets, and M
   assert.equal(adminAppResponse.headers.get("cache-control"), "no-store");
   assert.match(await adminAppResponse.text(), /\.\/main\.js\?v=/);
 
-  const userMainResponse = await fetch(`${baseUrl}/user-assets/main.js`);
-  assert.equal(userMainResponse.headers.get("cache-control"), "no-store");
-  assert.match(await userMainResponse.text(), /\.\/api\.js\?v=/);
-
   const manifestResponse = await fetch(`${baseUrl}/manifest.webmanifest`);
   assert.match(manifestResponse.headers.get("content-type") || "", /application\/manifest\+json/);
   const manifest = await manifestResponse.json();
   assert.equal(manifest.name, "Pax Library");
   assert.equal(manifest.short_name, "Pax");
   assert.equal(manifest.start_url, "/");
+  assert.deepEqual(manifest.icons, [
+    {
+      src: "/icon.svg",
+      sizes: "any",
+      type: "image/svg+xml",
+      purpose: "any"
+    },
+    {
+      src: "/icon-maskable.svg",
+      sizes: "any",
+      type: "image/svg+xml",
+      purpose: "maskable"
+    }
+  ]);
+
+  const iconResponse = await fetch(`${baseUrl}/icon.svg`);
+  assert.equal(iconResponse.status, 200);
+  assert.match(iconResponse.headers.get("content-type") || "", /image\/svg\+xml/);
+  assert.match(await iconResponse.text(), /Moon icon/);
+
+  const maskableIconResponse = await fetch(`${baseUrl}/icon-maskable.svg`);
+  assert.equal(maskableIconResponse.status, 200);
+  assert.match(maskableIconResponse.headers.get("content-type") || "", /image\/svg\+xml/);
+  assert.match(await maskableIconResponse.text(), /Moon icon/);
 
   const serviceWorkerResponse = await fetch(`${baseUrl}/service-worker.js`);
   assert.match(serviceWorkerResponse.headers.get("content-type") || "", /javascript/);
   const serviceWorkerSource = await serviceWorkerResponse.text();
-  assert.match(serviceWorkerSource, /moon-shell-/);
+  assert.match(serviceWorkerSource, /moon-static-/);
+  assert.match(serviceWorkerSource, /moon-reader-/);
   assert.doesNotMatch(serviceWorkerSource, /<!doctype html>/i);
 
   const brandingResponse = await fetch(`${baseUrl}/api/moon/v3/public/branding`);

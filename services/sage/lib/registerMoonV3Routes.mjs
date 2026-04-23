@@ -5,6 +5,16 @@ import {hasPermission} from "./auth.mjs";
 import {buildIntakeSelection, evaluateSelectionAgainstGuardState} from "./requestSelectionGuards.mjs";
 import {buildRequestWorkConflictPayload, isRequestWorkConflictError} from "./requestConflict.mjs";
 import {buildMoonHomePayload} from "./buildMoonHomePayload.mjs";
+import {
+  attachRequestWaitlistEntry,
+  buildActiveRequestDuplicatePayload,
+  buildLibraryDuplicatePayload,
+  canCancelRequest,
+  canEditRequestNotes,
+  normalizeDownloadOption,
+  resolveRequestTab,
+  selectAutoApproveDownload
+} from "./requestFlow.mjs";
 
 const defaultReaderPreferences = Object.freeze({
   readingMode: "infinite",
@@ -164,6 +174,9 @@ const toRequestSummary = (request = {}, userIndex = new Map()) => {
     createdAt: parseIso(request.createdAt),
     updatedAt: parseIso(request.updatedAt),
     commentCount: timeline.filter((entry) => normalizeString(entry.type) === "comment").length,
+    tab: resolveRequestTab(request.status),
+    canEditNotes: canEditRequestNotes(request),
+    canCancel: canCancelRequest(request),
     timeline,
     availability: normalizeString(details.availability, selectedDownload ? "available" : "unavailable"),
     coverUrl: normalizeString(
@@ -174,6 +187,9 @@ const toRequestSummary = (request = {}, userIndex = new Map()) => {
       query: normalizeString(details.query),
       selectedMetadata,
       selectedDownload,
+      sourceFoundAt: parseIso(details.sourceFoundAt),
+      sourceFoundOptions: normalizeArray(details.sourceFoundOptions),
+      waitlist: normalizeArray(details.waitlist),
       coverUrl: normalizeString(
         details.coverUrl,
         normalizeString(selectedDownload?.coverUrl, normalizeString(selectedMetadata?.coverUrl))
@@ -191,7 +207,8 @@ const toRequestSummary = (request = {}, userIndex = new Map()) => {
       discordUserId: normalizeString(request.requestedBy),
       username: requester?.username || null,
       role: requester?.role || null
-    }
+    },
+    waitlistCount: normalizeArray(details.waitlist).length
   };
 };
 
@@ -279,6 +296,24 @@ const withPermission = (requirePermission, permission, handler) => async (req, r
   });
 };
 
+const mergeDisplayStrings = (...values) => {
+  const seen = new Set();
+  const merged = [];
+  for (const value of values.flatMap((entry) => normalizeArray(entry).length ? normalizeArray(entry) : [entry])) {
+    const normalized = normalizeString(value);
+    if (!normalized) {
+      continue;
+    }
+    const dedupeKey = normalized.toLowerCase();
+    if (seen.has(dedupeKey)) {
+      continue;
+    }
+    seen.add(dedupeKey);
+    merged.push(normalized);
+  }
+  return merged;
+};
+
 /**
  * Register the Moon v3 broker routes used by both the admin and user Moon apps.
  *
@@ -293,6 +328,7 @@ const withPermission = (requirePermission, permission, handler) => async (req, r
  *   readRavenNamingSettings: () => Promise<Record<string, unknown>>,
  *   readMetadataProviderSettings: () => Promise<Record<string, unknown>>,
  *   readDownloadProviderSettings: () => Promise<Record<string, unknown>>,
+ *   readRequestWorkflowSettings: () => Promise<Record<string, unknown>>,
  *   readOracleSettings: () => Promise<Record<string, unknown>>,
  *   readMoonBrandingSettings: () => Promise<Record<string, unknown>>,
  *   readMoonPublicApiSettings: () => Promise<Record<string, unknown>>,
@@ -311,6 +347,7 @@ export const registerMoonV3Routes = (app, {
   readRavenNamingSettings,
   readMetadataProviderSettings,
   readDownloadProviderSettings,
+  readRequestWorkflowSettings,
   readOracleSettings,
   readMoonBrandingSettings,
   readMoonPublicApiSettings,
@@ -477,6 +514,151 @@ export const registerMoonV3Routes = (app, {
     };
   };
 
+  const fetchMetadataSearchResults = async (query) => {
+    const normalizedQuery = normalizeString(query);
+    if (!normalizedQuery) {
+      return {query: "", results: []};
+    }
+
+    const payload = await fetchRavenJson(`/v1/metadata/search?name=${encodeURIComponent(normalizedQuery)}`);
+    const rawResults = normalizeArray(payload);
+    const hydratedResults = await Promise.all(rawResults.map(async (entry) => {
+      const provider = normalizeString(entry.provider);
+      const providerSeriesId = normalizeString(entry.providerSeriesId);
+      let details = {};
+      if (provider && providerSeriesId) {
+        const result = await safeJson(serviceJson(
+          config.ravenBaseUrl,
+          `/v1/metadata/series-details?provider=${encodeURIComponent(provider)}&providerSeriesId=${encodeURIComponent(providerSeriesId)}`
+        ));
+        if (result?.ok !== false) {
+          details = normalizeObject(result?.payload, {}) || {};
+        }
+      }
+
+      const type = normalizeString(details.type, normalizeString(entry.type, "manga"));
+      return {
+        provider,
+        providerName: normalizeString(entry.providerName, provider),
+        providerSeriesId,
+        title: normalizeString(details.title, normalizeString(entry.title, "Untitled")),
+        url: normalizeString(details.url, normalizeString(entry.url)),
+        summary: normalizeString(details.summary, normalizeString(entry.summary)),
+        coverUrl: normalizeString(details.coverUrl, normalizeString(entry.coverUrl)),
+        type,
+        typeSlug: normalizeTypeSlug(details.typeSlug || type),
+        aliases: mergeDisplayStrings(entry.aliases, details.aliases),
+        tags: mergeDisplayStrings(entry.tags, details.tags),
+        releaseLabel: normalizeString(details.releaseLabel, normalizeString(entry.releaseLabel)),
+        status: normalizeString(details.status, normalizeString(entry.status))
+      };
+    }));
+    return {
+      query: normalizedQuery,
+      results: hydratedResults
+    };
+  };
+
+  const fetchDownloadOptions = async ({query, selectedMetadata}) => {
+    const payload = await fetchRavenJson("/v1/intake/download-options", {
+      method: "POST",
+      body: {
+        query: normalizeString(query),
+        selectedMetadata: normalizeObject(selectedMetadata, {}) || {}
+      }
+    });
+    return {
+      query: normalizeString(payload?.query, normalizeString(query)),
+      availability: normalizeString(payload?.availability, "unavailable"),
+      selectedMetadata: normalizeObject(payload?.selectedMetadata, normalizeObject(selectedMetadata, {}) || {}),
+      results: normalizeArray(payload?.results).map((entry) => normalizeDownloadOption(entry))
+    };
+  };
+
+  const approveAndQueueRequest = async ({
+    requestId,
+    requestSummary,
+    requestedBy,
+    actor,
+    comment,
+    eventMessage
+  }) => {
+    const queueResult = await queueSelectedDownload({
+      requestId,
+      requestSummary,
+      requestedBy
+    });
+    if (!queueResult.ok) {
+      return queueResult;
+    }
+
+    await vaultClient.updateRequest(requestId, {
+      status: "queued",
+      eventType: "approved",
+      eventMessage: normalizeString(eventMessage, normalizeString(comment, "Approved from Moon admin.")),
+      moderatorComment: normalizeString(comment),
+      actor: normalizeString(actor),
+      appendStatusEvent: false,
+      detailsMerge: {
+        availability: "available",
+        selectedMetadata: requestSummary.details?.selectedMetadata || null,
+        selectedDownload: requestSummary.details?.selectedDownload || null,
+        sourceFoundAt: "",
+        sourceFoundOptions: [],
+        jobId: normalizeString(queueResult.payload?.jobId),
+        taskId: normalizeString(queueResult.payload?.taskId)
+      }
+    });
+
+    return {
+      ok: true,
+      status: 202,
+      payload: {
+        request: await loadRequestById(requestId),
+        queue: queueResult.payload
+      }
+    };
+  };
+
+  const resolveDuplicateRequestSummary = async (guard) => {
+    if (guard?.matchingRequest?.id) {
+      return loadRequestById(guard.matchingRequest.id);
+    }
+    const requestId = normalizeString(guard?.matchingTask?.requestId);
+    if (requestId) {
+      return loadRequestById(requestId);
+    }
+    return null;
+  };
+
+  const attachDuplicateWaitlist = async ({requestSummary, user, source}) => {
+    const requestId = normalizeString(requestSummary?.id);
+    if (!requestId) {
+      return null;
+    }
+    const request = await vaultClient.getRequest(requestId);
+    if (!request) {
+      return null;
+    }
+    const nextWaitlist = attachRequestWaitlistEntry(request, {
+      discordUserId: normalizeString(user.discordUserId),
+      username: normalizeString(user.username, "Reader"),
+      avatarUrl: normalizeString(user.avatarUrl),
+      source: normalizeString(source, "moon")
+    });
+    if (!nextWaitlist.added) {
+      return requestSummary;
+    }
+    await vaultClient.updateRequest(request.id, {
+      detailsMerge: {
+        waitlist: nextWaitlist.waitlist
+      },
+      actor: "scriptarr-sage",
+      appendStatusEvent: false
+    });
+    return loadRequestById(request.id);
+  };
+
   const queueSelectedDownload = async ({requestId, requestSummary, requestedBy}) => {
     const selectedDownload = normalizeObject(requestSummary?.details?.selectedDownload);
     if (!selectedDownload?.titleUrl) {
@@ -610,6 +792,22 @@ export const registerMoonV3Routes = (app, {
     res.json(await fetchIntakeResults(req.query.query));
   }));
 
+  app.get("/api/moon-v3/admin/add/metadata-search", requireLibraryRead(async (req, res) => {
+    res.json(await fetchMetadataSearchResults(req.query.query));
+  }));
+
+  app.post("/api/moon-v3/admin/add/download-options", requireLibraryRead(async (req, res) => {
+    const selectedMetadata = normalizeObject(req.body?.selectedMetadata);
+    if (!selectedMetadata?.provider || !selectedMetadata?.providerSeriesId) {
+      res.status(400).json({error: "selectedMetadata with provider and providerSeriesId is required."});
+      return;
+    }
+    res.json(await fetchDownloadOptions({
+      query: normalizeString(req.body?.query),
+      selectedMetadata
+    }));
+  }));
+
   app.post("/api/moon-v3/admin/add/queue", requireLibraryRead(async (req, res) => {
     const selectedMetadata = normalizeObject(req.body?.selectedMetadata);
     if (!selectedMetadata?.provider || !selectedMetadata?.providerSeriesId) {
@@ -626,11 +824,17 @@ export const registerMoonV3Routes = (app, {
       selectedDownload
     }), await loadRequestGuardState());
     if (guard.alreadyInLibrary) {
-      res.status(409).json({error: "That title is already in the Scriptarr library."});
+      res.status(409).json(buildLibraryDuplicatePayload({
+        matchingTitle: guard.matchingTitle,
+        publicBaseUrl: config.publicBaseUrl
+      }));
       return;
     }
     if (guard.alreadyQueuedOrRequested) {
-      res.status(409).json({error: "That title is already queued or has an active request."});
+      res.status(409).json(buildActiveRequestDuplicatePayload({
+        matchingRequest: await resolveDuplicateRequestSummary(guard),
+        publicBaseUrl: config.publicBaseUrl
+      }));
       return;
     }
 
@@ -791,6 +995,150 @@ export const registerMoonV3Routes = (app, {
     res.json({requests: await loadRequests()});
   }));
 
+  app.get("/api/moon-v3/admin/requests/metadata-search", withPermission(requirePermission, "moderate_requests", async (req, res) => {
+    res.json(await fetchMetadataSearchResults(req.query.query));
+  }));
+
+  app.post("/api/moon-v3/admin/requests/download-options", withPermission(requirePermission, "moderate_requests", async (req, res) => {
+    const selectedMetadata = normalizeObject(req.body?.selectedMetadata);
+    if (!selectedMetadata?.provider || !selectedMetadata?.providerSeriesId) {
+      res.status(400).json({error: "selectedMetadata with provider and providerSeriesId is required."});
+      return;
+    }
+    res.json(await fetchDownloadOptions({
+      query: normalizeString(req.body?.query),
+      selectedMetadata
+    }));
+  }));
+
+  app.post("/api/moon-v3/admin/requests/:id/approve", withPermission(requirePermission, "moderate_requests", async (req, res) => {
+    const existing = await loadRequestById(req.params.id);
+    if (!existing) {
+      res.status(404).json({error: "Request not found."});
+      return;
+    }
+
+    const selectedMetadata = normalizeObject(req.body?.selectedMetadata, existing.details?.selectedMetadata) || existing.details?.selectedMetadata;
+    const selectedDownload = normalizeObject(req.body?.selectedDownload, existing.details?.selectedDownload) || existing.details?.selectedDownload;
+    if (!selectedMetadata?.provider || !selectedMetadata?.providerSeriesId) {
+      res.status(400).json({error: "A concrete metadata match is required."});
+      return;
+    }
+    if (!selectedDownload?.titleUrl) {
+      res.status(409).json({error: "A concrete download match is required before the request can be approved."});
+      return;
+    }
+
+    const guard = evaluateSelectionAgainstGuardState(buildIntakeSelection({
+      query: normalizeString(req.body?.query, existing.details?.query),
+      title: normalizeString(selectedMetadata.title, existing.title),
+      requestType: normalizeString(selectedDownload.requestType, existing.requestType),
+      selectedMetadata,
+      selectedDownload
+    }), await loadRequestGuardState(), {ignoreRequestId: req.params.id});
+    if (guard.alreadyInLibrary) {
+      res.status(409).json({error: "That title is already in the Scriptarr library."});
+      return;
+    }
+    if (guard.alreadyQueuedOrRequested) {
+      res.status(409).json({error: "That title is already queued or has an active request."});
+      return;
+    }
+
+    try {
+      await vaultClient.updateRequest(req.params.id, {
+        title: normalizeString(selectedMetadata.title, existing.title),
+        requestType: normalizeString(selectedDownload.requestType, existing.requestType),
+        notes: normalizeString(req.body?.notes, existing.notes),
+        status: "pending",
+        actor: req.user.username,
+        appendStatusEvent: false,
+        detailsMerge: {
+          query: normalizeString(req.body?.query, existing.details?.query),
+          selectedMetadata,
+          selectedDownload,
+          availability: "available",
+          sourceFoundAt: "",
+          sourceFoundOptions: []
+        }
+      });
+    } catch (error) {
+      if (isRequestWorkConflictError(error)) {
+        res.status(409).json(buildRequestWorkConflictPayload(error));
+        return;
+      }
+      throw error;
+    }
+
+    const approved = await approveAndQueueRequest({
+      requestId: req.params.id,
+      requestSummary: await loadRequestById(req.params.id),
+      requestedBy: existing.requestedBy.discordUserId || req.user.discordUserId,
+      actor: req.user.username,
+      comment: normalizeString(req.body?.comment, "Approved from Moon admin."),
+      eventMessage: normalizeString(req.body?.comment, "Approved from Moon admin.")
+    });
+    res.status(approved.status).json(approved.payload);
+  }));
+
+  app.post("/api/moon-v3/admin/requests/:id/override", withPermission(requirePermission, "moderate_requests", async (req, res) => {
+    const existing = await loadRequestById(req.params.id);
+    if (!existing) {
+      res.status(404).json({error: "Request not found."});
+      return;
+    }
+
+    const selectedMetadata = normalizeObject(req.body?.selectedMetadata) || existing.details?.selectedMetadata;
+    const selectedDownload = normalizeObject(req.body?.selectedDownload);
+    if (!selectedMetadata?.provider || !selectedMetadata?.providerSeriesId) {
+      res.status(400).json({error: "A concrete metadata match is required."});
+      return;
+    }
+
+    const nextStatus = selectedDownload?.titleUrl ? "pending" : "unavailable";
+    const guard = evaluateSelectionAgainstGuardState(buildIntakeSelection({
+      query: normalizeString(req.body?.query, existing.details?.query),
+      title: normalizeString(selectedMetadata.title, existing.title),
+      requestType: normalizeString(selectedDownload?.requestType, existing.requestType),
+      selectedMetadata,
+      selectedDownload
+    }), await loadRequestGuardState(), {ignoreRequestId: req.params.id});
+    if (guard.alreadyInLibrary) {
+      res.status(409).json({error: "That title is already in the Scriptarr library."});
+      return;
+    }
+    if (guard.alreadyQueuedOrRequested) {
+      res.status(409).json({error: "That title is already queued or has an active request."});
+      return;
+    }
+
+    try {
+      await vaultClient.updateRequest(req.params.id, {
+        title: normalizeString(selectedMetadata.title, existing.title),
+        requestType: normalizeString(selectedDownload?.requestType, existing.requestType),
+        notes: normalizeString(req.body?.notes, existing.notes),
+        status: nextStatus,
+        actor: req.user.username,
+        appendStatusEvent: false,
+        detailsMerge: {
+          query: normalizeString(req.body?.query, existing.details?.query),
+          selectedMetadata,
+          selectedDownload,
+          availability: selectedDownload?.titleUrl ? "available" : "unavailable",
+          sourceFoundAt: selectedDownload?.titleUrl ? "" : existing.details?.sourceFoundAt,
+          sourceFoundOptions: selectedDownload?.titleUrl ? [] : existing.details?.sourceFoundOptions
+        }
+      });
+    } catch (error) {
+      if (isRequestWorkConflictError(error)) {
+        res.status(409).json(buildRequestWorkConflictPayload(error));
+        return;
+      }
+      throw error;
+    }
+    res.json(await loadRequestById(req.params.id));
+  }));
+
   app.post("/api/moon-v3/admin/requests/:id/resolve", withPermission(requirePermission, "moderate_requests", async (req, res) => {
     const existing = await loadRequestById(req.params.id);
     if (!existing) {
@@ -874,17 +1222,56 @@ export const registerMoonV3Routes = (app, {
     });
   }));
 
+  app.post("/api/moon-v3/admin/requests/:id/refresh-sources", withPermission(requirePermission, "moderate_requests", async (req, res) => {
+    const existing = await loadRequestById(req.params.id);
+    if (!existing) {
+      res.status(404).json({error: "Request not found."});
+      return;
+    }
+
+    const selectedMetadata = normalizeObject(existing.details?.selectedMetadata);
+    if (!selectedMetadata?.provider || !selectedMetadata?.providerSeriesId) {
+      res.status(400).json({error: "This request does not have a saved metadata selection."});
+      return;
+    }
+
+    const downloads = await fetchDownloadOptions({
+      query: normalizeString(existing.details?.query, existing.title),
+      selectedMetadata
+    });
+    const nextOptions = normalizeArray(downloads.results);
+    await vaultClient.updateRequest(req.params.id, {
+      status: nextOptions.length ? "pending" : "unavailable",
+      actor: req.user.username,
+      appendStatusEvent: false,
+      detailsMerge: {
+        selectedMetadata: normalizeObject(downloads.selectedMetadata, selectedMetadata) || selectedMetadata,
+        selectedDownload: null,
+        availability: nextOptions.length ? "available" : "unavailable",
+        sourceFoundAt: nextOptions.length ? new Date().toISOString() : "",
+        sourceFoundOptions: nextOptions
+      }
+    });
+
+    res.json({
+      request: await loadRequestById(req.params.id),
+      results: nextOptions,
+      availability: nextOptions.length ? "available" : "unavailable"
+    });
+  }));
+
   app.get("/api/moon-v3/admin/users", requireAdminSettings(async (_req, res) => {
     const users = normalizeArray(await vaultClient.listUsers());
     res.json({users});
   }));
 
   app.get("/api/moon-v3/admin/settings", requireAdminSettings(async (_req, res) => {
-    const [ravenVpn, naming, metadataProviders, downloadProviders, oracle, branding, publicApi, discord, wardenStatus] = await Promise.all([
+    const [ravenVpn, naming, metadataProviders, downloadProviders, requestWorkflow, oracle, branding, publicApi, discord, wardenStatus] = await Promise.all([
       readRavenVpnSettings(),
       readRavenNamingSettings(),
       readMetadataProviderSettings(),
       readDownloadProviderSettings(),
+      readRequestWorkflowSettings(),
       readOracleSettings(),
       readMoonBrandingSettings(),
       readMoonPublicApiSettings(),
@@ -897,6 +1284,7 @@ export const registerMoonV3Routes = (app, {
       naming,
       metadataProviders,
       downloadProviders,
+      requestWorkflow,
       oracle,
       branding,
       publicApi,
@@ -1035,14 +1423,35 @@ export const registerMoonV3Routes = (app, {
   }));
 
   app.get("/api/moon-v3/user/requests", withUser(requireUser, async (req, res) => {
-    const requests = await loadRequests();
+    const requests = (await loadRequests()).filter((entry) => entry.requestedBy.discordUserId === req.user.discordUserId);
     res.json({
-      requests: requests.filter((entry) => entry.requestedBy.discordUserId === req.user.discordUserId)
+      requests,
+      tabs: {
+        active: requests.filter((entry) => entry.tab === "active").length,
+        completed: requests.filter((entry) => entry.tab === "completed").length,
+        closed: requests.filter((entry) => entry.tab === "closed").length
+      }
     });
   }));
 
   app.get("/api/moon-v3/user/requests/search", withUser(requireUser, async (req, res) => {
-    res.json(await fetchIntakeResults(req.query.query));
+    res.json(await fetchMetadataSearchResults(req.query.query));
+  }));
+
+  app.get("/api/moon-v3/user/requests/metadata-search", withUser(requireUser, async (req, res) => {
+    res.json(await fetchMetadataSearchResults(req.query.query));
+  }));
+
+  app.post("/api/moon-v3/user/requests/download-options", withUser(requireUser, async (req, res) => {
+    const selectedMetadata = normalizeObject(req.body?.selectedMetadata);
+    if (!selectedMetadata?.provider || !selectedMetadata?.providerSeriesId) {
+      res.status(400).json({error: "selectedMetadata with provider and providerSeriesId is required."});
+      return;
+    }
+    res.json(await fetchDownloadOptions({
+      query: normalizeString(req.body?.query),
+      selectedMetadata
+    }));
   }));
 
   app.post("/api/moon-v3/user/requests", withUser(requireUser, async (req, res) => {
@@ -1056,19 +1465,54 @@ export const registerMoonV3Routes = (app, {
     }
 
     const selectedMetadata = normalizeObject(req.body?.selectedMetadata);
-    const selectedDownload = normalizeObject(req.body?.selectedDownload);
+    if (!selectedMetadata?.provider || !selectedMetadata?.providerSeriesId) {
+      res.status(400).json({error: "You must pick an exact metadata result first."});
+      return;
+    }
+
+    const requestWorkflow = await readRequestWorkflowSettings();
+    const downloadResolution = await fetchDownloadOptions({
+      query: normalizeString(req.body?.query),
+      selectedMetadata
+    });
+    const effectiveMetadata = normalizeObject(downloadResolution.selectedMetadata, selectedMetadata) || selectedMetadata;
+    const autoSelectedDownload = requestWorkflow.autoApproveAndDownload
+      ? selectAutoApproveDownload(downloadResolution.results)
+      : null;
+    const hasConcreteOptions = normalizeArray(downloadResolution.results).length > 0;
+    const nextStatus = autoSelectedDownload?.titleUrl
+      ? "pending"
+      : (hasConcreteOptions ? "pending" : "unavailable");
+    const nextAvailability = hasConcreteOptions ? "available" : "unavailable";
+
     const guard = evaluateSelectionAgainstGuardState(buildIntakeSelection({
       query: normalizeString(req.body?.query),
-      title: normalizeString(req.body?.title),
-      requestType: normalizeString(req.body?.requestType),
-      selectedMetadata,
-      selectedDownload
+      title: normalizeString(req.body?.title, effectiveMetadata.title),
+      requestType: normalizeString(req.body?.requestType || autoSelectedDownload?.requestType || effectiveMetadata?.type),
+      selectedMetadata: effectiveMetadata,
+      selectedDownload: autoSelectedDownload
     }), await loadRequestGuardState());
     if (guard.alreadyInLibrary) {
-      res.status(409).json({error: "That title is already in the Scriptarr library."});
+      res.status(409).json(buildLibraryDuplicatePayload({
+        matchingTitle: guard.matchingTitle,
+        publicBaseUrl: config.publicBaseUrl
+      }));
       return;
     }
     if (guard.alreadyQueuedOrRequested) {
+      const duplicateRequest = await resolveDuplicateRequestSummary(guard);
+      if (duplicateRequest) {
+        await attachDuplicateWaitlist({
+          requestSummary: duplicateRequest,
+          user: req.user,
+          source: "moon"
+        });
+        res.status(409).json(buildActiveRequestDuplicatePayload({
+          matchingRequest: duplicateRequest,
+          publicBaseUrl: config.publicBaseUrl
+        }));
+        return;
+      }
       res.status(409).json({error: "That title is already queued or has an active request."});
       return;
     }
@@ -1077,26 +1521,106 @@ export const registerMoonV3Routes = (app, {
     try {
       request = await vaultClient.createRequest({
         source: "moon",
-        title: normalizeString(req.body?.selectedMetadata?.title, req.body?.title || "Untitled request"),
-        requestType: normalizeString(req.body?.requestType || req.body?.selectedDownload?.requestType || req.body?.selectedMetadata?.type || "manga", "manga"),
+        title: normalizeString(effectiveMetadata?.title, req.body?.title || "Untitled request"),
+        requestType: normalizeString(req.body?.requestType || autoSelectedDownload?.requestType || effectiveMetadata?.type || "manga", "manga"),
         notes: normalizeString(req.body?.notes),
         requestedBy: req.user.discordUserId,
-        status: normalizeObject(req.body?.selectedDownload)?.titleUrl ? "pending" : "unavailable",
+        status: nextStatus,
         details: {
           query: normalizeString(req.body?.query),
-          selectedMetadata: normalizeObject(req.body?.selectedMetadata),
-          selectedDownload: normalizeObject(req.body?.selectedDownload),
-          availability: normalizeObject(req.body?.selectedDownload)?.titleUrl ? "available" : "unavailable"
+          selectedMetadata: effectiveMetadata,
+          selectedDownload: autoSelectedDownload,
+          availability: nextAvailability,
+          sourceFoundOptions: []
         }
       });
     } catch (error) {
       if (isRequestWorkConflictError(error)) {
+        const duplicateRequest = error.requestId ? await loadRequestById(error.requestId) : null;
+        if (duplicateRequest) {
+          await attachDuplicateWaitlist({
+            requestSummary: duplicateRequest,
+            user: req.user,
+            source: "moon"
+          });
+          res.status(409).json(buildActiveRequestDuplicatePayload({
+            matchingRequest: duplicateRequest,
+            publicBaseUrl: config.publicBaseUrl
+          }));
+          return;
+        }
         res.status(409).json(buildRequestWorkConflictPayload(error));
         return;
       }
       throw error;
     }
-    res.status(201).json(request);
+
+    if (autoSelectedDownload?.titleUrl) {
+      const queued = await approveAndQueueRequest({
+        requestId: request.id,
+        requestSummary: await loadRequestById(request.id),
+        requestedBy: req.user.discordUserId,
+        actor: "scriptarr-sage",
+        eventMessage: "Scriptarr auto-approved and queued this request because the download match was high confidence."
+      });
+      if (queued.ok) {
+        res.status(201).json(queued.payload.request);
+        return;
+      }
+
+      logger?.warn?.("Moon request auto-approve queue failed, leaving request pending.", {
+        requestId: request.id,
+        error: queued.payload?.error || queued.status
+      });
+    }
+
+    res.status(201).json(await loadRequestById(request.id));
+  }));
+
+  app.patch("/api/moon-v3/user/requests/:id/notes", withUser(requireUser, async (req, res) => {
+    const request = await loadRequestById(req.params.id);
+    if (!request) {
+      res.status(404).json({error: "Request not found."});
+      return;
+    }
+    if (request.requestedBy.discordUserId !== req.user.discordUserId) {
+      res.status(403).json({error: "You can only edit your own requests."});
+      return;
+    }
+    if (!request.canEditNotes) {
+      res.status(409).json({error: "Notes can only be edited before moderation completes."});
+      return;
+    }
+    await vaultClient.updateRequest(req.params.id, {
+      notes: normalizeString(req.body?.notes),
+      actor: req.user.username,
+      appendStatusEvent: false
+    });
+    res.json(await loadRequestById(req.params.id));
+  }));
+
+  app.post("/api/moon-v3/user/requests/:id/cancel", withUser(requireUser, async (req, res) => {
+    const request = await loadRequestById(req.params.id);
+    if (!request) {
+      res.status(404).json({error: "Request not found."});
+      return;
+    }
+    if (request.requestedBy.discordUserId !== req.user.discordUserId) {
+      res.status(403).json({error: "You can only cancel your own requests."});
+      return;
+    }
+    if (!request.canCancel) {
+      res.status(409).json({error: "This request can no longer be canceled from Moon."});
+      return;
+    }
+
+    await vaultClient.updateRequest(req.params.id, {
+      status: "cancelled",
+      eventType: "cancelled",
+      eventMessage: "Requester canceled this request.",
+      actor: req.user.username
+    });
+    res.json(await loadRequestById(req.params.id));
   }));
 
   app.get("/api/moon-v3/user/following", withUser(requireUser, async (req, res) => {

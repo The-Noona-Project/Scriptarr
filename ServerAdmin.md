@@ -94,11 +94,17 @@ Fresh installs no longer include seeded demo series. Moon's user and admin libra
 real imported titles to expose.
 Vault now fronts shared MySQL state with its own cache-first broker layer, and first-party service-to-service HTTP is
 expected to flow through Sage instead of bypassing the broker topology.
-Moon requests and admin add-title now run through one intake flow: search query, enabled metadata providers, enabled
-download providers, saved match snapshot, then moderation or immediate queueing depending on who submitted it.
+Moon requests and admin add-title now run through one intake flow: search query, enabled metadata providers, saved
+metadata snapshot, then either admin source approval or immediate queueing depending on who submitted it.
 That intake is now grouped by concrete provider target so duplicate metadata rows that land on the same download URL
 only create one requestable result, while real separate variants such as plain vs colored editions stay distinct when
 the provider exposes different series URLs.
+Moon web request creation now lives in `/myrequests` as an inline wizard. Readers pick an exact metadata match,
+review the upstream metadata site if needed, optionally leave notes, and submit a moderated full-title request.
+Admins then choose the concrete download-provider target from `/admin/requests`, unless the optional `Auto approve and
+download` setting lets Sage queue one high-confidence source automatically. If no source exists yet, Sage stores the
+request as `unavailable`, re-checks it every 4 hours, DMs the requester when the title moves back into admin review,
+and expires it after 90 days if it still cannot be matched.
 Raven now only marks download work complete after the promoted files also persist into the brokered catalog, and it
 rescans the existing `downloaded/<type>/...` tree on boot so already-finished archives can repopulate Moon's library
 without forcing a re-download.
@@ -220,10 +226,14 @@ That same user app now runs through an embedded Next.js App Router frontend with
 megamenu header with plain site-name branding, a minimal avatar dropdown for Profile and Logout, a dedicated
 `/profile` page for local StylePanel preferences and install actions, a simple footer, and an immersive reader that
 defaults to infinite chapter scroll while still exposing paged mode. Library type links now live only inside the
-`Library` mega menu, and `/browse` now renders as a flat A-Z grid with a quick-jump letter rail and uniform
-art-forward cards that clamp long copy until the user opens a title page. Its home route now favors a simpler
+`Library` mega menu, and `/browse` now renders as A-Z shelf rows with the same Once UI scroller behavior used on the
+home page. It keeps a quick-jump letter rail on the left and tighter search against titles, aliases, types, and tags
+while browse cards clamp long copy until the user opens a title page. Its home route now favors a simpler
 media-library feel too, with a personalized "Your Bookshelf" continue-reading row followed by cover-led scrollers for
 recently added titles by type and tag-driven shelves based on the reader's existing progress.
+`/myrequests` is now both the request-creation surface and the personal status page. The top of the page runs the
+metadata-first request wizard, while the list below is split into `Active`, `Completed`, and `Closed` tabs. Readers
+can edit notes or cancel only while the request is still active.
 
 Common admin routes:
 
@@ -269,6 +279,9 @@ The current Discord command set is:
 
 Blank role ids mean any member in the configured guild can use that slash command. `downloadall` ignores guild roles
 and only checks the configured DM superuser id.
+Discord `/request` now uses the same metadata-first flow as Moon web: search raw metadata results first, then submit
+one exact metadata choice for moderated review. Requesters no longer choose download providers in Discord; staff do
+that from `/admin/requests`.
 `downloadall` now bulk-browses the provider first, then metadata-resolves each matched title before queueing it. Only
 titles with one confident metadata match are queued. Portal's DM summary now breaks skipped titles out as already
 active, no-metadata, ambiguous-metadata, or failed instead of silently queueing metadata-less library entries.
@@ -276,6 +289,10 @@ That owner-only command is intentionally pinned to WeebCentral. If WeebCentral i
 `downloadall` fails instead of falling back to MangaDex or another provider.
 Portal also sends requester DMs when a moderated request is approved, denied, or finishes downloading, and dedupes
 those notifications by request id plus decision state so retries and restarts do not spam Discord.
+When a duplicate request is blocked because Scriptarr is already tracking the same concrete work, Sage now attaches the
+user to a hidden notification waitlist instead of creating a second visible request row. Portal DMs those waitlisted
+users when the title is ready. Portal also DMs requesters when an unavailable request later finds a source and moves
+back into admin review, and DMs them again if that unavailable request expires after 90 days.
 Portal now prefers a minimal Discord runtime when privileged intents are unavailable. Slash commands and DM handling
 can stay online while onboarding is marked degraded, and `/admin/discord` will show the last meaningful runtime or
 command-sync error instead of only a generic disconnected state.

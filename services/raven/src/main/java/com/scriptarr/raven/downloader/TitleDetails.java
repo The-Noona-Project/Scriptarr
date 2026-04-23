@@ -15,6 +15,7 @@ public record TitleDetails(
     Boolean adultContent,
     Boolean officialTranslation,
     Boolean animeAdaptation,
+    List<String> tags,
     List<Map<String, String>> relatedSeries
 ) {
 }

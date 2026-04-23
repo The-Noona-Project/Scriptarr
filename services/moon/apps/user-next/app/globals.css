@@ -660,13 +660,8 @@ a {
   display: none;
 }
 
-.moon-browse-segmented-control [role="tablist"] {
-  overflow: visible;
-}
-
-.moon-browse-segmented-control [role="tablist"] > * {
-  display: flex;
-  flex-direction: column;
+.moon-browse-letter-index {
+  display: grid;
   gap: 6px;
   padding: 8px;
   border-radius: 22px;
@@ -674,9 +669,32 @@ a {
   border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
-.moon-browse-segmented-control [role="tab"] {
-  min-width: 44px;
-  justify-content: center;
+.moon-browse-letter-button {
+  width: 100%;
+  min-height: 40px;
+  border: 0;
+  border-radius: 14px;
+  background: transparent;
+  color: rgba(255, 248, 240, 0.82);
+  font: inherit;
+  cursor: pointer;
+  transition: background 160ms ease, color 160ms ease, opacity 160ms ease;
+}
+
+.moon-browse-letter-button:hover,
+.moon-browse-letter-button:focus-visible {
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 248, 240, 0.96);
+}
+
+.moon-browse-letter-button.is-active {
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 248, 240, 0.98);
+}
+
+.moon-browse-letter-button:disabled {
+  opacity: 0.28;
+  cursor: default;
 }
 
 .moon-browse-content {
@@ -692,11 +710,320 @@ a {
   margin-bottom: 16px;
 }
 
-.moon-browse-grid {
+.moon-browse-scroller {
+  width: 100%;
+}
+
+.moon-browse-scroller-item {
+  min-width: 208px;
+  width: 208px;
+  flex: 0 0 208px;
+}
+
+.moon-requests-layout {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-  gap: 18px;
-  grid-auto-rows: 1fr;
+  gap: 28px;
+}
+
+.moon-request-wizard {
+  display: grid;
+  gap: 20px;
+}
+
+.moon-request-search {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+}
+
+.moon-request-search input,
+.moon-request-notes-field textarea {
+  width: 100%;
+  padding: 14px 16px;
+  border-radius: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(10, 16, 24, 0.88);
+  color: rgba(245, 239, 234, 0.92);
+  font: inherit;
+}
+
+.moon-request-search button,
+.moon-request-submit button,
+.moon-request-tabs button,
+.moon-request-row-actions button,
+.moon-request-choice {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 18px;
+  background: rgba(12, 18, 28, 0.9);
+  color: rgba(245, 239, 234, 0.92);
+  font: inherit;
+}
+
+.moon-request-search button,
+.moon-request-submit button,
+.moon-request-tabs button,
+.moon-request-row-actions button {
+  padding: 12px 16px;
+  cursor: pointer;
+}
+
+.moon-request-search button:disabled,
+.moon-request-submit button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.moon-request-notes-field {
+  display: grid;
+  gap: 8px;
+}
+
+.moon-request-notes-field span {
+  font-size: 0.82rem;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  color: rgba(112, 165, 255, 0.88);
+}
+
+.moon-request-notice {
+  display: grid;
+  gap: 6px;
+  padding: 14px 16px;
+  border-radius: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(9, 14, 20, 0.88);
+}
+
+.moon-request-notice.is-good {
+  border-color: rgba(84, 197, 127, 0.45);
+}
+
+.moon-request-notice.is-bad {
+  border-color: rgba(224, 93, 93, 0.42);
+}
+
+.moon-request-notice.is-info {
+  border-color: rgba(112, 165, 255, 0.38);
+}
+
+.moon-request-notice p,
+.moon-request-notice a {
+  margin: 0;
+}
+
+.moon-request-notice a {
+  color: rgba(255, 208, 150, 0.98);
+}
+
+.moon-request-step,
+.moon-request-summary,
+.moon-request-empty-step {
+  display: grid;
+  gap: 12px;
+  padding: 18px;
+  border-radius: 22px;
+  background: rgba(10, 16, 24, 0.58);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.moon-request-step-head {
+  display: grid;
+  gap: 6px;
+}
+
+.moon-request-step-head h3,
+.moon-request-summary strong {
+  margin: 0;
+  font-size: 1.08rem;
+}
+
+.moon-request-step-head p,
+.moon-request-summary p,
+.moon-request-empty-step p {
+  margin: 0;
+  color: rgba(217, 209, 200, 0.76);
+}
+
+.moon-request-choice-list {
+  display: grid;
+  gap: 12px;
+}
+
+.moon-request-choice {
+  display: grid;
+  gap: 6px;
+  padding: 16px;
+  text-align: left;
+}
+
+.moon-request-choice.is-selected {
+  border-color: rgba(255, 208, 150, 0.55);
+  box-shadow: 0 0 0 1px rgba(255, 208, 150, 0.22);
+}
+
+.moon-request-choice-head,
+.moon-request-summary-head,
+.moon-request-row-links {
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.moon-request-choice-copy {
+  display: grid;
+  gap: 6px;
+}
+
+.moon-request-choice strong,
+.moon-request-choice p {
+  margin: 0;
+}
+
+.moon-request-choice div,
+.moon-request-choice p {
+  color: rgba(217, 209, 200, 0.74);
+}
+
+.moon-request-choice button {
+  padding: 10px 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 208, 150, 0.12);
+  color: rgba(255, 232, 206, 0.96);
+  font: inherit;
+  cursor: pointer;
+}
+
+.moon-request-choice-detail {
+  display: grid;
+  gap: 4px;
+}
+
+.moon-request-choice-detail span,
+.moon-request-summary-tags {
+  color: rgba(217, 209, 200, 0.7);
+}
+
+.moon-request-choice-detail span {
+  font-size: 0.76rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+}
+
+.moon-request-choice-links,
+.moon-request-row-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  color: rgba(217, 209, 200, 0.74);
+}
+
+.moon-request-choice-links a,
+.moon-request-row-links a,
+.moon-request-summary-head a {
+  color: rgba(255, 208, 150, 0.98);
+}
+
+.moon-request-summary-tags {
+  margin: 0;
+}
+
+.moon-request-submit {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.moon-request-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.moon-request-tabs button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.moon-request-tabs button.is-active {
+  border-color: rgba(255, 208, 150, 0.55);
+  background: rgba(255, 208, 150, 0.12);
+}
+
+.moon-request-tabs span {
+  color: rgba(255, 208, 150, 0.96);
+}
+
+.moon-request-list {
+  display: grid;
+  gap: 14px;
+}
+
+.moon-request-row {
+  display: grid;
+  gap: 10px;
+  padding: 18px;
+  border-radius: 20px;
+  background: rgba(10, 16, 24, 0.58);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.moon-request-row-head,
+.moon-request-row-head > div,
+.moon-request-row-meta,
+.moon-request-row-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.moon-request-status {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+}
+
+.moon-request-status.is-completed {
+  background: rgba(84, 197, 127, 0.16);
+}
+
+.moon-request-status.is-denied,
+.moon-request-status.is-expired,
+.moon-request-status.is-cancelled {
+  background: rgba(224, 93, 93, 0.16);
+}
+
+.moon-request-status.is-unavailable {
+  background: rgba(112, 165, 255, 0.16);
+}
+
+.moon-request-row-meta,
+.moon-request-row-notes,
+.moon-request-row-hint {
+  color: rgba(217, 209, 200, 0.76);
+}
+
+.moon-request-row-notes,
+.moon-request-row-hint {
+  margin: 0;
+}
+
+.moon-request-row-links {
+  margin-top: -2px;
+}
+
+.moon-request-row-actions button.is-danger {
+  border-color: rgba(224, 93, 93, 0.42);
 }
 
 .moon-reader-empty {
@@ -903,6 +1230,10 @@ a {
   .moon-browse-rail-mobile {
     display: block;
   }
+
+  .moon-request-search {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 720px) {
@@ -938,7 +1269,9 @@ a {
     flex-basis: 180px;
   }
 
-  .moon-browse-grid {
-    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  .moon-browse-scroller-item {
+    min-width: 176px;
+    width: 176px;
+    flex-basis: 176px;
   }
 }

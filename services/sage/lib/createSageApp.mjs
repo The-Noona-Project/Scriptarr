@@ -13,6 +13,7 @@ import {createServiceAuth} from "./serviceAuth.mjs";
 import {registerInternalBrokerRoutes} from "./registerInternalBrokerRoutes.mjs";
 import {buildIntakeSelection, evaluateSelectionAgainstGuardState} from "./requestSelectionGuards.mjs";
 import {buildRequestWorkConflictPayload, isRequestWorkConflictError} from "./requestConflict.mjs";
+import {getUnavailableRequestSweepIntervalMs, runUnavailableRequestSweep} from "./unavailableRequestSweep.mjs";
 import {
   PORTAL_DISCORD_KEY,
   knownPortalDiscordCommands,
@@ -26,6 +27,7 @@ const RAVEN_VPN_PASSWORD_SECRET = "raven.vpn.piaPassword";
 const RAVEN_NAMING_KEY = "raven.naming";
 const RAVEN_METADATA_KEY = "raven.metadata.providers";
 const RAVEN_DOWNLOAD_PROVIDERS_KEY = "raven.download.providers";
+const SAGE_REQUESTS_KEY = "sage.requests";
 const ORACLE_SETTINGS_KEY = "oracle.settings";
 const ORACLE_OPENAI_API_KEY_SECRET = "oracle.openai.apiKey";
 const MOON_BRANDING_KEY = "moon.branding";
@@ -182,6 +184,10 @@ const defaultDownloadProviderSettings = () => ({
   key: RAVEN_DOWNLOAD_PROVIDERS_KEY,
   providers: knownDownloadProviders.map((provider) => ({...provider}))
 });
+const defaultRequestWorkflowSettings = () => ({
+  key: SAGE_REQUESTS_KEY,
+  autoApproveAndDownload: false
+});
 
 const defaultOracleSettings = () => ({
   key: ORACLE_SETTINGS_KEY,
@@ -244,6 +250,13 @@ const normalizeDownloadProviderSettings = (value) => {
         };
       })
       .sort((left, right) => left.priority - right.priority)
+  };
+};
+const normalizeRequestWorkflowSettings = (value) => {
+  const defaults = defaultRequestWorkflowSettings();
+  return {
+    ...defaults,
+    autoApproveAndDownload: normalizeBoolean(value?.autoApproveAndDownload, defaults.autoApproveAndDownload)
   };
 };
 
@@ -385,6 +398,10 @@ const readMetadataProviderSettings = async (vaultClient) => {
 const readDownloadProviderSettings = async (vaultClient) => {
   const settingsValue = await readSetting(vaultClient, RAVEN_DOWNLOAD_PROVIDERS_KEY, defaultDownloadProviderSettings());
   return normalizeDownloadProviderSettings(settingsValue);
+};
+const readRequestWorkflowSettings = async (vaultClient) => {
+  const settingsValue = await readSetting(vaultClient, SAGE_REQUESTS_KEY, defaultRequestWorkflowSettings());
+  return normalizeRequestWorkflowSettings(settingsValue);
 };
 
 const readOracleSettings = async (vaultClient) => {
@@ -1037,6 +1054,16 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
     res.json(await readDownloadProviderSettings(vaultClient));
   });
 
+  app.get("/api/admin/settings/sage/requests", requirePermission(vaultClient, "manage_settings"), async (_req, res) => {
+    res.json(await readRequestWorkflowSettings(vaultClient));
+  });
+
+  app.put("/api/admin/settings/sage/requests", requirePermission(vaultClient, "manage_settings"), async (req, res) => {
+    const nextSettings = normalizeRequestWorkflowSettings(req.body);
+    await vaultClient.setSetting(SAGE_REQUESTS_KEY, nextSettings);
+    res.json(await readRequestWorkflowSettings(vaultClient));
+  });
+
   app.get("/api/admin/settings/oracle", requirePermission(vaultClient, "manage_settings"), async (_req, res) => {
     res.json(await readOracleSettings(vaultClient));
   });
@@ -1400,7 +1427,8 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
     config,
     vaultClient,
     requireService,
-    serviceJson
+    serviceJson,
+    readRequestWorkflowSettings: () => readRequestWorkflowSettings(vaultClient)
   });
 
   registerMoonV3Routes(app, {
@@ -1413,6 +1441,7 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
     readRavenNamingSettings: () => readRavenNamingSettings(vaultClient),
     readMetadataProviderSettings: () => readMetadataProviderSettings(vaultClient),
     readDownloadProviderSettings: () => readDownloadProviderSettings(vaultClient),
+    readRequestWorkflowSettings: () => readRequestWorkflowSettings(vaultClient),
     readOracleSettings: () => readOracleSettings(vaultClient),
     readMoonBrandingSettings: () => readMoonBrandingSettings(vaultClient),
     readMoonPublicApiSettings: () => readMoonPublicApiSettings(vaultClient),
@@ -1420,6 +1449,37 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
     serviceJson,
     safeJson
   });
+
+  app.use((error, _req, res, _next) => {
+    logger.error("Sage request failed.", {
+      error
+    });
+    if (res.headersSent) {
+      return;
+    }
+    const status = Number.isInteger(error?.status) && error.status >= 400 && error.status < 600
+      ? error.status
+      : 500;
+    res.status(status).json({
+      error: error?.message || "Sage request failed."
+    });
+  });
+
+  const unavailableRequestSweepTimer = setInterval(() => {
+    void runUnavailableRequestSweep({
+      config,
+      vaultClient,
+      serviceJson,
+      logger,
+      readRequestWorkflowSettings: () => readRequestWorkflowSettings(vaultClient)
+    }).catch((error) => {
+      logger.warn("Unavailable request sweep failed.", {
+        error
+      });
+    });
+  }, getUnavailableRequestSweepIntervalMs());
+  unavailableRequestSweepTimer.unref?.();
+  app.locals.unavailableRequestSweepTimer = unavailableRequestSweepTimer;
 
   logger.info("Sage app initialized.", {
     publicBaseUrl: config.publicBaseUrl

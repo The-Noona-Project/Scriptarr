@@ -20,6 +20,18 @@ const resolveRequestEventType = (notification = {}) => {
   if (["denied", "rejected"].includes(normalized)) {
     return "denied";
   }
+  if (["blocked"].includes(normalized)) {
+    return "blocked";
+  }
+  if (["ready"].includes(normalized)) {
+    return "ready";
+  }
+  if (["source-found", "source_found"].includes(normalized)) {
+    return "source-found";
+  }
+  if (["expired"].includes(normalized)) {
+    return "expired";
+  }
   return "completed";
 };
 
@@ -53,40 +65,70 @@ const resolveNotificationLink = (notification, kind, publicBaseUrl) => {
   }
 
   const eventType = resolveRequestEventType(notification);
-  return eventType === "completed"
+  return ["completed", "ready"].includes(eventType)
     ? ""
     : `${baseUrl}/myrequests`;
 };
 
-const buildDirectMessagePayload = (notification, kind, publicBaseUrl) => {
+const buildDirectMessagePayload = (notification, kind, publicBaseUrl, requestCommand) => {
   const titleName = normalizeString(notification?.titleName || notification?.title || "your Scriptarr title");
   const titleUrl = resolveNotificationLink(notification, kind, publicBaseUrl);
   const coverUrl = normalizeString(notification?.coverUrl);
   const moderatorNote = normalizeString(notification?.moderatorNote || notification?.note || notification?.comment);
   const requestEventType = resolveRequestEventType(notification);
   const titleLine = kind === "request"
-    ? requestEventType === "approved"
-      ? `Your Scriptarr request for **${titleName}** was approved.`
-      : requestEventType === "denied"
-        ? `Your Scriptarr request for **${titleName}** was denied.`
-        : `Your Scriptarr request for **${titleName}** is ready.`
+    ? (() => {
+      switch (requestEventType) {
+        case "approved":
+          return `Your Scriptarr request for **${titleName}** was approved.`;
+        case "denied":
+          return `Your Scriptarr request for **${titleName}** was denied.`;
+        case "blocked":
+          return `Scriptarr is already tracking **${titleName}**.`;
+        case "ready":
+          return `The Scriptarr title you asked to be notified about, **${titleName}**, is ready.`;
+        case "source-found":
+          return `Scriptarr found a source for your unavailable request **${titleName}** and moved it back into admin review.`;
+        case "expired":
+          return `Your Scriptarr request for **${titleName}** expired after 90 days without a stable source.`;
+        default:
+          return `Your Scriptarr request for **${titleName}** is ready.`;
+      }
+    })()
     : `New Scriptarr download completed for **${titleName}**.`;
   const noteLine = moderatorNote ? `\nModerator note: ${moderatorNote}` : "";
   const linkLine = titleUrl ? `\nOpen in Scriptarr: ${titleUrl}` : "";
+  const helperLine = kind === "request" && requestEventType === "blocked"
+    ? "\nYou were added to the waitlist and will get another Discord DM when the title is ready."
+    : "";
   const payload = {
-    content: `${titleLine}${noteLine}${linkLine}`
+    content: `${titleLine}${helperLine}${noteLine}${linkLine}`
   };
 
   if (coverUrl || titleUrl) {
+    const embedDescription = kind === "request"
+      ? (() => {
+        switch (requestEventType) {
+          case "approved":
+            return "Requested title approved.";
+          case "denied":
+            return "Requested title denied.";
+          case "blocked":
+            return "Requested title already being tracked.";
+          case "ready":
+            return "Requested title is now ready.";
+          case "source-found":
+            return "A new download source was found and the request is back in admin review.";
+          case "expired":
+            return "Unavailable request expired.";
+          default:
+            return "Requested title download completed.";
+        }
+      })()
+      : "Followed title download completed.";
     payload.embeds = [{
       title: titleName,
-      description: kind === "request"
-        ? requestEventType === "approved"
-          ? "Requested title approved."
-          : requestEventType === "denied"
-            ? "Requested title denied."
-            : "Requested title download completed."
-        : "Followed title download completed.",
+      description: embedDescription,
       url: titleUrl || undefined,
       image: coverUrl ? {url: coverUrl} : undefined,
       fields: moderatorNote
@@ -107,7 +149,8 @@ const deliverNotifications = async ({
   kind,
   discord,
   logger,
-  publicBaseUrl
+  publicBaseUrl,
+  requestCommand
 }) => {
   if (typeof list !== "function" || typeof acknowledge !== "function") {
     return;
@@ -128,7 +171,10 @@ const deliverNotifications = async ({
       continue;
     }
     try {
-      await discord.sendDirectMessage(notification.discordUserId, buildDirectMessagePayload(notification, kind, publicBaseUrl));
+      await discord.sendDirectMessage(
+        notification.discordUserId,
+        buildDirectMessagePayload(notification, kind, publicBaseUrl, requestCommand)
+      );
       if (notificationId) {
         deliveredIds.add(notificationId);
         await acknowledge(notificationId);
@@ -144,6 +190,7 @@ export const createFollowNotifier = ({
   discord,
   logger,
   publicBaseUrl,
+  requestCommand,
   pollMs = FOLLOW_NOTIFICATION_POLL_MS
 } = {}) => {
   let timer = null;
@@ -169,7 +216,8 @@ export const createFollowNotifier = ({
         kind: "request",
         discord,
         logger,
-        publicBaseUrl
+        publicBaseUrl,
+        requestCommand
       });
     } catch (error) {
       logger?.error?.("Portal notifier poll failed.", {error});

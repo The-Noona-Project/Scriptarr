@@ -57,11 +57,31 @@ export const createSageClient = (config) => {
     searchIntake(query) {
       return requestJson(config.sageBaseUrl, authHeader, withQuery("/api/internal/portal/intake/search", {query}));
     },
+    searchRequestMetadata(query) {
+      return requestJson(config.sageBaseUrl, authHeader, withQuery("/api/internal/portal/requests/metadata-search", {query}));
+    },
+    loadRequestDownloadOptions(payload) {
+      return requestJson(config.sageBaseUrl, jsonHeaders, "/api/internal/portal/requests/download-options", {
+        method: "POST",
+        body: payload
+      });
+    },
     createDiscordRequest(payload) {
       return requestJson(config.sageBaseUrl, jsonHeaders, "/api/internal/portal/requests/from-discord", {
         method: "POST",
         body: payload
       });
+    },
+    selectDiscordRequestDownload(requestId, payload) {
+      return requestJson(
+        config.sageBaseUrl,
+        jsonHeaders,
+        `/api/internal/portal/requests/${encodeURIComponent(String(requestId || "").trim())}/select-download`,
+        {
+          method: "POST",
+          body: payload
+        }
+      );
     },
     addFollowing(payload) {
       return requestJson(config.sageBaseUrl, jsonHeaders, "/api/internal/portal/following", {

@@ -37,7 +37,7 @@ export const HomeShelfRow = ({shelf}) => {
           </Link>
         ) : null}
       </div>
-      <Scroller direction="row" className="moon-home-scroller" gap="20">
+      <Scroller direction="row" className="moon-home-scroller" gap="24">
         {items.map((item) => (
           <div
             key={`${shelf.id}:${item?.id || item?.titleId || item?.mediaId || item?.title || "item"}`}

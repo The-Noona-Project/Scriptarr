@@ -4,6 +4,13 @@
 import {knownPortalDiscordCommands, readPortalDiscordSettings} from "./portalDiscordSettings.mjs";
 import {buildIntakeSelection, evaluateSelectionAgainstGuardState} from "./requestSelectionGuards.mjs";
 import {buildRequestWorkConflictPayload, isRequestWorkConflictError} from "./requestConflict.mjs";
+import {
+  attachRequestWaitlistEntry,
+  buildActiveRequestDuplicatePayload,
+  buildLibraryDuplicatePayload,
+  normalizeDownloadOption,
+  selectAutoApproveDownload
+} from "./requestFlow.mjs";
 
 const normalizeString = (value, fallback = "") => {
   const normalized = typeof value === "string" ? value.trim() : "";
@@ -32,14 +39,45 @@ const normalizeTypeSlug = (value, fallback = "manga") => {
   return normalized || fallback;
 };
 
-const withService = (requireService, allowedServices, handler) => async (req, res) => {
-  await requireService(allowedServices)(req, res, async () => {
-    await handler(req, res);
-  });
+const runServiceAuth = (middleware, req, res) => new Promise((resolve, reject) => {
+  let settled = false;
+  const settle = (callback, value) => {
+    if (settled) {
+      return;
+    }
+    settled = true;
+    callback(value);
+  };
+  const next = (error) => {
+    if (error) {
+      settle(reject, error);
+      return;
+    }
+    settle(resolve);
+  };
+  Promise.resolve(middleware(req, res, next))
+    .then(() => {
+      if (res.headersSent) {
+        settle(resolve);
+      }
+    })
+    .catch((error) => settle(reject, error));
+});
+
+const withService = (requireService, allowedServices, handler) => async (req, res, next) => {
+  try {
+    await runServiceAuth(requireService(allowedServices), req, res);
+    if (res.headersSent) {
+      return;
+    }
+    await handler(req, res, next);
+  } catch (error) {
+    next(error);
+  }
 };
 
 const proxyResult = async (res, promise) => {
-  const result = await promise;
+  const result = await safeServiceJson(promise);
   res.status(result.status).json(result.payload);
 };
 
@@ -115,25 +153,6 @@ const toPortalLibraryResult = (config, title = {}) => {
   };
 };
 
-const createIntakeBackedRequestPayload = (body = {}, requestedBy) => {
-  const selectedMetadata = normalizeObject(body.selectedMetadata);
-  const selectedDownload = normalizeObject(body.selectedDownload);
-  return {
-    source: normalizeString(body.source, "discord"),
-    title: normalizeString(selectedMetadata?.title, body.title || "Untitled request"),
-    requestType: normalizeString(body.requestType || selectedDownload?.requestType || selectedMetadata?.type || "manga", "manga"),
-    notes: normalizeString(body.notes),
-    requestedBy,
-    status: selectedDownload?.titleUrl ? "pending" : "unavailable",
-    details: {
-      query: normalizeString(body.query),
-      selectedMetadata,
-      selectedDownload,
-      availability: selectedDownload?.titleUrl ? "available" : "unavailable"
-    }
-  };
-};
-
 const loadPortalRequestGuardState = async ({config, vaultClient, serviceJson}) => {
   const [libraryResult, requests, taskResult] = await Promise.all([
     safeServiceJson(serviceJson(config.ravenBaseUrl, "/v1/library")),
@@ -146,6 +165,25 @@ const loadPortalRequestGuardState = async ({config, vaultClient, serviceJson}) =
     requests: normalizeArray(requests),
     tasks: normalizeArray(taskResult.payload)
   };
+};
+
+const attachPortalDuplicateWaitlist = async ({vaultClient, request, user}) => {
+  const nextWaitlist = attachRequestWaitlistEntry(request, {
+    discordUserId: normalizeString(user.discordUserId || user.requestedBy),
+    username: normalizeString(user.username, "Reader"),
+    avatarUrl: normalizeString(user.avatarUrl),
+    source: normalizeString(user.source, "discord")
+  });
+  if (!nextWaitlist.added) {
+    return request;
+  }
+  return vaultClient.updateRequest(request.id, {
+    detailsMerge: {
+      waitlist: nextWaitlist.waitlist
+    },
+    actor: "scriptarr-sage",
+    appendStatusEvent: false
+  });
 };
 
 const buildFollowEntry = (payload = {}) => ({
@@ -193,6 +231,19 @@ const readRequestNotificationState = async (vaultClient, requestId) =>
 const writeRequestNotificationState = async (vaultClient, requestId, value) =>
   vaultClient.setSetting(`${REQUEST_NOTIFICATION_ACK_PREFIX}.${requestId}`, normalizeObject(value, {}) || {});
 
+const normalizeRequestNotificationUserState = (value = {}) => Object.fromEntries(
+  Object.entries(normalizeObject(value, {}) || {})
+    .map(([key, entry]) => {
+      const discordUserId = normalizeScalarString(key);
+      const sentAt = normalizeString(
+        typeof entry === "string" ? entry : entry?.sentAt,
+        typeof entry === "object" ? normalizeString(entry?.at) : ""
+      );
+      return [discordUserId, sentAt];
+    })
+    .filter(([discordUserId, sentAt]) => discordUserId && sentAt)
+);
+
 const normalizeRequestNotificationState = (value = {}) => {
   const normalized = normalizeObject(value, {}) || {};
   return {
@@ -212,38 +263,109 @@ const normalizeRequestNotificationState = (value = {}) => {
           ? normalizeString(normalized.sentAt)
           : ""
       )
+    ),
+    sourceFoundSentAt: normalizeString(
+      normalized.sourceFoundSentAt,
+      normalizeString(normalized["source-found"]?.sentAt)
+    ),
+    expiredSentAt: normalizeString(
+      normalized.expiredSentAt,
+      normalizeString(normalized.expired?.sentAt)
+    ),
+    blockedByUser: normalizeRequestNotificationUserState(
+      normalized.blockedByUser || normalized.blocked?.users
+    ),
+    readyByUser: normalizeRequestNotificationUserState(
+      normalized.readyByUser || normalized.ready?.users
     )
   };
 };
 
-const isRequestNotificationAcked = (state, decisionType) =>
-  Boolean(normalizeRequestNotificationState(state)[`${decisionType}SentAt`]);
-
-const markRequestNotificationAcked = (state, decisionType, sentAt = new Date().toISOString()) => {
+const isRequestNotificationAcked = (state, decisionType, discordUserId = "") => {
   const normalized = normalizeRequestNotificationState(state);
+  if (["blocked", "ready"].includes(normalizeString(decisionType).toLowerCase())) {
+    const keyedState = normalizeString(decisionType).toLowerCase() === "blocked"
+      ? normalized.blockedByUser
+      : normalized.readyByUser;
+    return Boolean(keyedState[normalizeScalarString(discordUserId)]);
+  }
+  if (decisionType === "source-found") {
+    return Boolean(normalized.sourceFoundSentAt);
+  }
+  return Boolean(normalized[`${decisionType}SentAt`]);
+};
+
+const markRequestNotificationAcked = (state, decisionType, sentAt = new Date().toISOString(), discordUserId = "") => {
+  const normalized = normalizeRequestNotificationState(state);
+  const normalizedDecisionType = normalizeString(decisionType).toLowerCase();
+  const normalizedSentAt = normalizeString(sentAt, new Date().toISOString());
+  if (normalizedDecisionType === "blocked" && normalizeScalarString(discordUserId)) {
+    return {
+      ...normalized,
+      blockedByUser: {
+        ...normalized.blockedByUser,
+        [normalizeScalarString(discordUserId)]: normalizedSentAt
+      }
+    };
+  }
+  if (normalizedDecisionType === "ready" && normalizeScalarString(discordUserId)) {
+    return {
+      ...normalized,
+      readyByUser: {
+        ...normalized.readyByUser,
+        [normalizeScalarString(discordUserId)]: normalizedSentAt
+      }
+    };
+  }
+  if (normalizedDecisionType === "source-found") {
+    return {
+      ...normalized,
+      sourceFoundSentAt: normalizedSentAt
+    };
+  }
   return {
     ...normalized,
-    [`${decisionType}SentAt`]: normalizeString(sentAt, new Date().toISOString())
+    [`${normalizedDecisionType}SentAt`]: normalizedSentAt
   };
 };
 
-const buildRequestNotificationId = (requestId, decisionType) =>
-  normalizeString(decisionType) === "completed"
-    ? normalizeString(requestId)
-    : `${normalizeString(requestId)}:${normalizeString(decisionType)}`;
+const buildRequestNotificationId = (requestId, decisionType, discordUserId = "") => {
+  const normalizedRequestId = normalizeString(requestId);
+  const normalizedDecisionType = normalizeString(decisionType, "completed");
+  const normalizedDiscordUserId = normalizeScalarString(discordUserId);
+  if (!normalizedRequestId) {
+    return "";
+  }
+  if (["blocked", "ready"].includes(normalizedDecisionType) && normalizedDiscordUserId) {
+    return `${normalizedRequestId}:${normalizedDecisionType}:${normalizedDiscordUserId}`;
+  }
+  return normalizedDecisionType === "completed"
+    ? normalizedRequestId
+    : `${normalizedRequestId}:${normalizedDecisionType}`;
+};
 
 const parseRequestNotificationId = (value) => {
   const normalized = normalizeString(value);
-  const match = normalized.match(/^(.*?):(approved|denied|completed)$/);
+  const perUserMatch = normalized.match(/^(.*?):(blocked|ready):([^:]+)$/);
+  if (perUserMatch) {
+    return {
+      requestId: normalizeString(perUserMatch[1]),
+      decisionType: normalizeString(perUserMatch[2], "completed"),
+      discordUserId: normalizeScalarString(perUserMatch[3])
+    };
+  }
+  const match = normalized.match(/^(.*?):(approved|denied|completed|source-found|expired)$/);
   if (!match) {
     return {
       requestId: normalized,
-      decisionType: "completed"
+      decisionType: "completed",
+      discordUserId: ""
     };
   }
   return {
     requestId: normalizeString(match[1]),
-    decisionType: normalizeString(match[2], "completed")
+    decisionType: normalizeString(match[2], "completed"),
+    discordUserId: ""
   };
 };
 
@@ -504,45 +626,78 @@ const buildRequestNotifications = async ({config, vaultClient, serviceJson}) => 
     }
 
     const notificationState = normalizeRequestNotificationState(await readRequestNotificationState(vaultClient, requestId));
-
     const details = normalizeObject(request?.details, {}) || {};
+    const selectedMetadata = normalizeObject(details.selectedMetadata);
+    const selectedDownload = normalizeObject(details.selectedDownload);
+    const waitlist = normalizeArray(details.waitlist);
     const linkedTask = tasksByRequestId.get(requestId) || tasksByTaskId.get(normalizeScalarString(details.taskId));
     const matchedTitle = resolveLibraryTitle({
       titleId: linkedTask?.titleId || details?.titleId,
-      sourceUrl: linkedTask?.titleUrl || details?.selectedDownload?.titleUrl,
-      titleName: linkedTask?.titleName || request?.title || details?.selectedMetadata?.title || details?.selectedDownload?.titleName,
-      typeSlug: linkedTask?.libraryTypeSlug || details?.selectedDownload?.libraryTypeSlug || request?.requestType
+      sourceUrl: linkedTask?.titleUrl || selectedDownload?.titleUrl,
+      titleName: linkedTask?.titleName || request?.title || selectedMetadata?.title || selectedDownload?.titleName,
+      typeSlug: linkedTask?.libraryTypeSlug || selectedDownload?.libraryTypeSlug || request?.requestType
     });
-    const titleName = normalizeString(linkedTask?.titleName, normalizeString(request?.title, "Untitled"));
-    const libraryTypeSlug = normalizeTypeSlug(
-      linkedTask?.libraryTypeSlug || details?.selectedDownload?.libraryTypeSlug || matchedTitle?.libraryTypeSlug || request?.requestType
+    const titleName = normalizeString(
+      linkedTask?.titleName,
+      normalizeString(selectedMetadata?.title, normalizeString(request?.title, "Untitled"))
     );
-    const titleId = normalizeScalarString(linkedTask?.titleId, normalizeScalarString(details?.titleId, normalizeScalarString(matchedTitle?.id)));
+    const libraryTypeSlug = normalizeTypeSlug(
+      linkedTask?.libraryTypeSlug || selectedDownload?.libraryTypeSlug || matchedTitle?.libraryTypeSlug || request?.requestType
+    );
+    const titleId = normalizeScalarString(
+      linkedTask?.titleId,
+      normalizeScalarString(details?.titleId, normalizeScalarString(matchedTitle?.id))
+    );
     const coverUrl = normalizeString(
       linkedTask?.coverUrl,
-      normalizeString(details.coverUrl, normalizeString(details?.selectedDownload?.coverUrl, normalizeString(details?.selectedMetadata?.coverUrl, matchedTitle?.coverUrl)))
+      normalizeString(
+        details.coverUrl,
+        normalizeString(selectedDownload?.coverUrl, normalizeString(selectedMetadata?.coverUrl, matchedTitle?.coverUrl))
+      )
     );
     const titleUrl = titleId
       ? `${config.publicBaseUrl}/title/${encodeURIComponent(libraryTypeSlug)}/${encodeURIComponent(titleId)}`
       : "";
     const requestsUrl = `${normalizeString(config.publicBaseUrl).replace(/\/+$/g, "")}/myrequests`;
+    const requestStatus = normalizeString(request?.status).toLowerCase();
     const baseNotification = {
       requestId,
-      discordUserId: requesterDiscordId,
-      username: normalizeString(usersByDiscordId.get(requesterDiscordId)?.username, "Reader"),
       titleName,
       coverUrl,
       moderatorNote: normalizeString(request?.moderatorComment),
       titleUrl,
-      requestsUrl
+      requestsUrl,
+      selectedMetadata,
+      selectedDownload,
+      sourceFoundOptions: normalizeArray(details.sourceFoundOptions)
     };
-    const requestStatus = normalizeString(request?.status);
+
+    if (["pending", "unavailable", "queued", "downloading", "failed"].includes(requestStatus)) {
+      for (const entry of waitlist) {
+        const discordUserId = normalizeScalarString(entry?.discordUserId);
+        if (!discordUserId || !usersByDiscordId.has(discordUserId) || isRequestNotificationAcked(notificationState, "blocked", discordUserId)) {
+          continue;
+        }
+        notifications.push({
+          ...baseNotification,
+          id: buildRequestNotificationId(requestId, "blocked", discordUserId),
+          decisionType: "blocked",
+          discordUserId,
+          username: normalizeString(entry?.username, normalizeString(usersByDiscordId.get(discordUserId)?.username, "Reader")),
+          status: requestStatus,
+          linkUrl: requestsUrl,
+          attachedAt: normalizeString(entry?.attachedAt, request?.updatedAt)
+        });
+      }
+    }
 
     if (["queued", "downloading", "completed"].includes(requestStatus) && !isRequestNotificationAcked(notificationState, "approved")) {
       notifications.push({
         ...baseNotification,
         id: buildRequestNotificationId(requestId, "approved"),
         decisionType: "approved",
+        discordUserId: requesterDiscordId,
+        username: normalizeString(usersByDiscordId.get(requesterDiscordId)?.username, "Reader"),
         status: requestStatus,
         linkUrl: requestsUrl,
         decidedAt: normalizeString(request?.updatedAt)
@@ -554,6 +709,8 @@ const buildRequestNotifications = async ({config, vaultClient, serviceJson}) => 
         ...baseNotification,
         id: buildRequestNotificationId(requestId, "denied"),
         decisionType: "denied",
+        discordUserId: requesterDiscordId,
+        username: normalizeString(usersByDiscordId.get(requesterDiscordId)?.username, "Reader"),
         status: "denied",
         linkUrl: requestsUrl,
         decidedAt: normalizeString(request?.updatedAt)
@@ -565,14 +722,67 @@ const buildRequestNotifications = async ({config, vaultClient, serviceJson}) => 
         ...baseNotification,
         id: buildRequestNotificationId(requestId, "completed"),
         decisionType: "completed",
+        discordUserId: requesterDiscordId,
+        username: normalizeString(usersByDiscordId.get(requesterDiscordId)?.username, "Reader"),
         status: "completed",
         linkUrl: titleUrl,
         completedAt: normalizeString(linkedTask?.updatedAt, request?.updatedAt)
       });
     }
+
+    if (requestStatus === "completed") {
+      for (const entry of waitlist) {
+        const discordUserId = normalizeScalarString(entry?.discordUserId);
+        if (!discordUserId || !usersByDiscordId.has(discordUserId) || isRequestNotificationAcked(notificationState, "ready", discordUserId)) {
+          continue;
+        }
+        notifications.push({
+          ...baseNotification,
+          id: buildRequestNotificationId(requestId, "ready", discordUserId),
+          decisionType: "ready",
+          discordUserId,
+          username: normalizeString(entry?.username, normalizeString(usersByDiscordId.get(discordUserId)?.username, "Reader")),
+          status: "completed",
+          linkUrl: titleUrl || requestsUrl,
+          completedAt: normalizeString(linkedTask?.updatedAt, request?.updatedAt)
+        });
+      }
+    }
+
+    if (
+      requestStatus === "pending"
+      && !normalizeString(selectedDownload?.titleUrl)
+      && normalizeArray(details.sourceFoundOptions).length
+      && normalizeString(details.sourceFoundAt)
+      && !isRequestNotificationAcked(notificationState, "source-found")
+    ) {
+      notifications.push({
+        ...baseNotification,
+        id: buildRequestNotificationId(requestId, "source-found"),
+        decisionType: "source-found",
+        discordUserId: requesterDiscordId,
+        username: normalizeString(usersByDiscordId.get(requesterDiscordId)?.username, "Reader"),
+        status: "pending",
+        linkUrl: requestsUrl,
+        sourceFoundAt: normalizeString(details.sourceFoundAt)
+      });
+    }
+
+    if (requestStatus === "expired" && !isRequestNotificationAcked(notificationState, "expired")) {
+      notifications.push({
+        ...baseNotification,
+        id: buildRequestNotificationId(requestId, "expired"),
+        decisionType: "expired",
+        discordUserId: requesterDiscordId,
+        username: normalizeString(usersByDiscordId.get(requesterDiscordId)?.username, "Reader"),
+        status: "expired",
+        linkUrl: requestsUrl,
+        decidedAt: normalizeString(request?.updatedAt)
+      });
+    }
   }
 
-  return notifications.slice(0, 50);
+  return notifications.slice(0, 100);
 };
 
 /**
@@ -585,6 +795,7 @@ const buildRequestNotifications = async ({config, vaultClient, serviceJson}) => 
  *   config: Record<string, string>,
  *   vaultClient: ReturnType<import("./vaultClient.mjs").createVaultClient>,
  *   requireService: (allowedServices: string | string[]) => import("express").RequestHandler,
+ *   readRequestWorkflowSettings: () => Promise<Record<string, unknown>>,
  *   serviceJson: (baseUrl: string, path: string, options?: {method?: string, body?: unknown, headers?: Record<string, string>}) => Promise<{ok: boolean, status: number, payload: any}>
  * }} options
  */
@@ -592,8 +803,157 @@ export const registerInternalBrokerRoutes = (app, {
   config,
   vaultClient,
   requireService,
+  readRequestWorkflowSettings,
   serviceJson
 }) => {
+  const mergeDisplayStrings = (...values) => {
+    const seen = new Set();
+    const merged = [];
+    for (const value of values.flatMap((entry) => normalizeArray(entry).length ? normalizeArray(entry) : [entry])) {
+      const normalized = normalizeString(value);
+      if (!normalized) {
+        continue;
+      }
+      const dedupeKey = normalized.toLowerCase();
+      if (seen.has(dedupeKey)) {
+        continue;
+      }
+      seen.add(dedupeKey);
+      merged.push(normalized);
+    }
+    return merged;
+  };
+
+  const fetchPortalMetadataSearchResults = async (query) => {
+    const normalizedQuery = normalizeString(query);
+    if (!normalizedQuery) {
+      return {query: "", results: []};
+    }
+
+    const response = await serviceJson(
+      config.ravenBaseUrl,
+      `/v1/metadata/search?name=${encodeURIComponent(normalizedQuery)}`
+    );
+    if (!response.ok) {
+      return response;
+    }
+
+    const hydratedResults = await Promise.all(normalizeArray(response.payload).map(async (entry) => {
+      const provider = normalizeString(entry.provider);
+      const providerSeriesId = normalizeString(entry.providerSeriesId);
+      let details = {};
+      if (provider && providerSeriesId) {
+        const detailResult = await safeServiceJson(serviceJson(
+          config.ravenBaseUrl,
+          `/v1/metadata/series-details?provider=${encodeURIComponent(provider)}&providerSeriesId=${encodeURIComponent(providerSeriesId)}`
+        ));
+        if (detailResult?.ok !== false) {
+          details = normalizeObject(detailResult?.payload, {}) || {};
+        }
+      }
+
+      const type = normalizeString(details.type, normalizeString(entry.type, "manga"));
+      return {
+        provider,
+        providerName: normalizeString(entry.providerName, provider),
+        providerSeriesId,
+        title: normalizeString(details.title, normalizeString(entry.title, "Untitled")),
+        url: normalizeString(details.url, normalizeString(entry.url)),
+        summary: normalizeString(details.summary, normalizeString(entry.summary)),
+        coverUrl: normalizeString(details.coverUrl, normalizeString(entry.coverUrl)),
+        type,
+        typeSlug: normalizeTypeSlug(details.typeSlug || type),
+        aliases: mergeDisplayStrings(entry.aliases, details.aliases),
+        tags: mergeDisplayStrings(entry.tags, details.tags),
+        releaseLabel: normalizeString(details.releaseLabel, normalizeString(entry.releaseLabel)),
+        status: normalizeString(details.status, normalizeString(entry.status))
+      };
+    }));
+
+    return {
+      ok: true,
+      status: 200,
+      payload: {
+        query: normalizedQuery,
+        results: hydratedResults
+      }
+    };
+  };
+
+  const fetchPortalDownloadOptions = async ({query, selectedMetadata}) => {
+    const response = await serviceJson(config.ravenBaseUrl, "/v1/intake/download-options", {
+      method: "POST",
+      body: {
+        query: normalizeString(query),
+        selectedMetadata
+      }
+    });
+    if (!response.ok) {
+      return response;
+    }
+    return {
+      ok: true,
+      status: 200,
+      payload: {
+        query: normalizeString(response.payload?.query, normalizeString(query)),
+        availability: normalizeString(response.payload?.availability, "unavailable"),
+        selectedMetadata: normalizeObject(response.payload?.selectedMetadata, selectedMetadata) || selectedMetadata,
+        results: normalizeArray(response.payload?.results).map((entry) => normalizeDownloadOption(entry))
+      }
+    };
+  };
+
+  const queuePortalRequest = async ({requestId, request, actor, message}) => {
+    const selectedDownload = normalizeObject(request.details?.selectedDownload);
+    if (!selectedDownload?.titleUrl) {
+      return {
+        ok: false,
+        status: 409,
+        payload: {error: "This request does not have a concrete download target yet."}
+      };
+    }
+
+    const queued = await serviceJson(config.ravenBaseUrl, "/v1/downloads/queue", {
+      method: "POST",
+      body: {
+        titleName: normalizeString(selectedDownload.titleName, request.title),
+        titleUrl: normalizeString(selectedDownload.titleUrl),
+        requestType: normalizeString(selectedDownload.requestType, request.requestType),
+        providerId: normalizeString(selectedDownload.providerId),
+        requestId: String(requestId),
+        requestedBy: request.requestedBy,
+        selectedMetadata: normalizeObject(request.details?.selectedMetadata, {}),
+        selectedDownload
+      }
+    });
+    if (!queued.ok) {
+      return queued;
+    }
+
+    const updated = await vaultClient.updateRequest(requestId, {
+      status: "queued",
+      eventType: "approved",
+      eventMessage: normalizeString(message, "Scriptarr auto-approved and queued this request."),
+      actor: normalizeString(actor, "scriptarr-sage"),
+      appendStatusEvent: false,
+      detailsMerge: {
+        availability: "available",
+        selectedMetadata: normalizeObject(request.details?.selectedMetadata, {}),
+        selectedDownload,
+        sourceFoundAt: "",
+        sourceFoundOptions: [],
+        jobId: normalizeString(queued.payload?.jobId),
+        taskId: normalizeString(queued.payload?.taskId)
+      }
+    });
+
+    return {
+      ok: true,
+      status: 201,
+      payload: updated
+    };
+  };
+
   app.post("/api/internal/vault/users/upsert-discord", withService(requireService, ["scriptarr-portal"], async (req, res) => {
     res.json(await vaultClient.upsertDiscordUser(req.body || {}));
   }));
@@ -840,8 +1200,29 @@ export const registerInternalBrokerRoutes = (app, {
     await proxyResult(res, serviceJson(config.ravenBaseUrl, `/v1/intake/search?query=${encodeURIComponent(normalizeString(req.query.query))}`));
   }));
 
-  app.post("/api/internal/portal/requests", withService(requireService, ["scriptarr-portal"], async (req, res) => {
-    const requestedBy = normalizeString(req.body?.requestedBy);
+  app.get("/api/internal/portal/requests/metadata-search", withService(requireService, ["scriptarr-portal"], async (req, res) => {
+    const response = await fetchPortalMetadataSearchResults(req.query.query);
+    if (!response.ok) {
+      res.status(response.status).json(response.payload);
+      return;
+    }
+    res.json(response.payload);
+  }));
+
+  app.post("/api/internal/portal/requests/download-options", withService(requireService, ["scriptarr-portal"], async (req, res) => {
+    const selectedMetadata = normalizeObject(req.body?.selectedMetadata);
+    if (!selectedMetadata?.provider || !selectedMetadata?.providerSeriesId) {
+      res.status(400).json({error: "selectedMetadata with provider and providerSeriesId is required."});
+      return;
+    }
+    const response = await fetchPortalDownloadOptions({
+      query: req.body?.query,
+      selectedMetadata
+    });
+    res.status(response.status).json(response.payload);
+  }));
+
+  const handlePortalRequestCreate = async (req, res, requestedBy) => {
     if (!requestedBy) {
       res.status(400).json({error: "requestedBy is required."});
       return;
@@ -853,73 +1234,136 @@ export const registerInternalBrokerRoutes = (app, {
       return;
     }
 
+    const downloadResolution = await fetchPortalDownloadOptions({
+      query: req.body?.query,
+      selectedMetadata
+    });
+    if (!downloadResolution.ok) {
+      res.status(downloadResolution.status).json(downloadResolution.payload);
+      return;
+    }
+
+    const effectiveMetadata = normalizeObject(downloadResolution.payload?.selectedMetadata, selectedMetadata) || selectedMetadata;
+    const requestWorkflow = await readRequestWorkflowSettings();
+    const autoSelectedDownload = requestWorkflow.autoApproveAndDownload
+      ? selectAutoApproveDownload(downloadResolution.payload?.results)
+      : null;
+    const hasConcreteOptions = normalizeArray(downloadResolution.payload?.results).length > 0;
+    const nextStatus = autoSelectedDownload?.titleUrl
+      ? "pending"
+      : (hasConcreteOptions ? "pending" : "unavailable");
+    const nextAvailability = hasConcreteOptions ? "available" : "unavailable";
+
     const guard = evaluateSelectionAgainstGuardState(buildIntakeSelection({
       query: normalizeString(req.body?.query),
-      title: normalizeString(req.body?.title),
-      requestType: normalizeString(req.body?.requestType),
-      selectedMetadata,
-      selectedDownload: normalizeObject(req.body?.selectedDownload)
+      title: normalizeString(req.body?.title, effectiveMetadata.title),
+      requestType: normalizeString(req.body?.requestType || autoSelectedDownload?.requestType || effectiveMetadata?.type),
+      selectedMetadata: effectiveMetadata,
+      selectedDownload: autoSelectedDownload
     }), await loadPortalRequestGuardState({config, vaultClient, serviceJson}));
     if (guard.alreadyInLibrary) {
-      res.status(409).json({error: "That title is already in the Scriptarr library."});
+      res.status(409).json(buildLibraryDuplicatePayload({
+        matchingTitle: guard.matchingTitle,
+        publicBaseUrl: config.publicBaseUrl
+      }));
       return;
     }
     if (guard.alreadyQueuedOrRequested) {
+      const duplicateRequest = guard.matchingRequest
+        || (normalizeString(guard.matchingTask?.requestId)
+          ? await vaultClient.getRequest(guard.matchingTask.requestId)
+          : null);
+      if (duplicateRequest) {
+        await attachPortalDuplicateWaitlist({
+          vaultClient,
+          request: duplicateRequest,
+          user: {
+            discordUserId: requestedBy,
+            username: normalizeString(req.body?.username, "Reader"),
+            avatarUrl: normalizeString(req.body?.avatarUrl),
+            source: normalizeString(req.body?.source, "discord")
+          }
+        });
+        res.status(409).json(buildActiveRequestDuplicatePayload({
+          matchingRequest: duplicateRequest,
+          publicBaseUrl: config.publicBaseUrl
+        }));
+        return;
+      }
       res.status(409).json({error: "That title is already queued or has an active request."});
       return;
     }
 
     try {
-      res.status(201).json(await vaultClient.createRequest(createIntakeBackedRequestPayload(req.body, requestedBy)));
+      const request = await vaultClient.createRequest({
+        source: normalizeString(req.body?.source, "discord"),
+        title: normalizeString(effectiveMetadata?.title, req.body?.title || "Untitled request"),
+        requestType: normalizeString(req.body?.requestType || autoSelectedDownload?.requestType || effectiveMetadata?.type || "manga", "manga"),
+        notes: normalizeString(req.body?.notes),
+        requestedBy,
+        status: nextStatus,
+        details: {
+          query: normalizeString(req.body?.query),
+          selectedMetadata: effectiveMetadata,
+          selectedDownload: autoSelectedDownload,
+          availability: nextAvailability,
+          sourceFoundOptions: []
+        }
+      });
+
+      if (autoSelectedDownload?.titleUrl) {
+        const queued = await queuePortalRequest({
+          requestId: request.id,
+          request: await vaultClient.getRequest(request.id),
+          actor: "scriptarr-sage",
+          message: "Scriptarr auto-approved and queued this Discord request because the source match was high confidence."
+        });
+        if (queued.ok) {
+          res.status(201).json(queued.payload);
+          return;
+        }
+      }
+
+      res.status(201).json(await vaultClient.getRequest(request.id));
     } catch (error) {
       if (isRequestWorkConflictError(error)) {
+        const duplicateRequest = normalizeString(error.requestId)
+          ? await vaultClient.getRequest(error.requestId)
+          : null;
+        if (duplicateRequest) {
+          await attachPortalDuplicateWaitlist({
+            vaultClient,
+            request: duplicateRequest,
+            user: {
+              discordUserId: requestedBy,
+              username: normalizeString(req.body?.username, "Reader"),
+              avatarUrl: normalizeString(req.body?.avatarUrl),
+              source: normalizeString(req.body?.source, "discord")
+            }
+          });
+          res.status(409).json(buildActiveRequestDuplicatePayload({
+            matchingRequest: duplicateRequest,
+            publicBaseUrl: config.publicBaseUrl
+          }));
+          return;
+        }
         res.status(409).json(buildRequestWorkConflictPayload(error));
         return;
       }
       throw error;
     }
+  };
+
+  app.post("/api/internal/portal/requests", withService(requireService, ["scriptarr-portal"], async (req, res) => {
+    await handlePortalRequestCreate(req, res, normalizeString(req.body?.requestedBy));
   }));
 
   app.post("/api/internal/portal/requests/from-discord", withService(requireService, ["scriptarr-portal"], async (req, res) => {
-    req.url = "/api/internal/portal/requests";
-    req.originalUrl = "/api/internal/portal/requests";
-    const requestedBy = normalizeString(req.body?.requestedBy || req.body?.discordUserId);
-    if (!requestedBy) {
-      res.status(400).json({error: "requestedBy is required."});
-      return;
-    }
+    await handlePortalRequestCreate(req, res, normalizeString(req.body?.requestedBy || req.body?.discordUserId));
+  }));
 
-    const selectedMetadata = normalizeObject(req.body?.selectedMetadata);
-    if (!selectedMetadata?.provider || !selectedMetadata?.providerSeriesId) {
-      res.status(400).json({error: "selectedMetadata with provider and providerSeriesId is required."});
-      return;
-    }
-
-    const guard = evaluateSelectionAgainstGuardState(buildIntakeSelection({
-      query: normalizeString(req.body?.query),
-      title: normalizeString(req.body?.title),
-      requestType: normalizeString(req.body?.requestType),
-      selectedMetadata,
-      selectedDownload: normalizeObject(req.body?.selectedDownload)
-    }), await loadPortalRequestGuardState({config, vaultClient, serviceJson}));
-    if (guard.alreadyInLibrary) {
-      res.status(409).json({error: "That title is already in the Scriptarr library."});
-      return;
-    }
-    if (guard.alreadyQueuedOrRequested) {
-      res.status(409).json({error: "That title is already queued or has an active request."});
-      return;
-    }
-
-    try {
-      res.status(201).json(await vaultClient.createRequest(createIntakeBackedRequestPayload(req.body, requestedBy)));
-    } catch (error) {
-      if (isRequestWorkConflictError(error)) {
-        res.status(409).json(buildRequestWorkConflictPayload(error));
-        return;
-      }
-      throw error;
-    }
+  app.post("/api/internal/portal/requests/:requestId/select-download", withService(requireService, ["scriptarr-portal"], async (req, res) => {
+    res.status(410).json({error: "Requesters no longer choose download providers. Admins now approve a source from /admin/requests."});
   }));
 
   app.post("/api/internal/portal/following", withService(requireService, ["scriptarr-portal"], async (req, res) => {
@@ -1013,7 +1457,7 @@ export const registerInternalBrokerRoutes = (app, {
     await writeRequestNotificationState(
       vaultClient,
       parsed.requestId,
-      markRequestNotificationAcked(currentState, parsed.decisionType)
+      markRequestNotificationAcked(currentState, parsed.decisionType, new Date().toISOString(), parsed.discordUserId)
     );
     res.json({
       ok: true,

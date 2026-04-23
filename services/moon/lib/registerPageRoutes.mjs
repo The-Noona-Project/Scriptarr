@@ -29,6 +29,9 @@ const collectAssetFiles = async (rootPath) => {
   const files = [];
 
   for (const entry of entries) {
+    if (entry.isDirectory() && [".next", "node_modules"].includes(entry.name)) {
+      continue;
+    }
     const nextPath = path.join(rootPath, entry.name);
     if (entry.isDirectory()) {
       files.push(...await collectAssetFiles(nextPath));
@@ -128,42 +131,12 @@ const registerVersionedJsAssets = (app, routePrefix, assetsPath, resolveVersion)
   });
 };
 
-const toPublicAssetPath = (routePrefix, rootPath, filePath) =>
-  `${routePrefix}/${path.relative(rootPath, filePath).split(path.sep).join("/")}`;
-
-const buildUserShellAssetList = async ({userAssetsPath, userStylesPath, resolveUserJsVersion}) => {
-  const [styleContent, jsVersion, assetVersion, files] = await Promise.all([
-    fs.readFile(userStylesPath, "utf8"),
-    resolveUserJsVersion(),
-    resolveAssetVersion(userAssetsPath, new Set([".js", ".css", ".svg"])),
-    collectAssetFiles(userAssetsPath)
-  ]);
-
-  const jsAssets = files
-    .filter((filePath) => path.extname(filePath) === ".js")
-    .map((filePath) => appendAssetVersion(toPublicAssetPath("/user-assets", userAssetsPath, filePath), jsVersion));
-
-  return {
-    assetVersion,
-    jsVersion,
-    stylesUrl: toVersionedAssetPath("/user-assets/styles.css", styleContent),
-    urls: [
-      "/",
-      "/manifest.webmanifest",
-      "/user-assets/icons/icon.svg",
-      "/user-assets/icons/icon-maskable.svg",
-      toVersionedAssetPath("/user-assets/styles.css", styleContent),
-      ...jsAssets
-    ]
-  };
-};
-
-const renderServiceWorker = ({assetVersion, shellAssets}) => `
-const SHELL_CACHE = "moon-shell-${assetVersion}";
+const renderServiceWorker = ({assetVersion}) => `
+const STATIC_CACHE = "moon-static-${assetVersion}";
 const READER_CACHE = "moon-reader-${assetVersion}";
 const INDEX_REQUEST = "/__moon_recent_chapters__";
 const MAX_RECENT_CHAPTERS = 5;
-const SHELL_ASSETS = ${JSON.stringify(shellAssets)};
+const STATIC_ASSETS = ["/", "/manifest.webmanifest", "/icon.svg", "/icon-maskable.svg"];
 
 const isReaderChapterRequest = (requestUrl) =>
   requestUrl.pathname.startsWith("/api/moon/v3/user/reader/title/") &&
@@ -218,8 +191,8 @@ const rememberChapter = async (requestUrl) => {
 
 self.addEventListener("install", (event) => {
   event.waitUntil((async () => {
-    const cache = await caches.open(SHELL_CACHE);
-    await cache.addAll(SHELL_ASSETS);
+    const cache = await caches.open(STATIC_CACHE);
+    await cache.addAll(STATIC_ASSETS);
     await self.skipWaiting();
   })());
 });
@@ -228,7 +201,7 @@ self.addEventListener("activate", (event) => {
   event.waitUntil((async () => {
     const keys = await caches.keys();
     await Promise.all(keys
-      .filter((key) => ![SHELL_CACHE, READER_CACHE].includes(key))
+      .filter((key) => ![STATIC_CACHE, READER_CACHE].includes(key))
       .map((key) => caches.delete(key)));
     await self.clients.claim();
   })());
@@ -244,12 +217,12 @@ self.addEventListener("fetch", (event) => {
   if (event.request.mode === "navigate") {
     event.respondWith((async () => {
       try {
-        const response = await fetch(event.request);
-        const cache = await caches.open(SHELL_CACHE);
+        const response = await fetch(event.request, {cache: "no-store"});
+        const cache = await caches.open(STATIC_CACHE);
         await cache.put("/", response.clone());
         return response;
       } catch {
-        const cache = await caches.open(SHELL_CACHE);
+        const cache = await caches.open(STATIC_CACHE);
         return (await cache.match("/")) || Response.error();
       }
     })());
@@ -276,6 +249,26 @@ self.addEventListener("fetch", (event) => {
 });
 `;
 
+const renderUserFallbackHtml = ({siteName}) => `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>${siteName}</title>
+  <meta name="application-name" content="${siteName}">
+  <meta name="theme-color" content="#0f1418">
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/icon-maskable.svg">
+  <link rel="manifest" href="/manifest.webmanifest">
+</head>
+<body>
+  <main>
+    <h1>${siteName}</h1>
+    <p>Moon's user app now runs through the embedded Next runtime.</p>
+  </main>
+</body>
+</html>`;
+
 /**
  * Register Moon's static assets, legacy redirects, and the two HTML program
  * entry points used by the admin and user SPAs.
@@ -289,35 +282,18 @@ self.addEventListener("fetch", (event) => {
  * @returns {void}
  */
 export const registerPageRoutes = (app, {config = {}, getSessionToken = () => "", userNextRuntime = null} = {}) => {
-  const userHtmlPath = path.join(process.cwd(), "apps", "user", "index.html");
   const adminHtmlPath = path.join(process.cwd(), "apps", "admin", "index.html");
-  const userAssetsPath = path.join(process.cwd(), "apps", "user", "assets");
   const adminAssetsPath = path.join(process.cwd(), "apps", "admin", "assets");
-  const userStylesPath = path.join(process.cwd(), "apps", "user", "assets", "styles.css");
+  const userNextAppPath = path.join(process.cwd(), "apps", "user-next");
+  const userIconPath = path.join(userNextAppPath, "app", "icon.svg");
+  const userMaskableIconPath = path.join(userNextAppPath, "app", "icon-maskable.svg");
   const adminStylesPath = path.join(process.cwd(), "apps", "admin", "assets", "styles.css");
-  const resolveUserJsVersion = () => resolveAssetVersion(userAssetsPath, new Set([".js"]));
+  const resolveUserAssetVersion = () => resolveAssetVersion(userNextAppPath, new Set([".js", ".jsx", ".css", ".svg"]));
   const resolveAdminJsVersion = () => resolveAssetVersion(adminAssetsPath, new Set([".js"]));
   const loadBranding = () => readMoonBranding(config.sageBaseUrl || "");
 
-  registerVersionedJsAssets(app, "/user-assets", userAssetsPath, resolveUserJsVersion);
   registerVersionedJsAssets(app, "/admin-assets", adminAssetsPath, resolveAdminJsVersion);
-  app.use("/user-assets", express.static(userAssetsPath, staticAssetOptions()));
   app.use("/admin-assets", express.static(adminAssetsPath, staticAssetOptions()));
-
-  const renderUserHtml = async () => {
-    const [shellAssets, branding] = await Promise.all([
-      buildUserShellAssetList({userAssetsPath, userStylesPath, resolveUserJsVersion}),
-      loadBranding()
-    ]);
-
-    return renderVersionedHtml(userHtmlPath, [
-      ["__MOON_USER_TITLE__", normalizeSiteName(branding.siteName)],
-      ["__MOON_SITE_NAME__", normalizeSiteName(branding.siteName)],
-      ["__MOON_SHORT_NAME__", deriveShortSiteName(branding.siteName)],
-      ["/user-assets/styles.css", shellAssets.stylesUrl],
-      ["/user-assets/app.js", appendAssetVersion("/user-assets/app.js", shellAssets.jsVersion)]
-    ]);
-  };
 
   const renderAdminHtml = async () => {
     const [styles, jsVersion, branding] = await Promise.all([
@@ -346,6 +322,16 @@ export const registerPageRoutes = (app, {config = {}, getSessionToken = () => ""
     res.redirect("/admin");
   });
 
+  app.get("/icon.svg", (_req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    res.sendFile(userIconPath);
+  });
+
+  app.get("/icon-maskable.svg", (_req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    res.sendFile(userMaskableIconPath);
+  });
+
   app.get("/manifest.webmanifest", async (_req, res) => {
     const branding = await loadBranding();
     res.setHeader("Cache-Control", "no-store");
@@ -360,13 +346,13 @@ export const registerPageRoutes = (app, {config = {}, getSessionToken = () => ""
       theme_color: "#0f1418",
       icons: [
         {
-          src: "/user-assets/icons/icon.svg",
+          src: "/icon.svg",
           sizes: "any",
           type: "image/svg+xml",
           purpose: "any"
         },
         {
-          src: "/user-assets/icons/icon-maskable.svg",
+          src: "/icon-maskable.svg",
           sizes: "any",
           type: "image/svg+xml",
           purpose: "maskable"
@@ -376,11 +362,10 @@ export const registerPageRoutes = (app, {config = {}, getSessionToken = () => ""
   });
 
   app.get("/service-worker.js", async (_req, res) => {
-    const shellAssets = await buildUserShellAssetList({userAssetsPath, userStylesPath, resolveUserJsVersion});
+    const assetVersion = await resolveUserAssetVersion();
     res.setHeader("Cache-Control", "no-store");
     res.type("text/javascript").send(renderServiceWorker({
-      assetVersion: shellAssets.assetVersion,
-      shellAssets: shellAssets.urls
+      assetVersion
     }));
   });
 
@@ -436,7 +421,10 @@ export const registerPageRoutes = (app, {config = {}, getSessionToken = () => ""
       await userNextRuntime.handle(_req, res);
       return;
     }
-    res.type("html").send(await renderUserHtml());
+    const branding = await loadBranding();
+    res.type("html").send(renderUserFallbackHtml({
+      siteName: normalizeSiteName(branding.siteName)
+    }));
   });
 
   if (userNextRuntime) {
@@ -455,7 +443,10 @@ export const registerPageRoutes = (app, {config = {}, getSessionToken = () => ""
       await userNextRuntime.handle(_req, res);
       return;
     }
-    res.type("html").send(await renderUserHtml());
+    const branding = await loadBranding();
+    res.type("html").send(renderUserFallbackHtml({
+      siteName: normalizeSiteName(branding.siteName)
+    }));
   });
 };
 

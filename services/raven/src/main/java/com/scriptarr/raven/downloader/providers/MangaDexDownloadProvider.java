@@ -110,6 +110,7 @@ public class MangaDexDownloadProvider implements DownloadProvider {
                 isAdultContent(attributes.path("contentRating").asText("")),
                 Boolean.TRUE,
                 false,
+                extractTags(attributes),
                 List.of()
             );
         } catch (Exception ignored) {
@@ -311,13 +312,9 @@ public class MangaDexDownloadProvider implements DownloadProvider {
     private String inferType(JsonNode attributes) {
         String originalLanguage = attributes.path("originalLanguage").asText("").toLowerCase(Locale.ROOT);
         String countryOfOrigin = attributes.path("countryOfOrigin").asText("").toLowerCase(Locale.ROOT);
-        Set<String> tags = new LinkedHashSet<>();
-        for (JsonNode tag : attributes.path("tags")) {
-            String value = preferredLocalizedValue(tag.path("attributes").path("name"), "").toLowerCase(Locale.ROOT);
-            if (!value.isBlank()) {
-                tags.add(value);
-            }
-        }
+        Set<String> tags = extractTags(attributes).stream()
+            .map((entry) -> entry.toLowerCase(Locale.ROOT))
+            .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
         if (tags.contains("long strip") || tags.contains("web comic")) {
             return "Webtoon";
         }
@@ -328,6 +325,17 @@ public class MangaDexDownloadProvider implements DownloadProvider {
             return "Manhua";
         }
         return "Manga";
+    }
+
+    private List<String> extractTags(JsonNode attributes) {
+        Set<String> tags = new LinkedHashSet<>();
+        for (JsonNode tag : attributes.path("tags")) {
+            String value = preferredLocalizedValue(tag.path("attributes").path("name"), "");
+            if (!value.isBlank()) {
+                tags.add(value);
+            }
+        }
+        return List.copyOf(tags);
     }
 
     private boolean isAdultContent(String contentRating) {

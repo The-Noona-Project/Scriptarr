@@ -313,7 +313,8 @@ export const createPortalRuntime = ({
           sage,
           discord,
           logger,
-          publicBaseUrl: config.publicBaseUrl
+          publicBaseUrl: config.publicBaseUrl,
+          requestCommand: commands.get("request")
         });
         followNotifier.start();
         state = {

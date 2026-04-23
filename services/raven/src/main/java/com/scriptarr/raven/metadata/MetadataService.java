@@ -100,8 +100,10 @@ public class MetadataService {
      * @return aggregated provider results
      */
     public List<Map<String, Object>> search(String name, String requestedProvider, String libraryId) {
-        List<Map<String, Object>> results = new ArrayList<>();
+        List<RankedMetadataSearchResult> rankedResults = new ArrayList<>();
         LibraryTitle title = libraryId == null || libraryId.isBlank() ? null : libraryService.findTitle(libraryId);
+        int providerOrder = 0;
+        int resultOrder = 0;
         for (Map<String, Object> provider : describeProviders()) {
             String providerId = String.valueOf(provider.get("id"));
             boolean enabled = Boolean.TRUE.equals(provider.get("enabled"));
@@ -115,12 +117,44 @@ public class MetadataService {
                 continue;
             }
             try {
-                results.addAll(searchProvider(providerId, name));
+                for (Map<String, Object> result : searchProvider(providerId, name)) {
+                    int score = scoreSearchResult(name, result);
+                    if (score <= 0) {
+                        continue;
+                    }
+                    rankedResults.add(new RankedMetadataSearchResult(
+                        score,
+                        providerOrder,
+                        resultOrder++,
+                        Map.copyOf(result)
+                    ));
+                }
             } catch (Exception error) {
                 logger.warn("METADATA", "Metadata provider search failed.", providerId + ": " + error.getMessage());
             }
+            providerOrder += 1;
         }
-        return List.copyOf(results);
+        return rankedResults.stream()
+            .sorted((left, right) -> {
+                int scoreDelta = Integer.compare(right.score(), left.score());
+                if (scoreDelta != 0) {
+                    return scoreDelta;
+                }
+                int providerDelta = Integer.compare(left.providerOrder(), right.providerOrder());
+                if (providerDelta != 0) {
+                    return providerDelta;
+                }
+                int titleLengthDelta = Integer.compare(
+                    normalizeString(left.payload().get("title") == null ? "" : String.valueOf(left.payload().get("title"))).length(),
+                    normalizeString(right.payload().get("title") == null ? "" : String.valueOf(right.payload().get("title"))).length()
+                );
+                if (titleLengthDelta != 0) {
+                    return titleLengthDelta;
+                }
+                return Integer.compare(left.resultOrder(), right.resultOrder());
+            })
+            .map(RankedMetadataSearchResult::payload)
+            .toList();
     }
 
     /**
@@ -280,7 +314,19 @@ public class MetadataService {
         }
     }
 
-    private List<Map<String, Object>> searchProvider(String providerId, String name) throws IOException, InterruptedException {
+    /**
+     * Search one upstream metadata provider for a series name.
+     *
+     * <p>This stays overridable so Raven tests can exercise search ranking and
+     * filtering behavior without touching live upstream services.
+     *
+     * @param providerId metadata provider id
+     * @param name search query
+     * @return raw provider search rows
+     * @throws IOException when the provider search fails
+     * @throws InterruptedException when the provider search is interrupted
+     */
+    protected List<Map<String, Object>> searchProvider(String providerId, String name) throws IOException, InterruptedException {
         return switch (providerId.toLowerCase(Locale.ROOT)) {
             case "mangadex" -> searchMangaDex(name);
             case "anilist" -> searchAniList(name);
@@ -308,7 +354,11 @@ public class MetadataService {
                 "provider", "mangadex",
                 "providerSeriesId", id,
                 "title", title,
-                "url", "https://mangadex.org/title/" + id
+                "url", "https://mangadex.org/title/" + id,
+                "coverUrl", firstNonBlank(
+                    buildMangaDexCoverUrl(id, extractMangaDexCoverFileName(entry.path("relationships"))),
+                    ""
+                )
             ));
         }
         return results;
@@ -321,15 +371,22 @@ public class MetadataService {
             .GET()
             .build();
         JsonNode root = sendJson(request).path("data");
-        return Map.of(
-            "provider", "mangadex",
-            "providerSeriesId", providerSeriesId,
-            "title", preferredLocalizedValue(root.path("attributes").path("title"), providerSeriesId),
-            "summary", root.path("attributes").path("description").path("en").asText(""),
-            "releaseLabel", root.path("attributes").path("year").asText(""),
-            "status", SeriesLifecycle.normalizeStatus(root.path("attributes").path("status").asText("")),
-            "aliases", List.of(),
-            "books", List.of()
+        JsonNode attributes = root.path("attributes");
+        return Map.ofEntries(
+            Map.entry("provider", "mangadex"),
+            Map.entry("providerSeriesId", providerSeriesId),
+            Map.entry("title", preferredLocalizedValue(attributes.path("title"), providerSeriesId)),
+            Map.entry("url", "https://mangadex.org/title/" + providerSeriesId),
+            Map.entry("coverUrl", firstNonBlank(
+                buildMangaDexCoverUrl(providerSeriesId, extractMangaDexCoverFileName(root.path("relationships"))),
+                ""
+            )),
+            Map.entry("summary", preferredLocalizedValue(attributes.path("description"), "")),
+            Map.entry("releaseLabel", attributes.path("year").asText("")),
+            Map.entry("status", SeriesLifecycle.normalizeStatus(attributes.path("status").asText(""))),
+            Map.entry("aliases", collectAltTitles(attributes.path("altTitles"))),
+            Map.entry("tags", collectMangaDexTags(attributes)),
+            Map.entry("books", List.of())
         );
     }
 
@@ -357,14 +414,15 @@ public class MetadataService {
                 "provider", "anilist",
                 "providerSeriesId", id,
                 "title", title,
-                "url", entry.path("siteUrl").asText("https://anilist.co/manga/" + id)
+                "url", entry.path("siteUrl").asText("https://anilist.co/manga/" + id),
+                "coverUrl", entry.path("coverImage").path("large").asText("")
             ));
         }
         return results;
     }
 
     private Map<String, Object> fetchAniListSeriesDetails(String providerSeriesId) throws IOException, InterruptedException {
-        String query = "query ($id: Int) { Media(id: $id, type: MANGA) { id title { romaji english } siteUrl description(asHtml: false) startDate { year month day } status } }";
+        String query = "query ($id: Int) { Media(id: $id, type: MANGA) { id title { romaji english } siteUrl coverImage { large } description(asHtml: false) startDate { year month day } status synonyms genres tags { name isGeneralSpoiler isMediaSpoiler } } }";
         String body = objectMapper.writeValueAsString(Map.of(
             "query", query,
             "variables", Map.of("id", Integer.parseInt(providerSeriesId))
@@ -376,19 +434,27 @@ public class MetadataService {
             .POST(HttpRequest.BodyPublishers.ofString(body))
             .build();
         JsonNode media = sendJson(request).path("data").path("Media");
-        return Map.of(
-            "provider", "anilist",
-            "providerSeriesId", providerSeriesId,
-            "title", media.path("title").path("english").asText(media.path("title").path("romaji").asText(providerSeriesId)),
-            "url", media.path("siteUrl").asText("https://anilist.co/manga/" + providerSeriesId),
-            "summary", media.path("description").asText(""),
-            "releaseLabel", formatPartialDate(media.path("startDate")),
-            "status", SeriesLifecycle.normalizeStatus(media.path("status").asText("")),
-            "aliases", List.of(
-                media.path("title").path("english").asText(""),
-                media.path("title").path("romaji").asText("")
-            ).stream().filter((value) -> !value.isBlank()).toList(),
-            "books", List.of()
+        return Map.ofEntries(
+            Map.entry("provider", "anilist"),
+            Map.entry("providerSeriesId", providerSeriesId),
+            Map.entry("title", media.path("title").path("english").asText(media.path("title").path("romaji").asText(providerSeriesId))),
+            Map.entry("url", media.path("siteUrl").asText("https://anilist.co/manga/" + providerSeriesId)),
+            Map.entry("coverUrl", media.path("coverImage").path("large").asText("")),
+            Map.entry("summary", media.path("description").asText("")),
+            Map.entry("releaseLabel", formatPartialDate(media.path("startDate"))),
+            Map.entry("status", SeriesLifecycle.normalizeStatus(media.path("status").asText(""))),
+            Map.entry("aliases", mergeUniqueStrings(
+                List.of(
+                    media.path("title").path("english").asText(""),
+                    media.path("title").path("romaji").asText("")
+                ),
+                jsonTextList(media.path("synonyms"))
+            )),
+            Map.entry("tags", mergeUniqueStrings(
+                jsonTextList(media.path("genres")),
+                collectAniListTags(media.path("tags"))
+            )),
+            Map.entry("books", List.of())
         );
     }
 
@@ -493,6 +559,7 @@ public class MetadataService {
         payload.put("releaseLabel", releaseLabel);
         payload.put("status", status);
         payload.put("aliases", aliases);
+        payload.put("tags", extractAnimePlanetTags(document));
         payload.put("type", type);
         payload.put("books", List.of());
         return payload;
@@ -535,19 +602,24 @@ public class MetadataService {
         JsonNode result = sendJson(request);
         List<String> aliases = new ArrayList<>();
         result.path("associated").forEach((entry) -> aliases.add(entry.path("title").asText("")));
-        return Map.of(
-            "provider", "mangaupdates",
-            "providerSeriesId", providerSeriesId,
-            "title", result.path("title").asText(providerSeriesId),
-            "summary", result.path("description").asText(""),
-            "releaseLabel", result.path("year").asText(""),
-            "status", SeriesLifecycle.normalizeStatus(extractMangaUpdatesStatus(result)),
-            "author", result.path("authors").isArray() && result.path("authors").size() > 0
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("provider", "mangaupdates");
+        payload.put("providerSeriesId", providerSeriesId);
+        payload.put("title", result.path("title").asText(providerSeriesId));
+        payload.put("url", "https://www.mangaupdates.com/series/" + providerSeriesId);
+        payload.put("summary", result.path("description").asText(""));
+        payload.put("releaseLabel", result.path("year").asText(""));
+        payload.put("status", SeriesLifecycle.normalizeStatus(extractMangaUpdatesStatus(result)));
+        payload.put(
+            "author",
+            result.path("authors").isArray() && result.path("authors").size() > 0
                 ? result.path("authors").get(0).path("name").asText("")
-                : "",
-            "aliases", aliases.stream().filter((alias) -> !alias.isBlank()).toList(),
-            "books", List.of()
+                : ""
         );
+        payload.put("aliases", aliases.stream().filter((alias) -> !alias.isBlank()).toList());
+        payload.put("tags", jsonTextList(result.path("genres")));
+        payload.put("books", List.of());
+        return payload;
     }
 
     private List<Map<String, Object>> searchMal(String name) throws IOException, InterruptedException {
@@ -587,7 +659,7 @@ public class MetadataService {
         }
         HttpRequest request = HttpRequest.newBuilder()
             .uri(URI.create("https://api.myanimelist.net/v2/manga/" + providerSeriesId
-                + "?fields=alternative_titles,start_date,synopsis,authors{first_name,last_name},main_picture,media_type,status,num_volumes,num_chapters"))
+                + "?fields=alternative_titles,start_date,synopsis,authors{first_name,last_name},main_picture,media_type,status,num_volumes,num_chapters,genres"))
             .timeout(Duration.ofSeconds(15))
             .header("X-MAL-CLIENT-ID", settingsService.getMalClientId())
             .GET()
@@ -600,17 +672,19 @@ public class MetadataService {
             JsonNode authorNode = result.path("authors").get(0).path("node");
             author = (authorNode.path("first_name").asText("") + " " + authorNode.path("last_name").asText("")).trim();
         }
-        return Map.of(
-            "provider", "mal",
-            "providerSeriesId", providerSeriesId,
-            "title", result.path("title").asText(providerSeriesId),
-            "summary", result.path("synopsis").asText(""),
-            "releaseLabel", result.path("start_date").asText(""),
-            "status", SeriesLifecycle.normalizeStatus(result.path("status").asText("")),
-            "author", author,
-            "aliases", aliases.stream().filter((alias) -> !alias.isBlank()).toList(),
-            "books", List.of()
-        );
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("provider", "mal");
+        payload.put("providerSeriesId", providerSeriesId);
+        payload.put("title", result.path("title").asText(providerSeriesId));
+        payload.put("url", "https://myanimelist.net/manga/" + providerSeriesId);
+        payload.put("summary", result.path("synopsis").asText(""));
+        payload.put("releaseLabel", result.path("start_date").asText(""));
+        payload.put("status", SeriesLifecycle.normalizeStatus(result.path("status").asText("")));
+        payload.put("author", author);
+        payload.put("aliases", aliases.stream().filter((alias) -> !alias.isBlank()).toList());
+        payload.put("tags", collectNamedValues(result.path("genres")));
+        payload.put("books", List.of());
+        return payload;
     }
 
     private List<Map<String, Object>> searchComicVine(String name) throws IOException, InterruptedException {
@@ -664,6 +738,8 @@ public class MetadataService {
             "url", result.path("site_detail_url").asText(""),
             "summary", result.path("description").asText(""),
             "releaseLabel", result.path("start_year").asText(""),
+            "aliases", splitDelimitedValues(result.path("aliases").asText("")),
+            "tags", collectNamedValues(result.path("genres")),
             "books", List.of()
         );
     }
@@ -704,15 +780,42 @@ public class MetadataService {
     }
 
     private Map<String, Object> normalizeAppliedMetadata(Map<String, Object> details) {
-        return Map.of(
-            "title", String.valueOf(details.getOrDefault("title", "")),
-            "summary", String.valueOf(details.getOrDefault("summary", "")),
-            "releaseLabel", String.valueOf(details.getOrDefault("releaseLabel", "")),
-            "status", String.valueOf(details.getOrDefault("status", "")),
-            "author", String.valueOf(details.getOrDefault("author", "")),
-            "aliases", details.getOrDefault("aliases", List.of()),
-            "relations", details.getOrDefault("relations", List.of())
-        );
+        Map<String, Object> normalized = new LinkedHashMap<>();
+        normalized.put("title", String.valueOf(details.getOrDefault("title", "")));
+        normalized.put("url", String.valueOf(details.getOrDefault("url", "")));
+        normalized.put("summary", String.valueOf(details.getOrDefault("summary", "")));
+        normalized.put("coverUrl", String.valueOf(details.getOrDefault("coverUrl", "")));
+        normalized.put("releaseLabel", String.valueOf(details.getOrDefault("releaseLabel", "")));
+        normalized.put("status", String.valueOf(details.getOrDefault("status", "")));
+        normalized.put("author", String.valueOf(details.getOrDefault("author", "")));
+        normalized.put("type", String.valueOf(details.getOrDefault("type", "")));
+        normalized.put("aliases", details.getOrDefault("aliases", List.of()));
+        normalized.put("tags", details.getOrDefault("tags", List.of()));
+        normalized.put("relations", details.getOrDefault("relations", List.of()));
+        return normalized;
+    }
+
+    private String extractMangaDexCoverFileName(JsonNode relationships) {
+        if (relationships == null || !relationships.isArray()) {
+            return "";
+        }
+        for (JsonNode relationship : relationships) {
+            if (!"cover_art".equals(relationship.path("type").asText(""))) {
+                continue;
+            }
+            String fileName = relationship.path("attributes").path("fileName").asText("");
+            if (!fileName.isBlank()) {
+                return fileName;
+            }
+        }
+        return "";
+    }
+
+    private String buildMangaDexCoverUrl(String mangaId, String fileName) {
+        if (mangaId == null || mangaId.isBlank() || fileName == null || fileName.isBlank()) {
+            return "";
+        }
+        return "https://uploads.mangadex.org/covers/" + mangaId + "/" + fileName + ".512.jpg";
     }
 
     private Map<String, Object> normalizeMap(Object value) {
@@ -798,6 +901,184 @@ public class MetadataService {
             case "manhwa", "manhua", "manga", "oel" -> "manga";
             default -> "manga";
         };
+    }
+
+    private int scoreSearchResult(String query, Map<String, Object> result) {
+        String normalizedQuery = normalizeSearchTitle(query);
+        String normalizedQueryBase = normalizeSearchBaseTitle(query);
+        if (normalizedQuery.isBlank()) {
+            return 0;
+        }
+
+        int best = scoreSearchLabel(
+            normalizedQuery,
+            normalizedQueryBase,
+            result.get("title") == null ? "" : normalizeString(String.valueOf(result.get("title")))
+        );
+        Object rawAliases = result.get("aliases");
+        if (rawAliases instanceof Iterable<?> iterable) {
+            for (Object alias : iterable) {
+                best = Math.max(
+                    best,
+                    scoreSearchLabel(normalizedQuery, normalizedQueryBase, alias == null ? "" : normalizeString(String.valueOf(alias)))
+                );
+            }
+        }
+        return Math.max(0, best + scoreEditionSearchAlignment(query, result));
+    }
+
+    private int scoreEditionSearchAlignment(String query, Map<String, Object> result) {
+        EditionSignals queryEdition = detectEditionSignals(query);
+        EditionSignals resultEdition = detectEditionSignals(
+            result.get("title"),
+            result.get("editionLabel"),
+            result.get("aliases")
+        );
+        if (!queryEdition.colored()) {
+            return resultEdition.colored() ? -20 : 0;
+        }
+        if (!resultEdition.colored()) {
+            return -35;
+        }
+        return 18;
+    }
+
+    private int scoreSearchLabel(String normalizedQuery, String normalizedQueryBase, String value) {
+        String normalizedTitle = normalizeSearchTitle(value);
+        if (normalizedTitle.isBlank()) {
+            return 0;
+        }
+        if (normalizedTitle.equals(normalizedQuery)) {
+            return 320;
+        }
+
+        String normalizedTitleBase = normalizeSearchBaseTitle(value);
+        if (!normalizedTitleBase.isBlank() && normalizedTitleBase.equals(normalizedQueryBase)) {
+            return 280;
+        }
+        if (normalizedTitle.startsWith(normalizedQuery + " ")) {
+            return 180;
+        }
+        if (normalizedTitle.contains(" " + normalizedQuery + " ") || normalizedTitle.endsWith(" " + normalizedQuery)) {
+            return 150;
+        }
+        if (!normalizedTitleBase.isBlank() && !normalizedQueryBase.isBlank()) {
+            if (normalizedTitleBase.startsWith(normalizedQueryBase + " ")) {
+                return 170;
+            }
+            if (normalizedTitleBase.contains(" " + normalizedQueryBase + " ")
+                || normalizedTitleBase.endsWith(" " + normalizedQueryBase)) {
+                return 145;
+            }
+        }
+        if (normalizedTitle.contains(normalizedQuery) || normalizedQuery.contains(normalizedTitle)) {
+            return 135;
+        }
+        if (!normalizedTitleBase.isBlank()
+            && !normalizedQueryBase.isBlank()
+            && (normalizedTitleBase.contains(normalizedQueryBase) || normalizedQueryBase.contains(normalizedTitleBase))) {
+            return 125;
+        }
+        if (tokenOverlap(normalizedTitle, normalizedQuery) >= 0.75d) {
+            return 95;
+        }
+        if (!normalizedTitleBase.isBlank()
+            && !normalizedQueryBase.isBlank()
+            && tokenOverlap(normalizedTitleBase, normalizedQueryBase) >= 0.75d) {
+            return 90;
+        }
+        return 0;
+    }
+
+    private String normalizeSearchTitle(String value) {
+        return normalizeSearchBaseTitle(value)
+            .replaceAll("[()\\[\\]{}]", " ")
+            .replaceAll("\\s+", " ")
+            .trim();
+    }
+
+    private String normalizeSearchBaseTitle(String value) {
+        return normalizeString(value)
+            .toLowerCase(Locale.ROOT)
+            .replaceAll("(?i)\\bofficial\\s+colored\\b", " ")
+            .replaceAll("(?i)\\bdigital\\s+colored\\b", " ")
+            .replaceAll("(?i)\\bfull\\s+colored\\b", " ")
+            .replaceAll("(?i)\\bfull\\s+color\\b", " ")
+            .replaceAll("(?i)\\bcolored\\b", " ")
+            .replaceAll("(?i)\\bcolor\\b", " ")
+            .replaceAll("[^a-z0-9]+", " ")
+            .replaceAll("\\s+", " ")
+            .trim();
+    }
+
+    private double tokenOverlap(String left, String right) {
+        List<String> leftTokens = List.of(left.split("\\s+")).stream()
+            .map(String::trim)
+            .filter((token) -> !token.isBlank())
+            .toList();
+        List<String> rightTokens = List.of(right.split("\\s+")).stream()
+            .map(String::trim)
+            .filter((token) -> !token.isBlank())
+            .toList();
+        if (leftTokens.isEmpty() || rightTokens.isEmpty()) {
+            return 0d;
+        }
+        long matches = leftTokens.stream().filter(rightTokens::contains).count();
+        return matches / (double) Math.max(leftTokens.size(), rightTokens.size());
+    }
+
+    private EditionSignals detectEditionSignals(Object... values) {
+        StringBuilder builder = new StringBuilder();
+        for (Object value : values) {
+            if (value instanceof Iterable<?> iterable) {
+                for (Object entry : iterable) {
+                    appendEditionSource(builder, entry);
+                }
+                continue;
+            }
+            appendEditionSource(builder, value);
+        }
+        String normalized = builder.toString().trim();
+        if (normalized.isBlank()) {
+            return EditionSignals.none();
+        }
+        if (containsPhrase(normalized, "official colored")) {
+            return new EditionSignals(true, "Official Colored");
+        }
+        if (containsPhrase(normalized, "digital colored")) {
+            return new EditionSignals(true, "Digital Colored");
+        }
+        if (containsPhrase(normalized, "full colored") || containsPhrase(normalized, "full color")) {
+            return new EditionSignals(true, "Full Color");
+        }
+        if (containsPhrase(normalized, "colored")) {
+            return new EditionSignals(true, "Colored");
+        }
+        if (containsPhrase(normalized, "color")) {
+            return new EditionSignals(true, "Color");
+        }
+        return EditionSignals.none();
+    }
+
+    private void appendEditionSource(StringBuilder builder, Object value) {
+        String normalizedValue = normalizeString(value == null ? null : String.valueOf(value))
+            .toLowerCase(Locale.ROOT)
+            .replaceAll("[^a-z0-9]+", " ")
+            .trim();
+        if (normalizedValue.isBlank()) {
+            return;
+        }
+        if (builder.length() > 0) {
+            builder.append(' ');
+        }
+        builder.append(normalizedValue);
+    }
+
+    private boolean containsPhrase(String haystack, String phrase) {
+        return haystack.contains(" " + phrase + " ")
+            || haystack.startsWith(phrase + " ")
+            || haystack.endsWith(" " + phrase)
+            || haystack.equals(phrase);
     }
 
     private String firstNonBlank(String... values) {
@@ -994,7 +1275,137 @@ public class MetadataService {
         return builder.toString();
     }
 
+    private List<String> collectMangaDexTags(JsonNode attributes) {
+        List<String> tags = new ArrayList<>();
+        for (JsonNode tag : attributes.path("tags")) {
+            String value = preferredLocalizedValue(tag.path("attributes").path("name"), "");
+            if (!value.isBlank()) {
+                tags.add(value);
+            }
+        }
+        return mergeUniqueStrings(tags);
+    }
+
+    private List<String> collectAltTitles(JsonNode altTitlesNode) {
+        List<String> aliases = new ArrayList<>();
+        if (altTitlesNode == null || altTitlesNode.isMissingNode() || altTitlesNode.isNull()) {
+            return List.of();
+        }
+        if (altTitlesNode.isArray()) {
+            altTitlesNode.forEach((entry) -> {
+                String value = preferredLocalizedValue(entry, "");
+                if (!value.isBlank()) {
+                    aliases.add(value);
+                }
+            });
+        }
+        return mergeUniqueStrings(aliases);
+    }
+
+    private List<String> collectAniListTags(JsonNode tagsNode) {
+        List<String> tags = new ArrayList<>();
+        for (JsonNode tag : tagsNode) {
+            if (tag.path("isGeneralSpoiler").asBoolean(false) || tag.path("isMediaSpoiler").asBoolean(false)) {
+                continue;
+            }
+            String value = tag.path("name").asText("");
+            if (!value.isBlank()) {
+                tags.add(value);
+            }
+        }
+        return mergeUniqueStrings(tags);
+    }
+
+    private List<String> extractAnimePlanetTags(Document document) {
+        List<String> tags = new ArrayList<>();
+        for (Element chip : document.select(".tags li, .entryBar .tags a, .entryBar .tags span")) {
+            String value = normalizeString(chip.text());
+            if (!value.isBlank()) {
+                tags.add(value);
+            }
+        }
+        return mergeUniqueStrings(tags);
+    }
+
+    private List<String> jsonTextList(JsonNode node) {
+        List<String> values = new ArrayList<>();
+        if (node == null || node.isMissingNode() || node.isNull()) {
+            return List.of();
+        }
+        if (node.isArray()) {
+            node.forEach((entry) -> {
+                String value = entry.asText("");
+                if (!value.isBlank()) {
+                    values.add(value);
+                }
+            });
+        }
+        return mergeUniqueStrings(values);
+    }
+
+    private List<String> collectNamedValues(JsonNode node) {
+        List<String> values = new ArrayList<>();
+        if (node == null || node.isMissingNode() || node.isNull()) {
+            return List.of();
+        }
+        if (node.isArray()) {
+            node.forEach((entry) -> {
+                String value = firstNonBlank(
+                    entry.path("name").asText(""),
+                    entry.path("title").asText(""),
+                    entry.asText("")
+                );
+                if (!value.isBlank()) {
+                    values.add(value);
+                }
+            });
+        }
+        return mergeUniqueStrings(values);
+    }
+
+    private List<String> splitDelimitedValues(String raw) {
+        List<String> values = new ArrayList<>();
+        String normalized = normalizeString(raw);
+        if (normalized.isBlank()) {
+            return List.of();
+        }
+        for (String part : normalized.split("\\s*(?:,|;|\\||\\n)\\s*")) {
+            String value = normalizeString(part);
+            if (!value.isBlank()) {
+                values.add(value);
+            }
+        }
+        return mergeUniqueStrings(values);
+    }
+
+    private List<String> mergeUniqueStrings(List<String>... valueSets) {
+        Map<String, String> deduped = new LinkedHashMap<>();
+        for (List<String> values : valueSets) {
+            for (String value : values) {
+                String normalized = normalizeString(value);
+                if (!normalized.isBlank()) {
+                    deduped.putIfAbsent(normalized.toLowerCase(Locale.ROOT), normalized);
+                }
+            }
+        }
+        return List.copyOf(deduped.values());
+    }
+
     private String normalizeString(String value) {
         return value == null ? "" : value.trim();
+    }
+
+    private record RankedMetadataSearchResult(
+        int score,
+        int providerOrder,
+        int resultOrder,
+        Map<String, Object> payload
+    ) {
+    }
+
+    private record EditionSignals(boolean colored, String label) {
+        private static EditionSignals none() {
+            return new EditionSignals(false, "");
+        }
     }
 }

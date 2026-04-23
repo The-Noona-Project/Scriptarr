@@ -11,8 +11,9 @@ const browseCollator = new Intl.Collator("en", {
 
 const toSearchString = (title) => [
   title?.title,
-  title?.summary,
   title?.libraryTypeLabel,
+  title?.libraryTypeSlug,
+  title?.mediaType,
   ...(Array.isArray(title?.aliases) ? title.aliases : []),
   ...(Array.isArray(title?.tags) ? title.tags : [])
 ]

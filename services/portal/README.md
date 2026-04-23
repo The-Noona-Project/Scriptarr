@@ -19,6 +19,12 @@ Portal's supported Discord command set is:
 - `/subscribe`
 - DM-only `downloadall`
 
+Discord `/request` now mirrors Moon's web flow instead of using a one-shot fuzzy picker. Portal first shows raw
+metadata-provider matches, then lets the requester submit one exact metadata choice with optional notes. Staff later
+choose the concrete download source from `/admin/requests`, unless Sage auto-approves one high-confidence source. If
+the metadata exists but there is no source yet, Portal can still create an `unavailable` request, and when Sage later
+finds a source it DMs the requester that the title is back in admin review or was auto-approved.
+
 `downloadall` stays provider-browse first, but it now asks Raven to metadata-resolve each matched bulk title before
 queueing it. Portal only queues titles with one confident metadata match and reports already-active, no-metadata,
 ambiguous-metadata, and failed skips in the DM summary. The command is still owner-only and intentionally pinned to
@@ -33,3 +39,6 @@ capability, and the last meaningful Discord runtime error when the bot disconnec
 Portal also watches request-linked moderation and Raven completion state through Sage. When a request is approved,
 denied, or finished and the requester has a Discord id, Portal sends one deduped DM with the shared title art and the
 right Moon link instead of duplicating notification state in a separate store.
+Portal now also DMs blocked duplicate requesters when they are attached to the hidden ready-notify waitlist, DMs
+waitlisted users again when the title becomes ready, DMs unavailable requesters when a source appears and the request
+moves back into admin review, and DMs them again if that unavailable request expires after 90 days.

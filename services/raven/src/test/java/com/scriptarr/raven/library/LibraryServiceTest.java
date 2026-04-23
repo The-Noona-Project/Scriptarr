@@ -62,6 +62,7 @@ class LibraryServiceTest {
                 false,
                 true,
                 true,
+                List.of(),
                 List.of(Map.of("title", "Solo Leveling: Ragnarok", "relation", "Sequel"))
             ),
             List.of(new LibraryChapter("", "Chapter 1", "1", 1, null, true, archivePath.toString(), "https://weebcentral.com/chapters/solo-1")),
@@ -266,6 +267,7 @@ class LibraryServiceTest {
                 false,
                 true,
                 true,
+                List.of(),
                 List.of()
             ),
             List.of(new LibraryChapter("", "Chapter 1", "1", 10, null, true, archivePath.toString(), "")),

@@ -50,12 +50,18 @@ Raven also supports old-style chapter and page naming templates behind the inter
 keeping the current title-folder layout stable for rescans.
 Those naming settings are now profile-based by library type, so manga, manhwa, manhua, webtoon, comic, and OEL
 downloads can each use their own archive and page format while still sharing the same Raven rescan logic.
-Moon requests and admin add-title now use a metadata-first intake flow. Users search once, Scriptarr checks enabled
-metadata providers first, then enabled download providers, and stores the selected match snapshot with the request so
-moderation can queue the exact Raven target later.
+Moon requests and admin add-title now use a metadata-first intake flow. Readers pick one exact metadata result first,
+Scriptarr stores that metadata snapshot with the request, and staff choose the concrete Raven source later during
+approval unless Sage auto-approves a high-confidence match.
 That intake is now edition-aware and grouped by concrete download target, so duplicate metadata rows collapse into one
 requestable result while real variants such as plain vs colored editions stay separate when the provider exposes
 different series URLs.
+Moon web request creation now lives only in `/myrequests`, where signed-in readers search raw metadata rows, pick the
+exact metadata result they want, optionally leave notes, and submit a moderated full-title request. Admins then choose
+the concrete download source from `/admin/requests`, unless the optional `auto approve and download` setting lets Sage
+queue one high-confidence source automatically. If Scriptarr cannot find a source yet, it saves the request as
+`unavailable`, re-checks it every 4 hours, DMs the requester when the title moves back into admin review, and expires
+it after 90 days if it still cannot be matched.
 Raven now keeps WeebCentral first by default, exposes MangaDex as a second normal download-provider option, and enables
 Anime-Planet ahead of MangaUpdates as a scrape-based metadata source for aliases, summaries, and lifecycle hints.
 Moon admin also exposes a dedicated Discord page at `/admin/discord` for guild workflow settings, onboarding template
@@ -99,10 +105,16 @@ For end-to-end Docker verification, use:
 - Browser traffic stays behind Moon. Browsers should not call Warden, Vault, Raven, Portal, Oracle, or LocalAI
   directly.
 - Users can create and track requests in Moon and Discord, but Raven only receives approved work.
-- Moon user requests and Moon admin add-title now share one metadata-first intake engine. Requests persist the selected
-  metadata plus download match snapshot, and unavailable requests can be re-resolved later instead of being dropped.
+- Moon user requests and Moon admin add-title now share one metadata-first intake engine. User and Discord requests
+  persist the selected metadata first, admins pick download sources during approval, and unavailable requests can be
+  re-resolved later instead of being dropped.
+- Web request creation now lives in `/myrequests`, and Discord `/request` now uses the same metadata-only requester
+  flow instead of a single fuzzy picker or a requester-side source choice.
 - Vault now enforces one active request per concrete work identity, so duplicate submissions that resolve to the same
   provider target cannot create parallel active requests.
+- Duplicate request attempts now attach the requester to a hidden waitlist instead of creating a second visible row.
+  If the title is already in the library, Scriptarr links directly to the title page. If the title is already queued,
+  Scriptarr blocks the duplicate row and sends a Discord DM when the title becomes ready.
 - Portal now owns a real Discord command runtime again. The supported command set is `/ding`, `/status`, `/chat`,
   `/search`, `/request`, `/subscribe`, plus the DM-only `downloadall` command for the configured Discord superuser.
 - The DM-only `downloadall` flow now stays provider-browse first but resolves metadata before queueing each title. It
@@ -115,6 +127,10 @@ For end-to-end Docker verification, use:
   creating parallel subscription data.
 - Portal now sends requester Discord DMs when a moderated request is approved, denied, or completed, reusing the same
   title art and Moon links the rest of the stack exposes.
+- Portal also sends DMs when duplicate blockers attach a user to the ready-notify waitlist, when an unavailable
+  request later finds a source, and when an unavailable request expires after 90 days.
+- Raven now merges metadata-provider tags plus download-provider tags into one canonical tag set for library titles,
+  admin review, browse/search, and personalization surfaces while preserving internal source attribution for debugging.
 - Vault is the only supported broker to the shared MySQL database.
 - Sage is the supported internal HTTP hop between first-party services. Direct internal exceptions are limited to
   Vault -> MySQL, Warden -> Docker or host runtime, Oracle -> OpenAI or LocalAI, and Raven -> external source,

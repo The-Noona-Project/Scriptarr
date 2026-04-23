@@ -47,7 +47,18 @@ const normalizeScalarString = (value, fallback = "") => {
   }
   return fallback;
 };
-const REQUEST_STATUSES = new Set(["pending", "unavailable", "denied", "queued", "downloading", "completed", "failed"]);
+const REQUEST_STATUSES = new Set([
+  "pending",
+  "unavailable",
+  "denied",
+  "blocked",
+  "queued",
+  "downloading",
+  "completed",
+  "failed",
+  "expired",
+  "cancelled"
+]);
 const ACTIVE_REQUEST_WORK_STATUSES = new Set(["pending", "unavailable", "queued", "downloading"]);
 const normalizeRequestStatus = (value, fallback = "pending") => {
   const normalized = normalizeString(value, fallback).toLowerCase();
@@ -70,6 +81,9 @@ const normalizeRequestDetails = (value = {}) => {
     next.availability,
     next.selectedDownload ? "available" : "unavailable"
   );
+  next.sourceFoundAt = normalizeString(next.sourceFoundAt);
+  next.sourceFoundOptions = Array.isArray(next.sourceFoundOptions) ? cloneJsonValue(next.sourceFoundOptions, []) : [];
+  next.waitlist = Array.isArray(next.waitlist) ? cloneJsonValue(next.waitlist, []) : [];
   next.jobId = normalizeString(next.jobId || next.linkedJobId);
   next.taskId = normalizeString(next.taskId || next.linkedTaskId);
   delete next.linkedJobId;
@@ -109,6 +123,14 @@ const defaultRequestEventMessage = (eventType) => {
       return "No enabled download provider matched this request yet.";
     case "denied":
       return "Request denied.";
+    case "blocked":
+      return "Request blocked because Scriptarr is already tracking that title.";
+    case "expired":
+      return "Request expired after waiting too long without a source.";
+    case "cancelled":
+      return "Request cancelled by the requester.";
+    case "source-found":
+      return "Scriptarr found a new download source for this request.";
     default:
       return "Request updated.";
   }

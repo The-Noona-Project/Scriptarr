@@ -9,7 +9,7 @@ import {SegmentedControl} from "@once-ui-system/core";
 import {useMoonJson} from "../../lib/api.js";
 import {buildBrowseLetterState, buildBrowseSections, filterBrowseTitles} from "../../lib/browse.js";
 import {useMoonChrome} from "../MoonChromeContext.jsx";
-import TitleCard from "../TitleCard.jsx";
+import BrowseLetterRow from "../browse/BrowseLetterRow.jsx";
 import {AuthRequiredView, EmptyView, ErrorView, LoadingView} from "../StateView.jsx";
 
 /**
@@ -107,15 +107,20 @@ export const BrowsePageClient = () => {
             <div className="moon-browse-rail-stick">
               <span className="moon-kicker">Jump to</span>
               <div className="moon-browse-rail-desktop">
-                <div className="moon-browse-segmented-control">
-                  <SegmentedControl
-                    buttons={letterButtons}
-                    selected={activeLetter}
-                    onToggle={jumpToLetter}
-                    fillWidth={false}
-                    compact
-                  />
-                </div>
+                <nav className="moon-browse-letter-index" aria-label="Browse by letter">
+                  {letterState.map((entry) => (
+                    <button
+                      key={entry.letter}
+                      type="button"
+                      className={`moon-browse-letter-button ${entry.letter === activeLetter ? "is-active" : ""}`.trim()}
+                      disabled={entry.disabled}
+                      aria-current={entry.letter === activeLetter ? "true" : undefined}
+                      onClick={() => jumpToLetter(entry.letter)}
+                    >
+                      {entry.letter}
+                    </button>
+                  ))}
+                </nav>
               </div>
               <div className="moon-browse-rail-mobile">
                 <SegmentedControl
@@ -130,32 +135,17 @@ export const BrowsePageClient = () => {
           </aside>
           <div className="moon-browse-content">
             {sections.map((section) => (
-              <section
+              <BrowseLetterRow
                 key={section.letter}
-                className="moon-panel moon-section moon-browse-letter-section"
-                ref={(node) => {
+                section={section}
+                sectionRef={(node) => {
                   if (node) {
                     sectionRefs.current.set(section.letter, node);
                   } else {
                     sectionRefs.current.delete(section.letter);
                   }
                 }}
-              >
-                <div className="moon-section-head moon-browse-letter-head">
-                  <div>
-                    <span className="moon-kicker">Letter</span>
-                    <h2>{section.letter}</h2>
-                  </div>
-                  <span className="moon-muted">
-                    {section.titles.length} title{section.titles.length === 1 ? "" : "s"}
-                  </span>
-                </div>
-                <div className="moon-browse-grid">
-                  {section.titles.map((title) => (
-                    <TitleCard key={title.id} title={title} variant="browse" />
-                  ))}
-                </div>
-              </section>
+              />
             ))}
           </div>
         </div>

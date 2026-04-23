@@ -5,11 +5,20 @@
 - Keep Moon -> Sage -> internal services intact.
 - Keep first-party service-to-service HTTP behind Sage's internal broker routes instead of allowing Portal, Oracle,
   Raven, or Warden to reach across the stack directly.
-- Keep request intake centralized in Sage. Search should broker to Raven's intake search, request creation should
-  persist the selected metadata plus download snapshots in Vault, and moderation should queue the exact saved Raven
-  target instead of rerunning a fuzzy search at approval time.
+- Keep request intake centralized in Sage. Search should broker to Raven's intake search, requester flows should
+  persist the selected metadata first, and moderation should queue the exact saved Raven target instead of rerunning a
+  fuzzy search at approval time.
 - Keep duplicate enforcement aligned with Vault's durable request work key so Moon, Discord, admin add-title, and the
   public API all reject the same concrete target even under concurrent submits.
+- Moon and Portal now need explicit request-flow steps from Sage: metadata search, final requester creation, note
+  edits, cancellation, admin-only download-option lookup, and admin overrides. Do not collapse that back into one
+  opaque fuzzy endpoint.
+- Keep duplicate blockers hidden-row only. Sage should attach duplicate users to the request waitlist in request
+  details instead of creating a second visible record, and Portal should notify those users when the title is ready.
+- `unavailable` requests are first-class Sage records. Keep the background 4-hour recheck loop, `sourceFoundAt` plus
+  `sourceFoundOptions` detail fields, and the automatic 90-day expiry flow in sync with Portal's request DMs.
+- Keep `sage.requests.autoApproveAndDownload` high-confidence only. Auto-pick one source only when Raven's confidence
+  signals and warnings make that safe; otherwise leave the request in manual admin review.
 - Persist Raven and Oracle admin settings through Vault instead of service-local files.
 - Broker Portal's Discord workflow settings through the shared `portal.discord` setting, and keep Portal-facing broker
   routes for intake search, request creation, library search, follow updates, onboarding tests, and Raven bulk queue.

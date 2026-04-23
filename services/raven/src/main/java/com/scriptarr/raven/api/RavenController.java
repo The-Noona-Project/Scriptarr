@@ -96,6 +96,30 @@ public class RavenController {
     }
 
     /**
+     * Resolve explicit download-provider options from a selected metadata row.
+     *
+     * @param body intake resolution payload
+     * @return normalized metadata snapshot and concrete download targets
+     */
+    @PostMapping("/v1/intake/download-options")
+    public ResponseEntity<Map<String, Object>> intakeDownloadOptions(@RequestBody Map<String, Object> body) {
+        Map<String, Object> selectedMetadata = body.get("selectedMetadata") instanceof Map<?, ?> metadata
+            ? (Map<String, Object>) metadata
+            : Map.of();
+        if (String.valueOf(selectedMetadata.getOrDefault("provider", "")).trim().isBlank()
+            || String.valueOf(selectedMetadata.getOrDefault("providerSeriesId", "")).trim().isBlank()) {
+            return ResponseEntity.badRequest().body(Map.of(
+                "error", "selectedMetadata with provider and providerSeriesId is required."
+            ));
+        }
+
+        return ResponseEntity.ok(downloadIntakeService.resolveDownloadOptions(
+            String.valueOf(body.getOrDefault("query", "")).trim(),
+            selectedMetadata
+        ));
+    }
+
+    /**
      * List the current Raven library titles.
      *
      * @return library payload

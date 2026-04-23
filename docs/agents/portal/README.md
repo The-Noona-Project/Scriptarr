@@ -12,6 +12,13 @@
   or command-sync problem back through Moon admin.
 - Portal now also owns requester approval, denial, and completion DMs. Keep those notifications deduped by request id
   plus decision state, and reuse the shared `coverUrl` plus Moon public base URL when they are available.
+- `/request` now mirrors Moon's metadata-first wizard. Portal should search raw metadata rows first, then submit one
+  exact metadata choice for moderated review instead of asking the requester to pick a download provider.
+- Duplicate blockers should not create visible extra requests. Portal should surface the blocked state, rely on Sage's
+  hidden waitlist attachment, DM those users again when the title is ready, and keep source-found plus expired
+  unavailable DMs aligned with the same request-notification state machine.
+- When Sage later finds a source for an unavailable request, Portal should DM that the request moved back into admin
+  review or auto-approved; do not reintroduce requester-side source picking in Discord.
 - DM-only `downloadall` is still provider-browse first, but it must now go through Raven's metadata-safe bulk resolver
   before queueing anything. Queue only titles with one confident metadata match and surface already-active,
   no-metadata, ambiguous-metadata, and failed outcomes in the DM summary.

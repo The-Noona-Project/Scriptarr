@@ -335,6 +335,7 @@ public class TitleScraper {
                 parseBooleanFlag(extractLabeledValue(doc, "Adult Content")),
                 parseBooleanFlag(extractLabeledValue(doc, "Official Translation")),
                 parseBooleanFlag(extractLabeledValue(doc, "Anime Adaptation")),
+                extractTags(doc),
                 extractRelatedSeries(doc)
             );
         } catch (Exception error) {
@@ -606,6 +607,18 @@ public class TitleScraper {
             }
         }
         return values.isEmpty() ? List.of() : List.copyOf(values);
+    }
+
+    private List<String> extractTags(Document doc) {
+        Set<String> tags = new HashSet<>();
+        tags.addAll(extractLabeledList(doc, "Tags"));
+        tags.addAll(extractLabeledList(doc, "Genres"));
+        tags.addAll(extractLabeledList(doc, "Genre(s)"));
+        return tags.stream()
+            .map(String::trim)
+            .filter((value) -> !value.isBlank())
+            .sorted(String::compareToIgnoreCase)
+            .toList();
     }
 
     private List<Map<String, String>> extractRelatedSeries(Document doc) {

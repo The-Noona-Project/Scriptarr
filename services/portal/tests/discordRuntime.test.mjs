@@ -366,32 +366,22 @@ test("request and subscribe commands drive interactive Sage-backed selections", 
   };
   const createdRequests = [];
   const sage = {
-    async searchIntake() {
+    async searchRequestMetadata() {
       return {
         ok: true,
-        payload: {
-          results: [
-            {
-              canonicalTitle: "One Piece",
-              editionLabel: "Official Colored",
-              availability: "download-ready",
-              type: "manga",
-              metadataMatches: [{provider: "mangadex", providerSeriesId: "md-1", title: "One Piece (Official Colored)"}],
-              downloadTarget: {
-                providerId: "weebcentral",
-                providerName: "WeebCentral",
-                titleName: "One Piece (Color)",
-                titleUrl: "https://weebcentral.example/one-piece-color",
-                requestType: "manga"
-              },
-              targetIdentity: {
-                workKey: "weebcentral:https://weebcentral.example/one-piece-color",
-                providerId: "weebcentral",
-                titleUrl: "https://weebcentral.example/one-piece-color"
-              }
-            }
-          ]
-        }
+        payload: [
+          {
+            provider: "mangadex",
+            providerName: "MangaDex",
+            providerSeriesId: "md-1",
+            title: "One Piece (Official Colored)",
+            aliases: ["One Piece"],
+            summary: "Luffy sails the Grand Line.",
+            type: "manga",
+            url: "https://mangadex.org/title/md-1",
+            tags: ["Action", "Adventure"]
+          }
+        ]
       };
     },
     async searchLibrary() {
@@ -455,15 +445,17 @@ test("request and subscribe commands drive interactive Sage-backed selections", 
   });
   await handler(requestInteraction);
   const requestReply = requestInteraction.__calls.editReply[0];
-  assert.match(requestReply.content, /Select the Scriptarr request result/);
+  assert.match(requestReply.content, /Pick the exact metadata result/i);
   assert.match(requestReply.content, /Official Colored/);
-  const requestButtonId = requestReply.components[0].components[0].custom_id;
+  assert.match(requestReply.content, /https:\/\/mangadex\.org\/title\/md-1/);
+  const metadataButtonId = requestReply.components[0].components[0].custom_id;
 
-  const requestButton = createButtonInteraction({customId: requestButtonId});
-  await handler(requestButton);
-  assert.match(requestButton.__calls.reply[0].content, /Request saved as \*\*pending\*\*/);
-  assert.equal(createdRequests[0].title, "One Piece");
-  assert.equal(createdRequests[0].targetIdentity.workKey, "weebcentral:https://weebcentral.example/one-piece-color");
+  const metadataButton = createButtonInteraction({customId: metadataButtonId});
+  await handler(metadataButton);
+  assert.match(metadataButton.__calls.reply[0].content, /Request saved as \*\*pending\*\*/);
+  assert.equal(createdRequests[0].title, "One Piece (Official Colored)");
+  assert.equal(createdRequests[0].selectedMetadata.providerSeriesId, "md-1");
+  assert.equal(Object.hasOwn(createdRequests[0], "selectedDownload"), false);
 
   const subscribeInteraction = createInteraction({
     commandName: "subscribe",

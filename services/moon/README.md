@@ -26,16 +26,21 @@ Moon 3.0 also includes a native reader flow with:
 
 Moon still accepts the older untyped title and reader URLs as backward-compatible shims, but the typed paths above are
 the canonical links emitted by the user app.
-Moon's request and admin add-title flows now share the same metadata-first intake engine. Users search once, pick a
-concrete match, and Scriptarr saves the selected metadata plus download snapshot with the request so moderation can
-queue the exact Raven target later. Admin add-title uses the same intake results and queues immediately when a
-download-ready match exists.
+Moon's request and admin add-title flows now share the same metadata-first intake engine. Readers pick metadata only,
+and Scriptarr saves that metadata snapshot with the request so moderators can review the upstream metadata site and
+choose the exact Raven source later. Admin add-title uses the same intake base but lets staff pick a concrete source
+and queue immediately when one exists.
+Web request creation now lives only in `/myrequests`. That page runs an inline wizard: search raw metadata provider
+rows first, choose the exact metadata match, review its provider link if needed, then submit the request with optional
+notes. If no source exists yet, Moon saves the request as `unavailable` and still shows it in the same page's tabbed
+status list. Admins later choose sources from `/admin/requests`, unless Sage auto-approves one high-confidence source.
 The forward-facing user app itself now runs through an embedded Next.js App Router program using Once UI shells. Moon
 keeps the same public routes and same-origin APIs, but the user experience now uses a single-row megamenu header with
 plain site-name branding, a minimal avatar dropdown, a simple footer, and a dedicated `/profile` page for local
-StylePanel preferences and install actions instead of the older plain-JS shell. Library type links now live only under
-the `Library` mega menu, and `/browse` is now a flat A-Z surface with a quick-jump index rail plus uniform art-first
-cards that clamp long copy until the reader opens the full title page. The home route is intentionally simpler too: it
+StylePanel preferences and install actions. The older plain-JS user shell has been removed, and Library type links now live only under
+the `Library` mega menu, and `/browse` now uses A-Z shelf rows with the same Once UI scroller pattern as the home page.
+It keeps a quick-jump index rail on the left and tighter search against titles, aliases, types, and tags while browse
+cards clamp long copy until the reader opens the full title page. The home route is intentionally simpler too: it
 starts with a personalized "Your Bookshelf" continue-reading shelf, then stacks cover-led scroller rows for recently
 added titles by library type and tag-driven suggestions based on the titles the current reader has already opened.
 Moon's reader is now a full-page immersive workspace that defaults to infinite chapter scroll while keeping paged mode
@@ -43,6 +48,15 @@ as a secondary preference. It still uses Moon's typed reader routes plus the exi
 Moon now renders those intake results one row per concrete download target instead of one row per metadata row, so
 duplicate metadata matches collapse cleanly while real edition targets such as plain vs colored remain visibly
 distinct.
+When a user tries to request a duplicate title, Moon no longer creates a second visible request row. If the title is
+already in the library, Moon links directly to the title page. If the title is already queued or running, Moon blocks
+the duplicate row, shows the existing state, and Sage attaches the user to a hidden ready-notify waitlist so Portal
+can DM them later.
+Unavailable requests stay visible in `/myrequests`, are re-checked every 4 hours by Sage, and move to `expired` after
+90 days if no stable source appears.
+Moon's title, browse, admin review, and home surfaces now consume one merged canonical tag set per library title.
+Raven builds those tags from both metadata providers and download providers, with case-insensitive dedupe and
+human-readable display casing.
 Moon admin settings now also surface Anime-Planet as a scrape-based metadata provider ahead of MangaUpdates so admins
 can keep lifecycle or alias enrichment on without relying only on API-backed sources.
 

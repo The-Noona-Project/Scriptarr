@@ -208,7 +208,10 @@ public final class LibraryService {
             normalizedChapters.size(),
             normalizedChapters.size(),
             firstNonBlank(existing != null ? existing.author() : "", ""),
-            existing != null ? existing.tags() : List.of(),
+            mergeTagLists(
+                existing != null ? existing.tags() : List.of(),
+                details != null ? details.tags() : List.of()
+            ),
             mergeAliases(existing != null ? existing.aliases() : List.of(), details != null ? details.associatedNames() : List.of()),
             existing != null ? existing.metadataProvider() : "",
             existing != null ? existing.metadataMatchedAt() : null,
@@ -314,7 +317,11 @@ public final class LibraryService {
             existing.chapterCount(),
             existing.chaptersDownloaded(),
             firstNonBlank(stringValue(details.get("author")), existing.author()),
-            existing.tags(),
+            mergeTagLists(
+                existing.tags(),
+                objectMapper.convertValue(details.getOrDefault("tags", List.of()), new TypeReference<List<String>>() {
+                })
+            ),
             mergeAliases(existing.aliases(), objectMapper.convertValue(details.getOrDefault("aliases", List.of()), new TypeReference<List<String>>() {
             })),
             provider,
@@ -676,7 +683,7 @@ public final class LibraryService {
             maxInt(preferred.chapterCount(), secondary.chapterCount(), mergedChapters.size()),
             maxInt(preferred.chaptersDownloaded(), secondary.chaptersDownloaded(), mergedChapters.size()),
             preferLongerText(preferred.author(), secondary.author()),
-            mergeStringLists(preferred.tags(), secondary.tags()),
+            mergeTagLists(preferred.tags(), secondary.tags()),
             mergeAliases(preferred.aliases(), secondary.aliases()),
             firstNonBlank(preferred.metadataProvider(), secondary.metadataProvider()),
             firstNonBlank(preferred.metadataMatchedAt(), secondary.metadataMatchedAt()),
@@ -806,14 +813,21 @@ public final class LibraryService {
         return score;
     }
 
-    private List<String> mergeStringLists(List<String> primaryValues, List<String> secondaryValues) {
-        List<String> merged = new ArrayList<>(Optional.ofNullable(primaryValues).orElse(List.of()));
-        for (String value : Optional.ofNullable(secondaryValues).orElse(List.of())) {
-            if (value != null && !value.isBlank() && !merged.contains(value)) {
-                merged.add(value);
+    private List<String> mergeTagLists(List<String> primaryValues, List<String> secondaryValues) {
+        Map<String, String> merged = new LinkedHashMap<>();
+        for (String value : Optional.ofNullable(primaryValues).orElse(List.of())) {
+            String normalized = normalizeDisplayTag(value);
+            if (!normalized.isBlank()) {
+                merged.putIfAbsent(normalized.toLowerCase(Locale.ROOT), normalized);
             }
         }
-        return List.copyOf(merged);
+        for (String value : Optional.ofNullable(secondaryValues).orElse(List.of())) {
+            String normalized = normalizeDisplayTag(value);
+            if (!normalized.isBlank()) {
+                merged.putIfAbsent(normalized.toLowerCase(Locale.ROOT), normalized);
+            }
+        }
+        return List.copyOf(merged.values());
     }
 
     private List<Map<String, String>> chooseRelationList(List<Map<String, String>> primaryRelations, List<Map<String, String>> secondaryRelations) {
@@ -1030,6 +1044,16 @@ public final class LibraryService {
             }
         }
         return List.copyOf(merged);
+    }
+
+    private String normalizeDisplayTag(String value) {
+        if (value == null) {
+            return "";
+        }
+        return value.trim()
+            .replaceAll("[\\p{Punct}\\s]+", " ")
+            .replaceAll("\\s+", " ")
+            .trim();
     }
 
     private String resolveCoverAccent(String titleId) {

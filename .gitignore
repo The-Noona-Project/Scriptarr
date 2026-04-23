@@ -20,6 +20,12 @@ temp/
 dist/
 build/
 coverage/
+.next/
+.turbo/
+.vercel/
+*.tsbuildinfo
+playwright-report/
+test-results/
 services/raven/out/
 services/raven/build/
 services/raven/.gradle/

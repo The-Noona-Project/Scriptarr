@@ -5,6 +5,7 @@ import com.scriptarr.raven.library.LibraryService;
 import com.scriptarr.raven.library.LibraryTitle;
 import com.scriptarr.raven.metadata.providers.ComicVineProvider;
 import com.scriptarr.raven.metadata.providers.MangaDexProvider;
+import com.scriptarr.raven.settings.RavenBrokerClient;
 import com.scriptarr.raven.settings.RavenSettingsService;
 import com.scriptarr.raven.support.FakeRavenBrokerClient;
 import com.scriptarr.raven.support.ScriptarrLogger;
@@ -12,6 +13,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Path;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -169,5 +171,65 @@ class MetadataServiceTest {
 
         assertEquals(true, accepted.get("ok"));
         assertEquals("completed", libraryService.findTitle("title-2").status());
+    }
+
+    /**
+     * Verify metadata search ranks the exact main-series title ahead of related
+     * works and drops irrelevant generic Anime-Planet result rows.
+     */
+    @Test
+    void searchRanksExactNarutoAheadOfBorutoAndFiltersGenericNoise() {
+        RavenSettingsService settingsService = mock(RavenSettingsService.class);
+        when(settingsService.getMetadataProviderSettings()).thenReturn(List.of(
+            Map.of("id", "mangadex", "enabled", true),
+            Map.of("id", "animeplanet", "enabled", true)
+        ));
+        ScriptarrLogger logger = mock(ScriptarrLogger.class);
+        MetadataService service = new MetadataService(
+            List.of(),
+            settingsService,
+            mock(RavenBrokerClient.class),
+            mock(LibraryService.class),
+            logger
+        ) {
+            @Override
+            protected List<Map<String, Object>> searchProvider(String providerId, String name) {
+                if ("mangadex".equalsIgnoreCase(providerId)) {
+                    return List.of(
+                        searchResult("mangadex", "boruto-md", "Boruto: Naruto Next Generations"),
+                        searchResult("mangadex", "naruto-md", "Naruto"),
+                        searchResult("mangadex", "naruto-color-md", "Naruto (Official Colored)")
+                    );
+                }
+                if ("animeplanet".equalsIgnoreCase(providerId)) {
+                    return List.of(
+                        searchResult("animeplanet", "read-manga-online", "Read manga online"),
+                        searchResult("animeplanet", "naruto-ap", "Naruto"),
+                        searchResult("animeplanet", "manga-recommendations", "Manga recommendations")
+                    );
+                }
+                return List.of();
+            }
+        };
+
+        List<Map<String, Object>> results = service.search("Naruto", null);
+        List<String> titles = results.stream().map((entry) -> String.valueOf(entry.get("title"))).toList();
+
+        assertFalse(results.isEmpty());
+        assertEquals("Naruto", results.getFirst().get("title"));
+        assertTrue(titles.indexOf("Naruto (Official Colored)") > titles.indexOf("Naruto"));
+        assertTrue(titles.indexOf("Naruto (Official Colored)") < titles.indexOf("Boruto: Naruto Next Generations"));
+        assertTrue(results.stream().noneMatch((entry) -> "Read manga online".equals(entry.get("title"))));
+        assertTrue(results.stream().noneMatch((entry) -> "Manga recommendations".equals(entry.get("title"))));
+        assertTrue(results.stream().anyMatch((entry) -> "Boruto: Naruto Next Generations".equals(entry.get("title"))));
+    }
+
+    private Map<String, Object> searchResult(String provider, String providerSeriesId, String title) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("provider", provider);
+        payload.put("providerSeriesId", providerSeriesId);
+        payload.put("title", title);
+        payload.put("url", "https://metadata.example/" + providerSeriesId);
+        return payload;
     }
 }

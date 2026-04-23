@@ -68,6 +68,14 @@ public class DownloadIntakeService {
             if (!leftAvailability.equals(rightAvailability)) {
                 return "available".equals(leftAvailability) ? -1 : 1;
             }
+            int searchScoreDelta = Integer.compare(scoreSearchPayload(query, right), scoreSearchPayload(query, left));
+            if (searchScoreDelta != 0) {
+                return searchScoreDelta;
+            }
+            int matchScoreDelta = Integer.compare(resolveDownloadMatchScore(right), resolveDownloadMatchScore(left));
+            if (matchScoreDelta != 0) {
+                return matchScoreDelta;
+            }
             int titleComparison = stringValue(left.get("canonicalTitle"))
                 .compareToIgnoreCase(stringValue(right.get("canonicalTitle")));
             if (titleComparison != 0) {
@@ -76,6 +84,54 @@ public class DownloadIntakeService {
             return stringValue(left.get("editionLabel")).compareToIgnoreCase(stringValue(right.get("editionLabel")));
         });
         return List.copyOf(results);
+    }
+
+    /**
+     * Resolve a selected metadata row into Raven's normalized metadata snapshot.
+     *
+     * @param metadataSelection selected metadata-provider row
+     * @return normalized metadata snapshot or an empty map when the selection is invalid
+     */
+    public Map<String, Object> resolveMetadataSelection(Map<String, Object> metadataSelection) {
+        if (metadataSelection == null || metadataSelection.isEmpty()) {
+            return Map.of();
+        }
+
+        String providerId = stringValue(metadataSelection.get("provider"));
+        String providerSeriesId = stringValue(metadataSelection.get("providerSeriesId"));
+        if (providerId.isBlank() || providerSeriesId.isBlank()) {
+            return Map.of();
+        }
+
+        return Map.copyOf(buildMetadataSnapshot(metadataSelection));
+    }
+
+    /**
+     * Resolve every concrete enabled download target that confidently matches a
+     * selected metadata row.
+     *
+     * @param query optional user query that produced the selected metadata row
+     * @param metadataSelection selected metadata-provider row
+     * @return normalized payload with the resolved metadata snapshot and download options
+     */
+    public Map<String, Object> resolveDownloadOptions(String query, Map<String, Object> metadataSelection) {
+        Map<String, Object> metadataSnapshot = resolveMetadataSelection(metadataSelection);
+        if (metadataSnapshot.isEmpty()) {
+            return Map.of(
+                "query", stringValue(query),
+                "selectedMetadata", Map.of(),
+                "results", List.of(),
+                "availability", "unavailable"
+            );
+        }
+
+        List<Map<String, Object>> results = resolveConcreteDownloadOptions(query, metadataSnapshot);
+        return Map.of(
+            "query", stringValue(query),
+            "selectedMetadata", metadataSnapshot,
+            "results", results,
+            "availability", results.isEmpty() ? "unavailable" : "available"
+        );
     }
 
     /**
@@ -267,6 +323,7 @@ public class DownloadIntakeService {
         snapshot.put("summary", stringValue(title.summary()));
         snapshot.put("coverUrl", stringValue(title.coverUrl()));
         snapshot.put("aliases", title.aliases() == null ? List.of() : title.aliases());
+        snapshot.put("tags", title.tags() == null ? List.of() : title.tags());
         snapshot.put("type", firstNonBlank(title.libraryTypeLabel(), title.mediaType(), "manga"));
         snapshot.put("typeSlug", LibraryNaming.normalizeTypeSlug(firstNonBlank(title.libraryTypeSlug(), title.mediaType(), "manga")));
         snapshot.put("editionLabel", detectEditionSignals(title.title(), title.aliases()).label());
@@ -274,6 +331,7 @@ public class DownloadIntakeService {
             "title", stringValue(title.title()),
             "summary", stringValue(title.summary()),
             "aliases", title.aliases() == null ? List.of() : title.aliases(),
+            "tags", title.tags() == null ? List.of() : title.tags(),
             "coverUrl", stringValue(title.coverUrl()),
             "type", firstNonBlank(title.libraryTypeLabel(), title.mediaType(), "manga")
         ));
@@ -372,6 +430,10 @@ public class DownloadIntakeService {
             stringValue(metadataResult.get("coverUrl"))
         ));
         snapshot.put("aliases", aliases.stream().filter((alias) -> !alias.isBlank()).toList());
+        snapshot.put("tags", mergeDisplayStrings(
+            objectToStringList(metadataResult.get("tags")),
+            objectToStringList(details.get("tags"))
+        ));
         snapshot.put("type", typeLabel);
         snapshot.put("typeSlug", LibraryNaming.normalizeTypeSlug(typeLabel));
         snapshot.put("editionLabel", editionSignals.label());
@@ -443,11 +505,106 @@ public class DownloadIntakeService {
                 snapshot.put("nsfw", providerDetails != null && Boolean.TRUE.equals(providerDetails.adultContent()));
                 snapshot.put("matchedQuery", matchedQuery);
                 snapshot.put("matchScore", bestScore);
+                snapshot.put("confidenceBand", resolveConfidenceBand(bestScore));
+                snapshot.put("warnings", buildDownloadWarnings(metadataSnapshot, bestScore, metadataEdition, candidateEdition, typeLabel));
+                snapshot.put("tags", providerDetails != null && providerDetails.tags() != null ? providerDetails.tags() : List.of());
+                snapshot.put("sourceUrl", stringValue(bestCandidate.get("href")));
+                snapshot.put("metadataUrl", stringValue(metadataSnapshot.get("url")));
                 return snapshot;
             }
         }
 
         return null;
+    }
+
+    private List<Map<String, Object>> resolveConcreteDownloadOptions(String query, Map<String, Object> metadataSnapshot) {
+        Set<String> dedupedTerms = new LinkedHashSet<>();
+        addSearchTerm(dedupedTerms, stringValue(metadataSnapshot.get("title")));
+        Object rawAliases = metadataSnapshot.get("aliases");
+        if (rawAliases instanceof Iterable<?> iterable) {
+            for (Object alias : iterable) {
+                addSearchTerm(dedupedTerms, stringValue(alias));
+            }
+        }
+        addSearchTerm(dedupedTerms, query);
+
+        EditionSignals metadataEdition = detectEditionSignals(
+            stringValue(metadataSnapshot.get("title")),
+            stringValue(metadataSnapshot.get("editionLabel")),
+            metadataSnapshot.get("aliases")
+        );
+        Map<String, Map<String, Object>> groupedResults = new LinkedHashMap<>();
+        for (DownloadProvider provider : downloadProviderRegistry.enabledProviders()) {
+            for (String term : dedupedTerms) {
+                for (Map<String, String> candidate : provider.searchTitles(term)) {
+                    int score = scoreCandidate(metadataSnapshot, candidate, dedupedTerms, metadataEdition);
+                    if (score < 60) {
+                        continue;
+                    }
+                    String titleUrl = stringValue(candidate.get("href"));
+                    if (titleUrl.isBlank()) {
+                        continue;
+                    }
+
+                    String key = provider.id() + "::" + titleUrl;
+                    if (parseInt(groupedResults.getOrDefault(key, Map.of()).get("matchScore")) >= score) {
+                        continue;
+                    }
+
+                    TitleDetails providerDetails = provider.getTitleDetails(titleUrl);
+                    String typeLabel = LibraryNaming.normalizeTypeLabel(firstNonBlank(
+                        providerDetails != null ? providerDetails.type() : "",
+                        candidate.get("type"),
+                        stringValue(metadataSnapshot.get("type")),
+                        "manga"
+                    ));
+                    EditionSignals candidateEdition = detectEditionSignals(
+                        candidate.get("title"),
+                        titleUrl,
+                        providerDetails != null ? providerDetails.associatedNames() : List.of()
+                    );
+                    Map<String, Object> snapshot = new LinkedHashMap<>();
+                    snapshot.put("providerId", provider.id());
+                    snapshot.put("providerName", provider.name());
+                    snapshot.put("titleName", firstNonBlank(candidate.get("title"), stringValue(metadataSnapshot.get("title")), "Untitled"));
+                    snapshot.put("titleUrl", titleUrl);
+                    snapshot.put("requestType", typeLabel);
+                    snapshot.put("libraryTypeLabel", typeLabel);
+                    snapshot.put("libraryTypeSlug", LibraryNaming.normalizeTypeSlug(typeLabel));
+                    snapshot.put("coverUrl", firstNonBlank(
+                        stringValue(candidate.get("coverUrl")),
+                        stringValue(metadataSnapshot.get("coverUrl"))
+                    ));
+                    snapshot.put("editionLabel", firstNonBlank(metadataEdition.label(), candidateEdition.label()));
+                    snapshot.put("editionClass", firstNonBlank(candidateEdition.key(), metadataEdition.key()));
+                    snapshot.put("providerEditionLabel", candidateEdition.label());
+                    snapshot.put("nsfw", providerDetails != null && Boolean.TRUE.equals(providerDetails.adultContent()));
+                    snapshot.put("matchedQuery", term);
+                    snapshot.put("matchScore", score);
+                    snapshot.put("confidenceBand", resolveConfidenceBand(score));
+                    snapshot.put("warnings", buildDownloadWarnings(metadataSnapshot, score, metadataEdition, candidateEdition, typeLabel));
+                    snapshot.put("tags", providerDetails != null && providerDetails.tags() != null ? providerDetails.tags() : List.of());
+                    snapshot.put("sourceUrl", titleUrl);
+                    snapshot.put("metadataUrl", stringValue(metadataSnapshot.get("url")));
+                    groupedResults.put(key, snapshot);
+                }
+            }
+        }
+
+        return groupedResults.values().stream()
+            .sorted((left, right) -> {
+                int scoreDelta = Integer.compare(parseInt(right.get("matchScore")), parseInt(left.get("matchScore")));
+                if (scoreDelta != 0) {
+                    return scoreDelta;
+                }
+                int providerDelta = stringValue(left.get("providerName")).compareToIgnoreCase(stringValue(right.get("providerName")));
+                if (providerDelta != 0) {
+                    return providerDelta;
+                }
+                return stringValue(left.get("titleName")).compareToIgnoreCase(stringValue(right.get("titleName")));
+            })
+            .map(Map::copyOf)
+            .toList();
     }
 
     private int scoreCandidate(
@@ -507,6 +664,41 @@ public class DownloadIntakeService {
             best += 5;
         }
         return best;
+    }
+
+    private List<String> buildDownloadWarnings(
+        Map<String, Object> metadataSnapshot,
+        int score,
+        EditionSignals metadataEdition,
+        EditionSignals candidateEdition,
+        String typeLabel
+    ) {
+        List<String> warnings = new ArrayList<>();
+        String metadataType = LibraryNaming.normalizeTypeSlug(stringValue(metadataSnapshot.get("type")));
+        String candidateType = LibraryNaming.normalizeTypeSlug(typeLabel);
+        if (!metadataType.isBlank() && !candidateType.isBlank() && !metadataType.equals(candidateType)) {
+            warnings.add("Type differs from the selected metadata");
+        }
+        if (metadataEdition.colored() != candidateEdition.colored()) {
+            warnings.add("Edition markers do not match the selected metadata");
+        }
+        if (score < 100) {
+            warnings.add("Weak match confidence");
+        }
+        return List.copyOf(warnings);
+    }
+
+    private String resolveConfidenceBand(int score) {
+        if (score >= 120) {
+            return "exact";
+        }
+        if (score >= 100) {
+            return "high";
+        }
+        if (score >= 75) {
+            return "medium";
+        }
+        return "low";
     }
 
     private int scoreBulkMetadataCandidate(
@@ -739,6 +931,46 @@ public class DownloadIntakeService {
         }
     }
 
+    private int resolveDownloadMatchScore(Map<String, Object> payload) {
+        Object rawDownload = payload.get("download");
+        if (!(rawDownload instanceof Map<?, ?> download)) {
+            return 0;
+        }
+        return parseInt(download.get("matchScore"));
+    }
+
+    private int scoreSearchPayload(String query, Map<String, Object> payload) {
+        List<String> labels = new ArrayList<>();
+        labels.add(stringValue(payload.get("canonicalTitle")));
+        Object rawMetadata = payload.get("metadata");
+        if (rawMetadata instanceof Map<?, ?> metadata) {
+            labels.add(stringValue(metadata.get("title")));
+        }
+        Object rawAliases = payload.get("aliases");
+        if (rawAliases instanceof Iterable<?> iterable) {
+            for (Object alias : iterable) {
+                labels.add(stringValue(alias));
+            }
+        }
+        int best = 0;
+        for (String label : labels) {
+            best = Math.max(best, scoreBulkLabelAlignment(label, query));
+        }
+        EditionSignals queryEdition = detectEditionSignals(query);
+        EditionSignals payloadEdition = detectEditionSignals(
+            payload.get("canonicalTitle"),
+            payload.get("editionLabel"),
+            payload.get("aliases")
+        );
+        if (!queryEdition.colored()) {
+            return Math.max(0, best + (payloadEdition.colored() ? -20 : 0));
+        }
+        if (!payloadEdition.colored()) {
+            return Math.max(0, best - 35);
+        }
+        return best + 18;
+    }
+
     private String stringValue(Object value) {
         return value == null ? "" : String.valueOf(value).trim();
     }
@@ -750,6 +982,38 @@ public class DownloadIntakeService {
             }
         }
         return "";
+    }
+
+    private List<String> objectToStringList(Object value) {
+        if (!(value instanceof Iterable<?> iterable)) {
+            return List.of();
+        }
+        List<String> values = new ArrayList<>();
+        for (Object entry : iterable) {
+            String normalized = stringValue(entry);
+            if (!normalized.isBlank()) {
+                values.add(normalized);
+            }
+        }
+        return List.copyOf(values);
+    }
+
+    private List<String> mergeDisplayStrings(List<String>... valueSets) {
+        Set<String> seen = new LinkedHashSet<>();
+        List<String> merged = new ArrayList<>();
+        for (List<String> values : valueSets) {
+            for (String value : values) {
+                String normalized = stringValue(value);
+                if (normalized.isBlank()) {
+                    continue;
+                }
+                String dedupeKey = normalized.toLowerCase(Locale.ROOT);
+                if (seen.add(dedupeKey)) {
+                    merged.add(normalized);
+                }
+            }
+        }
+        return List.copyOf(merged);
     }
 
     private static final class GroupedIntakeResult {

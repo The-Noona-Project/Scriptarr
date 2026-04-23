@@ -14,18 +14,26 @@ dist
 build
 out
 target
+.next
+.turbo
+.vercel
+*.tsbuildinfo
 tmp
 temp
 test-results
+playwright-report
 logs
 *.log
 temp_*.txt
 
 **/.gradle
+**/.next
+**/.turbo
 **/build
 **/dist
 **/out
 **/target
+**/test-results
 
 services/raven/.gradle
 services/raven/build

@@ -36,9 +36,9 @@ class DownloadIntakeServiceTest {
             ),
             Map.of(
                 "https://weebcentral.com/series/plain-one-piece",
-                new TitleDetails("", "manga", List.of("One Piece"), "", "", false, true, false, List.of()),
+                new TitleDetails("", "manga", List.of("One Piece"), "", "", false, true, false, List.of(), List.of()),
                 "https://weebcentral.com/series/colored-one-piece",
-                new TitleDetails("", "manga", List.of("One Piece Digital Colored Comics"), "", "", false, true, false, List.of())
+                new TitleDetails("", "manga", List.of("One Piece Digital Colored Comics"), "", "", false, true, false, List.of(), List.of())
             )
         );
         when(registry.enabledProviders()).thenReturn(List.of(provider));
@@ -87,9 +87,9 @@ class DownloadIntakeServiceTest {
             ),
             Map.of(
                 "https://weebcentral.com/series/plain-one-piece",
-                new TitleDetails("", "manga", List.of("One Piece"), "", "", false, true, false, List.of()),
+                new TitleDetails("", "manga", List.of("One Piece"), "", "", false, true, false, List.of(), List.of()),
                 "https://weebcentral.com/series/colored-one-piece",
-                new TitleDetails("", "manga", List.of("One Piece Digital Colored Comics"), "", "", false, true, false, List.of())
+                new TitleDetails("", "manga", List.of("One Piece Digital Colored Comics"), "", "", false, true, false, List.of(), List.of())
             )
         );
         when(registry.enabledProviders()).thenReturn(List.of(provider));
@@ -122,7 +122,7 @@ class DownloadIntakeServiceTest {
             List.of(candidate("One Piece", "https://weebcentral.com/series/plain-one-piece", "manga")),
             Map.of(
                 "https://weebcentral.com/series/plain-one-piece",
-                new TitleDetails("", "manga", List.of("One Piece"), "", "", false, true, false, List.of())
+                new TitleDetails("", "manga", List.of("One Piece"), "", "", false, true, false, List.of(), List.of())
             )
         );
         when(registry.enabledProviders()).thenReturn(List.of(provider));
@@ -158,7 +158,7 @@ class DownloadIntakeServiceTest {
             List.of(candidate("One Piece", "https://weebcentral.com/series/plain-one-piece", "manga")),
             Map.of(
                 "https://weebcentral.com/series/plain-one-piece",
-                new TitleDetails("", "manga", List.of("One Piece"), "", "", false, true, false, List.of())
+                new TitleDetails("", "manga", List.of("One Piece"), "", "", false, true, false, List.of(), List.of())
             )
         );
         when(registry.enabledProviders()).thenReturn(List.of(provider));
@@ -220,7 +220,7 @@ class DownloadIntakeServiceTest {
             List.of(candidate("One Piece (Color)", "https://weebcentral.com/series/colored-one-piece", "manga")),
             Map.of(
                 "https://weebcentral.com/series/colored-one-piece",
-                new TitleDetails("", "manga", List.of("One Piece Digital Colored Comics"), "", "", false, true, false, List.of())
+                new TitleDetails("", "manga", List.of("One Piece Digital Colored Comics"), "", "", false, true, false, List.of(), List.of())
             )
         );
         when(registry.enabledProviders()).thenReturn(List.of(provider));
@@ -244,6 +244,56 @@ class DownloadIntakeServiceTest {
         assertTrue(resolution.matched());
         assertEquals("colored-md", resolution.metadataSnapshot().get("providerSeriesId"));
         assertEquals("https://weebcentral.com/series/colored-one-piece", resolution.downloadSnapshot().get("titleUrl"));
+    }
+
+    /**
+     * Verify grouped intake results rank an exact main-series title ahead of a
+     * longer related work when the metadata provider returns the related title
+     * first.
+     */
+    @Test
+    void searchRanksExactNarutoAheadOfBoruto() {
+        MetadataService metadataService = mock(MetadataService.class);
+        DownloadProviderRegistry registry = mock(DownloadProviderRegistry.class);
+        FakeDownloadProvider provider = new FakeDownloadProvider(
+            List.of(
+                candidate("Naruto (Color)", "https://weebcentral.com/series/naruto-colored", "manga"),
+                candidate("Boruto: Naruto Next Generations", "https://weebcentral.com/series/boruto", "manga"),
+                candidate("Naruto", "https://weebcentral.com/series/naruto", "manga")
+            ),
+            Map.of(
+                "https://weebcentral.com/series/naruto-colored",
+                new TitleDetails("", "manga", List.of("Naruto Digital Colored Comics"), "", "", false, true, false, List.of(), List.of()),
+                "https://weebcentral.com/series/boruto",
+                new TitleDetails("", "manga", List.of("Boruto: Naruto Next Generations"), "", "", false, true, false, List.of(), List.of()),
+                "https://weebcentral.com/series/naruto",
+                new TitleDetails("", "manga", List.of("Naruto"), "", "", false, true, false, List.of(), List.of())
+            )
+        );
+        when(registry.enabledProviders()).thenReturn(List.of(provider));
+        when(metadataService.search("Naruto", null)).thenReturn(List.of(
+            metadata("mangadex", "naruto-color-md", "Naruto (Official Colored)"),
+            metadata("mangadex", "boruto-md", "Boruto: Naruto Next Generations"),
+            metadata("mangadex", "naruto-md", "Naruto")
+        ));
+        when(metadataService.seriesDetails("mangadex", "naruto-color-md")).thenReturn(seriesDetails(
+            "Naruto (Official Colored)",
+            List.of("Naruto")
+        ));
+        when(metadataService.seriesDetails("mangadex", "boruto-md")).thenReturn(seriesDetails(
+            "Boruto: Naruto Next Generations",
+            List.of("Boruto")
+        ));
+        when(metadataService.seriesDetails("mangadex", "naruto-md")).thenReturn(seriesDetails("Naruto", List.of("Naruto")));
+
+        DownloadIntakeService service = new DownloadIntakeService(metadataService, registry);
+
+        List<Map<String, Object>> results = service.search("Naruto");
+
+        assertEquals(3, results.size());
+        assertEquals("Naruto", results.getFirst().get("canonicalTitle"));
+        assertEquals("Naruto (Official Colored)", results.get(1).get("canonicalTitle"));
+        assertEquals("Boruto: Naruto Next Generations", results.get(2).get("canonicalTitle"));
     }
 
     private Map<String, Object> metadata(String provider, String providerSeriesId, String title) {

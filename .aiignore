@@ -19,6 +19,12 @@ services/**/node_modules/
 coverage/
 dist/
 build/
+.next/
+.turbo/
+.vercel/
+*.tsbuildinfo
+playwright-report/
+test-results/
 tmp/
 temp/
 .cache/

@@ -337,6 +337,7 @@ class DownloaderServiceRetryTest {
                 false,
                 true,
                 false,
+                List.of(),
                 List.of()
             );
         }

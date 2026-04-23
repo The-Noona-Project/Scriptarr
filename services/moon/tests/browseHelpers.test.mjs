@@ -10,7 +10,7 @@ import {
 
 test("filterBrowseTitles sorts alphabetically and matches across title metadata", () => {
   const titles = [
-    {id: "3", title: "Zom 100", summary: "Apocalypse comedy", tags: ["zombies"]},
+    {id: "3", title: "Zom 100", summary: "Apocalypse comedy", tags: ["zombies"], libraryTypeSlug: "manga"},
     {id: "1", title: "Bleach", summary: "Soul reaper action", aliases: ["Burichi"]},
     {id: "2", title: "Akane-banashi", summary: "Rakugo drama", libraryTypeLabel: "Manga"}
   ];
@@ -28,6 +28,23 @@ test("filterBrowseTitles sorts alphabetically and matches across title metadata"
   assert.deepEqual(
     filterBrowseTitles(titles, "zombies").map((title) => title.title),
     ["Zom 100"]
+  );
+
+  assert.deepEqual(
+    filterBrowseTitles(titles, "manga").map((title) => title.title),
+    ["Akane-banashi", "Zom 100"]
+  );
+});
+
+test("filterBrowseTitles ignores summary-only matches", () => {
+  const titles = [
+    {id: "1", title: "Bleach", summary: "Soul reaper action"},
+    {id: "2", title: "Akane-banashi", summary: "Rakugo drama"}
+  ];
+
+  assert.deepEqual(
+    filterBrowseTitles(titles, "reaper").map((title) => title.title),
+    []
   );
 });
 

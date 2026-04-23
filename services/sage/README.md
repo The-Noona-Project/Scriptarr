@@ -7,12 +7,22 @@ Warden should use Sage's internal broker routes instead of reaching across the s
 
 It persists Moon admin Raven and Oracle settings through Vault, brokers durable job and task state, and mediates the
 browser-safe handoff to Warden for manual LocalAI or managed-service update actions.
-Sage now also owns the shared metadata-first request intake flow. Moon user requests and Moon admin add-title both
-search through Sage, which asks Raven for metadata-plus-download availability, persists the chosen match snapshot in
-Vault, and later queues the exact saved Raven target during moderation or admin immediate-add.
+Sage now also owns the shared metadata-first request intake flow. Moon user requests, Discord `/request`, and Moon
+admin add-title all search through Sage, which asks Raven for metadata and source availability, persists the chosen
+metadata snapshot in Vault, and later queues the exact saved Raven target during moderation or admin immediate-add.
 Sage now treats Raven's grouped intake result as the canonical request identity and defers final duplicate enforcement
 to Vault's durable work-key guard so Moon, Discord, admin add-title, and the public API all reject the same duplicate
 targets consistently under concurrency.
+Moon web now creates requests only through `/myrequests`, and Discord `/request` now uses the same metadata-first
+sequence. Sage exposes the browser-safe and Portal-safe orchestration steps separately: metadata search, admin-only
+download-option lookup from the selected metadata result, and final moderated request creation.
+Duplicate submissions no longer create visible second request rows. Sage attaches duplicate users to a hidden waitlist
+on the canonical request work identity so Portal can DM them when the title becomes ready. When metadata exists but no
+download target exists yet, Sage stores an `unavailable` request, re-checks it every 4 hours, and expires it after 90
+days if no stable source appears.
+Sage also owns the brokered `sage.requests.autoApproveAndDownload` setting. When that toggle is enabled, Sage may
+queue a request automatically only if Raven resolves one high-confidence source with no conflicting warnings; anything
+weaker stays in manual admin review.
 
 Moon's legacy and v3 library routes should mirror Raven's real-or-empty library state. Sage no longer seeds preview
 titles on behalf of Moon.

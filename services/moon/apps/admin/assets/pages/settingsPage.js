@@ -24,7 +24,15 @@ export const renderSettingsPage = (result) => {
     return renderEmptyState("Settings unavailable", result.payload?.error || "Unable to load admin settings.");
   }
 
-  const {ravenVpn = {}, metadataProviders = {}, downloadProviders = {}, oracle = {}, branding = {}, warden = {}} = result.payload || {};
+  const {
+    ravenVpn = {},
+    metadataProviders = {},
+    downloadProviders = {},
+    requestWorkflow = {},
+    oracle = {},
+    branding = {},
+    warden = {}
+  } = result.payload || {};
   const oracleProvider = oracle.provider === "localai" ? "localai" : "openai";
   const oracleModel = oracle.model || fallbackModelForProvider(oracleProvider);
   const localAiState = [
@@ -148,6 +156,22 @@ export const renderSettingsPage = (result) => {
           </div>
           <p class="field-note">WeebCentral stays first by default, MangaDex is available as a normal fallback source, and the Discord <code>downloadall</code> command remains intentionally WeebCentral-only for the configured owner account.</p>
           <button class="solid-button" type="submit">Save download providers</button>
+        </form>
+      </section>
+      <section class="panel-section">
+        <div class="section-heading">
+          <div>
+            <span class="section-kicker">Requests</span>
+            <h2>Workflow automation</h2>
+          </div>
+        </div>
+        <form id="request-workflow-form" class="settings-form">
+          <label class="switch-row">
+            <input id="request-auto-approve" type="checkbox" ${requestWorkflow.autoApproveAndDownload ? "checked" : ""}>
+            <span>Auto approve and download</span>
+          </label>
+          <p class="field-note">When enabled, Sage will only auto-approve requests if Raven resolves one high-confidence source with no warnings. Everything else stays in manual admin review.</p>
+          <button class="solid-button" type="submit">Save request workflow</button>
         </form>
       </section>
     </div>
@@ -274,6 +298,15 @@ export const enhanceSettingsPage = async (root, {api, rerender, setFlash}) => {
     }));
     const result = await api.put("/api/moon/admin/settings/raven/download-providers", {providers});
     setFlash(result.ok ? "good" : "bad", result.ok ? "Download provider settings saved." : result.payload?.error || "Unable to save download provider settings.");
+    await rerender();
+  });
+
+  root.querySelector("#request-workflow-form")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const result = await api.put("/api/moon/admin/settings/sage/requests", {
+      autoApproveAndDownload: root.querySelector("#request-auto-approve")?.checked === true
+    });
+    setFlash(result.ok ? "good" : "bad", result.ok ? "Request workflow settings saved." : result.payload?.error || "Unable to save request workflow settings.");
     await rerender();
   });
 

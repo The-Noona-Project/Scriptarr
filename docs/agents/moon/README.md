@@ -35,8 +35,14 @@
 - The old untyped `/title/:id` and `/reader/:titleId/:chapterId` paths are compatibility shims only. New Moon links
   should emit the typed canonical paths.
 - Moon stays responsible for browser-safe proxying into Sage. Browsers should not call Raven, Warden, Vault, Portal, or Oracle directly.
-- Keep user requests and admin add-title on the shared intake engine. Moon should submit `query`, `selectedMetadata`,
-  and nullable `selectedDownload` instead of regressing to free-text-only request payloads.
+- Keep user requests and admin add-title on the shared intake engine. Moon should submit `query` plus
+  `selectedMetadata` for requester flows, and only include `selectedDownload` on admin approval or admin add flows
+  instead of regressing to free-text-only request payloads.
+- `/myrequests` is now the only web request-creation surface. Keep the inline wizard metadata-first, keep the lower
+  list tabbed into `Active`, `Completed`, and `Closed`, and only allow requester note edits or cancel actions while
+  the request is still active.
+- Duplicate request blockers should not create second visible rows in Moon. Show the duplicate outcome, link directly
+  to the title when it already exists, and let Sage or Portal own the hidden waitlist and later ready notifications.
 - Moon should show honest empty states when Raven has no imported titles, and `/admin` should stay dark by default.
 - Keep Discord login as the only bootstrap and admin sign-in path. Do not reintroduce claim-dev-session behavior.
 - Keep HTML responses uncached and static admin or user assets versioned so publishes invalidate the browser cache
@@ -46,7 +52,7 @@
 - The user app now runs as an embedded Next.js App Router program. Preserve the existing public Moon routes and
   same-origin APIs while keeping the Once UI shell, single-row megamenu navigation, minimal avatar dropdown,
   `/profile` route for StylePanel or install actions, and simple footer inside Moon's runtime instead of bypassing
-  Moon.
+  Moon. The old `apps/user` plain-JS shell is gone, so new user-surface work should stay inside `apps/user-next`.
 - The user home route should stay cover-led and shelf-based, not hero-heavy. Favor a personalized "Your Bookshelf"
   continue-reading scroller first, then recent-by-type shelves and tag-driven shelves built from the reader's saved
   progress history.
@@ -67,8 +73,12 @@
   profiles for manga, manhwa, manhua, webtoon, comic, and OEL in sync with the brokered `raven.naming` payload.
 - `/admin/calendar` should consume real release entries, not just task history. Prefer chapter release dates captured
   from Raven's provider scrapes plus metadata enrichment and present them in a calendar-first operational view.
-- `/admin/requests` should surface the saved metadata and download snapshots, linked Raven task state, and the resolve
-  path for `unavailable` requests instead of assuming every request is immediately approvable.
+- `/admin/requests` should surface the saved metadata, metadata-site links, merged tags, linked Raven task state, and
+  the resolve path for `unavailable` requests instead of assuming every request is immediately approvable.
+- `/admin/requests` now also owns the source-pick and override path for requester metadata picks. Moderators can
+  replace metadata or download selections before they approve or resolve the request.
+- Keep the brokered `Auto approve and download` setting in Moon admin aligned with Sage's high-confidence-only
+  behavior. Moon should present it as an optimization toggle, not as a promise that every request will skip review.
 - `/admin/system/api` is the admin control point for Moon's trusted public API. Keep the docs and key-management
   surfaces same-origin, Sage-backed, and free of direct internal service calls.
 - `/api/public/*` should keep returning `coverUrl`, selection tokens, and the external guardrail metadata that trusted

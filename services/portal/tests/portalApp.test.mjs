@@ -137,7 +137,8 @@ test("portal HTTP surface covers command inventory, request routing, chat routin
       assert.equal(req.headers.authorization, "Bearer portal-service-token");
       assert.equal(body.discordUserId, "253987219969146890");
       assert.equal(body.title, "Dandadan");
-      assert.equal(body.targetIdentity.workKey, "weebcentral:https://weebcentral.example/dandadan");
+      assert.equal(body.selectedMetadata.providerSeriesId, "md-1");
+      assert.equal(body.selectedDownload, undefined);
       return {
         status: 201,
         body: {
@@ -181,16 +182,6 @@ test("portal HTTP surface covers command inventory, request routing, chat routin
             provider: "mangadex",
             providerSeriesId: "md-1",
             title: "Dandadan"
-          },
-          selectedDownload: {
-            providerId: "weebcentral",
-            titleUrl: "https://weebcentral.example/dandadan",
-            requestType: "manga"
-          },
-          targetIdentity: {
-            workKey: "weebcentral:https://weebcentral.example/dandadan",
-            providerId: "weebcentral",
-            titleUrl: "https://weebcentral.example/dandadan"
           }
         })
       });
@@ -336,6 +327,47 @@ test("portal notifier delivers follow, approval, denial, and completion DMs once
                   discordUserId: "user-1",
                   titleName: "Chainsaw Man",
                   note: "Already available elsewhere."
+                },
+              ackedIds.has("request-4:blocked:user-2")
+                ? null
+                : {
+                  id: "request-4:blocked:user-2",
+                  requestId: "request-4",
+                  decisionType: "blocked",
+                  discordUserId: "user-2",
+                  titleName: "Tomb Raider King"
+                },
+              ackedIds.has("request-5:ready:user-3")
+                ? null
+                : {
+                  id: "request-5:ready:user-3",
+                  requestId: "request-5",
+                  decisionType: "ready",
+                  discordUserId: "user-3",
+                  titleName: "Absolute Duo",
+                  titleUrl: "https://pax-kun.com/title/manga/absolute-duo"
+                },
+              ackedIds.has("request-6:source-found")
+                ? null
+                : {
+                  id: "request-6:source-found",
+                  requestId: "request-6",
+                  decisionType: "source-found",
+                  discordUserId: "user-4",
+                  titleName: "Unmatched Title",
+                  sourceFoundOptions: [{
+                    providerId: "weebcentral",
+                    titleUrl: "https://weebcentral.com/series/unmatched-title"
+                  }]
+                },
+              ackedIds.has("request-7:expired")
+                ? null
+                : {
+                  id: "request-7:expired",
+                  requestId: "request-7",
+                  decisionType: "expired",
+                  discordUserId: "user-5",
+                  titleName: "No Source Title"
                 }
             ].filter(Boolean)
           }
@@ -345,6 +377,11 @@ test("portal notifier delivers follow, approval, denial, and completion DMs once
         ackedIds.add(requestId);
         acknowledged.push(`request:${requestId}`);
         return {ok: true};
+      }
+    },
+    requestCommand: {
+      buildSourceFoundDirectMessage() {
+        return null;
       }
     }
   });
@@ -359,12 +396,20 @@ test("portal notifier delivers follow, approval, denial, and completion DMs once
   assert.ok(sent.some((entry) => entry.payload?.content.includes("was approved")));
   assert.ok(sent.some((entry) => entry.payload?.content.includes("was denied")));
   assert.ok(sent.some((entry) => entry.payload?.content.includes("Approved from Moon admin.")));
+  assert.ok(sent.some((entry) => entry.payload?.content.includes("already tracking **Tomb Raider King**")));
+  assert.ok(sent.some((entry) => entry.payload?.content.includes("**Absolute Duo**, is ready")));
+  assert.ok(sent.some((entry) => entry.payload?.content.includes("moved it back into admin review")));
+  assert.ok(sent.some((entry) => entry.payload?.content.includes("expired after 90 days")));
   assert.ok(sent.some((entry) => entry.payload?.content.includes("https://pax-kun.com/myrequests")));
   assert.ok(sent.some((entry) => entry.payload?.embeds?.[0]?.image?.url === "https://images.example/solo.jpg"));
   assert.deepEqual(acknowledged.sort(), [
     "follow:follow-1",
     "request:request-1",
     "request:request-2:approved",
-    "request:request-3:denied"
+    "request:request-3:denied",
+    "request:request-4:blocked:user-2",
+    "request:request-5:ready:user-3",
+    "request:request-6:source-found",
+    "request:request-7:expired"
   ]);
 });

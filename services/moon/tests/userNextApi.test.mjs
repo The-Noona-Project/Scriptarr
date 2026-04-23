@@ -2,7 +2,14 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {loadMoonChromeContext, logoutMoonSession, requestJson} from "../apps/user-next/lib/api.js";
-import {buildProfilePath, classifyPathname} from "../apps/user-next/lib/routes.js";
+import {
+  buildLibraryPath,
+  buildProfilePath,
+  buildReaderPath,
+  buildTitlePath,
+  classifyPathname,
+  getLibraryTypes
+} from "../apps/user-next/lib/routes.js";
 
 test("loadMoonChromeContext normalizes nested auth payloads from Moon auth status", async () => {
   const previousFetch = globalThis.fetch;
@@ -106,4 +113,21 @@ test("logoutMoonSession posts to Moon's local auth logout route", async () => {
 test("profile route helpers classify /profile cleanly", () => {
   assert.equal(buildProfilePath(), "/profile");
   assert.equal(classifyPathname("/profile"), "profile");
+});
+
+test("user-next route helpers build canonical typed Moon paths", () => {
+  assert.equal(buildLibraryPath("Web Toon"), "/library/web-toon");
+  assert.equal(buildTitlePath("Web Toon", "dan-da-dan"), "/title/web-toon/dan-da-dan");
+  assert.equal(buildReaderPath("Web Toon", "dan-da-dan", "chapter-1"), "/reader/web-toon/dan-da-dan/chapter-1");
+});
+
+test("user-next library types stay trimmed to the supported Moon buckets", () => {
+  assert.deepEqual(getLibraryTypes(), [
+    {slug: "manga", label: "Manga"},
+    {slug: "manhwa", label: "Manhwa"},
+    {slug: "manhua", label: "Manhua"},
+    {slug: "webtoon", label: "Webtoon"},
+    {slug: "comic", label: "Comic"},
+    {slug: "oel", label: "OEL"}
+  ]);
 });

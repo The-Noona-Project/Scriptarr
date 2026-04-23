@@ -19,8 +19,8 @@ Architecture invariants:
 
 - Vault is the only first-party service allowed to touch MySQL directly.
 - Sage is the only supported first-party internal HTTP broker.
-- Moon requests and admin add-title now share a metadata-first intake flow that persists the selected metadata plus
-  download snapshot before moderation or queueing.
+- Moon requests and admin add-title now share a metadata-first intake flow that persists the selected metadata first,
+  then either queues an admin-picked source or waits for staff review.
 - Raven intake is now grouped by concrete provider target and edition-aware, so plain vs colored variants only stay
   separate when they truly resolve to different provider URLs.
 - Portal's Discord runtime is now live again, and the brokered `portal.discord` settings object is the source of truth
@@ -31,6 +31,11 @@ Architecture invariants:
   public API collapse cleanly under concurrency.
 - Request-linked moderation and Raven completion events can now trigger one Portal DM per request state when a Discord
   id is available.
+- Moon web request creation now lives in `/myrequests`, Discord `/request` now uses the same metadata-only requester
+  flow, admins choose download sources during approval from `/admin/requests`, and unavailable requests are Sage-owned
+  records that recheck every 4 hours and expire after 90 days.
+- Raven now exposes merged metadata-provider and download-provider tags as one canonical tag set for library and
+  moderation surfaces, while keeping source attribution internally for debugging.
 - Raven stores in-flight downloads under `downloading/<type>/...` and promotes completed library content into
   `downloaded/<type>/...`.
 - Raven should only report `100%` after the promoted files persist into the brokered catalog, and startup recovery now
