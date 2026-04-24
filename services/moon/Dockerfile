@@ -3,6 +3,7 @@ FROM node:24-slim
 WORKDIR /app
 
 COPY package.json package-lock.json ./
+COPY packages/scriptarr-access ./packages/scriptarr-access
 COPY packages/scriptarr-logging ./packages/scriptarr-logging
 COPY services/moon/package.json services/moon/package.json
 
