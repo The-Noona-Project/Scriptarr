@@ -54,12 +54,20 @@
   `/profile` route for StylePanel or install actions, and simple footer inside Moon's runtime instead of bypassing
   Moon. The old `apps/user` plain-JS shell is gone, so new user-surface work should stay inside `apps/user-next`.
 - The user home route should stay cover-led and shelf-based, not hero-heavy. Favor a personalized "Your Bookshelf"
-  continue-reading scroller first, then recent-by-type shelves and tag-driven shelves built from the reader's saved
-  progress history.
+  continue-reading scroller first, then recent-by-type shelves and tag-driven shelves built from explicit tag
+  likes/dislikes plus inferred taste from read history, follows, and the active bookshelf.
+- Bookshelf membership is no longer derived from `media_progress` alone. Moon should treat title/chapter read state as
+  the source of truth for started vs completed bookshelf behavior while still keeping progress rows for the active
+  reading position.
+- Title pages should keep the explicit reader actions visible: mark title read, mark title unread, mark chapter read,
+  mark chapter unread, and per-tag `Like`, `Hide`, or `Clear` actions.
 - Reader preferences are now centered on the new immersive reader. Seamless infinite scroll is the default mode,
   fit-width paged mode is the secondary option, and progress, bookmarks, and typed route syncing should keep working
   even as the shell evolves.
 - `/admin/system/updates` is an actionable Moon surface that checks or starts managed-service update jobs through Sage.
+- `/admin/system` also owns the root-only content reset maintenance flow. Keep it two-step, confirmation-gated,
+  same-origin, and honest about what will be deleted: content-side requests, progress, read state, follows, bookmarks,
+  Raven catalog state, Raven task state, and managed Raven download folders only.
 - `/admin/discord` should surface Portal capability state honestly: command runtime, command sync, onboarding
   availability, and the last meaningful runtime error should all be visible without forcing the admin to read logs.
 - `/admin/library` should stay dense and operational, closer to Sonarr's series index than to a marketing gallery.

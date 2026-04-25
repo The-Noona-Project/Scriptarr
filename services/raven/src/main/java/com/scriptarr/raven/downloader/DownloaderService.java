@@ -30,10 +30,12 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
@@ -78,14 +80,8 @@ public class DownloaderService {
 
     private final Map<String, Map<String, Object>> tasks = new ConcurrentHashMap<>();
     private final AtomicLong queueSequence = new AtomicLong();
-    private final ThreadPoolExecutor queueWorker = new ThreadPoolExecutor(
-        1,
-        1,
-        0L,
-        TimeUnit.MILLISECONDS,
-        new PriorityBlockingQueue<>()
-    );
-    private final java.util.concurrent.ExecutorService pageDownloadWorker = Executors.newFixedThreadPool(PAGE_DOWNLOAD_WORKER_COUNT);
+    private ThreadPoolExecutor queueWorker = createQueueWorker();
+    private java.util.concurrent.ExecutorService pageDownloadWorker = createPageDownloadWorker();
     private final HttpClient httpClient = HttpClient.newBuilder()
         .connectTimeout(Duration.ofSeconds(10))
         .followRedirects(HttpClient.Redirect.NORMAL)
@@ -608,6 +604,42 @@ public class DownloaderService {
     }
 
     /**
+     * Preview the managed Raven content reset scope.
+     *
+     * @return preview payload for managed tasks and folders
+     */
+    public synchronized Map<String, Object> previewManagedContentReset() {
+        Path downloadsRoot = logger.getDownloadsRoot();
+        return Map.of(
+            "downloadsRoot", downloadsRoot == null ? "" : downloadsRoot.toString(),
+            "counts", Map.of(
+                "activeTasks", tasks.size(),
+                "downloadingTitleFolders", countManagedTitleFolders(DOWNLOADING_FOLDER_NAME),
+                "downloadedTitleFolders", countManagedTitleFolders(DOWNLOADED_FOLDER_NAME)
+            )
+        );
+    }
+
+    /**
+     * Clear managed Raven workers, in-memory tasks, and managed title folders.
+     *
+     * @return reset result payload
+     */
+    public synchronized Map<String, Object> executeManagedContentReset() {
+        Map<String, Object> preview = previewManagedContentReset();
+        ThreadPoolExecutor previousQueueWorker = queueWorker;
+        java.util.concurrent.ExecutorService previousPageWorker = pageDownloadWorker;
+        queueWorker = createQueueWorker();
+        pageDownloadWorker = createPageDownloadWorker();
+        previousQueueWorker.shutdownNow();
+        previousPageWorker.shutdownNow();
+        tasks.clear();
+        deleteDirectoryQuietly(logger.getDownloadsRoot().resolve(DOWNLOADING_FOLDER_NAME));
+        deleteDirectoryQuietly(logger.getDownloadsRoot().resolve(DOWNLOADED_FOLDER_NAME));
+        return preview;
+    }
+
+    /**
      * Stop the queue worker when the Spring context shuts down.
      */
     @PreDestroy
@@ -629,6 +661,7 @@ public class DownloaderService {
                 throw new IllegalStateException("No chapters were found for the requested title URL.");
             }
             TitleDetails details = provider.getTitleDetails(request.titleUrl());
+            details = mergeRequestTagsIntoDetails(details, request);
             String typeLabel = resolveLibraryTypeLabel(request, details);
             String typeSlug = LibraryNaming.normalizeTypeSlug(typeLabel);
             RavenNamingSettings namingSettings = settingsService.getNamingSettings();
@@ -1327,6 +1360,44 @@ public class DownloaderService {
         );
     }
 
+    private TitleDetails mergeRequestTagsIntoDetails(TitleDetails details, DownloadRequest request) {
+        Map<String, Object> selectedDownload = normalizeMap(request.selectedDownload());
+        Map<String, Object> selectedMetadata = normalizeMap(request.selectedMetadata());
+        Map<String, Object> metadataDetails = normalizeMap(selectedMetadata.get("details"));
+        List<String> mergedTags = mergeDisplayStrings(
+            details == null ? List.of() : details.tags(),
+            objectToStringList(selectedDownload.get("tags")),
+            objectToStringList(selectedMetadata.get("tags")),
+            objectToStringList(metadataDetails.get("tags"))
+        );
+        if (details == null) {
+            return new TitleDetails(
+                "",
+                "",
+                List.of(),
+                "",
+                "",
+                null,
+                null,
+                null,
+                mergedTags,
+                List.of()
+            );
+        }
+        return new TitleDetails(
+            details.summary(),
+            details.type(),
+            details.associatedNames(),
+            details.status(),
+            details.released(),
+            details.adultContent(),
+            details.officialTranslation(),
+            details.animeAdaptation(),
+            mergedTags,
+            details.relatedSeries()
+        );
+    }
+
     private int countArchiveEntries(Path archivePath) {
         try (java.util.zip.ZipFile zipFile = new java.util.zip.ZipFile(archivePath.toFile())) {
             return (int) zipFile.stream().filter((entry) -> !entry.isDirectory()).count();
@@ -1419,12 +1490,20 @@ public class DownloaderService {
         String titleName = normalizeString(task.get("titleName"));
         String typeSlug = LibraryNaming.normalizeTypeSlug(normalizeString(task.get("libraryTypeSlug"), normalizeString(task.get("requestType"), "manga")));
 
+        Set<Path> candidateDownloadRoots = new LinkedHashSet<>();
         if (!requestedDownloadRoot.isBlank()) {
-            Path downloadRoot = Path.of(requestedDownloadRoot);
+            candidateDownloadRoots.add(Path.of(requestedDownloadRoot));
+        }
+        if (!titleName.isBlank()) {
+            candidateDownloadRoots.add(resolveTitleRoot(DOWNLOADED_FOLDER_NAME, titleName, typeSlug));
+        }
+
+        for (Path downloadRoot : candidateDownloadRoots) {
             if (Files.exists(downloadRoot) && hasArchiveFiles(downloadRoot)) {
                 libraryService.rescanDownloadedFiles();
+                String normalizedCandidateRoot = downloadRoot.toString();
                 for (LibraryTitle title : libraryService.listTitles()) {
-                    if (requestedDownloadRoot.equals(normalizeString(title.downloadRoot()))) {
+                    if (normalizedCandidateRoot.equals(normalizeString(title.downloadRoot()))) {
                         return Optional.of(title);
                     }
                 }
@@ -1502,6 +1581,20 @@ public class DownloaderService {
         ));
     }
 
+    private ThreadPoolExecutor createQueueWorker() {
+        return new ThreadPoolExecutor(
+            1,
+            1,
+            0L,
+            TimeUnit.MILLISECONDS,
+            new PriorityBlockingQueue<>()
+        );
+    }
+
+    private java.util.concurrent.ExecutorService createPageDownloadWorker() {
+        return Executors.newFixedThreadPool(PAGE_DOWNLOAD_WORKER_COUNT);
+    }
+
     private int priorityRank(String value) {
         return switch (normalizePriorityLabel(value)) {
             case PRIORITY_HIGH -> 10;
@@ -1526,6 +1619,33 @@ public class DownloaderService {
             return normalized;
         }
         return Map.of();
+    }
+
+    private List<String> objectToStringList(Object value) {
+        if (value instanceof List<?> list) {
+            return list.stream()
+                .map(this::normalizeString)
+                .filter((entry) -> !entry.isBlank())
+                .toList();
+        }
+        return List.of();
+    }
+
+    private List<String> mergeDisplayStrings(List<String>... values) {
+        Map<String, String> merged = new LinkedHashMap<>();
+        for (List<String> entries : values) {
+            if (entries == null) {
+                continue;
+            }
+            for (String entry : entries) {
+                String normalized = normalizeString(entry);
+                if (normalized.isBlank()) {
+                    continue;
+                }
+                merged.putIfAbsent(normalized.toLowerCase(Locale.ROOT), normalized);
+            }
+        }
+        return List.copyOf(merged.values());
     }
 
     private String normalizeString(Object value, String fallback) {
@@ -1599,6 +1719,26 @@ public class DownloaderService {
             );
         } catch (IOException ignored) {
             return false;
+        }
+    }
+
+    private int countManagedTitleFolders(String stateFolder) {
+        Path root = logger.getDownloadsRoot().resolve(stateFolder);
+        if (!Files.exists(root) || !Files.isDirectory(root)) {
+            return 0;
+        }
+        try (var typeFolders = Files.list(root).filter(Files::isDirectory)) {
+            return typeFolders
+                .mapToInt((typeFolder) -> {
+                    try (var titles = Files.list(typeFolder).filter(Files::isDirectory)) {
+                        return (int) titles.count();
+                    } catch (IOException ignored) {
+                        return 0;
+                    }
+                })
+                .sum();
+        } catch (IOException ignored) {
+            return 0;
         }
     }
 

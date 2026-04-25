@@ -71,9 +71,17 @@ export const createPortalApp = async ({
         registeredGuildId: state.registeredGuildId,
         lastSyncAt: state.lastSyncAt,
         registeredCount: state.registeredCount,
+        registeredGlobalCount: state.registeredGlobalCount,
+        registeredGuildCount: state.registeredGuildCount,
         error: state.error,
         syncError: state.syncError,
         warning: state.warning,
+        requestedIntents: state.requestedIntents,
+        requestedPartials: state.requestedPartials,
+        lastDirectMessageReceivedAt: state.lastDirectMessageReceivedAt,
+        lastDownloadAllHandledAt: state.lastDownloadAllHandledAt,
+        lastDownloadAllError: state.lastDownloadAllError,
+        lastDownloadAllSource: state.lastDownloadAllSource,
         capabilities: state.capabilities
       },
       commands: state.commands

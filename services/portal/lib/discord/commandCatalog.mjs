@@ -3,13 +3,24 @@
  */
 
 export const portalCommandCatalog = Object.freeze([
-  {name: "ding", label: "/ding", description: "Quick bot health reply.", scope: "Guild slash command", mode: "slash", roleManaged: true},
-  {name: "status", label: "/status", description: "Read-only Scriptarr runtime summary.", scope: "Guild slash command", mode: "slash", roleManaged: true},
-  {name: "chat", label: "/chat", description: "Portal chat bridge into Oracle.", scope: "Guild slash command", mode: "slash", roleManaged: true},
-  {name: "search", label: "/search", description: "Search the current Scriptarr library.", scope: "Guild slash command", mode: "slash", roleManaged: true},
-  {name: "request", label: "/request", description: "Search intake matches and file a moderated request.", scope: "Guild slash command", mode: "slash", roleManaged: true},
-  {name: "subscribe", label: "/subscribe", description: "Follow a library title for Discord notifications.", scope: "Guild slash command", mode: "slash", roleManaged: true},
-  {name: "downloadall", label: "downloadall", description: "DM-only admin bulk queue command.", scope: "Direct message", mode: "dm", roleManaged: false}
+  {name: "ding", label: "/ding", description: "Quick bot health reply.", scope: "Guild slash command", mode: "slash", roleManaged: true, registrationScope: "guild"},
+  {name: "status", label: "/status", description: "Read-only Scriptarr runtime summary.", scope: "Guild slash command", mode: "slash", roleManaged: true, registrationScope: "guild"},
+  {name: "chat", label: "/chat", description: "Portal chat bridge into Oracle.", scope: "Guild slash command", mode: "slash", roleManaged: true, registrationScope: "guild"},
+  {name: "search", label: "/search", description: "Search the current Scriptarr library.", scope: "Guild slash command", mode: "slash", roleManaged: true, registrationScope: "guild"},
+  {name: "request", label: "/request", description: "Search intake matches and file a moderated request.", scope: "Guild slash command", mode: "slash", roleManaged: true, registrationScope: "guild"},
+  {name: "subscribe", label: "/subscribe", description: "Follow a library title for Discord notifications.", scope: "Guild slash command", mode: "slash", roleManaged: true, registrationScope: "guild"},
+  {
+    name: "downloadall",
+    label: "/downloadall",
+    description: "Owner-only DM bulk queue command.",
+    scope: "Global DM slash command",
+    mode: "slash",
+    roleManaged: false,
+    ownerOnly: true,
+    dmOnly: true,
+    legacyTextAlias: true,
+    registrationScope: "global"
+  }
 ]);
 
 const commandByName = new Map(portalCommandCatalog.map((command) => [command.name, command]));
@@ -44,13 +55,24 @@ export const normalizeCommandMap = (commands = new Map()) => {
  * @param {{commands?: Record<string, {enabled?: boolean}>}} settings
  * @returns {any[]}
  */
-export const extractCommandDefinitions = (commandMap = new Map(), settings = {}) =>
+export const extractCommandDefinitions = (commandMap = new Map(), settings = {}, registrationScope = "guild") =>
   Array.from(commandMap.entries())
-    .filter(([name, command]) => commandByName.get(name)?.mode === "slash" && isCommandEnabled(settings, name))
+    .filter(([name, command]) => {
+      const descriptor = commandByName.get(name);
+      return descriptor?.mode === "slash"
+        && descriptor?.registrationScope === registrationScope
+        && isCommandEnabled(settings, name);
+    })
     .map(([, command]) => command?.definition)
     .filter(Boolean);
 
-export const extractEnabledDefinitions = extractCommandDefinitions;
+export const extractGuildDefinitions = (commandMap = new Map(), settings = {}) =>
+  extractCommandDefinitions(commandMap, settings, "guild");
+
+export const extractGlobalDefinitions = (commandMap = new Map(), settings = {}) =>
+  extractCommandDefinitions(commandMap, settings, "global");
+
+export const extractEnabledDefinitions = extractGuildDefinitions;
 
 export const describeCommands = (commandMap = new Map()) =>
   Array.from(normalizeCommandMap(commandMap).entries()).map(([name, command]) => ({
@@ -64,6 +86,7 @@ export const describeCommands = (commandMap = new Map()) =>
  * @param {{
  *   settings?: {guildId?: string, commands?: Record<string, {enabled?: boolean, roleId?: string}>},
  *   registeredGuildId?: string,
+ *   registeredGlobalCount?: number,
  *   connectionState?: string,
  *   commandSyncState?: string
  * }} [options]
@@ -72,6 +95,7 @@ export const describeCommands = (commandMap = new Map()) =>
 export const buildCommandInventory = ({
   settings = {},
   registeredGuildId = "",
+  registeredGlobalCount = 0,
   connectionState = "missing",
   commandSyncState = "pending"
 } = {}) =>
@@ -79,24 +103,30 @@ export const buildCommandInventory = ({
     ...command,
     enabled: isCommandEnabled(settings, command.name),
     roleId: command.roleManaged ? (settings?.commands?.[command.name]?.roleId || "") : "",
-    registered: command.mode === "slash"
-      ? isCommandEnabled(settings, command.name) && Boolean(registeredGuildId) && commandSyncState === "available"
-      : Boolean(settings?.superuserId),
-    status: command.mode === "slash"
-      ? commandSyncState === "available"
+    registered: command.registrationScope === "global"
+      ? isCommandEnabled(settings, command.name) && registeredGlobalCount > 0 && commandSyncState === "available"
+      : isCommandEnabled(settings, command.name) && Boolean(registeredGuildId) && commandSyncState === "available",
+    status: command.registrationScope === "global"
+      ? registeredGlobalCount > 0
         ? "Registered"
         : commandSyncState === "degraded"
           ? "Sync issue"
-          : "Pending"
-      : Boolean(settings?.superuserId)
+          : connectionState === "connected"
+            ? "Pending"
+            : "Pending"
+      : commandSyncState === "available" && Boolean(registeredGuildId)
         ? "Registered"
-        : "Pending",
-    guildId: command.mode === "slash" ? registeredGuildId || settings?.guildId || "" : ""
+        : commandSyncState === "degraded"
+          ? "Sync issue"
+          : "Pending",
+    guildId: command.registrationScope === "guild" ? registeredGuildId || settings?.guildId || "" : ""
   }));
 
 export default {
   portalCommandCatalog,
   normalizeCommandMap,
   extractCommandDefinitions,
+  extractGuildDefinitions,
+  extractGlobalDefinitions,
   buildCommandInventory
 };

@@ -23,6 +23,12 @@ days if no stable source appears.
 Sage also owns the brokered `sage.requests.autoApproveAndDownload` setting. When that toggle is enabled, Sage may
 queue a request automatically only if Raven resolves one high-confidence source with no conflicting warnings; anything
 weaker stays in manual admin review.
+Sage now also brokers durable user read-state and tag-preference routes for Moon. Moon home, title, and reader payloads
+use those brokered title or chapter reads plus explicit tag likes or dislikes to build the active bookshelf and
+personalized tag shelves instead of relying only on progress rows.
+Sage also owns the root-only content reset preview plus execute flow for Moon admin. It previews Vault plus Raven reset
+scope, requires an explicit confirmation string, appends durable reset events, clears Vault's content-side state, and
+then tells Raven to wipe its managed catalog, tasks, and managed download folders.
 Sage now also brokers group-based Moon admin access and the shared admin event backbone. It exposes reusable
 permission-group CRUD plus user-group assignment flows for `/admin/users`, keeps canonical route-family grants in Moon
 session payloads while temporarily deriving the old flat permission array for compatibility, and appends immutable

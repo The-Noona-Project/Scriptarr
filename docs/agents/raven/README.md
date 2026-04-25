@@ -15,6 +15,9 @@
   metadata snapshot into the queued download, and report already-active, adult-content, no-metadata,
   ambiguous-metadata, and failed outcomes separately. For `nsfw:false`, queue only concrete WeebCentral targets whose
   detail page explicitly says `Adult Content: No`; skip adult and unknown adult flags.
+- Raven is the canonical tag merge point. Metadata-provider tags plus download-provider tags should be normalized and
+  merged case-insensitively once inside Raven, preserved with clean display casing, and forwarded through Sage so Moon
+  home, browse, title, and admin review all consume one canonical tag set.
 - Keep full JavaDoc on Raven main and test Java sources and let `gradlew check` fail when doc coverage regresses.
 - Fresh installs must not reintroduce demo titles; Raven's default library state is empty until real ingest exists.
 - Raven library storage now uses dynamic source-backed type labels and the managed folder lifecycle:
@@ -43,6 +46,9 @@
 - Raven now also supports staged source replacement for existing library titles. Keep replacement downloads isolated in
   fresh working and downloaded roots, then only swap the live folder and catalog identity after the replacement
   succeeds.
+- Raven now also participates in Moon admin's root-only content reset. Keep the preview plus execute endpoints limited
+  to Raven-owned managed scope: catalog rows, Raven task state, and managed `downloading/<type>` plus
+  `downloaded/<type>` folders. Do not let Raven clear shared users, settings, secrets, or durable events.
 - WeebCentral chapter discovery must follow the provider's live continuation model, including HTMX-powered full list
   requests for long-running series. Do not regress back to scraping only the initially visible chapter subset.
 - Preserve and enrich release-date data when Raven can observe it. Chapter release dates from provider scrapes and

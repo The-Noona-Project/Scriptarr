@@ -122,6 +122,45 @@ export const renderSystemPage = (result) => {
           </div>
         </section>
       </div>
+      <section class="panel-section">
+        <div class="section-heading">
+          <div>
+            <span class="section-kicker">Maintenance</span>
+            <h2>Content reset</h2>
+          </div>
+        </div>
+        <div class="callout subtle">
+          <strong>Safe content-only reset</strong>
+          <p>Users, groups, sessions, settings, secrets, and durable events stay intact. Library titles, requests, progress, follows, bookmarks, Raven task state, and managed download folders are wiped.</p>
+        </div>
+        ${result.payload?.contentReset ? `
+          <div class="content-grid two-up">
+            <article class="service-card">
+              <div class="service-card-head">
+                <strong>Vault preview</strong>
+                ${renderStatusBadge("Ready")}
+              </div>
+              <p>Requests ${escapeHtml(String(result.payload.contentReset.vault?.counts?.requests || 0))} · Titles ${escapeHtml(String(result.payload.contentReset.vault?.counts?.ravenTitles || 0))} · Progress ${escapeHtml(String(result.payload.contentReset.vault?.counts?.progress || 0))}</p>
+            </article>
+            <article class="service-card">
+              <div class="service-card-head">
+                <strong>Raven preview</strong>
+                ${renderStatusBadge(result.payload.contentReset.raven?.error ? "Degraded" : "Ready")}
+              </div>
+              <p>${result.payload.contentReset.raven?.error
+                ? escapeHtml(result.payload.contentReset.raven.error)
+                : `Downloading folders ${escapeHtml(String(result.payload.contentReset.raven?.counts?.downloadingTitleFolders || 0))} · Downloaded folders ${escapeHtml(String(result.payload.contentReset.raven?.counts?.downloadedTitleFolders || 0))} · Active tasks ${escapeHtml(String(result.payload.contentReset.raven?.counts?.activeTasks || 0))}`}</p>
+            </article>
+          </div>
+          <div class="field-stack" style="margin-top:16px;">
+            <label class="field-label" for="content-reset-confirmation">Type ${escapeHtml(result.payload.contentReset.confirmationText || "RESET SCRIPTARR CONTENT")} to confirm</label>
+            <input id="content-reset-confirmation" class="text-input" type="text" autocomplete="off" spellcheck="false" placeholder="${escapeHtml(result.payload.contentReset.confirmationText || "RESET SCRIPTARR CONTENT")}" />
+            <div class="action-row">
+              <button class="solid-button danger-button" type="button" data-action="execute-content-reset">Reset content</button>
+            </div>
+          </div>
+        ` : ""}
+      </section>
     `;
   }
 
@@ -269,6 +308,18 @@ export const enhanceSystemPage = async (root, {api, rerender, setFlash}, result)
   }
 
   if (result.routeId !== "system-updates") {
+    if (result.routeId !== "system-status") {
+      return;
+    }
+
+    root.querySelector("[data-action='execute-content-reset']")?.addEventListener("click", async () => {
+      const confirmation = /** @type {HTMLInputElement | null} */ (root.querySelector("#content-reset-confirmation"))?.value || "";
+      const response = await api.post("/api/moon/v3/admin/system/content-reset", {confirmation});
+      setFlash(response.ok ? "good" : "bad", response.ok
+        ? "Scriptarr content reset completed."
+        : response.payload?.error || "Unable to complete the content reset.");
+      await rerender();
+    });
     return;
   }
 

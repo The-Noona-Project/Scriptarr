@@ -2,6 +2,8 @@
  * @file Build the personalized Moon user-home payload.
  */
 
+import {normalizeTagPreferenceStore} from "./moonUserState.mjs";
+
 const normalizeString = (value, fallback = "") => {
   const normalized = typeof value === "string" ? value.trim() : "";
   return normalized || fallback;
@@ -31,6 +33,11 @@ const parseTimestamp = (value) => {
   return Number.isFinite(parsed) ? parsed : 0;
 };
 
+const normalizeTagKey = (value) => normalizeString(value).toLowerCase();
+
+const titleHasTag = (title, tag) =>
+  normalizeArray(title?.tags).some((entry) => normalizeTagKey(entry) === normalizeTagKey(tag));
+
 const chapterReleaseScore = (title = {}) =>
   normalizeArray(title.chapters).reduce((latest, chapter) => {
     const score = parseTimestamp(chapter?.releaseDate);
@@ -39,6 +46,7 @@ const chapterReleaseScore = (title = {}) =>
 
 const titleRecencyScore = (title = {}) =>
   Math.max(
+    parseTimestamp(title.userState?.lastActivityAt),
     parseTimestamp(title.updatedAt),
     parseTimestamp(title.metadataMatchedAt),
     chapterReleaseScore(title)
@@ -89,9 +97,6 @@ const collectTopTags = (entries = []) => {
     .map(([tag]) => tag);
 };
 
-const titleHasTag = (title, tag) =>
-  normalizeArray(title?.tags).some((entry) => normalizeString(entry).toLowerCase() === tag.toLowerCase());
-
 const buildRecentShelves = (titles = []) => {
   const groups = new Map();
 
@@ -117,30 +122,48 @@ const buildRecentShelves = (titles = []) => {
   });
 };
 
-const buildTagShelves = ({titles = [], continueReading = []}) => {
-  const tags = collectTopTags(continueReading);
-  const continueIds = new Set(uniqueByTitleId(continueReading).map((entry) => normalizeString(entry.titleId || entry.id)));
+const buildTagShelves = ({titles = [], bookshelf = [], tagPreferences = {}}) => {
+  const normalizedPreferences = normalizeTagPreferenceStore(tagPreferences);
+  const disliked = new Set(normalizedPreferences.dislikedTags.map((tag) => normalizeTagKey(tag)));
+  const liked = normalizedPreferences.likedTags.filter((tag) => !disliked.has(normalizeTagKey(tag)));
+  const inferredSources = titles.filter((title) =>
+    title.userState?.completed || title.userState?.bookshelf || title.userState?.following
+  );
+  const inferredTags = collectTopTags(inferredSources).filter((tag) => {
+    const key = normalizeTagKey(tag);
+    return !disliked.has(key) && !liked.some((entry) => normalizeTagKey(entry) === key);
+  });
+  const orderedTags = [...liked, ...inferredTags].slice(0, 6);
+  const bookshelfIds = new Set(uniqueByTitleId(bookshelf).map((entry) => normalizeString(entry.titleId || entry.id)));
 
-  return tags.flatMap((tag) => {
-    const unseenMatches = sortTitlesByRecency(titles.filter((title) =>
-      titleHasTag(title, tag) && !continueIds.has(normalizeString(title.id))
+  return orderedTags.flatMap((tag) => {
+    const tagKey = normalizeTagKey(tag);
+    if (disliked.has(tagKey)) {
+      return [];
+    }
+
+    const preferredMatches = sortTitlesByRecency(titles.filter((title) =>
+      titleHasTag(title, tag) && !bookshelfIds.has(normalizeString(title.id))
     ));
     const fallbackMatches = sortTitlesByRecency(titles.filter((title) => titleHasTag(title, tag)));
-    const items = (unseenMatches.length ? unseenMatches : fallbackMatches).slice(0, 18);
+    const items = (preferredMatches.length ? preferredMatches : fallbackMatches).slice(0, 18);
 
     if (!items.length) {
       return [];
     }
 
+    const explicitLike = liked.some((entry) => normalizeTagKey(entry) === tagKey);
     return [{
-      id: `tag:${tag.toLowerCase()}`,
+      id: `tag:${tagKey}`,
       kind: "tag",
       tag,
-      title: `Because you read ${tag}`,
-      subtitle: `More ${tag.toLowerCase()} from the library you already gravitate toward.`,
+      title: explicitLike ? `Because you like ${tag}` : `Because you read ${tag}`,
+      subtitle: explicitLike
+        ? `Moon is leaning into your explicit ${tag.toLowerCase()} taste.`
+        : `More ${tag.toLowerCase()} from the library you already gravitate toward.`,
       items
     }];
-  }).slice(0, 4);
+  });
 };
 
 /**
@@ -149,47 +172,56 @@ const buildTagShelves = ({titles = [], continueReading = []}) => {
  * @param {{
  *   titles?: Array<Record<string, any>>,
  *   requests?: Array<Record<string, any>>,
- *   progress?: Array<Record<string, any>>,
+ *   bookshelf?: Array<Record<string, any>>,
  *   following?: Array<Record<string, any>>,
- *   discordUserId?: string
+ *   discordUserId?: string,
+ *   tagPreferences?: {likedTags?: string[], dislikedTags?: string[]}
  * }} input
  * @returns {{
  *   latestTitles: Array<Record<string, any>>,
  *   continueReading: Array<Record<string, any>>,
  *   requests: Array<Record<string, any>>,
  *   following: Array<Record<string, any>>,
+ *   tagPreferences: {likedTags: string[], dislikedTags: string[]},
  *   shelves: Array<Record<string, any>>
  * }}
  */
 export const buildMoonHomePayload = ({
   titles = [],
   requests = [],
-  progress = [],
+  bookshelf = [],
   following = [],
-  discordUserId = ""
+  discordUserId = "",
+  tagPreferences = {}
 } = {}) => {
-  const continueReading = uniqueByTitleId(progress);
-  const latestTitles = sortTitlesByRecency(titles).slice(0, 12);
+  const normalizedTitles = uniqueByTitleId(titles);
+  const normalizedBookshelf = uniqueByTitleId(bookshelf);
+  const latestTitles = sortTitlesByRecency(normalizedTitles).slice(0, 12);
   const shelves = [];
 
-  if (continueReading.length) {
+  if (normalizedBookshelf.length) {
     shelves.push({
       id: "bookshelf",
       kind: "bookshelf",
       title: "Your Bookshelf",
       subtitle: "Pick up where you left off and keep the story moving.",
-      items: continueReading
+      items: normalizedBookshelf
     });
   }
 
-  shelves.push(...buildRecentShelves(titles));
-  shelves.push(...buildTagShelves({titles, continueReading}));
+  shelves.push(...buildRecentShelves(normalizedTitles));
+  shelves.push(...buildTagShelves({
+    titles: normalizedTitles,
+    bookshelf: normalizedBookshelf,
+    tagPreferences
+  }));
 
   return {
     latestTitles,
-    continueReading,
+    continueReading: normalizedBookshelf,
     requests: normalizeArray(requests).filter((entry) => normalizeString(entry.requestedBy?.discordUserId) === normalizeString(discordUserId)),
     following: normalizeArray(following),
+    tagPreferences: normalizeTagPreferenceStore(tagPreferences),
     shelves
   };
 };

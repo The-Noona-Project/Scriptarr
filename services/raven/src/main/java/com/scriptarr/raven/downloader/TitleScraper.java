@@ -2,6 +2,7 @@ package com.scriptarr.raven.downloader;
 
 import com.scriptarr.raven.library.LibraryNaming;
 import com.scriptarr.raven.support.ScriptarrLogger;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.jsoup.Connection;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
@@ -39,14 +40,27 @@ public class TitleScraper {
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
 
     private final ScriptarrLogger logger;
+    private final String sourceBaseUrl;
 
     /**
      * Create the title scraper with Raven logging support.
      *
      * @param logger shared Raven logger
      */
+    @Autowired
     public TitleScraper(ScriptarrLogger logger) {
+        this(logger, SOURCE_BASE_URL);
+    }
+
+    /**
+     * Create the title scraper with an overrideable source base URL for tests.
+     *
+     * @param logger shared Raven logger
+     * @param sourceBaseUrl base URL for Raven source requests
+     */
+    TitleScraper(ScriptarrLogger logger, String sourceBaseUrl) {
         this.logger = logger;
+        this.sourceBaseUrl = sourceBaseUrl == null || sourceBaseUrl.isBlank() ? SOURCE_BASE_URL : sourceBaseUrl.trim();
     }
 
     /**
@@ -122,8 +136,6 @@ public class TitleScraper {
         }
 
         String normalizedSearchPrefix = titlePrefix != null ? titlePrefix.trim() : "";
-        String comparableSearchPrefix = normalizePrefixComparableTitle(normalizedSearchPrefix);
-        String lowerSearchPrefix = comparableSearchPrefix != null ? comparableSearchPrefix.toLowerCase(Locale.ROOT) : "";
 
         List<Map<String, String>> collected = new ArrayList<>();
         Set<String> seenHrefs = new HashSet<>();
@@ -134,7 +146,10 @@ public class TitleScraper {
         try {
             do {
                 Document doc = fetchSearchData(Map.of(
-                    "text", normalizedSearchPrefix,
+                    // WeebCentral's text search is not a stable prefix browse.
+                    // Bulk alphabet scans should stay on the plain sorted list and
+                    // let Raven enforce the visible prefix locally.
+                    "text", "",
                     "sort", "Alphabet",
                     "order", "Ascending",
                     "official", "Any",
@@ -156,14 +171,6 @@ public class TitleScraper {
                     String href = parsed.get("href");
                     if (href == null || href.isBlank() || !seenHrefs.add(href)) {
                         continue;
-                    }
-
-                    String comparableTitle = normalizePrefixComparableTitle(parsed.get("title"));
-                    String lowerTitle = comparableTitle != null ? comparableTitle.toLowerCase(Locale.ROOT) : "";
-                    if (!lowerSearchPrefix.isEmpty() && !lowerTitle.isEmpty() && !lowerTitle.startsWith(lowerSearchPrefix)) {
-                        if (lowerTitle.compareTo(lowerSearchPrefix) > 0) {
-                            return new BulkBrowseResult(collected.isEmpty() ? List.of() : List.copyOf(collected), pagesScanned);
-                        }
                     }
 
                     collected.add(new HashMap<>(parsed));
@@ -239,7 +246,7 @@ public class TitleScraper {
 
     private Document fetchSearchData(Map<String, String> queryParameters) throws Exception {
         return executeWithRetries("search request", () -> {
-            Connection connection = connect(SOURCE_BASE_URL + "/search/data");
+            Connection connection = connect(sourceBaseUrl + "/search/data");
             for (Map.Entry<String, String> entry : queryParameters.entrySet()) {
                 connection.data(entry.getKey(), entry.getValue());
             }

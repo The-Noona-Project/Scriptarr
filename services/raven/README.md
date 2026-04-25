@@ -62,6 +62,9 @@ labels from metadata providers, which Moon admin reuses for its library and cale
 Raven now also normalizes lifecycle status from both source scrapes and metadata providers, including completed or
 finished series states, so Moon's admin library, title-detail, and calendar views can distinguish active titles from
 completed, hiatus, cancelled, or upcoming work without guessing from chapter gaps alone.
+Raven now also participates in Moon admin's root-only content reset flow. Sage previews and triggers that reset, and
+Raven clears its managed Raven catalog rows, Raven task state, and managed `downloading/<type>` plus
+`downloaded/<type>` folders without touching users, settings, or the shared durable event log.
 Raven now also exposes repair candidates per library title so Moon admin can compare alternate concrete provider
 targets, review chapter coverage, and queue a staged replacement download without deleting the current title first.
 Replacement downloads stage into a fresh working and downloaded root, then only swap the live files after the

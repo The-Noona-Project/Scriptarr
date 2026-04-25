@@ -357,6 +357,49 @@ a {
   background: rgba(255, 255, 255, 0.025);
 }
 
+.moon-chapter-actions,
+.moon-tag-preference-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.moon-chapter-open-link,
+.moon-chapter-actions button,
+.moon-tag-preference-actions button {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(245, 239, 234, 0.92);
+  padding: 8px 12px;
+  font: inherit;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.moon-tag-preference-list {
+  display: grid;
+  gap: 12px;
+}
+
+.moon-tag-preference-chip {
+  display: grid;
+  gap: 10px;
+  padding: 14px 16px;
+  border-radius: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.moon-tag-preference-chip.is-like {
+  border-color: rgba(84, 197, 127, 0.35);
+}
+
+.moon-tag-preference-chip.is-dislike {
+  border-color: rgba(224, 93, 93, 0.35);
+}
+
 .moon-reader-layout {
   min-height: calc(100vh - 140px);
   display: grid;

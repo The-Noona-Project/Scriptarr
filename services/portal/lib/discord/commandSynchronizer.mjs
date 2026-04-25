@@ -1,47 +1,57 @@
 /**
- * Sync Portal's active slash-command definitions to the configured guild.
+ * Sync Portal's slash-command definitions across global DM and guild scopes.
  */
+
+/**
+ * @param {unknown[]} definitions
+ * @returns {unknown[]}
+ */
+const normalizeDefinitions = (definitions = []) => Array.isArray(definitions) ? definitions.filter(Boolean) : [];
 
 /**
  * @param {{
  *   commandManager?: {set?: Function},
  *   guildId?: string,
- *   definitions?: unknown[],
- *   clearGlobalBeforeRegister?: boolean,
- *   clearBeforeRegister?: boolean
+ *   guildDefinitions?: unknown[],
+ *   globalDefinitions?: unknown[]
  * }} options
- * @returns {Promise<{clearedGlobal: boolean, cleared: boolean, registered: number, guildId: string}>}
+ * @returns {Promise<{registered: number, registeredGuild: number, registeredGlobal: number, guildId: string}>}
  */
-export const syncGuildCommands = async ({
+export const syncPortalCommands = async ({
   commandManager,
   guildId,
-  definitions = [],
-  clearGlobalBeforeRegister = true,
-  clearBeforeRegister = true
+  guildDefinitions = [],
+  globalDefinitions = []
 } = {}) => {
   if (!commandManager || typeof commandManager.set !== "function") {
     throw new Error("Discord application command manager is unavailable.");
   }
 
-  if (clearGlobalBeforeRegister) {
-    await commandManager.set([]);
-  }
+  const normalizedGlobalDefinitions = normalizeDefinitions(globalDefinitions);
+  const normalizedGuildDefinitions = normalizeDefinitions(guildDefinitions);
 
-  if (guildId && clearBeforeRegister) {
-    await commandManager.set([], guildId);
-  }
-
-  const normalizedDefinitions = Array.isArray(definitions) ? definitions.filter(Boolean) : [];
-  if (guildId && normalizedDefinitions.length > 0) {
-    await commandManager.set(normalizedDefinitions, guildId);
+  await commandManager.set(normalizedGlobalDefinitions);
+  if (guildId) {
+    await commandManager.set(normalizedGuildDefinitions, guildId);
   }
 
   return {
-    clearedGlobal: clearGlobalBeforeRegister,
-    cleared: clearBeforeRegister,
-    registered: normalizedDefinitions.length,
+    registered: normalizedGlobalDefinitions.length + (guildId ? normalizedGuildDefinitions.length : 0),
+    registeredGlobal: normalizedGlobalDefinitions.length,
+    registeredGuild: guildId ? normalizedGuildDefinitions.length : 0,
     guildId: guildId || ""
   };
 };
 
-export default syncGuildCommands;
+export const syncGuildCommands = async ({
+  commandManager,
+  guildId,
+  definitions = []
+} = {}) => syncPortalCommands({
+  commandManager,
+  guildId,
+  guildDefinitions: definitions,
+  globalDefinitions: []
+});
+
+export default syncPortalCommands;

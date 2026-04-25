@@ -17,7 +17,7 @@ Portal's supported Discord command set is:
 - `/search`
 - `/request`
 - `/subscribe`
-- DM-only `downloadall`
+- owner-only DM `/downloadall`
 
 Discord `/request` now mirrors Moon's web flow instead of using a one-shot fuzzy picker. Portal first shows raw
 metadata-provider matches, then lets the requester submit one exact metadata choice with optional notes. Staff later
@@ -25,18 +25,22 @@ choose the concrete download source from `/admin/requests`, unless Sage auto-app
 the metadata exists but there is no source yet, Portal can still create an `unavailable` request, and when Sage later
 finds a source it DMs the requester that the title is back in admin review or was auto-approved.
 
-`downloadall` stays provider-browse first, but it now asks Raven to metadata-resolve each matched bulk title before
+`downloadall` now uses a global slash command in DMs as the supported path: `/downloadall run ...` and
+`/downloadall help`. Portal still keeps the older raw DM text parser (`downloadall ...`) as a legacy best-effort
+fallback, but that path depends on Discord delivering `messageCreate` events and should not be treated as the primary
+interface anymore. The command stays owner-only and intentionally pinned to WeebCentral, so it fails if that provider
+is disabled instead of browsing MangaDex.
+Bulk queueing is still provider-browse first, but it now asks Raven to metadata-resolve each matched bulk title before
 queueing it. Portal only queues titles with one confident metadata match and reports already-active, adult-content,
 no-metadata, ambiguous-metadata, and failed skips in the DM summary. For `nsfw:false`, Raven only queues titles whose
-WeebCentral detail page explicitly says `Adult Content: No`; adult or unverified titles are skipped. The command is
-still owner-only and intentionally pinned to WeebCentral, so it fails if that provider is disabled instead of browsing
-MangaDex.
+WeebCentral detail page explicitly says `Adult Content: No`; adult or unverified titles are skipped.
 
 Guild id, onboarding settings, DM superuser id, and per-command role gates are managed from Moon admin at
 `/admin/discord`. Discord bot credentials remain env-managed.
 
 Moon admin also surfaces the live Discord runtime state from Portal, including command-sync health, onboarding
-capability, and the last meaningful Discord runtime error when the bot disconnects.
+capability, requested intents or partials, the most recent DM receive timestamp, the last handled `downloadall`
+timestamp, the last `downloadall` error text, and the last meaningful Discord runtime error when the bot disconnects.
 
 Portal also watches request-linked moderation and Raven completion state through Sage. When a request is approved,
 denied, or finished and the requester has a Discord id, Portal sends one deduped DM with the shared title art and the

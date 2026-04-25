@@ -339,6 +339,37 @@ export const createVaultApp = async ({logger = createLogger("VAULT")} = {}) => {
     res.json(await store.getProgressByUser(req.params.discordUserId));
   });
 
+  app.get("/api/service/read-state/:discordUserId", async (req, res) => {
+    res.json(await store.getReadStateByUser(
+      req.params.discordUserId,
+      req.query.mediaId ? String(req.query.mediaId) : ""
+    ));
+  });
+
+  app.post("/api/service/read-state/title/read", requireJson, async (req, res) => {
+    res.json(await store.markTitleRead(req.body || {}));
+  });
+
+  app.post("/api/service/read-state/title/unread", requireJson, async (req, res) => {
+    res.json(await store.markTitleUnread(req.body || {}));
+  });
+
+  app.post("/api/service/read-state/chapter/read", requireJson, async (req, res) => {
+    res.json(await store.markChapterRead(req.body || {}));
+  });
+
+  app.post("/api/service/read-state/chapter/unread", requireJson, async (req, res) => {
+    res.json(await store.markChapterUnread(req.body || {}));
+  });
+
+  app.get("/api/service/content-reset/preview", async (_req, res) => {
+    res.json(await store.previewContentReset());
+  });
+
+  app.post("/api/service/content-reset/execute", requireJson, async (_req, res) => {
+    res.json(await store.executeContentReset());
+  });
+
   app.get("/api/service/raven/titles", async (_req, res) => {
     res.json(await store.listRavenTitles());
   });

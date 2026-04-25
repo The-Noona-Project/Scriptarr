@@ -299,6 +299,52 @@ export const createVaultClient = (config) => {
       });
       return json(response);
     },
+    async getReadState(discordUserId, mediaId = "") {
+      const suffix = mediaId ? `?mediaId=${encodeURIComponent(mediaId)}` : "";
+      return (await requestJson(baseUrl, headers, `/api/service/read-state/${encodeURIComponent(discordUserId)}${suffix}`, {
+        context: "Failed to load user read state from Vault"
+      })).payload;
+    },
+    async markTitleRead(payload) {
+      return (await requestJson(baseUrl, headers, "/api/service/read-state/title/read", {
+        method: "POST",
+        body: payload,
+        context: "Failed to mark the title read in Vault"
+      })).payload;
+    },
+    async markTitleUnread(payload) {
+      return (await requestJson(baseUrl, headers, "/api/service/read-state/title/unread", {
+        method: "POST",
+        body: payload,
+        context: "Failed to mark the title unread in Vault"
+      })).payload;
+    },
+    async markChapterRead(payload) {
+      return (await requestJson(baseUrl, headers, "/api/service/read-state/chapter/read", {
+        method: "POST",
+        body: payload,
+        context: "Failed to mark the chapter read in Vault"
+      })).payload;
+    },
+    async markChapterUnread(payload) {
+      return (await requestJson(baseUrl, headers, "/api/service/read-state/chapter/unread", {
+        method: "POST",
+        body: payload,
+        context: "Failed to mark the chapter unread in Vault"
+      })).payload;
+    },
+    async previewContentReset() {
+      return (await requestJson(baseUrl, headers, "/api/service/content-reset/preview", {
+        context: "Failed to preview the content reset in Vault"
+      })).payload;
+    },
+    async executeContentReset() {
+      return (await requestJson(baseUrl, headers, "/api/service/content-reset/execute", {
+        method: "POST",
+        body: {},
+        context: "Failed to execute the content reset in Vault"
+      })).payload;
+    },
     async listRavenTitles() {
       const {payload} = await requestJson(baseUrl, headers, "/api/service/raven/titles", {
         context: "Failed to list Raven titles from Vault"

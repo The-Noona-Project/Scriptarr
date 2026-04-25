@@ -8,10 +8,12 @@ import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
+import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
+import java.util.LinkedHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -225,6 +227,101 @@ class TitleScraperRetryTest {
     }
 
     /**
+     * Verify bulk alphabet browsing does not send the title-group prefix into
+     * WeebCentral's text search, so Raven can walk later result pages and still
+     * find prefixes like {@code b}.
+     *
+     * @throws Exception when the local test server cannot start
+     */
+    @Test
+    void browseTitlesAlphabeticallyScansLaterPagesForPrefixes() throws Exception {
+        server = HttpServer.create(new InetSocketAddress(0), 0);
+        AtomicInteger requests = new AtomicInteger();
+        List<String> observedTexts = new java.util.concurrent.CopyOnWriteArrayList<>();
+        server.createContext("/search/data", (exchange) -> {
+            requests.incrementAndGet();
+            Map<String, String> query = parseQuery(exchange.getRequestURI().getRawQuery());
+            String offset = query.getOrDefault("offset", "0");
+            String text = query.getOrDefault("text", "");
+            observedTexts.add(text);
+
+            if ("0".equals(offset)) {
+                respond(
+                    exchange,
+                    200,
+                    """
+                        <html><body>
+                          <article class="bg-base-300">
+                            <a href="/series/alpha/Alpha-First" class="line-clamp-1 link link-hover">Alpha First</a>
+                            <strong>Type:</strong><span>Manga</span>
+                          </article>
+                          <article class="bg-base-300">
+                            <a href="/series/hitokiri/Hitokiri" class="line-clamp-1 link link-hover">Hitokiri</a>
+                            <strong>Type:</strong><span>Manga</span>
+                          </article>
+                          <button hx-get="/search/data?limit=32&amp;offset=32&amp;sort=Alphabet&amp;order=Ascending&amp;official=Any&amp;anime=Any&amp;adult=False&amp;included_type=Manga&amp;display_mode=Full+Display"></button>
+                          <div id="query-text">%s</div>
+                        </body></html>
+                        """.formatted(text)
+                );
+                return;
+            }
+
+            if ("32".equals(offset)) {
+                respond(
+                    exchange,
+                    200,
+                    """
+                        <html><body>
+                          <article class="bg-base-300">
+                            <a href="/series/1001-knights/1001-Knights" class="line-clamp-1 link link-hover">1001 Knights</a>
+                            <strong>Type:</strong><span>Manga</span>
+                          </article>
+                          <article class="bg-base-300">
+                            <a href="/series/a-certain/A Certain Scientific Accelerator" class="line-clamp-1 link link-hover">A Certain Scientific Accelerator</a>
+                            <strong>Type:</strong><span>Manga</span>
+                          </article>
+                          <button hx-get="/search/data?limit=32&amp;offset=64&amp;sort=Alphabet&amp;order=Ascending&amp;official=Any&amp;anime=Any&amp;adult=False&amp;included_type=Manga&amp;display_mode=Full+Display"></button>
+                          <div id="query-text">%s</div>
+                        </body></html>
+                        """.formatted(text)
+                );
+                return;
+            }
+
+            respond(
+                exchange,
+                200,
+                """
+                    <html><body>
+                      <article class="bg-base-300">
+                        <a href="/series/brave-story/Brave Story" class="line-clamp-1 link link-hover">Brave Story</a>
+                        <strong>Type:</strong><span>Manga</span>
+                      </article>
+                      <article class="bg-base-300">
+                        <a href="/series/blue-lock/Blue Lock" class="line-clamp-1 link link-hover">Blue Lock</a>
+                        <strong>Type:</strong><span>Manga</span>
+                      </article>
+                      <div id="query-text">%s</div>
+                    </body></html>
+                    """.formatted(text)
+            );
+        });
+        server.start();
+
+        TitleScraper scraper = new TitleScraper(new TestLogger(), "http://127.0.0.1:" + server.getAddress().getPort());
+
+        BulkBrowseResult result = scraper.browseTitlesAlphabetically("Manga", false, "b");
+
+        assertEquals(3, requests.get());
+        assertEquals(List.of("", "", ""), observedTexts);
+        assertEquals(3, result.pagesScanned());
+        assertEquals(2, result.titles().size());
+        assertEquals("Brave Story", result.titles().getFirst().get("title"));
+        assertEquals("Blue Lock", result.titles().getLast().get("title"));
+    }
+
+    /**
      * Send a fixed HTTP response for the lightweight local server.
      *
      * @param exchange active HTTP exchange
@@ -238,6 +335,30 @@ class TitleScraperRetryTest {
         exchange.sendResponseHeaders(status, payload.length);
         exchange.getResponseBody().write(payload);
         exchange.close();
+    }
+
+    /**
+     * Parse a small query string map for the lightweight local server.
+     *
+     * @param rawQuery raw request query
+     * @return decoded query-string values
+     */
+    private Map<String, String> parseQuery(String rawQuery) {
+        Map<String, String> query = new LinkedHashMap<>();
+        if (rawQuery == null || rawQuery.isBlank()) {
+            return query;
+        }
+
+        for (String part : rawQuery.split("&")) {
+            if (part == null || part.isBlank()) {
+                continue;
+            }
+            String[] pieces = part.split("=", 2);
+            String key = URLDecoder.decode(pieces[0], StandardCharsets.UTF_8);
+            String value = pieces.length > 1 ? URLDecoder.decode(pieces[1], StandardCharsets.UTF_8) : "";
+            query.put(key, value);
+        }
+        return query;
     }
 
     /**

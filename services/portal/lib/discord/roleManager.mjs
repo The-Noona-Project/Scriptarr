@@ -62,14 +62,19 @@ const memberHasRole = (member, roleId) => {
   return sources.some((source) => hasRoleInCollection(source, roleId));
 };
 
+const resolveUserId = (interaction) =>
+  interaction?.user?.id
+  ?? interaction?.member?.user?.id
+  ?? null;
+
 /**
  * Create Portal's settings-backed Discord role manager.
  *
- * @param {{getSettings: () => {guildId?: string, commands?: Record<string, {enabled?: boolean, roleId?: string}>}}} options
- * @returns {{checkAccess: (interaction: any, commandName: string) => {allowed: boolean, message?: string, reason?: string}}}
+ * @param {{getSettings: () => {guildId?: string, superuserId?: string, commands?: Record<string, {enabled?: boolean, roleId?: string}>}}} options
+ * @returns {{checkAccess: (interaction: any, commandName: string, command?: any) => {allowed: boolean, message?: string, reason?: string}}}
  */
 export const createRoleManager = ({getSettings}) => ({
-  checkAccess(interaction, commandName) {
+  checkAccess(interaction, commandName, command = {}) {
     const settings = typeof getSettings === "function" ? (getSettings() || {}) : {};
     const commandSettings = settings?.commands?.[commandName] || {};
     if (commandSettings.enabled === false) {
@@ -77,6 +82,34 @@ export const createRoleManager = ({getSettings}) => ({
         allowed: false,
         reason: "disabled",
         message: "This command is currently disabled."
+      };
+    }
+
+    const isDirectMessage = !resolveGuildId(interaction);
+    if (command?.access?.dmOnly && !isDirectMessage) {
+      return {
+        allowed: false,
+        reason: "dm",
+        message: "This command only works in a direct message with Noona."
+      };
+    }
+
+    if (command?.access?.ownerOnly) {
+      const requiredOwnerId = normalizeString(settings?.superuserId);
+      if (!requiredOwnerId || resolveUserId(interaction) !== requiredOwnerId) {
+        return {
+          allowed: false,
+          reason: "owner",
+          message: "This command is restricted to the configured Scriptarr owner."
+        };
+      }
+    }
+
+    if (command?.access?.dmOnly) {
+      return {
+        allowed: true,
+        requiredGuildId: "",
+        requiredRoleId: ""
       };
     }
 

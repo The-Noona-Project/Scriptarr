@@ -178,6 +178,77 @@ class DownloaderServiceRetryTest {
     }
 
     /**
+     * Verify Raven can recover a completed download after a title-persist
+     * failure even when the failed task never stored its final download root.
+     *
+     * @throws Exception when the temporary downloads root cannot be staged
+     */
+    @Test
+    void restorePersistedTasksRecoversCompletedFolderWithoutStoredDownloadRoot() throws Exception {
+        FakeRavenBrokerClient brokerClient = new FakeRavenBrokerClient();
+        brokerClient.setSetting("raven.download.providers", Map.of(
+            "providers", List.of(Map.of(
+                "id", "weebcentral",
+                "enabled", true,
+                "priority", 10
+            ))
+        ));
+        TestLogger logger = new TestLogger(tempDir.resolve("downloads"), tempDir.resolve("logs"));
+        RavenSettingsService settingsService = new RavenSettingsService(brokerClient, logger, List.of());
+        DownloadProvider provider = new FakeDownloadProvider(() -> List.of());
+        DownloadProviderRegistry providerRegistry = new DownloadProviderRegistry(List.of(provider), settingsService);
+        LibraryService libraryService = new LibraryService(brokerClient, settingsService, logger);
+        MetadataService metadataService = new MetadataService(List.of(), settingsService, brokerClient, libraryService, logger);
+        DownloadIntakeService downloadIntakeService = new DownloadIntakeService(metadataService, providerRegistry);
+        VpnService vpnService = new VpnService(settingsService, logger);
+
+        Path completedRoot = logger.getDownloadsRoot()
+            .resolve("downloaded")
+            .resolve("manhwa")
+            .resolve("A_Common_Story_of_a_Lady_s_New_Life");
+        Files.createDirectories(completedRoot);
+        Files.writeString(
+            completedRoot.resolve("A Common Story of a Lady’s New Life c001 [Scriptarr].cbz"),
+            "fake-archive",
+            StandardCharsets.UTF_8
+        );
+
+        brokerClient.putDownloadTask("failed-task", Map.of(
+            "taskId", "failed-task",
+            "jobId", "failed-task",
+            "titleId", "",
+            "titleName", "A Common Story of a Lady’s New Life",
+            "titleUrl", "https://weebcentral.com/series/common-story",
+            "requestType", "Manhwa",
+            "requestedBy", "tester",
+            "status", "failed",
+            "message", "Failed to persist Raven title.",
+            "percent", 90,
+            "queuedAt", "2026-04-24T00:00:00Z",
+            "updatedAt", "2026-04-24T00:00:00Z"
+        ));
+
+        service = new DownloaderService(
+            providerRegistry,
+            vpnService,
+            libraryService,
+            downloadIntakeService,
+            metadataService,
+            brokerClient,
+            settingsService,
+            logger
+        );
+
+        service.restorePersistedTasks();
+
+        Map<String, Object> task = service.snapshot().getFirst();
+        assertEquals("completed", task.get("status"));
+        assertEquals(100, task.get("percent"));
+        assertEquals(1, libraryService.listTitles().size());
+        assertEquals(completedRoot.toString(), libraryService.listTitles().getFirst().downloadRoot());
+    }
+
+    /**
      * Build a DownloaderService with in-memory broker state and a temporary
      * downloads root.
      *

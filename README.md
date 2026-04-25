@@ -123,11 +123,15 @@ For end-to-end Docker verification, use:
   If the title is already in the library, Scriptarr links directly to the title page. If the title is already queued,
   Scriptarr blocks the duplicate row and sends a Discord DM when the title becomes ready.
 - Portal now owns a real Discord command runtime again. The supported command set is `/ding`, `/status`, `/chat`,
-  `/search`, `/request`, `/subscribe`, plus the DM-only `downloadall` command for the configured Discord superuser.
+  `/search`, `/request`, `/subscribe`, plus the owner-only DM `/downloadall` command for the configured Discord
+  superuser.
 - The DM-only `downloadall` flow now stays provider-browse first but resolves metadata before queueing each title. It
-  only queues titles with one confident metadata match and reports already-active, adult-content, no-metadata,
-  ambiguous-metadata, and failed skips back in the Discord DM summary instead of silently creating metadata-less
-  library entries. When `nsfw:false` is used, Raven requires an explicit WeebCentral `Adult Content: No`.
+  now uses a global DM slash command as the supported path: `/downloadall run ...` and `/downloadall help`. Portal
+  still keeps the old raw DM text form as a legacy best-effort fallback, but that path depends on Discord delivering
+  normal DM message events.
+- The bulk flow only queues titles with one confident metadata match and reports already-active, adult-content,
+  no-metadata, ambiguous-metadata, and failed skips back in the Discord DM summary instead of silently creating
+  metadata-less library entries. When `nsfw:false` is used, Raven requires an explicit WeebCentral `Adult Content: No`.
   That owner-only command is intentionally locked to WeebCentral and will fail fast if WeebCentral is disabled.
 - Portal now prefers a minimal Discord runtime over going fully dark when privileged intents are unavailable, so slash
   commands and DMs can stay online while onboarding is shown as degraded in Moon admin.
@@ -142,6 +146,13 @@ For end-to-end Docker verification, use:
   summaries into Vault instead of building page-specific ad hoc timelines.
 - Raven now merges metadata-provider tags plus download-provider tags into one canonical tag set for library titles,
   admin review, browse/search, and personalization surfaces while preserving internal source attribution for debugging.
+- Moon home personalization now blends explicit tag likes or dislikes with inferred taste from read history, follows,
+  and the active bookshelf. Bookshelf membership is driven by durable title and chapter read state, so readers can mark
+  a full title or one chapter read or unread and let completed series fall off the shelf until new chapters appear.
+- Moon admin now exposes a root-only content reset preview plus execute flow under `/admin/system`. That reset clears
+  requests, work locks, progress, follows, bookmarks, Raven catalog state, Raven task state, and managed
+  `downloading/<type>` plus `downloaded/<type>` content while preserving users, permission groups, sessions, settings,
+  secrets, and durable events.
 - Vault is the only supported broker to the shared MySQL database.
 - Sage is the supported internal HTTP hop between first-party services. Direct internal exceptions are limited to
   Vault -> MySQL, Warden -> Docker or host runtime, Oracle -> OpenAI or LocalAI, and Raven -> external source,

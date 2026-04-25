@@ -456,7 +456,7 @@ test("vault persists Raven titles with cover and managed roots", async () => {
   assert.equal(title.coverUrl, "https://cdn.example.com/solo.jpg");
   assert.equal(title.downloadRoot, "/downloads/downloaded/manhwa/Solo_Leveling_Ragnarok");
   assert.equal(title.chapters.length, 2);
-  assert.equal(title.chapters[0].id, "title-1-c45");
+  assert.deepEqual(title.chapters.map((chapter) => chapter.id).sort(), ["title-1-c45", "title-1-c46"]);
 
   const listed = await fetch(`${baseUrl}/api/service/raven/titles`, {
     headers
@@ -464,6 +464,7 @@ test("vault persists Raven titles with cover and managed roots", async () => {
   assert.equal(listed.length, 1);
   assert.equal(listed[0].workingRoot, "/downloads/downloading/manhwa/Solo_Leveling_Ragnarok");
   assert.equal(listed[0].chapters.length, 2);
+  assert.deepEqual(listed[0].chapters.map((chapter) => chapter.id).sort(), ["title-1-c45", "title-1-c46"]);
 
   server.close();
 });
@@ -682,6 +683,276 @@ test("vault manages permission groups, durable events, and deleted-user recreati
   }).then((response) => response.json());
   assert.equal(recreatedReader.role, "member");
   assert.equal(recreatedReader.groups[0].id, "member");
+
+  server.close();
+});
+
+test("vault persists read state and clears only content-side records during a content reset", async () => {
+  const {app} = await createVaultApp();
+  const server = app.listen(0);
+  const {port} = server.address();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const headers = {
+    "Authorization": "Bearer sage-dev-token",
+    "Content-Type": "application/json"
+  };
+
+  await fetch(`${baseUrl}/api/service/users/upsert-discord`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      discordUserId: "reader-1",
+      username: "Reader One"
+    })
+  });
+
+  await fetch(`${baseUrl}/api/service/settings/oracle.settings`, {
+    method: "PUT",
+    headers,
+    body: JSON.stringify({
+      value: {
+        enabled: false,
+        provider: "openai"
+      }
+    })
+  });
+
+  await fetch(`${baseUrl}/api/service/secrets/oracle.openai.apiKey`, {
+    method: "PUT",
+    headers,
+    body: JSON.stringify({
+      value: "top-secret"
+    })
+  });
+
+  await fetch(`${baseUrl}/api/service/events`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      domain: "system",
+      eventType: "manual-checkpoint",
+      actorType: "owner",
+      actorId: "owner-1",
+      actorLabel: "Owner One",
+      targetType: "system",
+      targetId: "checkpoint-1",
+      message: "Checkpoint before content reset."
+    })
+  });
+
+  await fetch(`${baseUrl}/api/service/requests`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      source: "moon",
+      title: "Dandadan",
+      requestType: "webtoon",
+      requestedBy: "reader-1",
+      details: {
+        query: "dandadan",
+        selectedMetadata: {
+          provider: "mangadex",
+          providerSeriesId: "md-1",
+          title: "Dandadan"
+        }
+      }
+    })
+  });
+
+  await fetch(`${baseUrl}/api/service/progress`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      mediaId: "dan-da-dan",
+      discordUserId: "reader-1",
+      chapterLabel: "Chapter 166",
+      positionRatio: 0.5,
+      bookmark: {
+        chapterId: "dandadan-c166",
+        pageIndex: 2
+      }
+    })
+  });
+
+  await fetch(`${baseUrl}/api/service/settings/moon.following.reader-1`, {
+    method: "PUT",
+    headers,
+    body: JSON.stringify({
+      value: [{
+        titleId: "dan-da-dan",
+        title: "Dandadan",
+        libraryTypeSlug: "webtoon"
+      }]
+    })
+  });
+
+  await fetch(`${baseUrl}/api/service/settings/moon.reader.bookmarks.reader-1`, {
+    method: "PUT",
+    headers,
+    body: JSON.stringify({
+      value: [{
+        id: "bookmark-1",
+        titleId: "dan-da-dan",
+        chapterId: "dandadan-c166"
+      }]
+    })
+  });
+
+  await fetch(`${baseUrl}/api/service/raven/titles/dan-da-dan`, {
+    method: "PUT",
+    headers,
+    body: JSON.stringify({
+      id: "dan-da-dan",
+      title: "Dandadan",
+      mediaType: "webtoon",
+      libraryTypeLabel: "Webtoon",
+      libraryTypeSlug: "webtoon",
+      status: "active",
+      latestChapter: "167",
+      chapterCount: 2,
+      chaptersDownloaded: 2,
+      tags: ["Action", "Supernatural"],
+      chapters: [{
+        id: "dandadan-c166",
+        label: "Chapter 166",
+        chapterNumber: "166",
+        available: true
+      }, {
+        id: "dandadan-c167",
+        label: "Chapter 167",
+        chapterNumber: "167",
+        available: true
+      }]
+    })
+  });
+
+  const chapterRead = await fetch(`${baseUrl}/api/service/read-state/chapter/read`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      discordUserId: "reader-1",
+      mediaId: "dan-da-dan",
+      chapterId: "dandadan-c166",
+      startedAt: "2026-04-23T00:00:00.000Z"
+    })
+  }).then((response) => response.json());
+  assert.equal(chapterRead.chapterRead.chapterId, "dandadan-c166");
+
+  const titleRead = await fetch(`${baseUrl}/api/service/read-state/title/read`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      discordUserId: "reader-1",
+      mediaId: "dan-da-dan",
+      chapterIds: ["dandadan-c166", "dandadan-c167"],
+      startedAt: "2026-04-23T00:00:00.000Z",
+      completedAt: "2026-04-23T01:00:00.000Z"
+    })
+  }).then((response) => response.json());
+  assert.equal(titleRead.titleState.mediaId, "dan-da-dan");
+  assert.equal(titleRead.chapterReads.length, 2);
+
+  const readStateBeforeReset = await fetch(`${baseUrl}/api/service/read-state/reader-1?mediaId=dan-da-dan`, {
+    headers
+  }).then((response) => response.json());
+  assert.equal(readStateBeforeReset.titleStates.length, 1);
+  assert.equal(readStateBeforeReset.chapterReads.length, 2);
+
+  const preview = await fetch(`${baseUrl}/api/service/content-reset/preview`, {
+    headers
+  }).then((response) => response.json());
+  assert.equal(preview.counts.requests, 1);
+  assert.equal(preview.counts.progress, 1);
+  assert.equal(preview.counts.titleReadStates, 1);
+  assert.equal(preview.counts.chapterReadStates, 2);
+  assert.equal(preview.counts.followingSettings, 1);
+  assert.equal(preview.counts.bookmarkSettings, 1);
+  assert.equal(preview.counts.ravenTitles, 1);
+
+  const executed = await fetch(`${baseUrl}/api/service/content-reset/execute`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({})
+  }).then((response) => response.json());
+  assert.equal(executed.counts.requests, 1);
+  assert.equal(executed.counts.chapterReadStates, 2);
+
+  const readStateAfterReset = await fetch(`${baseUrl}/api/service/read-state/reader-1?mediaId=dan-da-dan`, {
+    headers
+  }).then((response) => response.json());
+  assert.equal(readStateAfterReset.titleStates.length, 0);
+  assert.equal(readStateAfterReset.chapterReads.length, 0);
+
+  const progressAfterReset = await fetch(`${baseUrl}/api/service/progress/reader-1`, {
+    headers
+  }).then((response) => response.json());
+  assert.equal(progressAfterReset.length, 0);
+
+  const followingAfterReset = await fetch(`${baseUrl}/api/service/settings/moon.following.reader-1`, {
+    headers
+  }).then((response) => response.json());
+  assert.equal(followingAfterReset.value, null);
+
+  const bookmarksAfterReset = await fetch(`${baseUrl}/api/service/settings/moon.reader.bookmarks.reader-1`, {
+    headers
+  }).then((response) => response.json());
+  assert.equal(bookmarksAfterReset.value, null);
+
+  const oracleSettings = await fetch(`${baseUrl}/api/service/settings/oracle.settings`, {
+    headers
+  }).then((response) => response.json());
+  assert.equal(oracleSettings.value.provider, "openai");
+
+  const accessOverview = await fetch(`${baseUrl}/api/service/access`, {
+    headers
+  }).then((response) => response.json());
+  assert.equal(accessOverview.users.some((user) => user.discordUserId === "reader-1"), true);
+
+  const events = await fetch(`${baseUrl}/api/service/events?domain=system`, {
+    headers
+  }).then((response) => response.json());
+  assert.equal(events.some((event) => event.eventType === "manual-checkpoint"), true);
+
+  server.close();
+});
+
+test("vault normalizes Raven title metadataMatchedAt timestamps for MySQL persistence", async () => {
+  const {app} = await createVaultApp();
+  const server = app.listen(0);
+  const {port} = server.address();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const headers = {
+    "Authorization": "Bearer sage-dev-token",
+    "Content-Type": "application/json"
+  };
+
+  const persisted = await fetch(`${baseUrl}/api/service/raven/titles/tb-1`, {
+    method: "PUT",
+    headers,
+    body: JSON.stringify({
+      id: "tb-1",
+      title: "Test Bulk Title",
+      mediaType: "manhwa",
+      libraryTypeLabel: "Manhwa",
+      libraryTypeSlug: "manhwa",
+      status: "active",
+      latestChapter: "Chapter 1",
+      chapterCount: 1,
+      chaptersDownloaded: 1,
+      tags: ["Action"],
+      aliases: ["Test Bulk Title"],
+      relations: [],
+      metadataProvider: "animeplanet",
+      metadataMatchedAt: "2026-04-24T14:16:20.942256270Z",
+      sourceUrl: "https://weebcentral.com/series/test-bulk-title",
+      coverUrl: "https://example.com/test-bulk-title.jpg"
+    })
+  });
+
+  assert.equal(persisted.status, 200);
+  const payload = await persisted.json();
+  assert.equal(payload.id, "tb-1");
+  assert.equal(payload.metadataMatchedAt, "2026-04-24T14:16:20.942Z");
 
   server.close();
 });

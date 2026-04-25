@@ -8,6 +8,12 @@ import {buildIntakeSelection, evaluateSelectionAgainstGuardState} from "./reques
 import {buildRequestWorkConflictPayload, isRequestWorkConflictError} from "./requestConflict.mjs";
 import {buildMoonHomePayload} from "./buildMoonHomePayload.mjs";
 import {
+  buildMoonUserLibraryState,
+  getTagPreference,
+  normalizeTagPreferenceStore,
+  setTagPreference
+} from "./moonUserState.mjs";
+import {
   attachRequestWaitlistEntry,
   buildActiveRequestDuplicatePayload,
   buildLibraryDuplicatePayload,
@@ -306,6 +312,20 @@ const readUserScopedSetting = async (vaultClient, prefix, discordUserId, fallbac
 const writeUserScopedSetting = async (vaultClient, prefix, discordUserId, value) =>
   vaultClient.setSetting(`${prefix}.${discordUserId}`, value);
 
+const normalizeFollowingEntry = (entry = {}) => ({
+  ...entry,
+  libraryTypeLabel: normalizeString(entry.libraryTypeLabel, normalizeString(entry.mediaType, "Manga")),
+  libraryTypeSlug: normalizeTypeSlug(entry.libraryTypeSlug || entry.mediaType)
+});
+
+const decorateTitleWithTagPreferences = (title = {}, tagPreferenceStore = {}) => ({
+  ...title,
+  tagPreferences: normalizeArray(title.tags).map((tag) => ({
+    tag,
+    preference: getTagPreference(tagPreferenceStore, tag)
+  }))
+});
+
 const withUser = (requireUser, handler) => async (req, res) => {
   await requireUser(req, res, async () => {
     await handler(req, res);
@@ -412,6 +432,46 @@ export const registerMoonV3Routes = (app, {
     ]);
 
     return normalizeArray(requests).map((request) => toRequestSummary(request, userIndex));
+  };
+
+  const readUserTagPreferences = async (discordUserId) =>
+    normalizeTagPreferenceStore(await readUserScopedSetting(vaultClient, "moon.tag-preferences", discordUserId, {}));
+
+  const loadUserLibraryState = async (discordUserId, titles = null) => {
+    const resolvedTitles = Array.isArray(titles) ? titles : await loadLibrary();
+    const [progress, readState, following, tagPreferences] = await Promise.all([
+      vaultClient.getProgress(discordUserId),
+      vaultClient.getReadState(discordUserId),
+      readUserScopedSetting(vaultClient, "moon.following", discordUserId, []),
+      readUserTagPreferences(discordUserId)
+    ]);
+    const normalizedFollowing = normalizeArray(following).map(normalizeFollowingEntry);
+    const derived = buildMoonUserLibraryState({
+      titles: resolvedTitles,
+      progress: normalizeArray(progress),
+      readState,
+      following: normalizedFollowing
+    });
+    return {
+      ...derived,
+      progress: normalizeArray(progress),
+      readState,
+      following: normalizedFollowing,
+      tagPreferences
+    };
+  };
+
+  const loadUserTitleState = async (discordUserId, titleId, title = null) => {
+    const resolvedTitle = title || await loadLibraryTitle(titleId);
+    if (!resolvedTitle?.id) {
+      return null;
+    }
+    const userLibrary = await loadUserLibraryState(discordUserId, [resolvedTitle]);
+    const userTitle = userLibrary.titles[0] || resolvedTitle;
+    return {
+      title: decorateTitleWithTagPreferences(userTitle, userLibrary.tagPreferences),
+      userLibrary
+    };
   };
 
   const loadRequestById = async (requestId) => {
@@ -670,6 +730,20 @@ export const registerMoonV3Routes = (app, {
       return loadRequestById(requestId);
     }
     return null;
+  };
+
+  const previewContentReset = async () => {
+    const [vaultPreview, ravenPreview] = await Promise.all([
+      vaultClient.previewContentReset(),
+      serviceJson(config.ravenBaseUrl, "/v1/system/content-reset/preview")
+    ]);
+    return {
+      vault: vaultPreview,
+      raven: ravenPreview.ok ? ravenPreview.payload : {
+        error: ravenPreview.payload?.error || "Moon could not preview Raven managed content reset scope."
+      },
+      confirmationText: "RESET SCRIPTARR CONTENT"
+    };
   };
 
   const attachDuplicateWaitlist = async ({requestSummary, user, source}) => {
@@ -1672,16 +1746,76 @@ export const registerMoonV3Routes = (app, {
   }));
 
   app.get("/api/moon-v3/admin/system/status", requireSystemRead(async (_req, res) => {
-    const [services, bootstrap, runtime] = await Promise.all([
+    const [services, bootstrap, runtime, contentReset] = await Promise.all([
       loadServiceStatus(),
       safeJson(serviceJson(config.wardenBaseUrl, "/api/bootstrap")),
-      safeJson(serviceJson(config.wardenBaseUrl, "/api/runtime"))
+      safeJson(serviceJson(config.wardenBaseUrl, "/api/runtime")),
+      previewContentReset()
     ]);
 
     res.json({
       services,
       bootstrap: bootstrap.payload || bootstrap,
-      runtime: runtime.payload || runtime
+      runtime: runtime.payload || runtime,
+      contentReset
+    });
+  }));
+
+  app.get("/api/moon-v3/admin/system/content-reset/preview", requireSystemRoot(async (_req, res) => {
+    res.json(await previewContentReset());
+  }));
+
+  app.post("/api/moon-v3/admin/system/content-reset", requireSystemRoot(async (req, res) => {
+    const confirmation = normalizeString(req.body?.confirmation);
+    if (confirmation !== "RESET SCRIPTARR CONTENT") {
+      res.status(400).json({error: "Confirmation text did not match. Use RESET SCRIPTARR CONTENT."});
+      return;
+    }
+
+    await appendEvent({
+      ...buildUserActor(req.user, "admin"),
+      domain: "system",
+      eventType: "content-reset-started",
+      severity: "warning",
+      targetType: "system",
+      targetId: "content-reset",
+      message: `${req.user.username} started a content reset.`,
+      metadata: {
+        confirmation
+      }
+    });
+
+    const vaultResult = await vaultClient.executeContentReset();
+    const ravenReset = await serviceJson(config.ravenBaseUrl, "/v1/system/content-reset", {
+      method: "POST",
+      body: {}
+    });
+    if (!ravenReset.ok) {
+      res.status(ravenReset.status || 502).json({
+        error: ravenReset.payload?.error || "Moon reset Vault content state but Raven managed storage cleanup failed.",
+        vault: vaultResult
+      });
+      return;
+    }
+
+    await appendEvent({
+      ...buildUserActor(req.user, "admin"),
+      domain: "system",
+      eventType: "content-reset-completed",
+      severity: "warning",
+      targetType: "system",
+      targetId: "content-reset",
+      message: `${req.user.username} completed a content reset.`,
+      metadata: {
+        vault: vaultResult,
+        raven: ravenReset.payload
+      }
+    });
+
+    res.json({
+      confirmationText: "RESET SCRIPTARR CONTENT",
+      vault: vaultResult,
+      raven: ravenReset.payload
     });
   }));
 
@@ -1751,25 +1885,19 @@ export const registerMoonV3Routes = (app, {
   }));
 
   app.get("/api/moon-v3/user/home", withUser(requireUser, async (req, res) => {
-    const [titles, requests, progress, following] = await Promise.all([
+    const [titles, requests, userLibrary] = await Promise.all([
       loadLibrary(),
       loadRequests(),
-      vaultClient.getProgress(req.user.discordUserId),
-      readUserScopedSetting(vaultClient, "moon.following", req.user.discordUserId, [])
+      loadUserLibraryState(req.user.discordUserId)
     ]);
-    const titleIndex = new Map(titles.map((title) => [title.id, title]));
-    const continueReading = normalizeArray(progress).map((entry) => enrichProgressEntry(entry, titleIndex));
 
     res.json(buildMoonHomePayload({
-      titles,
+      titles: userLibrary.titles.length ? userLibrary.titles : titles,
       requests,
-      progress: continueReading,
-      following: normalizeArray(following).map((entry) => ({
-        ...entry,
-        libraryTypeLabel: normalizeString(entry.libraryTypeLabel, normalizeString(entry.mediaType, "Manga")),
-        libraryTypeSlug: normalizeTypeSlug(entry.libraryTypeSlug || entry.mediaType)
-      })),
-      discordUserId: req.user.discordUserId
+      bookshelf: userLibrary.bookshelf,
+      following: userLibrary.following,
+      discordUserId: req.user.discordUserId,
+      tagPreferences: userLibrary.tagPreferences
     }));
   }));
 
@@ -1778,21 +1906,20 @@ export const registerMoonV3Routes = (app, {
   }));
 
   app.get("/api/moon-v3/user/title/:titleId", withUser(requireUser, async (req, res) => {
-    const result = await serviceJson(config.ravenBaseUrl, `/v1/library/${encodeURIComponent(req.params.titleId)}`);
-    if (!result.ok) {
-      res.status(result.status).json(result.payload);
+    const [titleState, requests] = await Promise.all([
+      loadUserTitleState(req.user.discordUserId, req.params.titleId),
+      loadRequests()
+    ]);
+    const title = titleState?.title || null;
+    if (!title) {
+      res.status(404).json({error: "Title not found."});
       return;
     }
 
-    const [following, requests] = await Promise.all([
-      readUserScopedSetting(vaultClient, "moon.following", req.user.discordUserId, []),
-      loadRequests()
-    ]);
-
-    const title = toTitleSummary(result.payload);
     res.json({
       title,
-      following: normalizeArray(following).some((entry) => entry.titleId === title.id),
+      following: Boolean(title.userState?.following),
+      tagPreferences: titleState?.userLibrary?.tagPreferences || normalizeTagPreferenceStore({}),
       requests: requests.filter((entry) =>
         entry.requestedBy.discordUserId === req.user.discordUserId && (
           entry.title === title.title
@@ -1800,6 +1927,191 @@ export const registerMoonV3Routes = (app, {
           || normalizeString(entry.details?.selectedMetadata?.title) === title.title
         )
       )
+    });
+  }));
+
+  app.get("/api/moon-v3/user/tag-preferences", withUser(requireUser, async (req, res) => {
+    res.json(await readUserTagPreferences(req.user.discordUserId));
+  }));
+
+  app.put("/api/moon-v3/user/tag-preferences", withUser(requireUser, async (req, res) => {
+    const current = await readUserTagPreferences(req.user.discordUserId);
+    const tag = normalizeString(req.body?.tag);
+    const preference = normalizeString(req.body?.preference).toLowerCase();
+    if (!tag) {
+      res.status(400).json({error: "tag is required."});
+      return;
+    }
+    if (!["like", "dislike", "clear", ""].includes(preference)) {
+      res.status(400).json({error: "preference must be like, dislike, or clear."});
+      return;
+    }
+    const next = setTagPreference(current, tag, preference || "clear");
+    await writeUserScopedSetting(vaultClient, "moon.tag-preferences", req.user.discordUserId, next);
+    await appendEventForUser({
+      domain: "library",
+      eventType: "tag-preference-updated",
+      user: req.user,
+      targetType: "tag",
+      targetId: normalizeString(tag).toLowerCase(),
+      message: `${req.user.username} updated a title-tag preference.`,
+      metadata: {
+        tag: normalizeString(tag),
+        preference: preference || "clear"
+      }
+    });
+    res.json(next);
+  }));
+
+  app.get("/api/moon-v3/user/title/:titleId/read-state", withUser(requireUser, async (req, res) => {
+    const titleState = await loadUserTitleState(req.user.discordUserId, req.params.titleId);
+    if (!titleState?.title) {
+      res.status(404).json({error: "Title not found."});
+      return;
+    }
+    res.json({
+      titleId: titleState.title.id,
+      userState: titleState.title.userState,
+      chapters: normalizeArray(titleState.title.chapters).map((chapter) => ({
+        id: chapter.id,
+        label: chapter.label,
+        read: chapter.read === true,
+        readAt: chapter.readAt || null
+      }))
+    });
+  }));
+
+  app.post("/api/moon-v3/user/title/:titleId/read", withUser(requireUser, async (req, res) => {
+    const titleState = await loadUserTitleState(req.user.discordUserId, req.params.titleId);
+    if (!titleState?.title) {
+      res.status(404).json({error: "Title not found."});
+      return;
+    }
+    const availableChapterIds = normalizeArray(titleState.title.chapters)
+      .filter((chapter) => chapter.available !== false)
+      .map((chapter) => normalizeString(chapter.id))
+      .filter(Boolean);
+    await vaultClient.markTitleRead({
+      discordUserId: req.user.discordUserId,
+      mediaId: titleState.title.id,
+      chapterIds: availableChapterIds,
+      startedAt: titleState.title.userState?.startedAt || new Date().toISOString(),
+      completedAt: new Date().toISOString()
+    });
+    await appendEventForUser({
+      domain: "reader",
+      eventType: "title-marked-read",
+      user: req.user,
+      targetType: "title",
+      targetId: normalizeString(titleState.title.id),
+      message: `${req.user.username} marked ${titleState.title.title} as read.`,
+      metadata: {
+        titleId: normalizeString(titleState.title.id),
+        chapterCount: availableChapterIds.length
+      }
+    });
+    const refreshed = await loadUserTitleState(req.user.discordUserId, req.params.titleId);
+    res.json({
+      title: refreshed?.title || titleState.title
+    });
+  }));
+
+  app.post("/api/moon-v3/user/title/:titleId/unread", withUser(requireUser, async (req, res) => {
+    const titleState = await loadUserTitleState(req.user.discordUserId, req.params.titleId);
+    if (!titleState?.title) {
+      res.status(404).json({error: "Title not found."});
+      return;
+    }
+    await vaultClient.markTitleUnread({
+      discordUserId: req.user.discordUserId,
+      mediaId: titleState.title.id,
+      startedAt: new Date().toISOString()
+    });
+    await appendEventForUser({
+      domain: "reader",
+      eventType: "title-marked-unread",
+      user: req.user,
+      targetType: "title",
+      targetId: normalizeString(titleState.title.id),
+      message: `${req.user.username} put ${titleState.title.title} back on their bookshelf.`,
+      metadata: {
+        titleId: normalizeString(titleState.title.id)
+      }
+    });
+    const refreshed = await loadUserTitleState(req.user.discordUserId, req.params.titleId);
+    res.json({
+      title: refreshed?.title || titleState.title
+    });
+  }));
+
+  app.post("/api/moon-v3/user/title/:titleId/chapters/:chapterId/read", withUser(requireUser, async (req, res) => {
+    const titleState = await loadUserTitleState(req.user.discordUserId, req.params.titleId);
+    const title = titleState?.title || null;
+    const chapter = normalizeArray(title?.chapters).find((entry) => entry.id === req.params.chapterId) || null;
+    if (!title || !chapter) {
+      res.status(404).json({error: "Chapter not found."});
+      return;
+    }
+    const readIds = new Set(normalizeArray(title.userState?.readChapterIds).map((entry) => normalizeString(entry)));
+    readIds.add(normalizeString(chapter.id));
+    const availableCount = normalizeArray(title.chapters).filter((entry) => entry.available !== false).length;
+    const completedAt = readIds.size >= availableCount && availableCount > 0 ? new Date().toISOString() : null;
+    await vaultClient.markChapterRead({
+      discordUserId: req.user.discordUserId,
+      mediaId: title.id,
+      chapterId: chapter.id,
+      startedAt: title.userState?.startedAt || new Date().toISOString(),
+      completedAt
+    });
+    await appendEventForUser({
+      domain: "reader",
+      eventType: "chapter-marked-read",
+      user: req.user,
+      targetType: "chapter",
+      targetId: normalizeString(chapter.id),
+      message: `${req.user.username} marked ${chapter.label} as read.`,
+      metadata: {
+        titleId: normalizeString(title.id),
+        chapterId: normalizeString(chapter.id)
+      }
+    });
+    const refreshed = await loadUserTitleState(req.user.discordUserId, req.params.titleId);
+    res.json({
+      title: refreshed?.title || title,
+      chapterId: normalizeString(chapter.id)
+    });
+  }));
+
+  app.post("/api/moon-v3/user/title/:titleId/chapters/:chapterId/unread", withUser(requireUser, async (req, res) => {
+    const titleState = await loadUserTitleState(req.user.discordUserId, req.params.titleId);
+    const title = titleState?.title || null;
+    const chapter = normalizeArray(title?.chapters).find((entry) => entry.id === req.params.chapterId) || null;
+    if (!title || !chapter) {
+      res.status(404).json({error: "Chapter not found."});
+      return;
+    }
+    await vaultClient.markChapterUnread({
+      discordUserId: req.user.discordUserId,
+      mediaId: title.id,
+      chapterId: chapter.id,
+      startedAt: title.userState?.startedAt || new Date().toISOString()
+    });
+    await appendEventForUser({
+      domain: "reader",
+      eventType: "chapter-marked-unread",
+      user: req.user,
+      targetType: "chapter",
+      targetId: normalizeString(chapter.id),
+      message: `${req.user.username} marked ${chapter.label} as unread.`,
+      metadata: {
+        titleId: normalizeString(title.id),
+        chapterId: normalizeString(chapter.id)
+      }
+    });
+    const refreshed = await loadUserTitleState(req.user.discordUserId, req.params.titleId);
+    res.json({
+      title: refreshed?.title || title,
+      chapterId: normalizeString(chapter.id)
     });
   }));
 
@@ -2200,6 +2512,14 @@ export const registerMoonV3Routes = (app, {
       });
     }
     if (nextRatio >= 0.999 && previousRatio < 0.999) {
+      if (normalizeString(req.body?.bookmark?.chapterId) && normalizeString(req.body?.mediaId)) {
+        await vaultClient.markChapterRead({
+          discordUserId: req.user.discordUserId,
+          mediaId: normalizeString(req.body.mediaId),
+          chapterId: normalizeString(req.body.bookmark.chapterId),
+          startedAt: previousEntry?.updatedAt || new Date().toISOString()
+        });
+      }
       await appendEventForUser({
         domain: "reader",
         eventType: "chapter-completed",
@@ -2224,19 +2544,26 @@ export const registerMoonV3Routes = (app, {
       return;
     }
 
+    const titleState = await loadUserTitleState(req.user.discordUserId, req.params.titleId, toTitleSummary(result.payload?.title));
+    if (!titleState?.title) {
+      res.status(404).json({error: "Title not found."});
+      return;
+    }
+
     res.json({
-      title: toTitleSummary(result.payload?.title),
-      chapters: normalizeArray(result.payload?.chapters).map(toChapterSummary)
+      title: titleState.title,
+      chapters: normalizeArray(titleState.title.chapters)
     });
   }));
 
   app.get("/api/moon-v3/user/reader/title/:titleId/chapter/:chapterId", withUser(requireUser, async (req, res) => {
-    const [manifest, chapter, progress, bookmarks, storedPreferences] = await Promise.all([
+    const [manifest, chapter, progress, bookmarks, storedPreferences, titleState] = await Promise.all([
       serviceJson(config.ravenBaseUrl, `/v1/reader/${encodeURIComponent(req.params.titleId)}`),
       serviceJson(config.ravenBaseUrl, `/v1/reader/${encodeURIComponent(req.params.titleId)}/${encodeURIComponent(req.params.chapterId)}`),
       vaultClient.getProgress(req.user.discordUserId),
       readUserScopedSetting(vaultClient, "moon.reader.bookmarks", req.user.discordUserId, []),
-      readUserScopedSetting(vaultClient, "moon.reader.preferences", req.user.discordUserId, {})
+      readUserScopedSetting(vaultClient, "moon.reader.preferences", req.user.discordUserId, {}),
+      loadUserTitleState(req.user.discordUserId, req.params.titleId)
     ]);
 
     if (!chapter.ok) {
@@ -2245,25 +2572,26 @@ export const registerMoonV3Routes = (app, {
     }
 
     const payload = chapter.payload;
-    const title = toTitleSummary(payload.title);
+    const title = titleState?.title || toTitleSummary(payload.title);
     const chapterSummary = toChapterSummary(payload.chapter);
     const manifestPayload = manifest.ok
       ? {
-        title: toTitleSummary(manifest.payload?.title || payload.title),
-        chapters: normalizeArray(manifest.payload?.chapters).map(toChapterSummary)
+        title,
+        chapters: normalizeArray(title?.chapters).length ? normalizeArray(title.chapters) : normalizeArray(manifest.payload?.chapters).map(toChapterSummary)
       }
       : {
         title,
-        chapters: [chapterSummary]
+        chapters: normalizeArray(title?.chapters).length ? normalizeArray(title.chapters) : [chapterSummary]
       };
     const typeSlug = normalizeTypeSlug(title.libraryTypeSlug || title.mediaType);
     const progressEntry = normalizeArray(progress).find((entry) => entry.mediaId === payload.title.id);
     const pageBase = `/api/moon/v3/user/reader/title/${encodeURIComponent(req.params.titleId)}/chapter/${encodeURIComponent(req.params.chapterId)}/page`;
+    const enrichedChapter = normalizeArray(title?.chapters).find((entry) => entry.id === req.params.chapterId) || chapterSummary;
 
     res.json({
       ...payload,
       title,
-      chapter: chapterSummary,
+      chapter: enrichedChapter,
       manifest: manifestPayload,
       pages: normalizeArray(payload.pages).map((page) => ({
         ...page,

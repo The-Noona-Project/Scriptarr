@@ -19,20 +19,58 @@ const withQuery = (path, query = {}) => {
   return `${path}?${search.toString()}`;
 };
 
-const requestJson = async (baseUrl, headers, path, options = {}) => {
-  const response = await fetch(`${baseUrl}${path}`, {
-    method: options.method || "GET",
-    headers: options.body == null
-      ? {"Authorization": headers.Authorization}
-      : headers,
-    body: options.body == null ? undefined : JSON.stringify(options.body)
-  });
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-  return {
-    ok: response.ok,
-    status: response.status,
-    payload: await json(response)
-  };
+const isRetryableNetworkError = (error) => {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  return /fetch failed/i.test(error.message || "");
+};
+
+const requestJson = async (baseUrl, headers, path, options = {}) => {
+  const retries = Number.isInteger(options.retries) ? Math.max(1, options.retries) : 1;
+  const retryDelayMs = Number.isInteger(options.retryDelayMs) ? Math.max(0, options.retryDelayMs) : 0;
+  const timeoutMs = Number.isInteger(options.timeoutMs) ? Math.max(1, options.timeoutMs) : 0;
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= retries; attempt += 1) {
+    let timeout = null;
+    try {
+      const controller = timeoutMs > 0 ? new AbortController() : null;
+      timeout = controller
+        ? setTimeout(() => controller.abort(), timeoutMs)
+        : null;
+      const response = await fetch(`${baseUrl}${path}`, {
+        method: options.method || "GET",
+        headers: options.body == null
+          ? {"Authorization": headers.Authorization}
+          : headers,
+        body: options.body == null ? undefined : JSON.stringify(options.body),
+        signal: controller?.signal
+      });
+      return {
+        ok: response.ok,
+        status: response.status,
+        payload: await json(response)
+      };
+    } catch (error) {
+      if (error?.name === "AbortError") {
+        error = new Error(`Request timed out after ${timeoutMs}ms`);
+      }
+      lastError = error;
+      if (attempt >= retries || !isRetryableNetworkError(error)) {
+        throw error;
+      }
+      await sleep(retryDelayMs);
+    } finally {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+    }
+  }
+
+  throw lastError;
 };
 
 export const createSageClient = (config) => {
@@ -92,7 +130,10 @@ export const createSageClient = (config) => {
     bulkQueueDownload(payload) {
       return requestJson(config.sageBaseUrl, jsonHeaders, "/api/internal/portal/downloads/bulk-queue", {
         method: "POST",
-        body: payload
+        body: payload,
+        retries: 2,
+        retryDelayMs: 250,
+        timeoutMs: Number.isInteger(config.bulkQueueTimeoutMs) ? config.bulkQueueTimeoutMs : 900000
       });
     },
     listFollowNotifications() {

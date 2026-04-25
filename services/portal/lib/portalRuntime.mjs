@@ -92,7 +92,7 @@ const createCapabilities = (state, settings) => {
     : connected
       ? {
         status: "available",
-        detail: "Portal can receive direct messages, including the DM-only downloadall command."
+        detail: "Portal can receive direct messages, including the owner-only DM /downloadall command."
       }
       : {
         status: state.mode === "starting" ? "pending" : "disconnected",
@@ -137,10 +137,6 @@ export const createPortalRuntime = ({
   logger,
   clientFactory
 }) => {
-  const commands = createPortalCommands({
-    sage,
-    publicBaseUrl: config.publicBaseUrl
-  });
   let settings = normalizePortalDiscordSettings({}, config.discordDefaults);
   let discord = null;
   let followNotifier = null;
@@ -155,8 +151,24 @@ export const createPortalRuntime = ({
     warning: null,
     lastSyncAt: null,
     registeredCount: 0,
-    guildMemberEventsEnabled: false
+    registeredGlobalCount: 0,
+    registeredGuildCount: 0,
+    guildMemberEventsEnabled: false,
+    requestedIntents: [],
+    requestedPartials: [],
+    lastDirectMessageReceivedAt: null,
+    lastDownloadAllHandledAt: null,
+    lastDownloadAllError: null,
+    lastDownloadAllSource: null
   };
+
+  const commands = createPortalCommands({
+    sage,
+    publicBaseUrl: config.publicBaseUrl,
+    getSettings: () => settings,
+    logger,
+    onRuntimeEvent: (event) => recordRuntimeEvent(event)
+  });
 
   const roleManager = createRoleManager({
     getSettings: () => settings
@@ -164,6 +176,34 @@ export const createPortalRuntime = ({
 
   const recordRuntimeEvent = (event = {}) => {
     if (!event?.type) {
+      return;
+    }
+
+    if (event.type === "dm-message-received") {
+      state = {
+        ...state,
+        lastDirectMessageReceivedAt: event.at || new Date().toISOString()
+      };
+      return;
+    }
+
+    if (event.type === "downloadall-handled") {
+      state = {
+        ...state,
+        lastDownloadAllHandledAt: event.at || new Date().toISOString(),
+        lastDownloadAllSource: normalizeString(event.source),
+        ...(event.status === "started" ? {} : {lastDownloadAllError: null})
+      };
+      return;
+    }
+
+    if (event.type === "downloadall-error") {
+      state = {
+        ...state,
+        lastDownloadAllHandledAt: event.at || new Date().toISOString(),
+        lastDownloadAllSource: normalizeString(event.source),
+        lastDownloadAllError: normalizeString(event.message)
+      };
       return;
     }
 
@@ -217,6 +257,8 @@ export const createPortalRuntime = ({
           ...state,
           lastSyncAt: new Date().toISOString(),
           registeredCount: sync.registered,
+          registeredGlobalCount: sync.registeredGlobal || 0,
+          registeredGuildCount: sync.registeredGuild || 0,
           registeredGuildId: sync.guildId || settings.guildId || "",
           syncError: null
         };
@@ -241,7 +283,8 @@ export const createPortalRuntime = ({
       directMessageHandler: createDirectMessageHandler({
         getSettings: () => settings,
         sage,
-        logger
+        logger,
+        onRuntimeEvent: recordRuntimeEvent
       }),
       guildMemberAddHandler: enableGuildMemberEvents ? async (member) => {
         const channelId = settings.onboarding.channelId;
@@ -290,6 +333,8 @@ export const createPortalRuntime = ({
       syncError: null,
       warning: null,
       registeredCount: 0,
+      registeredGlobalCount: 0,
+      registeredGuildCount: 0,
       registeredGuildId: ""
     };
     await refreshSettings().catch(() => settings);
@@ -326,8 +371,12 @@ export const createPortalRuntime = ({
           warning: attempt.warning,
           lastSyncAt: new Date().toISOString(),
           registeredCount: started.sync.registered,
+          registeredGlobalCount: started.sync.registeredGlobal || 0,
+          registeredGuildCount: started.sync.registeredGuild || 0,
           registeredGuildId: started.sync.guildId || settings.guildId || "",
-          guildMemberEventsEnabled: attempt.enableGuildMemberEvents
+          guildMemberEventsEnabled: attempt.enableGuildMemberEvents,
+          requestedIntents: Array.isArray(started.nextDiscord.requestedIntents) ? [...started.nextDiscord.requestedIntents] : [],
+          requestedPartials: Array.isArray(started.nextDiscord.requestedPartials) ? [...started.nextDiscord.requestedPartials] : []
         };
         return state;
       } catch (error) {
@@ -415,6 +464,7 @@ export const createPortalRuntime = ({
       const commandInventory = buildCommandInventory({
         settings,
         registeredGuildId: state.registeredGuildId || settings.guildId || "",
+        registeredGlobalCount: state.registeredGlobalCount || 0,
         connectionState,
         commandSyncState: createCapabilities(state, settings).commandSync.status
       });

@@ -74,6 +74,33 @@ const normalizeBoolean = (value, fallback = false) => {
   }
   return fallback;
 };
+const readStateKey = (discordUserId, mediaId) => `${normalizeString(discordUserId)}::${normalizeString(mediaId)}`;
+const normalizeReadStateTimestamp = (value, fallback = null) => {
+  const normalized = normalizeString(value);
+  if (!normalized) {
+    return fallback;
+  }
+  const parsed = Date.parse(normalized);
+  return Number.isFinite(parsed) ? new Date(parsed).toISOString() : fallback;
+};
+const toTitleReadState = (value = {}) => ({
+  mediaId: normalizeString(value.mediaId || value.media_id),
+  discordUserId: normalizeString(value.discordUserId || value.discord_user_id),
+  startedAt: normalizeReadStateTimestamp(value.startedAt || value.started_at),
+  completedAt: normalizeReadStateTimestamp(value.completedAt || value.completed_at),
+  updatedAt: normalizeReadStateTimestamp(value.updatedAt || value.updated_at, nowIso())
+});
+const toChapterReadState = (value = {}) => ({
+  mediaId: normalizeString(value.mediaId || value.media_id),
+  chapterId: normalizeString(value.chapterId || value.chapter_id),
+  discordUserId: normalizeString(value.discordUserId || value.discord_user_id),
+  readAt: normalizeReadStateTimestamp(value.readAt || value.read_at, nowIso()),
+  updatedAt: normalizeReadStateTimestamp(value.updatedAt || value.updated_at, nowIso())
+});
+const CONTENT_RESET_SETTING_PREFIXES = Object.freeze([
+  "moon.following.",
+  "moon.reader.bookmarks."
+]);
 const REQUEST_STATUSES = new Set([
   "pending",
   "unavailable",
@@ -409,6 +436,8 @@ const createMemoryStore = () => {
     requests: new Map(),
     requestWorkLocks: new Map(),
     progress: new Map(),
+    titleReadStates: new Map(),
+    chapterReadStates: new Map(),
     ravenTitles: new Map(),
     ravenChapters: new Map(),
     ravenDownloadTasks: new Map(),
@@ -471,6 +500,83 @@ const createMemoryStore = () => {
         state.sessions.delete(token);
       }
     }
+  };
+  const getMemoryTitleState = (discordUserId, mediaId) => state.titleReadStates.get(readStateKey(discordUserId, mediaId)) || null;
+  const setMemoryTitleState = (payload) => {
+    const normalized = toTitleReadState(payload);
+    state.titleReadStates.set(readStateKey(normalized.discordUserId, normalized.mediaId), normalized);
+    return normalized;
+  };
+  const getMemoryChapterReads = (discordUserId, mediaId = "") => {
+    const keyPrefix = mediaId ? `${readStateKey(discordUserId, mediaId)}::` : `${normalizeString(discordUserId)}::`;
+    return Array.from(state.chapterReadStates.entries())
+      .filter(([key]) => key.startsWith(keyPrefix))
+      .map(([, value]) => value);
+  };
+  const setMemoryChapterRead = (payload) => {
+    const normalized = toChapterReadState(payload);
+    state.chapterReadStates.set(
+      `${readStateKey(normalized.discordUserId, normalized.mediaId)}::${normalized.chapterId}`,
+      normalized
+    );
+    return normalized;
+  };
+  const clearMemoryChapterReadsForTitle = (discordUserId, mediaId) => {
+    const prefix = `${readStateKey(discordUserId, mediaId)}::`;
+    let removed = 0;
+    for (const key of Array.from(state.chapterReadStates.keys())) {
+      if (key.startsWith(prefix)) {
+        state.chapterReadStates.delete(key);
+        removed += 1;
+      }
+    }
+    return removed;
+  };
+  const clearMemoryContentReset = () => {
+    const preview = {
+      requests: state.requests.size,
+      requestWorkLocks: state.requestWorkLocks.size,
+      progress: state.progress.size,
+      titleReadStates: state.titleReadStates.size,
+      chapterReadStates: state.chapterReadStates.size,
+      followingSettings: Array.from(state.settings.keys()).filter((key) => key.startsWith("moon.following.")).length,
+      bookmarkSettings: Array.from(state.settings.keys()).filter((key) => key.startsWith("moon.reader.bookmarks.")).length,
+      ravenTitles: state.ravenTitles.size,
+      ravenChapters: Array.from(state.ravenChapters.values()).reduce((sum, entries) => sum + entries.size, 0),
+      ravenMetadataMatches: state.ravenMetadataMatches.size,
+      ravenDownloadTasks: state.ravenDownloadTasks.size,
+      ravenJobs: Array.from(state.jobs.values()).filter((job) => job.ownerService === "scriptarr-raven").length,
+      ravenJobTasks: Array.from(state.jobTasks.values()).filter((task) => {
+        const job = state.jobs.get(task.jobId);
+        return job?.ownerService === "scriptarr-raven";
+      }).length
+    };
+    state.requests.clear();
+    state.requestWorkLocks.clear();
+    state.progress.clear();
+    state.titleReadStates.clear();
+    state.chapterReadStates.clear();
+    for (const key of Array.from(state.settings.keys())) {
+      if (CONTENT_RESET_SETTING_PREFIXES.some((prefix) => key.startsWith(prefix))) {
+        state.settings.delete(key);
+      }
+    }
+    state.ravenTitles.clear();
+    state.ravenChapters.clear();
+    state.ravenMetadataMatches.clear();
+    state.ravenDownloadTasks.clear();
+    const ravenJobIds = Array.from(state.jobs.values())
+      .filter((job) => job.ownerService === "scriptarr-raven")
+      .map((job) => job.jobId);
+    for (const jobId of ravenJobIds) {
+      state.jobs.delete(jobId);
+    }
+    for (const [taskId, task] of Array.from(state.jobTasks.entries())) {
+      if (ravenJobIds.includes(task.jobId)) {
+        state.jobTasks.delete(taskId);
+      }
+    }
+    return preview;
   };
   const listMemoryEvents = (filters = {}) => {
     const normalized = normalizeEventFilters(filters);
@@ -771,14 +877,138 @@ const createMemoryStore = () => {
       });
     },
     async upsertProgress(entry) {
-      state.progress.set(entry.mediaId, {
+      state.progress.set(readStateKey(entry.discordUserId, entry.mediaId), {
         ...entry,
         updatedAt: nowIso()
       });
-      return state.progress.get(entry.mediaId);
+      return state.progress.get(readStateKey(entry.discordUserId, entry.mediaId));
     },
     async getProgressByUser(discordUserId) {
       return Array.from(state.progress.values()).filter((entry) => entry.discordUserId === discordUserId);
+    },
+    async getReadStateByUser(discordUserId, mediaId = "") {
+      const normalizedUserId = normalizeString(discordUserId);
+      const normalizedMediaId = normalizeString(mediaId);
+      const titleStates = normalizedMediaId
+        ? [getMemoryTitleState(normalizedUserId, normalizedMediaId)].filter(Boolean)
+        : Array.from(state.titleReadStates.values()).filter((entry) => entry.discordUserId === normalizedUserId);
+      const chapterReads = getMemoryChapterReads(normalizedUserId, normalizedMediaId);
+      return {
+        titleStates,
+        chapterReads
+      };
+    },
+    async markTitleRead(payload = {}) {
+      const normalizedUserId = normalizeString(payload.discordUserId);
+      const normalizedMediaId = normalizeString(payload.mediaId);
+      const chapterIds = Array.from(new Set((Array.isArray(payload.chapterIds) ? payload.chapterIds : [])
+        .map((chapterId) => normalizeString(chapterId))
+        .filter(Boolean)));
+      for (const chapterId of chapterIds) {
+        setMemoryChapterRead({
+          mediaId: normalizedMediaId,
+          chapterId,
+          discordUserId: normalizedUserId,
+          readAt: payload.completedAt || nowIso(),
+          updatedAt: nowIso()
+        });
+      }
+      const titleState = setMemoryTitleState({
+        mediaId: normalizedMediaId,
+        discordUserId: normalizedUserId,
+        startedAt: payload.startedAt || nowIso(),
+        completedAt: payload.completedAt || nowIso(),
+        updatedAt: nowIso()
+      });
+      return {
+        titleState,
+        chapterReads: getMemoryChapterReads(normalizedUserId, normalizedMediaId)
+      };
+    },
+    async markTitleUnread(payload = {}) {
+      const normalizedUserId = normalizeString(payload.discordUserId);
+      const normalizedMediaId = normalizeString(payload.mediaId);
+      clearMemoryChapterReadsForTitle(normalizedUserId, normalizedMediaId);
+      const titleState = setMemoryTitleState({
+        mediaId: normalizedMediaId,
+        discordUserId: normalizedUserId,
+        startedAt: payload.startedAt || nowIso(),
+        completedAt: null,
+        updatedAt: nowIso()
+      });
+      return {
+        titleState,
+        chapterReads: []
+      };
+    },
+    async markChapterRead(payload = {}) {
+      const normalizedUserId = normalizeString(payload.discordUserId);
+      const normalizedMediaId = normalizeString(payload.mediaId);
+      const chapterRead = setMemoryChapterRead({
+        mediaId: normalizedMediaId,
+        chapterId: payload.chapterId,
+        discordUserId: normalizedUserId,
+        readAt: payload.readAt || nowIso(),
+        updatedAt: nowIso()
+      });
+      const existing = getMemoryTitleState(normalizedUserId, normalizedMediaId);
+      const titleState = setMemoryTitleState({
+        mediaId: normalizedMediaId,
+        discordUserId: normalizedUserId,
+        startedAt: existing?.startedAt || payload.startedAt || nowIso(),
+        completedAt: payload.completedAt ?? existing?.completedAt ?? null,
+        updatedAt: nowIso()
+      });
+      return {
+        titleState,
+        chapterRead
+      };
+    },
+    async markChapterUnread(payload = {}) {
+      const normalizedUserId = normalizeString(payload.discordUserId);
+      const normalizedMediaId = normalizeString(payload.mediaId);
+      state.chapterReadStates.delete(`${readStateKey(normalizedUserId, normalizedMediaId)}::${normalizeString(payload.chapterId)}`);
+      const existing = getMemoryTitleState(normalizedUserId, normalizedMediaId);
+      const titleState = setMemoryTitleState({
+        mediaId: normalizedMediaId,
+        discordUserId: normalizedUserId,
+        startedAt: existing?.startedAt || payload.startedAt || nowIso(),
+        completedAt: payload.completedAt ?? null,
+        updatedAt: nowIso()
+      });
+      return {
+        titleState,
+        chapterReads: getMemoryChapterReads(normalizedUserId, normalizedMediaId)
+      };
+    },
+    async previewContentReset() {
+      return {
+        driver: "memory",
+        counts: {
+          requests: state.requests.size,
+          requestWorkLocks: state.requestWorkLocks.size,
+          progress: state.progress.size,
+          titleReadStates: state.titleReadStates.size,
+          chapterReadStates: state.chapterReadStates.size,
+          followingSettings: Array.from(state.settings.keys()).filter((key) => key.startsWith("moon.following.")).length,
+          bookmarkSettings: Array.from(state.settings.keys()).filter((key) => key.startsWith("moon.reader.bookmarks.")).length,
+          ravenTitles: state.ravenTitles.size,
+          ravenChapters: Array.from(state.ravenChapters.values()).reduce((sum, entries) => sum + entries.size, 0),
+          ravenMetadataMatches: state.ravenMetadataMatches.size,
+          ravenDownloadTasks: state.ravenDownloadTasks.size,
+          ravenJobs: Array.from(state.jobs.values()).filter((job) => job.ownerService === "scriptarr-raven").length,
+          ravenJobTasks: Array.from(state.jobTasks.values()).filter((task) => {
+            const job = state.jobs.get(task.jobId);
+            return job?.ownerService === "scriptarr-raven";
+          }).length
+        }
+      };
+    },
+    async executeContentReset() {
+      return {
+        driver: "memory",
+        counts: clearMemoryContentReset()
+      };
     },
     async listRavenTitles() {
       return sortRavenTitles(Array.from(state.ravenTitles.values()).map((title) =>
@@ -981,6 +1211,28 @@ const createMysqlStore = (config) => {
         bookmark_json JSON NULL,
         updated_at DATETIME NOT NULL,
         PRIMARY KEY (media_id, discord_user_id)
+      )
+    `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS media_title_state (
+        media_id VARCHAR(128) NOT NULL,
+        discord_user_id VARCHAR(64) NOT NULL,
+        started_at DATETIME NULL,
+        completed_at DATETIME NULL,
+        updated_at DATETIME NOT NULL,
+        PRIMARY KEY (media_id, discord_user_id),
+        INDEX idx_media_title_state_user (discord_user_id)
+      )
+    `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS media_chapter_reads (
+        media_id VARCHAR(128) NOT NULL,
+        chapter_id VARCHAR(191) NOT NULL,
+        discord_user_id VARCHAR(64) NOT NULL,
+        read_at DATETIME NOT NULL,
+        updated_at DATETIME NOT NULL,
+        PRIMARY KEY (media_id, chapter_id, discord_user_id),
+        INDEX idx_media_chapter_reads_user_media (discord_user_id, media_id)
       )
     `);
     await pool.query(`
@@ -1949,6 +2201,204 @@ const createMysqlStore = (config) => {
         updatedAt: row.updated_at.toISOString()
       }));
     },
+    async getReadStateByUser(discordUserId, mediaId = "") {
+      const normalizedMediaId = normalizeString(mediaId);
+      const titleWhereSql = normalizedMediaId ? "WHERE discord_user_id = ? AND media_id = ?" : "WHERE discord_user_id = ?";
+      const titleParams = normalizedMediaId ? [discordUserId, normalizedMediaId] : [discordUserId];
+      const chapterWhereSql = normalizedMediaId ? "WHERE discord_user_id = ? AND media_id = ?" : "WHERE discord_user_id = ?";
+      const chapterParams = normalizedMediaId ? [discordUserId, normalizedMediaId] : [discordUserId];
+      const [titleRows, chapterRows] = await Promise.all([
+        pool.query(`SELECT * FROM media_title_state ${titleWhereSql} ORDER BY updated_at DESC`, titleParams),
+        pool.query(`SELECT * FROM media_chapter_reads ${chapterWhereSql} ORDER BY updated_at DESC`, chapterParams)
+      ]);
+      return {
+        titleStates: titleRows[0].map((row) => ({
+          mediaId: row.media_id,
+          discordUserId: row.discord_user_id,
+          startedAt: row.started_at ? row.started_at.toISOString() : null,
+          completedAt: row.completed_at ? row.completed_at.toISOString() : null,
+          updatedAt: row.updated_at.toISOString()
+        })),
+        chapterReads: chapterRows[0].map((row) => ({
+          mediaId: row.media_id,
+          chapterId: row.chapter_id,
+          discordUserId: row.discord_user_id,
+          readAt: row.read_at.toISOString(),
+          updatedAt: row.updated_at.toISOString()
+        }))
+      };
+    },
+    async markTitleRead(payload = {}) {
+      const normalizedUserId = normalizeString(payload.discordUserId);
+      const normalizedMediaId = normalizeString(payload.mediaId);
+      const chapterIds = Array.from(new Set((Array.isArray(payload.chapterIds) ? payload.chapterIds : [])
+        .map((chapterId) => normalizeString(chapterId))
+        .filter(Boolean)));
+      const startedAt = payload.startedAt || nowIso();
+      const completedAt = payload.completedAt || nowIso();
+      return withTransaction(async (connection) => {
+        await connection.query("DELETE FROM media_chapter_reads WHERE discord_user_id = ? AND media_id = ?", [normalizedUserId, normalizedMediaId]);
+        for (const chapterId of chapterIds) {
+          await connection.query(`
+            INSERT INTO media_chapter_reads (media_id, chapter_id, discord_user_id, read_at, updated_at)
+            VALUES (?, ?, ?, ?, NOW())
+          `, [normalizedMediaId, chapterId, normalizedUserId, toMysqlDateTime(completedAt, toMysqlDateTime(nowIso()))]);
+        }
+        await connection.query(`
+          INSERT INTO media_title_state (media_id, discord_user_id, started_at, completed_at, updated_at)
+          VALUES (?, ?, ?, ?, NOW())
+          ON DUPLICATE KEY UPDATE started_at = VALUES(started_at), completed_at = VALUES(completed_at), updated_at = NOW()
+        `, [
+          normalizedMediaId,
+          normalizedUserId,
+          toMysqlDateTime(startedAt, toMysqlDateTime(nowIso())),
+          toMysqlDateTime(completedAt, toMysqlDateTime(nowIso()))
+        ]);
+        return this.getReadStateByUser(normalizedUserId, normalizedMediaId);
+      });
+    },
+    async markTitleUnread(payload = {}) {
+      const normalizedUserId = normalizeString(payload.discordUserId);
+      const normalizedMediaId = normalizeString(payload.mediaId);
+      const startedAt = payload.startedAt || nowIso();
+      return withTransaction(async (connection) => {
+        await connection.query("DELETE FROM media_chapter_reads WHERE discord_user_id = ? AND media_id = ?", [normalizedUserId, normalizedMediaId]);
+        await connection.query(`
+          INSERT INTO media_title_state (media_id, discord_user_id, started_at, completed_at, updated_at)
+          VALUES (?, ?, ?, NULL, NOW())
+          ON DUPLICATE KEY UPDATE started_at = VALUES(started_at), completed_at = NULL, updated_at = NOW()
+        `, [
+          normalizedMediaId,
+          normalizedUserId,
+          toMysqlDateTime(startedAt, toMysqlDateTime(nowIso()))
+        ]);
+        return this.getReadStateByUser(normalizedUserId, normalizedMediaId);
+      });
+    },
+    async markChapterRead(payload = {}) {
+      const normalizedUserId = normalizeString(payload.discordUserId);
+      const normalizedMediaId = normalizeString(payload.mediaId);
+      const normalizedChapterId = normalizeString(payload.chapterId);
+      const readAt = payload.readAt || nowIso();
+      const startedAt = payload.startedAt || nowIso();
+      return withTransaction(async (connection) => {
+        await connection.query(`
+          INSERT INTO media_chapter_reads (media_id, chapter_id, discord_user_id, read_at, updated_at)
+          VALUES (?, ?, ?, ?, NOW())
+          ON DUPLICATE KEY UPDATE read_at = VALUES(read_at), updated_at = NOW()
+        `, [
+          normalizedMediaId,
+          normalizedChapterId,
+          normalizedUserId,
+          toMysqlDateTime(readAt, toMysqlDateTime(nowIso()))
+        ]);
+        await connection.query(`
+          INSERT INTO media_title_state (media_id, discord_user_id, started_at, completed_at, updated_at)
+          VALUES (?, ?, ?, ?, NOW())
+          ON DUPLICATE KEY UPDATE started_at = VALUES(started_at), completed_at = VALUES(completed_at), updated_at = NOW()
+        `, [
+          normalizedMediaId,
+          normalizedUserId,
+          toMysqlDateTime(startedAt, toMysqlDateTime(nowIso())),
+          toMysqlDateTime(payload.completedAt)
+        ]);
+        return this.getReadStateByUser(normalizedUserId, normalizedMediaId);
+      });
+    },
+    async markChapterUnread(payload = {}) {
+      const normalizedUserId = normalizeString(payload.discordUserId);
+      const normalizedMediaId = normalizeString(payload.mediaId);
+      const normalizedChapterId = normalizeString(payload.chapterId);
+      const startedAt = payload.startedAt || nowIso();
+      return withTransaction(async (connection) => {
+        await connection.query(`
+          DELETE FROM media_chapter_reads
+          WHERE media_id = ? AND chapter_id = ? AND discord_user_id = ?
+        `, [
+          normalizedMediaId,
+          normalizedChapterId,
+          normalizedUserId
+        ]);
+        await connection.query(`
+          INSERT INTO media_title_state (media_id, discord_user_id, started_at, completed_at, updated_at)
+          VALUES (?, ?, ?, NULL, NOW())
+          ON DUPLICATE KEY UPDATE started_at = VALUES(started_at), completed_at = NULL, updated_at = NOW()
+        `, [
+          normalizedMediaId,
+          normalizedUserId,
+          toMysqlDateTime(startedAt, toMysqlDateTime(nowIso()))
+        ]);
+        return this.getReadStateByUser(normalizedUserId, normalizedMediaId);
+      });
+    },
+    async previewContentReset() {
+      const [[requestRows], [requestWorkLockRows], [progressRows], [titleReadStateRows], [chapterReadStateRows], [followingRows], [bookmarkRows], [ravenTitleRows], [ravenChapterRows], [ravenMetadataMatchRows], [ravenDownloadTaskRows], [ravenJobRows], [ravenJobTaskRows]] = await Promise.all([
+        pool.query("SELECT COUNT(*) AS count FROM requests"),
+        pool.query("SELECT COUNT(*) AS count FROM request_work_locks"),
+        pool.query("SELECT COUNT(*) AS count FROM media_progress"),
+        pool.query("SELECT COUNT(*) AS count FROM media_title_state"),
+        pool.query("SELECT COUNT(*) AS count FROM media_chapter_reads"),
+        pool.query("SELECT COUNT(*) AS count FROM settings WHERE setting_key LIKE 'moon.following.%'"),
+        pool.query("SELECT COUNT(*) AS count FROM settings WHERE setting_key LIKE 'moon.reader.bookmarks.%'"),
+        pool.query("SELECT COUNT(*) AS count FROM raven_titles"),
+        pool.query("SELECT COUNT(*) AS count FROM raven_chapters"),
+        pool.query("SELECT COUNT(*) AS count FROM raven_metadata_matches"),
+        pool.query("SELECT COUNT(*) AS count FROM raven_download_tasks"),
+        pool.query("SELECT COUNT(*) AS count FROM vault_jobs WHERE owner_service = 'scriptarr-raven'"),
+        pool.query(`
+          SELECT COUNT(*) AS count
+          FROM vault_job_tasks tasks
+          INNER JOIN vault_jobs jobs ON jobs.job_id = tasks.job_id
+          WHERE jobs.owner_service = 'scriptarr-raven'
+        `)
+      ]);
+      return {
+        driver: "mysql",
+        counts: {
+          requests: Number(requestRows[0]?.count || 0),
+          requestWorkLocks: Number(requestWorkLockRows[0]?.count || 0),
+          progress: Number(progressRows[0]?.count || 0),
+          titleReadStates: Number(titleReadStateRows[0]?.count || 0),
+          chapterReadStates: Number(chapterReadStateRows[0]?.count || 0),
+          followingSettings: Number(followingRows[0]?.count || 0),
+          bookmarkSettings: Number(bookmarkRows[0]?.count || 0),
+          ravenTitles: Number(ravenTitleRows[0]?.count || 0),
+          ravenChapters: Number(ravenChapterRows[0]?.count || 0),
+          ravenMetadataMatches: Number(ravenMetadataMatchRows[0]?.count || 0),
+          ravenDownloadTasks: Number(ravenDownloadTaskRows[0]?.count || 0),
+          ravenJobs: Number(ravenJobRows[0]?.count || 0),
+          ravenJobTasks: Number(ravenJobTaskRows[0]?.count || 0)
+        }
+      };
+    },
+    async executeContentReset() {
+      const preview = await this.previewContentReset();
+      await withTransaction(async (connection) => {
+        await connection.query("DELETE FROM requests");
+        await connection.query("DELETE FROM request_work_locks");
+        await connection.query("DELETE FROM media_progress");
+        await connection.query("DELETE FROM media_title_state");
+        await connection.query("DELETE FROM media_chapter_reads");
+        for (const prefix of CONTENT_RESET_SETTING_PREFIXES) {
+          await connection.query("DELETE FROM settings WHERE setting_key LIKE ?", [`${prefix}%`]);
+        }
+        await connection.query("DELETE FROM raven_chapters");
+        await connection.query("DELETE FROM raven_metadata_matches");
+        await connection.query("DELETE FROM raven_download_tasks");
+        await connection.query("DELETE FROM raven_titles");
+        await connection.query(`
+          DELETE tasks
+          FROM vault_job_tasks tasks
+          INNER JOIN vault_jobs jobs ON jobs.job_id = tasks.job_id
+          WHERE jobs.owner_service = 'scriptarr-raven'
+        `);
+        await connection.query("DELETE FROM vault_jobs WHERE owner_service = 'scriptarr-raven'");
+      });
+      return {
+        driver: "mysql",
+        counts: preview.counts
+      };
+    },
     async listRavenTitles() {
       const [titleRows] = await pool.query("SELECT * FROM raven_titles ORDER BY title ASC");
       if (!titleRows.length) {
@@ -2021,7 +2471,7 @@ const createMysqlStore = (config) => {
         JSON.stringify(Array.isArray(title.aliases) ? title.aliases : []),
         JSON.stringify(Array.isArray(title.relations) ? title.relations : []),
         title.metadataProvider || null,
-        title.metadataMatchedAt || null,
+        toMysqlDateTime(title.metadataMatchedAt),
         title.sourceUrl || null,
         title.coverUrl || null,
         title.workingRoot || null,

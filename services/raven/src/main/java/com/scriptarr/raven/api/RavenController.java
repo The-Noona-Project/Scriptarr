@@ -356,6 +356,26 @@ public class RavenController {
     }
 
     /**
+     * Preview the Raven-managed portion of a content reset.
+     *
+     * @return managed task and storage counts
+     */
+    @GetMapping("/v1/system/content-reset/preview")
+    public Map<String, Object> previewContentReset() {
+        return downloaderService.previewManagedContentReset();
+    }
+
+    /**
+     * Execute the Raven-managed portion of a content reset.
+     *
+     * @return reset result payload
+     */
+    @PostMapping("/v1/system/content-reset")
+    public Map<String, Object> executeContentReset() {
+        return downloaderService.executeManagedContentReset();
+    }
+
+    /**
      * Describe Raven's metadata providers.
      *
      * @return metadata provider payload

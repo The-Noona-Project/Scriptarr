@@ -134,10 +134,7 @@ public class RavenSageClient implements RavenBrokerClient {
             .GET()
             .build();
         HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-        if (response.body() == null || response.body().isBlank()) {
-            return objectMapper.createObjectNode();
-        }
-        return objectMapper.readTree(response.body());
+        return parseResponse(path, response);
     }
 
     private JsonNode put(String path, Map<String, Object> payload) throws IOException, InterruptedException {
@@ -149,10 +146,7 @@ public class RavenSageClient implements RavenBrokerClient {
             .PUT(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(payload)))
             .build();
         HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-        if (response.body() == null || response.body().isBlank()) {
-            return objectMapper.createObjectNode();
-        }
-        return objectMapper.readTree(response.body());
+        return parseResponse(path, response);
     }
 
     private JsonNode patch(String path, Map<String, Object> payload) throws IOException, InterruptedException {
@@ -164,10 +158,25 @@ public class RavenSageClient implements RavenBrokerClient {
             .method("PATCH", HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(payload)))
             .build();
         HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+        return parseResponse(path, response);
+    }
+
+    private JsonNode parseResponse(String path, HttpResponse<String> response) throws IOException {
         if (response.body() == null || response.body().isBlank()) {
+            if (response.statusCode() >= 400) {
+                throw new IOException("Sage returned " + response.statusCode() + " for " + path + ".");
+            }
             return objectMapper.createObjectNode();
         }
-        return objectMapper.readTree(response.body());
+        JsonNode payload = objectMapper.readTree(response.body());
+        if (response.statusCode() >= 400) {
+            String message = payload.path("error").asText().trim();
+            if (message.isBlank()) {
+                message = "Sage returned " + response.statusCode() + " for " + path + ".";
+            }
+            throw new IOException(message);
+        }
+        return payload;
     }
 
     private String trimBaseUrl() {

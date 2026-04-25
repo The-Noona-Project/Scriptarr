@@ -1,5 +1,5 @@
-import {extractEnabledDefinitions} from "./commandCatalog.mjs";
-import {syncGuildCommands} from "./commandSynchronizer.mjs";
+import {extractGlobalDefinitions, extractGuildDefinitions} from "./commandCatalog.mjs";
+import {syncPortalCommands} from "./commandSynchronizer.mjs";
 import {createInteractionHandler} from "./interactionRouter.mjs";
 
 const DEFAULT_EVENT_NAMES = Object.freeze({
@@ -15,7 +15,8 @@ const DEFAULT_EVENT_NAMES = Object.freeze({
 const DEFAULT_GATEWAY_INTENTS = Object.freeze({
   Guilds: "Guilds",
   GuildMembers: "GuildMembers",
-  DirectMessages: "DirectMessages"
+  DirectMessages: "DirectMessages",
+  MessageContent: "MessageContent"
 });
 
 const DEFAULT_PARTIALS = Object.freeze({
@@ -78,7 +79,8 @@ const resolveDiscordBindings = (discordModule) => {
     intents: {
       Guilds: discordModule.GatewayIntentBits?.Guilds ?? DEFAULT_GATEWAY_INTENTS.Guilds,
       GuildMembers: discordModule.GatewayIntentBits?.GuildMembers ?? DEFAULT_GATEWAY_INTENTS.GuildMembers,
-      DirectMessages: discordModule.GatewayIntentBits?.DirectMessages ?? DEFAULT_GATEWAY_INTENTS.DirectMessages
+      DirectMessages: discordModule.GatewayIntentBits?.DirectMessages ?? DEFAULT_GATEWAY_INTENTS.DirectMessages,
+      MessageContent: discordModule.GatewayIntentBits?.MessageContent ?? DEFAULT_GATEWAY_INTENTS.MessageContent
     },
     partials: {
       Channel: discordModule.Partials?.Channel ?? DEFAULT_PARTIALS.Channel,
@@ -121,6 +123,7 @@ export const createDiscordClient = async ({
   const requestedIntents = [
     intents.Guilds,
     intents.DirectMessages,
+    intents.MessageContent,
     ...(enableGuildMemberEvents ? [intents.GuildMembers] : [])
   ];
   const requestedPartials = [
@@ -128,6 +131,11 @@ export const createDiscordClient = async ({
     partials.User,
     ...(enableGuildMemberEvents ? [partials.GuildMember] : [])
   ];
+  logger?.info?.("Portal Discord client configured.", {
+    intents: requestedIntents,
+    partials: requestedPartials,
+    guildMemberEventsEnabled: enableGuildMemberEvents
+  });
   const client = typeof clientFactory === "function"
     ? await clientFactory({
       intents: requestedIntents,
@@ -198,6 +206,19 @@ export const createDiscordClient = async ({
 
   if (typeof directMessageHandler === "function") {
     client.on(events.messageCreate, (message) => {
+      if (!message?.guildId && !message?.inGuild?.()) {
+        onRuntimeEvent?.({
+          type: "dm-message-received",
+          at: new Date().toISOString(),
+          authorId: normalizeString(message?.author?.id)
+        });
+        logger?.info?.("Portal Discord DM received.", {
+          authorId: normalizeString(message?.author?.id),
+          isBot: Boolean(message?.author?.bot),
+          hasContent: Boolean(normalizeString(message?.content)),
+          contentPreview: normalizeString(message?.content).slice(0, 120)
+        });
+      }
       Promise.resolve(directMessageHandler(message)).catch((error) => {
         logger?.error?.("Portal DM handler failed.", {error});
       });
@@ -215,15 +236,14 @@ export const createDiscordClient = async ({
   const registerCommands = async () => {
     const settings = getSettings();
     const guildId = settings?.guildId;
-    if (!guildId) {
-      return {guildId: null, registered: 0};
-    }
-    const definitions = extractEnabledDefinitions(commandMap, settings);
+    const guildDefinitions = extractGuildDefinitions(commandMap, settings);
+    const globalDefinitions = extractGlobalDefinitions(commandMap, settings);
     try {
-      return await syncGuildCommands({
+      return await syncPortalCommands({
         commandManager: client.application?.commands,
         guildId,
-        definitions
+        guildDefinitions,
+        globalDefinitions
       });
     } catch (error) {
       const diagnostic = createDiagnosticError("Discord command registration failed", error);

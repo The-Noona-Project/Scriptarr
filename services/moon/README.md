@@ -42,10 +42,17 @@ the `Library` mega menu, and `/browse` now uses A-Z shelf rows with the same Onc
 It keeps a quick-jump index rail on the left and tighter search against titles, aliases, types, and tags while browse
 cards clamp long copy until the reader opens the full title page. The home route is intentionally simpler too: it
 starts with a personalized "Your Bookshelf" continue-reading shelf, then stacks cover-led scroller rows for recently
-added titles by library type and tag-driven suggestions based on the titles the current reader has already opened.
+added titles by library type and tag-driven suggestions based on explicit tag likes or hides plus inferred taste from
+read history, follows, and the active bookshelf.
 Moon's reader is now a full-page immersive workspace that defaults to seamless infinite chapter scroll while keeping
 fit-width paged mode as a secondary preference. It still uses Moon's typed reader routes plus the existing progress
 and bookmark APIs.
+Moon title pages now also let readers mark a title or one chapter read or unread and set per-tag `Like`, `Hide`, or
+`Clear` preferences directly from the canonical title tags. Bookshelf membership is now derived from durable read state
+instead of only from `media_progress`, so completed titles can fall off the shelf until new chapters appear.
+`/admin/system` now also exposes a root-only content reset preview plus execute flow. That maintenance action clears
+content-side requests, follows, bookmarks, progress, Raven catalog state, Raven task state, and managed Raven download
+folders while keeping users, permission groups, settings, secrets, sessions, and durable events.
 Moon now renders those intake results one row per concrete download target instead of one row per metadata row, so
 duplicate metadata matches collapse cleanly while real edition targets such as plain vs colored remain visibly
 distinct.

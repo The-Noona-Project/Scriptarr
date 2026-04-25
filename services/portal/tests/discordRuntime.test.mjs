@@ -75,7 +75,9 @@ const createInteraction = ({commandName, guildId = "guild-1", roleIds = [], stri
       }
     },
     options: {
-      getString: (name) => strings[name] || null
+      getString: (name) => strings[name] || null,
+      getBoolean: (name) => Object.hasOwn(strings, name) ? strings[name] : null,
+      getSubcommand: () => strings.__subcommand || null
     },
     isChatInputCommand: () => true,
     isButton: () => false,
@@ -173,7 +175,10 @@ test("portal runtime syncs enabled commands and exposes Discord runtime state", 
     config: baseConfig,
     sage,
     logger: createLogger(),
-    clientFactory: async () => fakeClient
+    clientFactory: async (options = {}) => {
+      fakeClient.options = options;
+      return fakeClient;
+    }
   });
 
   try {
@@ -186,10 +191,18 @@ test("portal runtime syncs enabled commands and exposes Discord runtime state", 
     assert.equal(state.capabilities.commandSync.status, "available");
     assert.equal(state.capabilities.directMessages.status, "available");
     assert.equal(state.capabilities.onboarding.status, "disabled");
+    assert.equal(fakeClient.options.intents.includes("DirectMessages"), true);
+    assert.equal(fakeClient.options.intents.includes("MessageContent"), true);
     assert.equal(state.commands.find((command) => command.name === "subscribe").enabled, false);
     assert.equal(state.commands.find((command) => command.name === "request").status, "Registered");
-    assert.equal(fakeClient.commandSets.at(-1).guildId, "guild-1");
-    assert.deepEqual(fakeClient.commandSets.at(-1).definitions.map((definition) => definition.name), [
+    assert.equal(state.commands.find((command) => command.name === "downloadall").status, "Registered");
+    assert.equal(state.registeredGlobalCount, 1);
+    assert.equal(fakeClient.commandSets[0].guildId, undefined);
+    assert.deepEqual(fakeClient.commandSets[0].definitions.map((definition) => definition.name), [
+      "downloadall"
+    ]);
+    assert.equal(fakeClient.commandSets[1].guildId, "guild-1");
+    assert.deepEqual(fakeClient.commandSets[1].definitions.map((definition) => definition.name), [
       "ding",
       "status",
       "chat",
@@ -249,6 +262,7 @@ test("portal runtime falls back to minimal intents when guild member intent is d
     assert.equal(createdClients.length, 2);
     assert.equal(createdClients[0].options.intents.includes("GuildMembers"), true);
     assert.equal(createdClients[1].options.intents.includes("GuildMembers"), false);
+    assert.equal(createdClients[1].options.intents.includes("MessageContent"), true);
     assert.equal(createdClients[0].destroyed, true);
     assert.equal(state.mode, "ready");
     assert.equal(state.connected, true);
@@ -468,4 +482,97 @@ test("request and subscribe commands drive interactive Sage-backed selections", 
   const subscribeButton = createButtonInteraction({customId: subscribeButtonId});
   await handler(subscribeButton);
   assert.match(subscribeButton.__calls.reply[0].content, /Following \*\*Dandadan\*\*/);
+});
+
+test("downloadall slash command is DM-only and owner-only", async () => {
+  const settings = {
+    guildId: "guild-1",
+    superuserId: "owner-1",
+    commands: {
+      downloadall: {enabled: true}
+    }
+  };
+  const forwardedPayloads = [];
+  const commands = createPortalCommands({
+    sage: {
+      async bulkQueueDownload(payload) {
+        forwardedPayloads.push(payload);
+        return {
+          ok: true,
+          payload: {
+            status: "queued",
+            message: "Bulk queue submitted.",
+            filters: payload,
+            queuedCount: 1,
+            matchedCount: 1,
+            pagesScanned: 1,
+            skippedActiveCount: 0,
+            skippedAdultContentCount: 0,
+            skippedNoMetadataCount: 0,
+            skippedAmbiguousMetadataCount: 0,
+            failedCount: 0
+          }
+        };
+      }
+    },
+    publicBaseUrl: "https://pax-kun.com",
+    getSettings: () => settings,
+    logger: createLogger()
+  });
+  const handler = createInteractionHandler({
+    commandMap: commands,
+    roleManager: createRoleManager({
+      getSettings: () => settings
+    }),
+    logger: createLogger()
+  });
+
+  const deniedGuild = createInteraction({
+    commandName: "downloadall",
+    guildId: "guild-1",
+    userId: "owner-1",
+    strings: {__subcommand: "help"}
+  });
+  await handler(deniedGuild);
+  assert.match(deniedGuild.__calls.reply[0].content, /only works in a direct message/i);
+
+  const deniedOwner = createInteraction({
+    commandName: "downloadall",
+    guildId: null,
+    userId: "user-2",
+    strings: {__subcommand: "help"}
+  });
+  await handler(deniedOwner);
+  assert.match(deniedOwner.__calls.reply[0].content, /configured Scriptarr owner/i);
+
+  const helpInteraction = createInteraction({
+    commandName: "downloadall",
+    guildId: null,
+    userId: "owner-1",
+    strings: {__subcommand: "help"}
+  });
+  await handler(helpInteraction);
+  assert.match(helpInteraction.__calls.reply[0].content, /\/downloadall run type:manga nsfw:false titlegroup:a/i);
+
+  const runInteraction = createInteraction({
+    commandName: "downloadall",
+    guildId: null,
+    userId: "owner-1",
+    strings: {
+      __subcommand: "run",
+      type: "Manga",
+      nsfw: false,
+      titlegroup: "a"
+    }
+  });
+  await handler(runInteraction);
+  assert.equal(runInteraction.__calls.deferReply.length, 1);
+  assert.match(runInteraction.__calls.editReply[0].content, /Bulk queue submitted/i);
+  assert.deepEqual(forwardedPayloads[0], {
+    providerId: "weebcentral",
+    type: "Manga",
+    nsfw: false,
+    titlePrefix: "a",
+    requestedBy: "owner-1"
+  });
 });

@@ -202,6 +202,8 @@ temporarily unavailable.
 - manage the trusted public Moon automation API from `/admin/system/api`, including enable state, admin key rotation,
   and Swagger/OpenAPI links
 - check or install managed Scriptarr service updates from `/admin/system/updates`
+- preview or execute the root-only content reset flow from `/admin/system` when you need to wipe content-side state
+  and managed files without deleting users, settings, or durable events
 - configure Oracle and optional LocalAI runtime settings
 - manage users, roles, and permissions
 - inspect Warden service health and runtime config
@@ -236,10 +238,13 @@ defaults to infinite chapter scroll while still exposing paged mode. Library typ
 home page. It keeps a quick-jump letter rail on the left and tighter search against titles, aliases, types, and tags
 while browse cards clamp long copy until the user opens a title page. Its home route now favors a simpler
 media-library feel too, with a personalized "Your Bookshelf" continue-reading row followed by cover-led scrollers for
-recently added titles by type and tag-driven shelves based on the reader's existing progress.
+recently added titles by type and tag-driven shelves based on explicit tag likes or hides plus inferred taste from
+read history, follows, and the active bookshelf.
 `/myrequests` is now both the request-creation surface and the personal status page. The top of the page runs the
 metadata-first request wizard, while the list below is split into `Active`, `Completed`, and `Closed` tabs. Readers
 can edit notes or cancel only while the request is still active.
+Title pages now also let readers mark a whole title or one chapter read or unread and set per-tag `Like`, `Hide`, or
+`Clear` preferences directly from the title metadata chips. Those actions update bookshelf membership immediately.
 
 Common admin routes:
 
@@ -285,10 +290,14 @@ The current Discord command set is:
 - `/search`
 - `/request`
 - `/subscribe`
-- DM-only `downloadall`
+- owner-only DM `/downloadall`
 
-Blank role ids mean any member in the configured guild can use that slash command. `downloadall` ignores guild roles
-and only checks the configured DM superuser id.
+Blank role ids mean any member in the configured guild can use that slash command. `downloadall` ignores guild roles,
+is only supported in bot DMs, and only checks the configured DM superuser id.
+Use `/downloadall run type:<type> nsfw:<true|false> titlegroup:<prefix>` in a DM with Noona as the supported bulk path.
+`/downloadall help` returns the usage guide in DMs. Portal still keeps the old raw DM text form
+(`downloadall type:... nsfw:... titlegroup:...`) as a legacy best-effort fallback, but that path depends on Discord
+delivering normal DM message events and should not be treated as the primary interface.
 Discord `/request` now uses the same metadata-first flow as Moon web: search raw metadata results first, then submit
 one exact metadata choice for moderated review. Requesters no longer choose download providers in Discord; staff do
 that from `/admin/requests`.
@@ -308,6 +317,8 @@ back into admin review, and DMs them again if that unavailable request expires a
 Portal now prefers a minimal Discord runtime when privileged intents are unavailable. Slash commands and DM handling
 can stay online while onboarding is marked degraded, and `/admin/discord` will show the last meaningful runtime or
 command-sync error instead of only a generic disconnected state.
+That runtime view now also surfaces the requested intents or partials, the most recent DM receive timestamp, the last
+handled `downloadall`, and the last `downloadall` error so owner-only DM failures are easier to trace.
 
 ## Public Moon API
 
@@ -368,6 +379,12 @@ Vault now also stores reusable permission groups, user-group assignments, and im
 from `/admin/users` clears local access plus active sessions, but preserves their requests, follows, bookmarks,
 progress, and audit history. If that Discord user signs in again later, Scriptarr recreates them on the current
 default onboarding group.
+Vault now also stores durable title-level and chapter-level read state. `media_progress` remains the current reading
+position signal, while bookshelf and completion state now derive from the read-state model so completed titles can fall
+off the shelf until new chapters arrive.
+Moon's content reset is content-only, not a factory reset. The root-only reset flow clears requests, work locks,
+progress, follows, reader bookmarks, Raven catalog or task state, and managed Raven download folders, but keeps users,
+permission groups, sessions, settings, secrets, and durable events.
 
 Moon admin library and calendar are now denser operational views:
 

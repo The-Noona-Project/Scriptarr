@@ -40,7 +40,7 @@ export const createInteractionHandler = ({
     return;
   }
 
-  const access = roleManager.checkAccess(interaction, commandName);
+  const access = roleManager.checkAccess(interaction, commandName, command);
   if (!access.allowed) {
     await respondWithError(interaction, access.message);
     return;

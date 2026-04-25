@@ -9,6 +9,12 @@ Vault now also persists reusable permission groups, user-group assignments, and 
 powers `/admin/users`, `/admin/requests`, and `/admin/system/events`. The bootstrap owner stays protected, while every
 other user's admin access is derived from one or more permission groups plus a required default onboarding group for
 new or returning Discord sign-ins.
+Vault now also persists title-level and chapter-level read state for Moon's bookshelf and completion logic. Progress
+rows still track the current reading position, while the read-state model determines whether a title is active on the
+bookshelf or fully completed.
+Its content reset path is content-only, not a factory reset: requests, work locks, progress, read state, follows,
+reader bookmarks, Raven catalog rows, Raven tasks, and Raven-owned jobs are cleared, while users, permission groups,
+sessions, settings, secrets, and durable events remain intact.
 
 It also stores the Raven VPN settings, Raven metadata provider configuration, Oracle provider state, and Oracle
 secrets used by the rest of the stack.

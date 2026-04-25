@@ -20,6 +20,12 @@
 - Sage now brokers group-based admin access too. Keep canonical route-family grants in session payloads, preserve the
   temporary derived legacy permission array for compatibility, and use reusable permission groups instead of reviving
   direct role or flat-permission mutation flows for non-owner users.
+- Sage now also brokers Moon's durable title/chapter read-state and tag-preference actions. Keep the user-facing Moon
+  routes browser-safe, write the durable state through Vault, and rebuild home/title/reader payloads from explicit tag
+  preferences plus inferred taste from read history, follows, and the active bookshelf.
+- Moon's root-only content reset is Sage-owned orchestration. Keep the preview plus execute flow brokered, require the
+  explicit confirmation string, append `content-reset-started` and `content-reset-completed` events, clear Vault's
+  content-side state first, then trigger Raven's managed storage reset.
 - Keep `sage.requests.autoApproveAndDownload` high-confidence only. Auto-pick one source only when Raven's confidence
   signals and warnings make that safe; otherwise leave the request in manual admin review.
 - Persist Raven and Oracle admin settings through Vault instead of service-local files.

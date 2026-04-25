@@ -16,3 +16,8 @@
 - Deleting a user from Vault-backed access should clear sessions plus local group assignments, but preserve requests,
   progress, follows, bookmarks, and durable events so a future Discord sign-in can recreate that user cleanly.
 - Durable events should stay immutable, summary-oriented, and retention-managed instead of storing large raw snapshots.
+- Vault now also owns `media_title_state` plus `media_chapter_reads`. Treat those records as the durable bookshelf and
+  completion source of truth; `media_progress` stays focused on current reading position only.
+- Vault's content reset path must stay content-only. It may clear requests, request work locks, progress, read state,
+  follows, bookmarks, Raven catalog rows, Raven download tasks, and Raven-owned jobs, but it must not delete users,
+  permission groups, sessions, settings, secrets, or durable events.

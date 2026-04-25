@@ -32,7 +32,7 @@ export const TitlePageClient = ({titleId, typeSlug = ""}) => {
   const router = useRouter();
   const {auth, loginUrl} = useMoonChrome();
   const {loading, error, status, data, refresh, setData} = useMoonJson(`/api/moon-v3/user/title/${encodeURIComponent(titleId)}`, {
-    fallback: {title: null, following: false, requests: []},
+    fallback: {title: null, following: false, requests: [], tagPreferences: {likedTags: [], dislikedTags: []}},
     deps: [titleId]
   });
   const [busy, setBusy] = useState(false);
@@ -67,6 +67,18 @@ export const TitlePageClient = ({titleId, typeSlug = ""}) => {
     return <EmptyView title="Title unavailable" detail="Moon could not find this series in the current library." />;
   }
 
+  const syncTitleFromPayload = async (result) => {
+    if (result.ok && result.payload?.title) {
+      setData((current) => ({
+        ...current,
+        title: result.payload.title,
+        following: current.following
+      }));
+      return;
+    }
+    await refresh();
+  };
+
   const toggleFollow = () => {
     setBusy(true);
     startTransition(() => {
@@ -94,6 +106,47 @@ export const TitlePageClient = ({titleId, typeSlug = ""}) => {
     });
   };
 
+  const updateTagPreference = (tag, preference) => {
+    setBusy(true);
+    startTransition(() => {
+      void (async () => {
+        await requestJson("/api/moon-v3/user/tag-preferences", {
+          method: "PUT",
+          json: {tag, preference}
+        });
+        await refresh();
+        setBusy(false);
+      })();
+    });
+  };
+
+  const updateTitleReadState = (mode) => {
+    setBusy(true);
+    startTransition(() => {
+      void (async () => {
+        const result = await requestJson(`/api/moon-v3/user/title/${encodeURIComponent(title.id)}/${mode}`, {
+          method: "POST"
+        });
+        await syncTitleFromPayload(result);
+        setBusy(false);
+      })();
+    });
+  };
+
+  const updateChapterReadState = (targetChapterId, mode) => {
+    setBusy(true);
+    startTransition(() => {
+      void (async () => {
+        const result = await requestJson(
+          `/api/moon-v3/user/title/${encodeURIComponent(title.id)}/chapters/${encodeURIComponent(targetChapterId)}/${mode}`,
+          {method: "POST"}
+        );
+        await syncTitleFromPayload(result);
+        setBusy(false);
+      })();
+    });
+  };
+
   return (
     <div className="moon-page-grid">
       <section className="moon-panel moon-title-hero">
@@ -113,6 +166,8 @@ export const TitlePageClient = ({titleId, typeSlug = ""}) => {
             <span className="moon-pill">{title.metadataProvider || "Metadata gap"}</span>
             <span className="moon-pill">{title.releaseLabel || "Release date unknown"}</span>
             <span className="moon-pill">{title.latestChapter || "No chapter summary yet"}</span>
+            {title.userState?.completed ? <span className="moon-pill">Completed</span> : null}
+            {title.userState?.bookshelf ? <span className="moon-pill">On your bookshelf</span> : null}
           </div>
           <Flex gap="12" wrap>
             {latestChapter ? (
@@ -123,7 +178,31 @@ export const TitlePageClient = ({titleId, typeSlug = ""}) => {
             <Button variant="secondary" size="l" onClick={toggleFollow} disabled={busy}>
               {data.following ? "Unfollow" : "Follow"}
             </Button>
+            <Button
+              variant="secondary"
+              size="l"
+              onClick={() => updateTitleReadState(title.userState?.completed ? "unread" : "read")}
+              disabled={busy}
+            >
+              {title.userState?.completed ? "Mark title unread" : "Mark title read"}
+            </Button>
           </Flex>
+          {Array.isArray(title.tagPreferences) && title.tagPreferences.length ? (
+            <div className="moon-tag-preference-list">
+              {title.tagPreferences.map((entry) => (
+                <div key={entry.tag} className={`moon-tag-preference-chip is-${entry.preference || "neutral"}`}>
+                  <span className="moon-pill">{entry.tag}</span>
+                  <div className="moon-tag-preference-actions">
+                    <button type="button" onClick={() => updateTagPreference(entry.tag, "like")} disabled={busy}>Like</button>
+                    <button type="button" onClick={() => updateTagPreference(entry.tag, "dislike")} disabled={busy}>Hide</button>
+                    {entry.preference ? (
+                      <button type="button" onClick={() => updateTagPreference(entry.tag, "clear")} disabled={busy}>Clear</button>
+                    ) : null}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : null}
         </div>
       </section>
 
@@ -137,13 +216,23 @@ export const TitlePageClient = ({titleId, typeSlug = ""}) => {
         {chapters.length ? (
           <div className="moon-chapter-list">
             {chapters.map((chapter) => (
-              <a key={chapter.id} className="moon-chapter-link" href={buildReaderPathForTitle(title, chapter.id)}>
+              <div key={chapter.id} className="moon-chapter-link">
                 <div>
                   <strong>{chapter.label || `Chapter ${chapter.chapterNumber || "?"}`}</strong>
                   <div className="moon-muted">{formatDate(chapter.releaseDate)} · {chapter.pageCount || 0} pages</div>
+                  <div className="moon-muted">{chapter.read ? "Read" : "Unread"}</div>
                 </div>
-                <div className="moon-muted">Open</div>
-              </a>
+                <div className="moon-chapter-actions">
+                  <a className="moon-chapter-open-link" href={buildReaderPathForTitle(title, chapter.id)}>Open</a>
+                  <button
+                    type="button"
+                    onClick={() => updateChapterReadState(chapter.id, chapter.read ? "unread" : "read")}
+                    disabled={busy}
+                  >
+                    {chapter.read ? "Mark unread" : "Mark read"}
+                  </button>
+                </div>
+              </div>
             ))}
           </div>
         ) : (

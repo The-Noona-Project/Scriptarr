@@ -252,6 +252,71 @@ export const createCachedStore = (
     async getProgressByUser(discordUserId) {
       return readThrough(`progress:${discordUserId}`, () => baseStore.getProgressByUser(discordUserId));
     },
+    async getReadStateByUser(discordUserId, mediaId = "") {
+      return readThrough(`read-state:${discordUserId}:${mediaId}`, () => baseStore.getReadStateByUser(discordUserId, mediaId));
+    },
+    async markTitleRead(payload) {
+      const result = await baseStore.markTitleRead(payload);
+      invalidate(
+        `read-state:${payload.discordUserId}:${payload.mediaId}`,
+        `read-state:${payload.discordUserId}:`,
+        `progress:${payload.discordUserId}`
+      );
+      invalidatePrefix("raven-title:", "raven-titles:list");
+      return result;
+    },
+    async markTitleUnread(payload) {
+      const result = await baseStore.markTitleUnread(payload);
+      invalidate(
+        `read-state:${payload.discordUserId}:${payload.mediaId}`,
+        `read-state:${payload.discordUserId}:`,
+        `progress:${payload.discordUserId}`
+      );
+      invalidatePrefix("raven-title:", "raven-titles:list");
+      return result;
+    },
+    async markChapterRead(payload) {
+      const result = await baseStore.markChapterRead(payload);
+      invalidate(
+        `read-state:${payload.discordUserId}:${payload.mediaId}`,
+        `read-state:${payload.discordUserId}:`,
+        `progress:${payload.discordUserId}`
+      );
+      invalidatePrefix("raven-title:", "raven-titles:list");
+      return result;
+    },
+    async markChapterUnread(payload) {
+      const result = await baseStore.markChapterUnread(payload);
+      invalidate(
+        `read-state:${payload.discordUserId}:${payload.mediaId}`,
+        `read-state:${payload.discordUserId}:`,
+        `progress:${payload.discordUserId}`
+      );
+      invalidatePrefix("raven-title:", "raven-titles:list");
+      return result;
+    },
+    async previewContentReset() {
+      return baseStore.previewContentReset();
+    },
+    async executeContentReset() {
+      const result = await baseStore.executeContentReset();
+      invalidatePrefix(
+        "requests:",
+        "request:",
+        "progress:",
+        "read-state:",
+        "raven-title:",
+        "raven-titles:list",
+        "raven-download-tasks:list",
+        "raven-metadata:",
+        "jobs:",
+        "job:",
+        "job-tasks:",
+        "setting:moon.following.",
+        "setting:moon.reader.bookmarks."
+      );
+      return result;
+    },
     async listRavenTitles() {
       return readThrough("raven-titles:list", () => baseStore.listRavenTitles());
     },

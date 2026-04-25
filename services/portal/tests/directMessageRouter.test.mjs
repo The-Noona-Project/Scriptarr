@@ -40,7 +40,7 @@ test("parseDownloadAllCommand preserves the legacy syntax and validation", () =>
 test("direct message handler replies with the schema for downloadall help", async () => {
   const replies = [];
   const handler = createDirectMessageHandler({
-    getSettings: () => ({}),
+    getSettings: () => ({superuserId: "111"}),
     sage: {
       bulkQueueDownload: async () => {
         throw new Error("should not run for help");
@@ -59,8 +59,8 @@ test("direct message handler replies with the schema for downloadall help", asyn
 
   assert.equal(handled, true);
   assert.equal(replies.length, 1);
-  assert.match(replies[0].content, /Use `downloadall type:manga nsfw:false titlegroup:a`/);
-  assert.match(replies[0].content, /Supported `type` values/i);
+  assert.match(replies[0].content, /Use `\/downloadall run type:manga nsfw:false titlegroup:a`/);
+  assert.match(replies[0].content, /Legacy fallback/i);
 });
 
 test("formatBulkQueueSummary includes counts and title sections", () => {
@@ -128,7 +128,7 @@ test("direct message handler gates by superuser and forwards legacy downloadall 
     }
   };
   assert.equal(await handler(deniedMessage), true);
-  assert.match(replies[0].content, /configured .* superuser/i);
+  assert.match(replies[0].content, /configured Scriptarr owner/i);
 
   replies.length = 0;
   const allowedMessage = {
@@ -204,4 +204,49 @@ test("direct message handler respects the enabled toggle and surfaces Sage failu
   assert.match(replies[0].content, /Queueing Scriptarr bulk download/i);
   assert.match(replies[1].content, /bulk queue failed/i);
   assert.match(replies[1].content, /Raven bulk queue is unavailable/i);
+});
+
+test("direct message handler splits large bulk summaries into multiple replies", async () => {
+  const replies = [];
+  const oversizedTitles = Array.from(
+    {length: 80},
+    (_, index) => `A very long queued title number ${index + 1} with a deliberately oversized label for chunking coverage`
+  );
+  const handler = createDirectMessageHandler({
+    getSettings: () => ({superuserId: "253987219969146890"}),
+    sage: {
+      bulkQueueDownload: async () => ({
+        ok: true,
+        payload: {
+          status: "partial",
+          message: "Bulk queue submitted.",
+          filters: {type: "Manhwa", nsfw: false, titlePrefix: "a"},
+          pagesScanned: 4,
+          matchedCount: oversizedTitles.length,
+          queuedCount: oversizedTitles.length,
+          skippedActiveCount: oversizedTitles.length,
+          skippedAdultContentCount: 0,
+          skippedNoMetadataCount: 0,
+          skippedAmbiguousMetadataCount: 0,
+          failedCount: 0,
+          queuedTitles: oversizedTitles,
+          skippedActiveTitles: oversizedTitles
+        }
+      })
+    }
+  });
+
+  await handler({
+    content: "downloadall type:manhwa nsfw:false titlegroup:a",
+    author: {id: "253987219969146890", bot: false},
+    reply: async (payload) => {
+      replies.push(payload);
+      return payload;
+    }
+  });
+
+  assert.ok(replies.length >= 3);
+  assert.match(replies[0].content, /Queueing Scriptarr bulk download/i);
+  assert.ok(replies.slice(1).every((payload) => payload.content.length <= 1800));
+  assert.match(replies.slice(1).map((payload) => payload.content).join("\n"), /Queued titles/i);
 });

@@ -21,6 +21,16 @@ Read this before editing Scriptarr.
 - [Server admin guide](ServerAdmin.md)
 - [AI docs index](docs/agents/README.md)
 
+## Useful Commands
+
+- `npm run docker:list`
+- `npm run docker:build`
+- `npm run docker:push`
+- `npm run docker:publish`
+- `npm run docker:healthcheck`
+- `npm run docker:test`
+- `npm run docker:test:teardown`
+
 ## Service Index
 
 - [Warden](services/warden/AGENTS.md)
@@ -40,6 +50,8 @@ Read this before editing Scriptarr.
 - Requests created in Moon and Discord must converge on one moderated flow.
 - Moon user requests and Moon admin add-title now share one metadata-first intake flow. Persist the selected metadata
   and download snapshots so moderation can queue the exact saved Raven target later.
+- Moon web request creation now lives in `/myrequests`. Keep the web requester flow metadata-first there instead of
+  reintroducing older request-entry surfaces.
 - Moon also owns the trusted public automation API. Keep external search and request traffic behind Moon's
   `/api/public/*` routes, store only hashed API keys in Vault through Sage, and preserve the NSFW, duplicate, and
   lowest-priority guards on external queueing.
@@ -57,6 +69,8 @@ Read this before editing Scriptarr.
   should boot the Oracle-safe text-generation preload set instead of the full bundled model list.
 - Raven VPN should fail closed when enabled, and Raven chapter or page naming now comes from the internal
   `raven.naming` template settings rather than only hard-coded defaults.
+- `raven.naming` is now profile-based by library type, and Moon admin owns that workflow at
+  `/admin/mediamanagement`.
 - LocalAI is optional to overall platform health; degrade safely when AI dependencies are unavailable.
 - Prefer Docker-based verification for cross-service work. `npm run docker:healthcheck` is the default smoke path for
   agents and contributors, while `npm run docker:test` remains the deeper end-to-end flow. `npm run docker:test:teardown`
