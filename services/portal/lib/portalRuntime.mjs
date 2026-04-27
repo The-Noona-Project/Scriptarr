@@ -92,7 +92,7 @@ const createCapabilities = (state, settings) => {
     : connected
       ? {
         status: "available",
-        detail: "Portal can receive direct messages, including the owner-only DM /downloadall command."
+        detail: "Portal can receive direct messages, including the owner-only DM-only WeebCentral /downloadall command."
       }
       : {
         status: state.mode === "starting" ? "pending" : "disconnected",

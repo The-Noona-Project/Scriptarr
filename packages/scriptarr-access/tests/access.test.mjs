@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   ADMIN_ACCESS_DOMAIN_IDS,
+  BASELINE_USER_CAPABILITIES,
   canAccessAdmin,
   deriveLegacyPermissions,
   hasGrant,
@@ -54,6 +55,9 @@ test("seed permission groups include member as the only default and admin covers
   const groups = seedPermissionGroups();
   assert.equal(groups.filter((group) => group.isDefault).length, 1);
   assert.equal(groups.find((group) => group.id === "member")?.isDefault, true);
+  assert.equal(BASELINE_USER_CAPABILITIES.includes("manage_personal_api_keys"), true);
+  assert.equal(groups.find((group) => group.id === "member")?.permissions.includes("manage_personal_api_keys"), true);
+  assert.equal(ADMIN_ACCESS_DOMAIN_IDS.includes("database"), true);
   const adminGroup = groups.find((group) => group.id === "admin");
   assert.ok(adminGroup);
   for (const domainId of ADMIN_ACCESS_DOMAIN_IDS) {

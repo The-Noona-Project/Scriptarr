@@ -2,6 +2,7 @@ package com.scriptarr.raven.api;
 
 import com.scriptarr.raven.downloader.DownloadRequest;
 import com.scriptarr.raven.downloader.BulkQueueDownloadResult;
+import com.scriptarr.raven.downloader.BulkRunService;
 import com.scriptarr.raven.downloader.DownloadIntakeService;
 import com.scriptarr.raven.downloader.DownloaderService;
 import com.scriptarr.raven.library.ReaderChapterPayload;
@@ -34,6 +35,7 @@ public class RavenController {
     private final MetadataService metadataService;
     private final DownloadIntakeService downloadIntakeService;
     private final DownloaderService downloaderService;
+    private final BulkRunService bulkRunService;
     private final VpnService vpnService;
     private final RavenSettingsService settingsService;
     private final LibraryService libraryService;
@@ -44,6 +46,7 @@ public class RavenController {
      * @param metadataService metadata service
      * @param downloadIntakeService intake orchestration service
      * @param downloaderService download queue service
+     * @param bulkRunService durable bulk-run orchestration service
      * @param vpnService VPN status service
      * @param settingsService Raven settings service
      * @param libraryService library projection service
@@ -52,6 +55,7 @@ public class RavenController {
         MetadataService metadataService,
         DownloadIntakeService downloadIntakeService,
         DownloaderService downloaderService,
+        BulkRunService bulkRunService,
         VpnService vpnService,
         RavenSettingsService settingsService,
         LibraryService libraryService
@@ -59,6 +63,7 @@ public class RavenController {
         this.metadataService = metadataService;
         this.downloadIntakeService = downloadIntakeService;
         this.downloaderService = downloaderService;
+        this.bulkRunService = bulkRunService;
         this.vpnService = vpnService;
         this.settingsService = settingsService;
         this.libraryService = libraryService;
@@ -346,6 +351,102 @@ public class RavenController {
     }
 
     /**
+     * Create and optionally start a durable Raven mega downloadall run.
+     *
+     * @param body bulk-run request payload
+     * @return durable run status payload
+     */
+    @PostMapping("/v1/downloads/bulk-runs")
+    public ResponseEntity<Map<String, Object>> createBulkRun(@RequestBody Map<String, Object> body) {
+        try {
+            return ResponseEntity.status(HttpStatus.ACCEPTED).body(bulkRunService.createRun(body));
+        } catch (IllegalArgumentException error) {
+            return ResponseEntity.badRequest().body(Map.of("error", error.getMessage()));
+        } catch (IllegalStateException error) {
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("error", error.getMessage()));
+        }
+    }
+
+    /**
+     * Load a durable Raven mega downloadall run.
+     *
+     * @param runId durable run id
+     * @return durable run status payload
+     */
+    @GetMapping("/v1/downloads/bulk-runs/{runId}")
+    public ResponseEntity<Map<String, Object>> bulkRunStatus(@PathVariable("runId") String runId) {
+        try {
+            return ResponseEntity.ok(bulkRunService.status(runId));
+        } catch (IllegalArgumentException error) {
+            return ResponseEntity.badRequest().body(Map.of("error", error.getMessage()));
+        } catch (IllegalStateException error) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("error", error.getMessage()));
+        }
+    }
+
+    /**
+     * Start a queued durable Raven mega downloadall run.
+     *
+     * @param runId durable run id
+     * @return durable run status payload
+     */
+    @PostMapping("/v1/downloads/bulk-runs/{runId}/start")
+    public ResponseEntity<Map<String, Object>> startBulkRun(@PathVariable("runId") String runId) {
+        try {
+            return ResponseEntity.status(HttpStatus.ACCEPTED).body(bulkRunService.startRun(runId));
+        } catch (IllegalArgumentException error) {
+            return ResponseEntity.badRequest().body(Map.of("error", error.getMessage()));
+        } catch (IllegalStateException error) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("error", error.getMessage()));
+        }
+    }
+
+    /**
+     * Resume a durable Raven mega downloadall run after a pause or restart.
+     *
+     * @param runId durable run id
+     * @return durable run status payload
+     */
+    @PostMapping("/v1/downloads/bulk-runs/{runId}/resume")
+    public ResponseEntity<Map<String, Object>> resumeBulkRun(@PathVariable("runId") String runId) {
+        try {
+            return ResponseEntity.status(HttpStatus.ACCEPTED).body(bulkRunService.resumeRun(runId));
+        } catch (IllegalArgumentException error) {
+            return ResponseEntity.badRequest().body(Map.of("error", error.getMessage()));
+        } catch (IllegalStateException error) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("error", error.getMessage()));
+        }
+    }
+
+    /**
+     * Continue a durable Raven mega downloadall run after a pause or restart.
+     *
+     * @param runId durable run id
+     * @return durable run status payload
+     */
+    @PostMapping("/v1/downloads/bulk-runs/{runId}/continue")
+    public ResponseEntity<Map<String, Object>> continueBulkRun(@PathVariable("runId") String runId) {
+        return resumeBulkRun(runId);
+    }
+
+    /**
+     * Cancel a durable Raven mega downloadall run.
+     *
+     * @param runId durable run id
+     * @return durable run status payload
+     */
+    @PostMapping("/v1/downloads/bulk-runs/{runId}/cancel")
+    public ResponseEntity<Map<String, Object>> cancelBulkRun(@PathVariable("runId") String runId) {
+        try {
+            return ResponseEntity.ok(bulkRunService.cancelRun(runId));
+        } catch (IllegalArgumentException error) {
+            return ResponseEntity.badRequest().body(Map.of("error", error.getMessage()));
+        } catch (IllegalStateException error) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("error", error.getMessage()));
+        }
+    }
+
+    /**
      * Snapshot the Raven download task list.
      *
      * @return task history
@@ -353,6 +454,95 @@ public class RavenController {
     @GetMapping("/v1/downloads/tasks")
     public List<Map<String, Object>> tasks() {
         return downloaderService.snapshot();
+    }
+
+    /**
+     * Cancel a queued or running Raven download task.
+     *
+     * @param taskId task id to cancel
+     * @return updated task payload or a validation error
+     */
+    @PostMapping("/v1/downloads/tasks/{taskId}/cancel")
+    public ResponseEntity<Map<String, Object>> cancelTask(@PathVariable("taskId") String taskId) {
+        try {
+            return ResponseEntity.ok(downloaderService.cancelTask(taskId));
+        } catch (IllegalStateException error) {
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("error", error.getMessage()));
+        }
+    }
+
+    /**
+     * Retry a failed Raven download task.
+     *
+     * @param taskId task id to retry
+     * @return updated task payload or a validation error
+     */
+    @PostMapping("/v1/downloads/tasks/{taskId}/retry")
+    public ResponseEntity<Map<String, Object>> retryTask(@PathVariable("taskId") String taskId) {
+        try {
+            return ResponseEntity.ok(downloaderService.retryTask(taskId));
+        } catch (IllegalStateException error) {
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("error", error.getMessage()));
+        }
+    }
+
+    /**
+     * Remove a failed or stale queued Raven download task and its incomplete working files.
+     *
+     * @param taskId task id to remove
+     * @return removal summary or a validation error
+     */
+    @PostMapping("/v1/downloads/tasks/{taskId}/remove")
+    public ResponseEntity<Map<String, Object>> removeTask(@PathVariable("taskId") String taskId) {
+        try {
+            return ResponseEntity.ok(downloaderService.removeTask(taskId));
+        } catch (IllegalStateException error) {
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("error", error.getMessage()));
+        }
+    }
+
+    /**
+     * Reprioritize a queued Raven download task.
+     *
+     * @param taskId task id to update
+     * @param body priority payload
+     * @return updated task payload or a validation error
+     */
+    @PostMapping("/v1/downloads/tasks/{taskId}/priority")
+    public ResponseEntity<Map<String, Object>> updateTaskPriority(
+        @PathVariable("taskId") String taskId,
+        @RequestBody Map<String, Object> body
+    ) {
+        try {
+            return ResponseEntity.ok(downloaderService.updateTaskPriority(
+                taskId,
+                String.valueOf(body.getOrDefault("priority", "normal")).trim()
+            ));
+        } catch (IllegalStateException error) {
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("error", error.getMessage()));
+        }
+    }
+
+    /**
+     * Move a queued Raven download task inside its priority band.
+     *
+     * @param taskId task id to move
+     * @param body move payload
+     * @return updated task payload or a validation error
+     */
+    @PostMapping("/v1/downloads/tasks/{taskId}/move")
+    public ResponseEntity<Map<String, Object>> moveTask(
+        @PathVariable("taskId") String taskId,
+        @RequestBody Map<String, Object> body
+    ) {
+        try {
+            return ResponseEntity.ok(downloaderService.moveQueuedTask(
+                taskId,
+                String.valueOf(body.getOrDefault("direction", "")).trim()
+            ));
+        } catch (IllegalStateException error) {
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("error", error.getMessage()));
+        }
     }
 
     /**

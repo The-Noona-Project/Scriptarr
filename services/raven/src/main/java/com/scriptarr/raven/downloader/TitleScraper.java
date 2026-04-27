@@ -135,7 +135,9 @@ public class TitleScraper {
             return new BulkBrowseResult(List.of(), 0);
         }
 
-        String normalizedSearchPrefix = titlePrefix != null ? titlePrefix.trim() : "";
+        String normalizedSearchPrefix = titlePrefix == null
+            ? ""
+            : titlePrefix.trim().toLowerCase(Locale.ROOT);
 
         List<Map<String, String>> collected = new ArrayList<>();
         Set<String> seenHrefs = new HashSet<>();
@@ -173,6 +175,10 @@ public class TitleScraper {
                         continue;
                     }
 
+                    if (!matchesVisiblePrefix(parsed.get("title"), normalizedSearchPrefix)) {
+                        continue;
+                    }
+
                     collected.add(new HashMap<>(parsed));
                 }
 
@@ -184,6 +190,19 @@ public class TitleScraper {
         }
 
         return new BulkBrowseResult(collected.isEmpty() ? List.of() : List.copyOf(collected), pagesScanned);
+    }
+
+    private boolean matchesVisiblePrefix(String rawTitle, String normalizedSearchPrefix) {
+        if (normalizedSearchPrefix == null || normalizedSearchPrefix.isBlank()) {
+            return true;
+        }
+
+        String comparableTitle = normalizePrefixComparableTitle(rawTitle);
+        if (comparableTitle == null || comparableTitle.isBlank()) {
+            return false;
+        }
+
+        return comparableTitle.toLowerCase(Locale.ROOT).startsWith(normalizedSearchPrefix);
     }
 
     /**

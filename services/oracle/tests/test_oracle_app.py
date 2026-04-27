@@ -46,6 +46,7 @@ def build_config() -> OracleConfig:
         local_ai_api_key="localai",
         model="gpt-4.1-mini",
         temperature=0.2,
+        llm_timeout_seconds=60.0,
         noona_persona_name="Noona"
     )
 
@@ -117,6 +118,135 @@ def test_health_reports_runtime_and_bootstrap_details():
             "services": {"vault": {"ok": True}, "sage": {"ok": True}}
         }
     }
+
+
+def test_openai_model_discovery_filters_to_oracle_compatible_models():
+    sage = FakeSageClient(
+        settings={
+            "enabled": True,
+            "provider": "openai",
+            "model": "gpt-4.1-mini",
+            "temperature": 0.2
+        },
+        secret="sk-test"
+    )
+    seen = {}
+
+    async def fake_models_fetch(url, headers=None):
+        seen["url"] = url
+        seen["authorization"] = (headers or {}).get("Authorization")
+        return {
+            "data": [
+                {"id": "gpt-4.1-mini"},
+                {"id": "gpt-image-1"},
+                {"id": "text-embedding-3-small"},
+                {"id": "gpt-realtime-mini"},
+                {"id": "o4-mini"},
+                {"id": "davinci-002"},
+                {"id": "ft:gpt-4o-mini:scriptarr:test"}
+            ]
+        }
+
+    app = create_app(config=build_config(), sage_client=sage, fetch_models_json_fn=fake_models_fetch)
+
+    with TestClient(app) as client:
+        response = client.get("/api/models?provider=openai")
+
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["provider"] == "openai"
+    assert payload["selectedModel"] == "gpt-4.1-mini"
+    assert [entry["id"] for entry in payload["models"]] == [
+        "ft:gpt-4o-mini:scriptarr:test",
+        "gpt-4.1-mini",
+        "o4-mini"
+    ]
+    assert seen["url"] == "https://api.openai.com/v1/models"
+    assert seen["authorization"] == "Bearer sk-test"
+
+
+def test_localai_model_discovery_reads_openai_compatible_models_endpoint():
+    sage = FakeSageClient(
+        settings={
+            "enabled": True,
+            "provider": "localai",
+            "model": "gpt-4",
+            "temperature": 0.2
+        }
+    )
+    seen = {}
+
+    async def fake_models_fetch(url, _headers=None):
+        seen["url"] = url
+        return {
+            "data": [
+                {"id": "gpt-4"},
+                {"id": "hermes-3"}
+            ]
+        }
+
+    app = create_app(config=build_config(), sage_client=sage, fetch_models_json_fn=fake_models_fetch)
+
+    with TestClient(app) as client:
+        response = client.get("/api/models?provider=localai")
+
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["provider"] == "localai"
+    assert payload["selectedModel"] == "gpt-4"
+    assert [entry["id"] for entry in payload["models"]] == ["gpt-4", "hermes-3"]
+    assert seen["url"] == "http://127.0.0.1:8080/v1/models"
+
+
+def test_model_discovery_falls_back_when_openai_key_is_missing():
+    sage = FakeSageClient(
+        settings={
+            "enabled": True,
+            "provider": "openai",
+            "model": "gpt-4.1-mini",
+            "temperature": 0.2
+        },
+        secret=""
+    )
+    app = create_app(config=build_config(), sage_client=sage)
+
+    with TestClient(app) as client:
+        response = client.get("/api/models?provider=openai")
+
+    payload = response.json()
+    assert payload["ok"] is False
+    assert payload["provider"] == "openai"
+    assert payload["selectedModel"] == "gpt-4.1-mini"
+    assert payload["source"] == "current"
+    assert payload["models"] == [{"id": "gpt-4.1-mini", "label": "gpt-4.1-mini"}]
+    assert payload["error"] == "OpenAI API key is not configured."
+
+
+def test_model_discovery_falls_back_when_localai_request_fails():
+    sage = FakeSageClient(
+        settings={
+            "enabled": True,
+            "provider": "localai",
+            "model": "custom-local",
+            "temperature": 0.2
+        }
+    )
+
+    async def broken_models_fetch(_url, _headers=None):
+        raise RuntimeError("LocalAI offline")
+
+    app = create_app(config=build_config(), sage_client=sage, fetch_models_json_fn=broken_models_fetch)
+
+    with TestClient(app) as client:
+        response = client.get("/api/models?provider=localai")
+
+    payload = response.json()
+    assert payload["ok"] is False
+    assert payload["provider"] == "localai"
+    assert payload["selectedModel"] == "custom-local"
+    assert payload["source"] == "current"
+    assert payload["models"] == [{"id": "custom-local", "label": "custom-local"}]
+    assert payload["error"] == "LocalAI offline"
 
 
 def test_status_keywords_return_read_only_status_reply_without_llm_call():
@@ -239,5 +369,38 @@ def test_generation_error_returns_degraded_fallback():
     payload = response.json()
     assert payload["ok"] is True
     assert payload["degraded"] is True
-    assert payload["reply"] == "Noona is in read-only fallback mode because LocalAI is unavailable right now."
+    assert payload["reply"] == "Noona is in read-only fallback mode because OpenAI is unavailable right now."
     assert payload["error"] == "boom"
+
+
+def test_localai_generation_error_returns_localai_fallback():
+    sage = FakeSageClient(
+        settings={
+            "enabled": True,
+            "provider": "localai",
+            "model": "gpt-4",
+            "temperature": 0.2
+        }
+    )
+
+    async def available_probe(_runtime):
+        return True
+
+    async def broken_invoke(_runtime, _persona_name, _message):
+        raise RuntimeError("slow model")
+
+    app = create_app(
+        config=build_config(),
+        sage_client=sage,
+        probe_local_ai_fn=available_probe,
+        invoke_oracle_fn=broken_invoke
+    )
+
+    with TestClient(app) as client:
+        response = client.post("/api/chat", json={"message": "Tell me a short update"})
+
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["degraded"] is True
+    assert payload["reply"] == "Noona is in read-only fallback mode because LocalAI is unavailable right now."
+    assert payload["error"] == "slow model"

@@ -22,7 +22,7 @@ async def invoke_oracle(runtime, persona_name: str, message: str) -> str:
     client = AsyncOpenAI(
         api_key=runtime.api_key,
         base_url=runtime.local_ai_base_url if runtime.provider == "localai" else None,
-        timeout=1.5
+        timeout=runtime.llm_timeout_seconds
     )
     response = await client.chat.completions.create(
         model=runtime.model,

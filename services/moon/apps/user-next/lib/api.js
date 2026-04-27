@@ -124,12 +124,18 @@ export const useMoonJson = (url, {enabled = true, fallback = /** @type {T} */ (n
  *   loginUrl: string
  * }>}
  */
-export const loadMoonChromeContext = async () => {
+export const loadMoonChromeContext = async (returnTo = "/") => {
+  const trimmedReturnTo = typeof returnTo === "string" ? returnTo.trim() : "";
+  const normalizedReturnTo = trimmedReturnTo.startsWith("/")
+      && !trimmedReturnTo.startsWith("//")
+      && !trimmedReturnTo.startsWith("/api/")
+    ? trimmedReturnTo
+    : "/";
   const [branding, auth, bootstrap, discordUrl] = await Promise.all([
     requestJson("/api/moon/v3/public/branding"),
     requestJson("/api/moon/auth/status"),
     requestJson("/api/moon/auth/bootstrap-status"),
-    requestJson("/api/moon/auth/discord/url")
+    requestJson(`/api/moon/auth/discord/url?returnTo=${encodeURIComponent(normalizedReturnTo)}`)
   ]);
 
   return {

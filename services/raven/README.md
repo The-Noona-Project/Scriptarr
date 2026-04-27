@@ -55,6 +55,12 @@ ambiguous-metadata, and failed skips back to Portal instead of bulk-queueing met
 command uses `nsfw:false`, Raven verifies the concrete WeebCentral title page and only queues titles with an explicit
 `Adult Content: No`; adult or unverified titles are skipped. That command is intentionally locked to the WeebCentral
 provider and fails when WeebCentral is disabled rather than falling back to MangaDex.
+Raven also exposes durable async bulk-run orchestration under `/v1/downloads/bulk-runs` for owner flows that need
+mega `downloadall` runs. A run can target one type/group or expand `type:all` and `titlegroup:all` into A-Z batches
+ordered group-first, then type. Run and batch state persist through Sage's generic job broker, batch status includes
+the Raven title task ids queued by that batch, and resume skips completed batches after a restart. Each batch still
+uses the same WeebCentral-only, `nsfw:false`, metadata-confident bulk queue path and retries failed run-owned title
+tasks up to three total attempts before removing the failed task through Raven's existing safe task removal.
 Raven now also treats cover art as first-class title metadata, carries it through intake, queue state, and library
 records, and exposes the same imagery Moon and Portal reuse in their UIs and embeds.
 Raven now also preserves chapter release dates from provider chapter scrapes and blends in richer title-level release
@@ -74,8 +80,17 @@ Download completion now waits for both file promotion and brokered catalog persi
 If catalog persistence fails, Raven marks the task failed instead of leaving it stuck at `90%`. On boot, Raven also
 rescans the existing `downloaded/<type>/...` tree to backfill missing catalog rows from already-finished archives.
 
-Raven still runs one title at a time for provider and VPN safety, but page fetches inside a title now use bounded
-concurrency, preserve archive ordering, skip already-written files on retry, and collapse duplicate restorable tasks
-for the same logical request during recovery.
+Raven now runs up to two title downloads at once globally while still preserving priority ordering and queued-task
+reordering inside each priority band. Page fetches inside a title still use their existing bounded concurrency,
+preserve archive ordering, skip already-written files on retry, and collapse duplicate restorable tasks for the same
+logical request during recovery.
+Raven task snapshots now also preserve a real `startedAt` for active attempts and, when a chapter download yields
+credible timing data, a live `downloadSpeedBytesPerSecond` value that Moon can show on running queue cards. Recovery
+or needs-attention views should still stay limited to Raven title-task state instead of pulling in unrelated service
+events. Failed or stale queued tasks can be removed from recovery, which clears the persisted task and deletes only
+the incomplete managed `downloading/<type>` working folder.
+When an upstream page image returns `404`, Raven now skips same-URL image retries, refreshes the chapter page list on
+the next chapter attempt, and leaves a clearer source-image failure if the refreshed source still points at missing
+images.
 For long-running WeebCentral series, Raven now follows the source page's HTMX full-chapter-list flow instead of only
 the initial visible subset, which fixes partial-history titles such as Tomb Raider King.

@@ -23,17 +23,26 @@ test("parseDownloadAllCommand preserves the legacy syntax and validation", () =>
     titlePrefix: "a"
   });
 
-  const invalid = parseDownloadAllCommand("downloadall type:bad nsfw:maybe");
+  const mega = parseDownloadAllCommand("downloadall type:all nsfw:false titlegroup:all");
+  assert.equal(mega.valid, true);
+  assert.deepEqual(mega.filters, {
+    type: "all",
+    nsfw: false,
+    titlePrefix: "all"
+  });
+
+  const invalid = parseDownloadAllCommand("downloadall type:bad nsfw:maybe titlegroup:aa");
   assert.equal(invalid.valid, false);
   assert.match(invalid.errors.join(" "), /type must be one of/i);
   assert.match(invalid.errors.join(" "), /nsfw must be true or false/i);
+  assert.match(invalid.errors.join(" "), /titlegroup must be one letter/i);
 
-  const bangPrefixed = parseDownloadAllCommand("!downloadall type:managa nsfw:no titlegroup:\"ab\"");
+  const bangPrefixed = parseDownloadAllCommand("!downloadall type:managa nsfw:no titlegroup:\"b\"");
   assert.equal(bangPrefixed.valid, true);
   assert.deepEqual(bangPrefixed.filters, {
     type: "Manga",
     nsfw: false,
-    titlePrefix: "ab"
+    titlePrefix: "b"
   });
 });
 
@@ -60,6 +69,7 @@ test("direct message handler replies with the schema for downloadall help", asyn
   assert.equal(handled, true);
   assert.equal(replies.length, 1);
   assert.match(replies[0].content, /Use `\/downloadall run type:manga nsfw:false titlegroup:a`/);
+  assert.match(replies[0].content, /continue runid/i);
   assert.match(replies[0].content, /Legacy fallback/i);
 });
 
@@ -92,6 +102,56 @@ test("formatBulkQueueSummary includes counts and title sections", () => {
   assert.match(text, /Ambiguous Academy/);
   assert.match(text, /Another World/);
 });
+
+test("direct message handler starts async mega runs for all filters", async () => {
+  const replies = [];
+  const forwardedPayloads = [];
+  const handler = createDirectMessageHandler({
+    getSettings: () => ({superuserId: "253987219969146890"}),
+    sage: {
+      createBulkRun: async (payload) => {
+        forwardedPayloads.push(payload);
+        return {
+          ok: true,
+          payload: {
+            runId: "bulk-run-1",
+            status: "paused",
+            message: "Queued the first batch and paused for owner continuation.",
+            filters: payload,
+            counts: {
+              completedBatches: 1,
+              remainingBatches: 103,
+              queued: 10,
+              skipped: 2,
+              failed: 0
+            }
+          }
+        };
+      }
+    }
+  });
+
+  await handler({
+    content: "downloadall type:all nsfw:false titlegroup:all",
+    author: {id: "253987219969146890", bot: false},
+    reply: async (payload) => {
+      replies.push(payload);
+      return payload;
+    }
+  });
+
+  assert.match(replies[0].content, /async mega downloadall run/i);
+  assert.match(replies[1].content, /Run ID: bulk-run-1/);
+  assert.match(replies[1].content, /continue runid:bulk-run-1/);
+  assert.deepEqual(forwardedPayloads[0], {
+    providerId: "weebcentral",
+    type: "all",
+    nsfw: false,
+    titlePrefix: "all",
+    requestedBy: "253987219969146890"
+  });
+});
+
 
 test("direct message handler gates by superuser and forwards legacy downloadall filters to Sage", async () => {
   const replies = [];

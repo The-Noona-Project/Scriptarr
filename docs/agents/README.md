@@ -25,8 +25,9 @@ Architecture invariants:
   separate when they truly resolve to different provider URLs.
 - Portal's Discord runtime is now live again, and the brokered `portal.discord` settings object is the source of truth
   for guild id, onboarding, per-command role gates, and DM superuser rules.
-- Moon now serves a trusted public automation API and same-origin Swagger docs. Search is public, create or status
-  calls use the brokered admin API key, and accepted external requests must stay at the lowest queue priority.
+- Moon now serves trusted API-key surfaces and plain same-origin Swagger docs. Search is public, protected calls use
+  `X-Scriptarr-Api-Key`, system keys inherit assigned permission groups, user keys stay scoped to the owning reader,
+  and accepted external requests must stay at the lowest queue priority.
 - Active requests now use a durable Vault work key so duplicate submissions across Moon, Discord, admin, and the
   public API collapse cleanly under concurrency.
 - Request-linked moderation and Raven completion events can now trigger one Portal DM per request state when a Discord
@@ -47,6 +48,9 @@ Architecture invariants:
   instead of burying it in the generic settings page.
 - Moon admin library and calendar now expect richer Raven release metadata: the series index is dense and sortable,
   while the calendar view consumes chapter release dates captured from source scrapes and metadata enrichment.
+- Moon admin System pages now include Logs, Events, Updates, Tasks, Status, API, and AI as purpose-built Next surfaces.
+  Keep browser traffic same-origin through Moon -> Sage, keep task jobs allowlisted, probe only safe read endpoints in
+  Status, and keep Oracle/LocalAI settings under `/admin/system/ai`.
 
 ## Service Index
 

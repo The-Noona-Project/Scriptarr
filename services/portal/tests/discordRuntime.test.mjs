@@ -493,6 +493,7 @@ test("downloadall slash command is DM-only and owner-only", async () => {
     }
   };
   const forwardedPayloads = [];
+  const bulkRunActions = [];
   const commands = createPortalCommands({
     sage: {
       async bulkQueueDownload(payload) {
@@ -511,6 +512,43 @@ test("downloadall slash command is DM-only and owner-only", async () => {
             skippedNoMetadataCount: 0,
             skippedAmbiguousMetadataCount: 0,
             failedCount: 0
+          }
+        };
+      },
+      async createBulkRun(payload) {
+        bulkRunActions.push({action: "create", payload});
+        return {
+          ok: true,
+          payload: {
+            runId: "bulk-run-1",
+            status: "paused",
+            message: "First batch queued.",
+            filters: payload,
+            counts: {
+              completedBatches: 1,
+              remainingBatches: 4,
+              queued: 12,
+              skipped: 0,
+              failed: 0
+            }
+          }
+        };
+      },
+      async getBulkRunStatus(runId) {
+        bulkRunActions.push({action: "status", runId});
+        return {
+          ok: true,
+          payload: {
+            runId,
+            status: "paused",
+            message: "Waiting for owner continuation.",
+            counts: {
+              completedBatches: 1,
+              remainingBatches: 4,
+              queued: 12,
+              skipped: 0,
+              failed: 0
+            }
           }
         };
       }
@@ -574,5 +612,45 @@ test("downloadall slash command is DM-only and owner-only", async () => {
     nsfw: false,
     titlePrefix: "a",
     requestedBy: "owner-1"
+  });
+
+  const megaInteraction = createInteraction({
+    commandName: "downloadall",
+    guildId: null,
+    userId: "owner-1",
+    strings: {
+      __subcommand: "run",
+      type: "all",
+      nsfw: false,
+      titlegroup: "all"
+    }
+  });
+  await handler(megaInteraction);
+  assert.match(megaInteraction.__calls.editReply[0].content, /Run ID: bulk-run-1/);
+  assert.deepEqual(bulkRunActions[0], {
+    action: "create",
+    payload: {
+      providerId: "weebcentral",
+      type: "all",
+      nsfw: false,
+      titlePrefix: "all",
+      requestedBy: "owner-1"
+    }
+  });
+
+  const statusInteraction = createInteraction({
+    commandName: "downloadall",
+    guildId: null,
+    userId: "owner-1",
+    strings: {
+      __subcommand: "status",
+      runid: "bulk-run-1"
+    }
+  });
+  await handler(statusInteraction);
+  assert.match(statusInteraction.__calls.editReply[0].content, /Waiting for owner continuation/);
+  assert.deepEqual(bulkRunActions[1], {
+    action: "status",
+    runId: "bulk-run-1"
   });
 });

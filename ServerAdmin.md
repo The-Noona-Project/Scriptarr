@@ -139,6 +139,9 @@ Example callback shape:
 Moon's bootstrap surface should also show the configured first-owner Discord id before the first claim. If it does not,
 double-check that `SUPERUSER_ID` was passed into Warden correctly.
 Moon no longer exposes a dev-session claim path, so Discord login is the supported bootstrap and admin sign-in flow.
+When login starts from a same-origin Moon page, Scriptarr now remembers that route and returns the user there after
+Discord OAuth completes. If the original route is missing, invalid, or no longer allowed for the signed-in user,
+Moon falls back to the user home page at `/`.
 
 ## Network Topology
 
@@ -164,11 +167,20 @@ Warden inspects the host and selects a LocalAI AIO image by hardware class:
 - CPU fallback: `localai/localai:latest-aio-cpu`
 
 LocalAI is not installed or started on first boot. Moon admin lets the server admin choose a preset image or custom
-override and then manually trigger the install or start flow later. Warden now mounts the persistent LocalAI models and
-data folders, passes the matching hardware flags for the selected preset, and waits for LocalAI readiness before it
-reports startup success. This can take 5 to 20 minutes depending on the host, and the first AIO warm-up may take a bit
-longer. Warden now boots the official AIO images with the Oracle-safe text-generation preload set instead of the full
-default AIO bundle so startup does not block on optional speech, image, or other bundled models.
+override and then manually trigger install, start, or remove flows later. Warden runs those flows as asynchronous
+LocalAI lifecycle jobs, mirrors progress into the shared broker, and lets the Moon admin page show Docker pull,
+container, and model-readiness progress without timing out the browser request.
+
+Warden mounts the persistent LocalAI models and data folders, passes the matching hardware flags for the selected
+preset, and waits for LocalAI readiness before it reports startup success. This can take 5 to 20 minutes depending on
+the host, and the first AIO warm-up may take a bit longer. Warden now boots the official AIO images with the
+Oracle-safe text-generation preload set instead of the full default AIO bundle so startup does not block on optional
+speech, image, or other bundled models. When a lifecycle job completes or fails, Portal sends one Discord DM to the
+admin who requested it when that admin has a Discord-backed user id.
+
+Readiness means the LocalAI HTTP runtime and model catalog are available. CPU-only generation may still take tens of
+seconds per prompt, so Oracle uses a longer provider-call timeout and Moon's admin test broker waits long enough for a
+small LocalAI response before reporting the selected provider as degraded.
 
 If GPU-specific startup is unavailable, the rest of Scriptarr should stay healthy while AI features remain disabled or
 temporarily unavailable.
@@ -179,9 +191,14 @@ temporarily unavailable.
 - Oracle defaults to provider `openai`.
 - Oracle now runs as a FastAPI Python service while keeping the same internal HTTP contract for Sage, Moon, and Portal.
 - The OpenAI API key can be entered in Moon admin before Oracle is enabled.
-- Admins can later switch Oracle to LocalAI from Moon admin and then manually install or start LocalAI through Warden.
+- Admins can later switch Oracle to LocalAI from Moon admin and then manually install, start, or remove LocalAI through
+  Warden.
 - When the provider is `localai` and no model is set explicitly, Scriptarr falls back to the LocalAI-friendly `gpt-4`
   alias instead of the OpenAI default model name.
+- Moon's AI page loads available model ids through Moon -> Sage -> Oracle and renders the model control as a
+  provider-specific dropdown. Browsers never call OpenAI or LocalAI directly for model discovery.
+- `SCRIPTARR_ORACLE_LLM_TIMEOUT_SECONDS` can tune Oracle's provider call timeout. The default is `60` seconds so slow
+  CPU LocalAI responses have room to complete.
 
 ## Core Admin Tasks In Moon
 
@@ -198,15 +215,31 @@ temporarily unavailable.
 - review Raven metadata providers, with MangaDex enabled by default, Anime-Planet enabled ahead of MangaUpdates, and
   AniList, MyAnimeList, or ComicVine available for wider coverage
 - review Raven download providers, with WeebCentral first by default and MangaDex available as a second normal source
-- set the Moon site name branding that powers headers, document titles, and install metadata
-- manage the trusted public Moon automation API from `/admin/system/api`, including enable state, admin key rotation,
-  and Swagger/OpenAPI links
-- check or install managed Scriptarr service updates from `/admin/system/updates`
+- manage Moon branding from `/admin/settings`, including site name and a PNG, JPEG, or WebP logo that Scriptarr stores
+  as WebP variants for user/admin chrome and install metadata
+- review database size and table counts from `/admin/settings`, then open the grant-protected DB explorer at
+  `/admin/settings/database` when you need redacted table browsing or safe settings JSON edits
+- manage global and per-admin toast notification preferences for admin actions, async jobs, live events, and failures
+- manage Moon API keys from `/admin/system/api`, including enable state, system keys with permission-group assignment,
+  user-key audit, and Swagger/OpenAPI links
+- inspect server-redacted managed-service logs from `/admin/system/logs`
+- search durable audit and runtime events from `/admin/system/events`
+- check or install managed Scriptarr service updates from `/admin/system/updates`; installs require `system.root` and
+  the typed confirmation `UPDATE SCRIPTARR`
+- manage allowlisted maintenance schedules from `/admin/system/tasks`; cron expressions are free-form, but the jobs
+  are Scriptarr-defined only, runs are non-overlapping, and every manual or scheduled run is brokered through Sage with
+  durable job history
+- inspect the grouped endpoint matrix from `/admin/system/status`; Scriptarr lists Moon, Sage, Vault, Raven, Warden,
+  Portal, Oracle, and LocalAI routes, probes only safe read endpoints, and marks mutations or browser-session routes
+  as not probed
+- configure Oracle and optional LocalAI runtime controls from `/admin/system/ai`, including provider, model dropdown,
+  temperature, masked OpenAI key state, LocalAI image profile, manual install, start, or remove actions, lifecycle
+  progress, completion toasts, and a small test prompt
 - preview or execute the root-only content reset flow from `/admin/system` when you need to wipe content-side state
   and managed files without deleting users, settings, or durable events
-- configure Oracle and optional LocalAI runtime settings
 - manage users, roles, and permissions
 - inspect Warden service health and runtime config
+- monitor the live Raven queue board and reprioritize, retry, or cancel work from `/admin/activity/queue`
 
 ## Moon Route Model
 
@@ -214,6 +247,10 @@ Moon now serves two distinct programs from one runtime:
 
 - the forward-facing user app at `/`
 - the admin app at `/admin`
+
+The admin program now runs through a separate Next.js App Router runtime with isolated `/admin/_next` assets. The
+legacy plain-JS admin bundle and `/admin-assets` fallback have been removed, and admin routes continue to use Moon
+same-origin APIs plus the Discord-backed admin guard.
 
 Common user routes:
 
@@ -231,15 +268,16 @@ but the typed routes are the canonical links Moon now emits.
 Moon's user app also serves a same-origin `manifest.webmanifest` and `service-worker.js` so the reader can be
 installed like an app and keep a rolling cache of recently opened chapters on the current device.
 That same user app now runs through an embedded Next.js App Router frontend with Once UI shells, a single-row
-megamenu header with plain site-name branding, a minimal avatar dropdown for Profile and Logout, a dedicated
-`/profile` page for local StylePanel preferences and install actions, a simple footer, and an immersive reader that
-defaults to infinite chapter scroll while still exposing paged mode. Library type links now live only inside the
-`Library` mega menu, and `/browse` now renders as A-Z shelf rows with the same Once UI scroller behavior used on the
-home page. It keeps a quick-jump letter rail on the left and tighter search against titles, aliases, types, and tags
-while browse cards clamp long copy until the user opens a title page. Its home route now favors a simpler
-media-library feel too, with a personalized "Your Bookshelf" continue-reading row followed by cover-led scrollers for
-recently added titles by type and tag-driven shelves based on explicit tag likes or hides plus inferred taste from
-read history, follows, and the active bookshelf.
+megamenu header with plain site-name branding, a compact avatar dropdown for Profile, conditional Admin, and Logout, a
+dedicated `/profile` page for local StylePanel preferences and install actions, a simple footer, and an immersive
+reader that defaults to infinite chapter scroll while still exposing paged mode. `/profile` is now a tabbed account
+hub with `Overview`, `Stats`, and `Preferences` instead of one long mixed settings panel. Library type links now live
+only inside the `Library` mega menu, and `/browse` now renders as A-Z shelf rows with the same Once UI scroller
+behavior used on the home page. It keeps a quick-jump letter rail on the left and tighter search against titles,
+aliases, types, and tags while browse cards clamp long copy until the user opens a title page. Its home route now
+favors a simpler media-library feel too, with a personalized "Your Bookshelf" continue-reading row followed by
+cover-led scrollers for recently added titles by type and tag-driven shelves based on explicit tag likes or hides plus
+inferred taste from read history, follows, and the active bookshelf.
 `/myrequests` is now both the request-creation surface and the personal status page. The top of the page runs the
 metadata-first request wizard, while the list below is split into `Active`, `Completed`, and `Closed` tabs. Readers
 can edit notes or cancel only while the request is still active.
@@ -259,6 +297,7 @@ Common admin routes:
 - `/admin/requests`
 - `/admin/users`
 - `/admin/settings`
+- `/admin/settings/database` (opened from Settings, not shown as a left-nav item)
 - `/admin/discord`
 - `/admin/system/*`
 
@@ -272,6 +311,37 @@ chips, and a safe replacement queue action that stages the replacement download 
 assignment panel, and recent auth or access events in one page. Staff access is no longer a flat role toggle. Moon now
 evaluates unioned permission groups with route-family `read`, `write`, or `root` grants, while the bootstrap owner
 stays visible but protected from deletion or demotion.
+`/admin/requests` is the moderation inbox. It opens on requests needing review, lets staff search or filter by status,
+and keeps request details in a drawer with saved metadata, selected source snapshots, duplicate waitlist state,
+timeline, linked Raven ids, and approve, resolve, refresh-source, override, or deny actions. Denying a request requires
+a moderator comment so the durable audit event and requester notification have a useful reason.
+`/admin/activity/queue` is now a live queue board. It groups Raven work into `Running`, `Queued`, and recovery-only
+`Needs attention`, subscribes to the shared admin SSE stream so it refreshes without a manual page reload, and
+exposes card-level controls for retry, retry-all, cancel, priority changes, and queued-task move up/down actions.
+Queued cards intentionally do not show ETA values. Running cards show live transfer speed and active ETA only when
+Raven and Sage have credible progress data, and `Needs attention` cards can remove failed or stale queued tasks while
+deleting only the incomplete managed working folder. Service update and restart jobs stay out of `Needs attention`;
+track them under System, Updates, and Events instead.
+
+## Settings And Database Explorer
+
+The main Settings page is the compact place for general site administration. It includes branding, uploaded logo
+preview, database size summary, The Noona Project credit link, Discord support link, toast preferences, Raven VPN,
+metadata providers, download providers, request workflow, and Discord basics. AI controls intentionally stay under
+`/admin/system/ai`. Settings saves are section-scoped through Moon v3 routes, so background refreshes should not wipe
+unsaved edits and blank Raven VPN password fields preserve the existing stored secret.
+
+The DB explorer is reachable only from the Settings page and requires the `database` admin grant unless the signed-in
+user is the protected owner. It can show a table overview, row counts, approximate table sizes, redacted rows, column
+metadata, pagination, and safe search. It does not expose arbitrary SQL. The first edit path is intentionally limited
+to validated JSON values in the `settings` table so auth, sessions, secrets, API key hashes, users, and durable events
+remain read-only from the browser.
+
+Toast preferences are also brokered through Settings. Root settings admins can adjust global defaults, while each
+admin can keep personal overrides for action, job, live-event, and failures-only notifications.
+
+Project credit: [The Noona Project](https://github.com/The-Noona-Project/Scriptarr). Support:
+[Discord](https://discord.gg/HMYHT8KD5v).
 
 ## Discord Bot Workflow
 
@@ -295,6 +365,9 @@ The current Discord command set is:
 Blank role ids mean any member in the configured guild can use that slash command. `downloadall` ignores guild roles,
 is only supported in bot DMs, and only checks the configured DM superuser id.
 Use `/downloadall run type:<type> nsfw:<true|false> titlegroup:<prefix>` in a DM with Noona as the supported bulk path.
+Concrete single type plus single `titlegroup` requests use the one-shot queue path. `type:all` or `titlegroup:all`
+starts an async mega run that pauses after each batch until the owner uses `/downloadall continue runid:<id>`;
+`/downloadall status runid:<id>` and `/downloadall cancel runid:<id>` inspect or stop it.
 `/downloadall help` returns the usage guide in DMs. Portal still keeps the old raw DM text form
 (`downloadall type:... nsfw:... titlegroup:...`) as a legacy best-effort fallback, but that path depends on Discord
 delivering normal DM message events and should not be treated as the primary interface.
@@ -330,9 +403,10 @@ Moon now serves a trusted automation API and same-origin Swagger docs:
 - create request: `POST /api/public/v1/requests`
 - request status: `GET /api/public/v1/requests/<requestId>`
 
-Search is public. Create and status calls require `X-Scriptarr-Api-Key`, which Moon admin now manages from
-`/admin/system/api`. Scriptarr stores only the hashed form of that key in Vault and only reveals the plaintext value
-when the admin generates or regenerates it.
+Search is public. Protected calls require `X-Scriptarr-Api-Key`, which Moon admin now manages from
+`/admin/system/api`. Scriptarr stores only hashed key material in Vault and only reveals a plaintext key once when it
+is created. System-level keys inherit the permission groups assigned to them, while user-level keys are created from
+the reader profile page and can only access that Discord account's reader sync data and own requests.
 
 External API requests are intended for trusted automation. Scriptarr rejects them when the selected result is NSFW,
 already present in the library, already pending or running, or lacks an enabled download target. Accepted external API
@@ -385,6 +459,11 @@ off the shelf until new chapters arrive.
 Moon's content reset is content-only, not a factory reset. The root-only reset flow clears requests, work locks,
 progress, follows, reader bookmarks, Raven catalog or task state, and managed Raven download folders, but keeps users,
 permission groups, sessions, settings, secrets, and durable events.
+Raven now also runs up to two title downloads at once globally. Higher-priority work still starts first, queued-task
+reordering only affects work that has not started yet, and the live Moon queue reflects the two available running
+slots. Raven also persists real task start times and, when it can measure them credibly, live download speeds that
+Moon reuses in the running queue cards. Source-image 404 failures trigger a chapter page-list refresh before Raven
+leaves the task in recovery, which helps distinguish stale source URLs from true upstream missing-page failures.
 
 Moon admin library and calendar are now denser operational views:
 
@@ -413,11 +492,13 @@ The test stack uses:
 
 - If the first admin cannot sign in during bootstrap, confirm the Discord user id matches `SUPERUSER_ID`.
 - If Moon shows Discord auth as incomplete, re-check the public base URL and callback URL in the Discord developer
-  portal.
-- If Oracle is off, confirm the chosen provider and credentials in Moon admin before treating the rest of the stack as
-  unhealthy.
+  portal. Scriptarr now tries to send the user back to the page they started from after Discord login, so a wrong
+  callback or public base URL can also break the return-path handoff and drop users back to `/`.
+- If Oracle is off, confirm the chosen provider and credentials in `/admin/system/ai` before treating the rest of the
+  stack as unhealthy.
 - If LocalAI actions are slow, let the Moon admin job continue instead of retrying immediately; the initial pull and
-  startup are intentionally long-running.
+  startup are intentionally long-running. The progress card tracks the Docker image, container, and readiness phases,
+  and Portal DMs the requesting admin when the action completes or fails.
 - If Raven VPN is enabled, failed settings reads or failed tunnel startup now block downloads instead of silently
   falling back to direct traffic. Fix the VPN settings first, then retry the job.
 - If the Docker test stack is already running, tear it down with `npm run docker:test:teardown` before starting a new

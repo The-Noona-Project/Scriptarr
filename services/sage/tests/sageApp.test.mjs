@@ -116,8 +116,21 @@ const createDependencyStub = ({
     runtime: 0,
     queue: 0,
     bulkQueue: 0,
+    bulkRunCreate: 0,
+    bulkRunStatus: 0,
+    bulkRunContinue: 0,
+    bulkRunCancel: 0,
     contentResetPreview: 0,
-    contentResetExecute: 0
+    contentResetExecute: 0,
+    logs: 0,
+    updatesList: 0,
+    updatesCheck: 0,
+    updatesInstall: 0,
+    modelOptions: 0,
+    localAiProfile: 0,
+    localAiConfig: 0,
+    localAiInstall: 0,
+    localAiStart: 0
   };
   let currentLibraryTitles = [...libraryTitles];
   let currentDownloadTasks = [...downloadTasks];
@@ -233,11 +246,129 @@ const createDependencyStub = ({
       return;
     }
 
+    if (request.url?.startsWith("/api/logs")) {
+      calls.logs += 1;
+      const url = new URL(`http://stub${request.url}`);
+      const selectedService = url.searchParams.get("service") || "scriptarr-warden";
+      response.writeHead(200, {"Content-Type": "application/json"});
+      response.end(JSON.stringify({
+        services: [
+          {name: "scriptarr-warden", label: "Warden", containerName: "scriptarr-warden"},
+          {name: "scriptarr-moon", label: "Moon", containerName: "scriptarr-moon"}
+        ],
+        selectedService,
+        selectedContainer: selectedService,
+        entries: [{
+          id: "line-1",
+          timestamp: "2026-04-25T10:00:00.000Z",
+          level: url.searchParams.get("level") || "info",
+          message: `stub log ${url.searchParams.get("q") || ""}`.trim()
+        }],
+        generatedAt: "2026-04-25T10:01:00.000Z",
+        redacted: true,
+        lines: Number(url.searchParams.get("lines") || 250)
+      }));
+      return;
+    }
+
+    if (request.url === "/api/updates") {
+      calls.updatesList += 1;
+      response.writeHead(200, {"Content-Type": "application/json"});
+      response.end(JSON.stringify({
+        checkedAt: "2026-04-25T10:02:00.000Z",
+        services: [{
+          name: "scriptarr-moon",
+          image: "scriptarr-moon:latest",
+          runningImageLabel: "old-image",
+          localImageLabel: "new-image",
+          updateAvailable: true,
+          running: true,
+          health: "healthy"
+        }],
+        job: null
+      }));
+      return;
+    }
+
+    if (request.url === "/api/updates/check" && request.method === "POST") {
+      calls.updatesCheck += 1;
+      response.writeHead(200, {"Content-Type": "application/json"});
+      response.end(JSON.stringify({
+        checkedAt: "2026-04-25T10:03:00.000Z",
+        services: [{
+          name: "scriptarr-moon",
+          image: "scriptarr-moon:latest",
+          runningImageLabel: "old-image",
+          localImageLabel: "new-image",
+          updateAvailable: true,
+          running: true,
+          health: "healthy"
+        }],
+        job: null
+      }));
+      return;
+    }
+
+    if (request.url === "/api/updates/install" && request.method === "POST") {
+      calls.updatesInstall += 1;
+      let body = "";
+      request.on("data", (chunk) => {
+        body += chunk;
+      });
+      request.on("end", () => {
+        const payload = JSON.parse(body || "{}");
+        response.writeHead(202, {"Content-Type": "application/json"});
+        response.end(JSON.stringify({
+          checkedAt: "2026-04-25T10:04:00.000Z",
+          services: [{
+            name: "scriptarr-moon",
+            image: "scriptarr-moon:latest",
+            runningImageLabel: "old-image",
+            localImageLabel: "new-image",
+            updateAvailable: true,
+            running: true,
+            health: "healthy"
+          }],
+          job: {
+            jobId: "update-test",
+            status: "running",
+            requestedServices: payload.services || [],
+            tasks: [{
+              taskId: "update-test_pull-images",
+              label: "Pull candidate images",
+              status: "running",
+              percent: 10,
+              message: "Checking images."
+            }]
+          }
+        }));
+      });
+      return;
+    }
+
     if (request.url === "/api/status") {
       response.writeHead(200, {"Content-Type": "application/json"});
       response.end(JSON.stringify({
         ok: true,
         source: "oracle-status-broker"
+      }));
+      return;
+    }
+
+    if (request.url.startsWith("/api/models")) {
+      calls.modelOptions += 1;
+      const url = new URL(request.url, "http://scriptarr.test");
+      const provider = url.searchParams.get("provider") === "localai" ? "localai" : "openai";
+      response.writeHead(200, {"Content-Type": "application/json"});
+      response.end(JSON.stringify({
+        provider,
+        selectedModel: provider === "localai" ? "gpt-4" : "gpt-4.1-mini",
+        models: provider === "localai"
+          ? [{id: "gpt-4", label: "gpt-4"}]
+          : [{id: "gpt-4.1-mini", label: "gpt-4.1-mini"}],
+        source: "live",
+        ok: true,
+        error: null
       }));
       return;
     }
@@ -478,9 +609,115 @@ const createDependencyStub = ({
       return;
     }
 
+    if (request.url === "/v1/downloads/bulk-runs" && request.method === "POST") {
+      let body = "";
+      request.on("data", (chunk) => {
+        body += chunk;
+      });
+      request.on("end", () => {
+        calls.bulkRunCreate += 1;
+        const payload = JSON.parse(body || "{}");
+        response.writeHead(202, {"Content-Type": "application/json"});
+        response.end(JSON.stringify({
+          runId: "bulk-run-1",
+          status: "paused",
+          message: "First batch queued.",
+          filters: {
+            providerId: payload.providerId || "",
+            type: payload.type || "",
+            nsfw: payload.nsfw === true,
+            titlePrefix: payload.titlePrefix || ""
+          },
+          counts: {
+            completedBatches: 1,
+            remainingBatches: 4,
+            queued: 10,
+            skipped: 0,
+            failed: 0
+          }
+        }));
+      });
+      return;
+    }
+
+    if (request.url === "/v1/downloads/bulk-runs/bulk-run-1" && request.method === "GET") {
+      calls.bulkRunStatus += 1;
+      response.writeHead(200, {"Content-Type": "application/json"});
+      response.end(JSON.stringify({
+        runId: "bulk-run-1",
+        status: "paused",
+        message: "Waiting for owner continuation."
+      }));
+      return;
+    }
+
+    if (request.url === "/v1/downloads/bulk-runs/bulk-run-1/continue" && request.method === "POST") {
+      calls.bulkRunContinue += 1;
+      response.writeHead(202, {"Content-Type": "application/json"});
+      response.end(JSON.stringify({
+        runId: "bulk-run-1",
+        status: "paused",
+        message: "Next batch queued."
+      }));
+      return;
+    }
+
+    if (request.url === "/v1/downloads/bulk-runs/bulk-run-1/cancel" && request.method === "POST") {
+      calls.bulkRunCancel += 1;
+      response.writeHead(200, {"Content-Type": "application/json"});
+      response.end(JSON.stringify({
+        runId: "bulk-run-1",
+        status: "cancelled",
+        message: "Mega run cancelled."
+      }));
+      return;
+    }
+
     if (request.url === "/api/localai/status") {
       response.writeHead(200, {"Content-Type": "application/json"});
       response.end(JSON.stringify({installed: false, running: false}));
+      return;
+    }
+
+    if (request.url === "/api/localai/profile") {
+      calls.localAiProfile += 1;
+      response.writeHead(200, {"Content-Type": "application/json"});
+      response.end(JSON.stringify({
+        selectedProfile: "cpu",
+        profiles: [{
+          key: "cpu",
+          label: "CPU",
+          image: "localai/localai:latest-aio-cpu"
+        }, {
+          key: "nvidia",
+          label: "NVIDIA",
+          image: "localai/localai:latest-aio-gpu-nvidia-cuda-12"
+        }]
+      }));
+      return;
+    }
+
+    if (request.url === "/api/localai/config" && request.method === "PUT") {
+      request.on("end", () => {
+        calls.localAiConfig += 1;
+        response.writeHead(200, {"Content-Type": "application/json"});
+        response.end(JSON.stringify({ok: true, selectedProfile: "cpu"}));
+      });
+      request.resume();
+      return;
+    }
+
+    if (request.url === "/api/localai/actions/install" && request.method === "POST") {
+      calls.localAiInstall += 1;
+      response.writeHead(202, {"Content-Type": "application/json"});
+      response.end(JSON.stringify({ok: true, status: "installing"}));
+      return;
+    }
+
+    if (request.url === "/api/localai/actions/start" && request.method === "POST") {
+      calls.localAiStart += 1;
+      response.writeHead(202, {"Content-Type": "application/json"});
+      response.end(JSON.stringify({ok: true, status: "starting"}));
       return;
     }
 
@@ -522,11 +759,52 @@ const restoreFetch = () => {
   globalThis.fetch = originalFetch;
 };
 
-const signInViaDiscord = async (baseUrl) =>
-  fetch(`${baseUrl}/api/auth/discord/callback?code=test-oauth-code`).then((response) => response.json());
+const signInViaDiscord = async (baseUrl, query = "") =>
+  fetch(`${baseUrl}/api/auth/discord/callback?code=test-oauth-code${query ? `&${query}` : ""}`).then((response) => response.json());
 
 test.afterEach(() => {
   restoreFetch();
+});
+
+test("sage carries a sanitized returnTo path through Discord OAuth state", async () => {
+  const {app: vaultApp} = await createVaultApp();
+  const vaultServer = vaultApp.listen(0);
+  const vaultPort = vaultServer.address().port;
+
+  const dependencyStub = await createDependencyStub({libraryTitles: []});
+  dependencyStub.server.listen(0);
+  const dependencyPort = dependencyStub.server.address().port;
+
+  process.env.SCRIPTARR_VAULT_BASE_URL = `http://127.0.0.1:${vaultPort}`;
+  process.env.SCRIPTARR_WARDEN_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_PORTAL_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_ORACLE_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_RAVEN_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_PUBLIC_BASE_URL = "https://pax-kun.com";
+  process.env.SCRIPTARR_DISCORD_CLIENT_ID = "discord-client-id";
+  process.env.SCRIPTARR_DISCORD_CLIENT_SECRET = "discord-client-secret";
+
+  installDiscordFetchStub();
+
+  const {app: sageApp} = await createSageApp();
+  const sageServer = sageApp.listen(0);
+  const sagePort = sageServer.address().port;
+  const baseUrl = `http://127.0.0.1:${sagePort}`;
+
+  const authUrlPayload = await fetch(`${baseUrl}/api/auth/discord/url?returnTo=${encodeURIComponent("/browse?q=moon")}`)
+    .then((response) => response.json());
+  const oauthUrl = new URL(authUrlPayload.oauthUrl);
+  const state = oauthUrl.searchParams.get("state");
+
+  assert.equal(authUrlPayload.returnTo, "/browse?q=moon");
+  assert.ok(state);
+
+  const ownerClaim = await signInViaDiscord(baseUrl, `state=${encodeURIComponent(state)}`);
+  assert.equal(ownerClaim.returnTo, "/browse?q=moon");
+
+  await closeServer(sageServer);
+  await closeServer(vaultServer);
+  await closeServer(dependencyStub.server);
 });
 
 test("sage signs in the first owner through the Discord callback and moderates requests", async () => {
@@ -610,6 +888,65 @@ test("sage signs in the first owner through the Discord callback and moderates r
   assert.equal(reviewed.request.details.selectedDownload.providerId, "weebcentral");
   assert.equal(dependencyStub.calls.queue, 1);
 
+  const denyCandidate = await fetch(`${baseUrl}/api/moon-v3/user/requests`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${ownerClaim.token}`
+    },
+    body: JSON.stringify({
+      query: "not a match",
+      requestType: "manga",
+      notes: "This should be denied.",
+      selectedMetadata: {
+        provider: "mangadex",
+        providerSeriesId: "md-deny",
+        title: "Wrong Match"
+      }
+    })
+  }).then((response) => response.json());
+
+  const blankDenial = await fetch(`${baseUrl}/api/moon-v3/admin/requests/${denyCandidate.id}/deny`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${ownerClaim.token}`
+    },
+    body: JSON.stringify({comment: ""})
+  });
+  assert.equal(blankDenial.status, 400);
+
+  const denied = await fetch(`${baseUrl}/api/moon-v3/admin/requests/${denyCandidate.id}/deny`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${ownerClaim.token}`
+    },
+    body: JSON.stringify({comment: "Wrong edition."})
+  }).then((response) => response.json());
+  assert.equal(denied.status, "denied");
+  assert.equal(denied.moderatorComment, "Wrong edition.");
+  assert.equal(denied.timeline.some((entry) => entry.type === "denied" && entry.message === "Wrong edition."), true);
+
+  const adminRequests = await fetch(`${baseUrl}/api/moon-v3/admin/requests`, {
+    headers: {
+      "Authorization": `Bearer ${ownerClaim.token}`
+    }
+  }).then((response) => response.json());
+  assert.equal(adminRequests.counts.total, 2);
+  assert.equal(adminRequests.counts.queued, 1);
+  assert.equal(adminRequests.counts.closed, 1);
+  assert.equal(adminRequests.counts.needsReview, 0);
+  const requestEvents = await fetch(`${baseUrl}/api/moon-v3/admin/events?domain=requests`, {
+    headers: {
+      "Authorization": `Bearer ${ownerClaim.token}`
+    }
+  }).then((response) => response.json());
+  assert.equal(requestEvents.events.some((event) =>
+    event.eventType === "request-denied"
+    && event.targetId === String(denyCandidate.id)
+  ), true);
+
   const oracleSettings = await fetch(`${baseUrl}/api/admin/settings/oracle`, {
     headers: {
       "Authorization": `Bearer ${ownerClaim.token}`
@@ -674,6 +1011,141 @@ test("sage signs in the first owner through the Discord callback and moderates r
   assert.equal(systemStatus.bootstrap.managedNetworkName, "scriptarr-network-bootstrap");
   assert.equal(systemStatus.runtime.managedNetworkName, "scriptarr-network-runtime");
   assert.equal(systemStatus.runtime.mysql.mode, "selfhost");
+  assert.equal(systemStatus.groups.some((group) => group.id === "oracle"), true);
+  assert.equal(systemStatus.summary.notProbed > 0, true);
+  assert.equal(systemStatus.contentReset, undefined);
+
+  const tasks = await fetch(`${baseUrl}/api/moon-v3/admin/system/tasks`, {
+    headers: {
+      "Authorization": `Bearer ${ownerClaim.token}`
+    }
+  }).then((response) => response.json());
+  assert.equal(tasks.tasks.some((task) => task.taskId === "update-check"), true);
+  assert.equal(tasks.tasks.some((task) => task.taskId === "event-retention-prune"), true);
+
+  const taskPreview = await fetch(`${baseUrl}/api/moon-v3/admin/system/tasks/update-check/preview`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${ownerClaim.token}`
+    },
+    body: JSON.stringify({
+      cronExpression: "0 */6 * * *",
+      timezone: "UTC"
+    })
+  }).then((response) => response.json());
+  assert.equal(taskPreview.valid, true);
+  assert.equal(taskPreview.nextRuns.length > 0, true);
+
+  const aiStatus = await fetch(`${baseUrl}/api/moon-v3/admin/system/ai`, {
+    headers: {
+      "Authorization": `Bearer ${ownerClaim.token}`
+    }
+  }).then((response) => response.json());
+  assert.equal(aiStatus.oracle.provider, "openai");
+  assert.equal(aiStatus.localAiProfile.selectedProfile, "cpu");
+  assert.equal(aiStatus.modelOptions.provider, "openai");
+  assert.equal(aiStatus.modelOptions.models[0].id, "gpt-4.1-mini");
+
+  const unauthenticatedModels = await fetch(`${baseUrl}/api/moon-v3/admin/system/ai/models?provider=localai`);
+  assert.equal(unauthenticatedModels.status, 401);
+
+  const aiLocalAiModels = await fetch(`${baseUrl}/api/moon-v3/admin/system/ai/models?provider=localai`, {
+    headers: {
+      "Authorization": `Bearer ${ownerClaim.token}`
+    }
+  }).then((response) => response.json());
+  assert.equal(aiLocalAiModels.provider, "localai");
+  assert.equal(aiLocalAiModels.models[0].id, "gpt-4");
+
+  const aiLocalAiStart = await fetch(`${baseUrl}/api/moon-v3/admin/system/ai/localai/start`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${ownerClaim.token}`
+    },
+    body: JSON.stringify({
+      localAiProfileKey: "cpu",
+      localAiImageMode: "preset",
+      localAiCustomImage: ""
+    })
+  }).then((response) => response.json());
+  assert.equal(aiLocalAiStart.ok, true);
+
+  const aiTest = await fetch(`${baseUrl}/api/moon-v3/admin/system/ai/test`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${ownerClaim.token}`
+    },
+    body: JSON.stringify({
+      message: "ping"
+    })
+  }).then((response) => response.json());
+  assert.equal(aiTest.reply, "stubbed:ping");
+
+  const logs = await fetch(`${baseUrl}/api/moon-v3/admin/system/logs?service=scriptarr-moon&level=error&lines=25&q=needle`, {
+    headers: {
+      "Authorization": `Bearer ${ownerClaim.token}`
+    }
+  }).then((response) => response.json());
+  assert.equal(logs.selectedService, "scriptarr-moon");
+  assert.equal(logs.redacted, true);
+  assert.match(logs.entries[0].message, /needle/);
+
+  await fetch(`${process.env.SCRIPTARR_VAULT_BASE_URL}/api/service/events`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": "Bearer sage-dev-token"
+    },
+    body: JSON.stringify({
+      domain: "system",
+      eventType: "update-check",
+      severity: "warning",
+      actorType: "admin",
+      actorId: "owner-1",
+      targetType: "service",
+      targetId: "scriptarr-moon",
+      message: "Needle update event."
+    })
+  });
+  const events = await fetch(`${baseUrl}/api/moon-v3/admin/system/events?domain=system&eventType=update-check&severity=warning&targetType=service&q=Needle`, {
+    headers: {
+      "Authorization": `Bearer ${ownerClaim.token}`
+    }
+  }).then((response) => response.json());
+  assert.equal(events.events.length, 1);
+  assert.equal(events.events[0].targetId, "scriptarr-moon");
+
+  const updates = await fetch(`${baseUrl}/api/moon-v3/admin/system/updates`, {
+    headers: {
+      "Authorization": `Bearer ${ownerClaim.token}`
+    }
+  }).then((response) => response.json());
+  assert.equal(updates.services[0].updateAvailable, true);
+  const checkedUpdates = await fetch(`${baseUrl}/api/moon-v3/admin/system/updates/check`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${ownerClaim.token}`
+    },
+    body: JSON.stringify({
+      services: ["scriptarr-moon"]
+    })
+  }).then((response) => response.json());
+  assert.equal(checkedUpdates.checkedAt, "2026-04-25T10:03:00.000Z");
+  const installUpdates = await fetch(`${baseUrl}/api/moon-v3/admin/system/updates/install`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${ownerClaim.token}`
+    },
+    body: JSON.stringify({
+      services: ["scriptarr-moon"]
+    })
+  }).then((response) => response.json());
+  assert.equal(installUpdates.job.status, "running");
 
   const home = await fetch(`${baseUrl}/api/moon-v3/user/home`, {
     headers: {
@@ -691,6 +1163,10 @@ test("sage signs in the first owner through the Discord callback and moderates r
   assert.ok(dependencyStub.calls.health >= 1);
   assert.ok(dependencyStub.calls.bootstrap >= 1);
   assert.ok(dependencyStub.calls.runtime >= 1);
+  assert.equal(dependencyStub.calls.logs, 1);
+  assert.ok(dependencyStub.calls.updatesList >= 1);
+  assert.equal(dependencyStub.calls.updatesCheck, 1);
+  assert.equal(dependencyStub.calls.updatesInstall, 1);
 
   await closeServer(sageServer);
   await closeServer(vaultServer);
@@ -790,15 +1266,205 @@ test("sage round-trips Moon branding and exposes typed Moon reader payloads", as
   assert.equal(savedBrandingResponse.status, 200);
   assert.equal(savedBranding.siteName, "Pax Library");
 
+  const savedV3BrandingResponse = await fetch(`${baseUrl}/api/moon-v3/admin/settings/branding`, {
+    method: "PUT",
+    headers,
+    body: JSON.stringify({siteName: "  Pax-Kun  "})
+  });
+  const savedV3Branding = await savedV3BrandingResponse.json();
+  assert.equal(savedV3BrandingResponse.status, 200);
+  assert.equal(savedV3Branding.branding.siteName, "Pax-Kun");
+  assert.equal(savedV3Branding.publicBranding.siteName, "Pax-Kun");
+
   const publicBranding = await fetch(`${baseUrl}/api/moon-v3/public/branding`).then((response) => response.json());
-  assert.equal(publicBranding.siteName, "Pax Library");
+  assert.equal(publicBranding.siteName, "Pax-Kun");
 
   const aggregatedSettings = await fetch(`${baseUrl}/api/moon-v3/admin/settings`, {
     headers: {
       "Authorization": `Bearer ${ownerClaim.token}`
     }
   }).then((response) => response.json());
-  assert.equal(aggregatedSettings.branding.siteName, "Pax Library");
+  assert.equal(aggregatedSettings.branding.siteName, "Pax-Kun");
+  assert.equal(aggregatedSettings.publicBranding.siteName, "Pax-Kun");
+  assert.equal(aggregatedSettings.databaseOverview.tables.some((table) => table.name === "settings" && table.editable), true);
+  assert.equal(aggregatedSettings.toastSettings.effective.actionToasts, true);
+
+  const savedVpnResponse = await fetch(`${baseUrl}/api/moon-v3/admin/settings/raven/vpn`, {
+    method: "PUT",
+    headers,
+    body: JSON.stringify({
+      enabled: true,
+      region: "ca_toronto",
+      piaUsername: "captain",
+      piaPassword: "secret-vpn-password"
+    })
+  });
+  const savedVpn = await savedVpnResponse.json();
+  assert.equal(savedVpnResponse.status, 200);
+  assert.equal(savedVpn.enabled, true);
+  assert.equal(savedVpn.region, "ca_toronto");
+  assert.equal(savedVpn.piaUsername, "captain");
+  assert.equal(savedVpn.passwordConfigured, true);
+
+  const savedVpnWithoutPasswordResponse = await fetch(`${baseUrl}/api/moon-v3/admin/settings/raven/vpn`, {
+    method: "PUT",
+    headers,
+    body: JSON.stringify({
+      enabled: false,
+      region: "us_california",
+      piaUsername: "captain",
+      piaPassword: ""
+    })
+  });
+  const savedVpnWithoutPassword = await savedVpnWithoutPasswordResponse.json();
+  assert.equal(savedVpnWithoutPasswordResponse.status, 200);
+  assert.equal(savedVpnWithoutPassword.enabled, false);
+  assert.equal(savedVpnWithoutPassword.region, "us_california");
+  assert.equal(savedVpnWithoutPassword.passwordConfigured, true);
+
+  const personalToastResponse = await fetch(`${baseUrl}/api/moon-v3/admin/settings/toasts/personal`, {
+    method: "PUT",
+    headers,
+    body: JSON.stringify({
+      actionToasts: true,
+      jobToasts: true,
+      liveEventToasts: false,
+      failuresOnly: false,
+      severities: {info: true, success: true, warning: true, error: true}
+    })
+  });
+  const personalToastPayload = await personalToastResponse.json();
+  assert.equal(personalToastResponse.status, 200);
+  assert.equal(personalToastPayload.effective.liveEventToasts, false);
+  assert.equal(personalToastPayload.personal.liveEventToasts, false);
+
+  const globalToastResponse = await fetch(`${baseUrl}/api/moon-v3/admin/settings/toasts/global`, {
+    method: "PUT",
+    headers,
+    body: JSON.stringify({
+      actionToasts: true,
+      jobToasts: true,
+      liveEventToasts: true,
+      failuresOnly: true,
+      severities: {info: true, success: true, warning: true, error: true}
+    })
+  });
+  const globalToastPayload = await globalToastResponse.json();
+  assert.equal(globalToastResponse.status, 200);
+  assert.equal(globalToastPayload.global.failuresOnly, true);
+
+  const metadataSaveResponse = await fetch(`${baseUrl}/api/moon-v3/admin/settings/raven/metadata`, {
+    method: "PUT",
+    headers,
+    body: JSON.stringify({
+      providers: [
+        {id: "mangadex", enabled: false, priority: 50},
+        {id: "animeplanet", enabled: true, priority: 5}
+      ]
+    })
+  });
+  const metadataSave = await metadataSaveResponse.json();
+  assert.equal(metadataSaveResponse.status, 200);
+  assert.equal(metadataSave.providers.find((provider) => provider.id === "mangadex").enabled, false);
+  assert.equal(metadataSave.providers.find((provider) => provider.id === "animeplanet").priority, 5);
+
+  const downloadProviderSaveResponse = await fetch(`${baseUrl}/api/moon-v3/admin/settings/raven/download-providers`, {
+    method: "PUT",
+    headers,
+    body: JSON.stringify({
+      providers: [
+        {id: "weebcentral", enabled: true, priority: 30},
+        {id: "mangadex", enabled: false, priority: 5}
+      ]
+    })
+  });
+  const downloadProviderSave = await downloadProviderSaveResponse.json();
+  assert.equal(downloadProviderSaveResponse.status, 200);
+  assert.equal(downloadProviderSave.providers.find((provider) => provider.id === "mangadex").enabled, false);
+  assert.equal(downloadProviderSave.providers.find((provider) => provider.id === "mangadex").priority, 5);
+
+  const discordBasicsResponse = await fetch(`${baseUrl}/api/moon-v3/admin/settings/portal/discord`, {
+    method: "PUT",
+    headers,
+    body: JSON.stringify({
+      guildId: "guild-1",
+      superuserId: "owner-1",
+      onboarding: {
+        channelId: "welcome-1",
+        template: "Welcome {user_mention}"
+      }
+    })
+  });
+  const discordBasics = await discordBasicsResponse.json();
+  assert.equal(discordBasicsResponse.status, 200);
+  assert.equal(discordBasics.guildId, "guild-1");
+  assert.equal(discordBasics.onboarding.channelId, "welcome-1");
+  assert.equal(discordBasics.commands.request.enabled, true);
+
+  const clearedDiscordBasicsResponse = await fetch(`${baseUrl}/api/moon-v3/admin/settings/portal/discord`, {
+    method: "PUT",
+    headers,
+    body: JSON.stringify({
+      guildId: "",
+      superuserId: "",
+      onboarding: {
+        channelId: ""
+      }
+    })
+  });
+  const clearedDiscordBasics = await clearedDiscordBasicsResponse.json();
+  assert.equal(clearedDiscordBasicsResponse.status, 200);
+  assert.equal(clearedDiscordBasics.guildId, "");
+  assert.equal(clearedDiscordBasics.superuserId, "");
+  assert.equal(clearedDiscordBasics.onboarding.channelId, "");
+  assert.equal(clearedDiscordBasics.onboarding.template, "Welcome {user_mention}");
+
+  const settingsAfterSaves = await fetch(`${baseUrl}/api/moon-v3/admin/settings`, {
+    headers: {
+      "Authorization": `Bearer ${ownerClaim.token}`
+    }
+  }).then((response) => response.json());
+  assert.equal(settingsAfterSaves.branding.siteName, "Pax-Kun");
+  assert.equal(settingsAfterSaves.ravenVpn.region, "us_california");
+  assert.equal(settingsAfterSaves.ravenVpn.passwordConfigured, true);
+  assert.equal(settingsAfterSaves.toastSettings.personal.liveEventToasts, false);
+  assert.equal(settingsAfterSaves.toastSettings.global.failuresOnly, true);
+  assert.equal(settingsAfterSaves.metadataProviders.providers.find((provider) => provider.id === "mangadex").enabled, false);
+  assert.equal(settingsAfterSaves.downloadProviders.providers.find((provider) => provider.id === "mangadex").enabled, false);
+  assert.equal(settingsAfterSaves.discord.guildId, "");
+
+  const databaseOverviewResponse = await fetch(`${baseUrl}/api/moon-v3/admin/settings/database`, {
+    headers
+  });
+  assert.equal(databaseOverviewResponse.status, 200);
+  assert.equal((await databaseOverviewResponse.json()).tables.some((table) => table.name === "settings"), true);
+
+  const databaseTableResponse = await fetch(`${baseUrl}/api/moon-v3/admin/settings/database/tables/settings?q=moon.branding`, {
+    headers
+  });
+  assert.equal(databaseTableResponse.status, 200);
+  assert.equal((await databaseTableResponse.json()).rows.some((row) => row.setting_key === "moon.branding"), true);
+
+  const databaseSettingUpdate = await fetch(`${baseUrl}/api/moon-v3/admin/settings/database/tables/settings/rows/moon.admin.toasts.global`, {
+    method: "PUT",
+    headers,
+    body: JSON.stringify({value: {actionToasts: false}})
+  });
+  assert.equal(databaseSettingUpdate.status, 200);
+
+  installDiscordFetchStub({
+    id: "reader-db-denied",
+    username: "Reader",
+    global_name: "Reader",
+    avatar: null
+  });
+  const readerClaim = await signInViaDiscord(baseUrl);
+  const deniedDatabaseResponse = await fetch(`${baseUrl}/api/moon-v3/admin/settings/database`, {
+    headers: {
+      "Authorization": `Bearer ${readerClaim.token}`
+    }
+  });
+  assert.equal(deniedDatabaseResponse.status, 403);
 
   const moonLibrary = await fetch(`${baseUrl}/api/moon-v3/user/library`, {
     headers: {
@@ -1643,6 +2309,126 @@ test("sage exposes group-based admin users access and domain-scoped event reads"
     });
     assert.equal(forbiddenEvents.status, 403);
 
+  } finally {
+    await closeServer(sageServer);
+    await closeServer(vaultServer);
+    await closeServer(dependencyStub.server);
+  }
+});
+
+test("sage authenticates system and user API keys with scoped access", async () => {
+  const {app: vaultApp} = await createVaultApp();
+  const vaultServer = vaultApp.listen(0);
+  const vaultPort = vaultServer.address().port;
+
+  const dependencyStub = await createDependencyStub({libraryTitles: []});
+  dependencyStub.server.listen(0);
+  const dependencyPort = dependencyStub.server.address().port;
+
+  process.env.SCRIPTARR_VAULT_BASE_URL = `http://127.0.0.1:${vaultPort}`;
+  process.env.SCRIPTARR_WARDEN_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_PORTAL_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_ORACLE_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_RAVEN_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_DISCORD_CLIENT_ID = "discord-client-id";
+  process.env.SCRIPTARR_DISCORD_CLIENT_SECRET = "discord-client-secret";
+
+  const {app: sageApp} = await createSageApp();
+  const sageServer = sageApp.listen(0);
+  const sagePort = sageServer.address().port;
+  const baseUrl = `http://127.0.0.1:${sagePort}`;
+
+  try {
+    installDiscordFetchStub({
+      id: "owner-1",
+      username: "Owner",
+      global_name: "Owner",
+      avatar: null
+    });
+    const ownerClaim = await signInViaDiscord(baseUrl);
+    const ownerHeaders = {
+      "Authorization": `Bearer ${ownerClaim.token}`,
+      "Content-Type": "application/json"
+    };
+
+    const enabledSettings = await fetch(`${baseUrl}/api/moon-v3/admin/system/api/settings`, {
+      method: "PUT",
+      headers: ownerHeaders,
+      body: JSON.stringify({enabled: true})
+    });
+    assert.equal(enabledSettings.status, 200);
+
+    const systemKeyResponse = await fetch(`${baseUrl}/api/moon-v3/admin/system/api/keys`, {
+      method: "POST",
+      headers: ownerHeaders,
+      body: JSON.stringify({
+        name: "Status Bot",
+        groupIds: ["admin"]
+      })
+    });
+    assert.equal(systemKeyResponse.status, 201);
+    const systemKey = await systemKeyResponse.json();
+    assert.ok(systemKey.secret);
+    assert.equal(systemKey.apiKey.keyHash, undefined);
+
+    const systemStatus = await fetch(`${baseUrl}/api/moon-v3/admin/system/status`, {
+      headers: {"X-Scriptarr-Api-Key": systemKey.secret}
+    });
+    assert.equal(systemStatus.status, 200);
+
+    const emptyKey = await fetch(`${baseUrl}/api/moon-v3/admin/system/api/keys`, {
+      method: "POST",
+      headers: ownerHeaders,
+      body: JSON.stringify({
+        name: "No Grants",
+        groupIds: []
+      })
+    }).then((response) => response.json());
+    const deniedStatus = await fetch(`${baseUrl}/api/moon-v3/admin/system/status`, {
+      headers: {"X-Scriptarr-Api-Key": emptyKey.secret}
+    });
+    assert.equal(deniedStatus.status, 403);
+
+    const userKeyResponse = await fetch(`${baseUrl}/api/moon-v3/user/api-keys`, {
+      method: "POST",
+      headers: ownerHeaders,
+      body: JSON.stringify({name: "Reader Sync"})
+    });
+    assert.equal(userKeyResponse.status, 201);
+    const userKey = await userKeyResponse.json();
+
+    const profileResponse = await fetch(`${baseUrl}/api/moon-v3/user/profile`, {
+      headers: {"X-Scriptarr-Api-Key": userKey.secret}
+    });
+    assert.equal(profileResponse.status, 200);
+    const profile = await profileResponse.json();
+    assert.equal(profile.user.discordUserId, "owner-1");
+
+    const userKeyAdminResponse = await fetch(`${baseUrl}/api/moon-v3/admin/system/status`, {
+      headers: {"X-Scriptarr-Api-Key": userKey.secret}
+    });
+    assert.equal(userKeyAdminResponse.status, 403);
+
+    const publicSearch = await fetch(`${baseUrl}/api/public/v1/search?q=dandadan`).then((response) => response.json());
+    const publicCreate = await fetch(`${baseUrl}/api/public/v1/requests`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Scriptarr-Api-Key": userKey.secret
+      },
+      body: JSON.stringify({
+        selectionToken: publicSearch.results[0].selectionToken
+      })
+    });
+    assert.equal(publicCreate.status, 202);
+
+    const requests = await fetch(`http://127.0.0.1:${vaultPort}/api/service/requests`, {
+      headers: {
+        "Authorization": "Bearer sage-dev-token"
+      }
+    }).then((response) => response.json());
+    assert.equal(requests[0].requestedBy, "owner-1");
+    assert.equal(requests[0].details.apiKeyKind, "user");
   } finally {
     await closeServer(sageServer);
     await closeServer(vaultServer);
@@ -2581,6 +3367,43 @@ test("sage brokers service-to-service routes with internal service auth", async 
   assert.equal(rejectedBulkQueue.status, 400);
   assert.equal(dependencyStub.calls.bulkQueue, 1);
 
+  const bulkRun = await fetch(`${baseUrl}/api/internal/portal/downloads/bulk-runs`, {
+    method: "POST",
+    headers: portalHeaders,
+    body: JSON.stringify({
+      providerId: "weebcentral",
+      type: "all",
+      nsfw: false,
+      titlePrefix: "all",
+      requestedBy: "owner-1"
+    })
+  }).then((response) => response.json());
+  assert.equal(bulkRun.runId, "bulk-run-1");
+  assert.equal(bulkRun.status, "paused");
+  assert.equal(dependencyStub.calls.bulkRunCreate, 1);
+
+  const bulkRunStatus = await fetch(`${baseUrl}/api/internal/portal/downloads/bulk-runs/bulk-run-1`, {
+    headers: portalHeaders
+  }).then((response) => response.json());
+  assert.equal(bulkRunStatus.message, "Waiting for owner continuation.");
+  assert.equal(dependencyStub.calls.bulkRunStatus, 1);
+
+  const bulkRunContinue = await fetch(`${baseUrl}/api/internal/portal/downloads/bulk-runs/bulk-run-1/continue`, {
+    method: "POST",
+    headers: portalHeaders,
+    body: JSON.stringify({requestedBy: "owner-1"})
+  }).then((response) => response.json());
+  assert.equal(bulkRunContinue.message, "Next batch queued.");
+  assert.equal(dependencyStub.calls.bulkRunContinue, 1);
+
+  const bulkRunCancel = await fetch(`${baseUrl}/api/internal/portal/downloads/bulk-runs/bulk-run-1/cancel`, {
+    method: "POST",
+    headers: portalHeaders,
+    body: JSON.stringify({requestedBy: "owner-1"})
+  }).then((response) => response.json());
+  assert.equal(bulkRunCancel.status, "cancelled");
+  assert.equal(dependencyStub.calls.bulkRunCancel, 1);
+
   const oracleStatus = await fetch(`${baseUrl}/api/internal/warden/bootstrap`, {
     headers: oracleHeaders
   }).then((response) => response.json());
@@ -2662,6 +3485,20 @@ test("sage brokers service-to-service routes with internal service auth", async 
     event.domain === "system"
     && event.eventType === "job-created"
     && event.targetId === "raven-job-1"
+  ), true);
+
+  const removedRavenTask = await fetch(`${baseUrl}/api/internal/vault/raven/download-tasks/task-broker-1`, {
+    method: "DELETE",
+    headers: ravenHeaders
+  }).then((response) => response.json());
+  assert.equal(removedRavenTask.removed, 1);
+
+  const removalEvents = await fetch(`http://127.0.0.1:${vaultPort}/api/service/events?domain=activity`, {
+    headers: vaultHeaders
+  }).then((response) => response.json());
+  assert.equal(removalEvents.some((event) =>
+    event.eventType === "download-task-removed"
+    && event.targetId === "task-broker-1"
   ), true);
 
   const forbidden = await fetch(`${baseUrl}/api/internal/jobs/raven-job-1`, {

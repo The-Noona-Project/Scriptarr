@@ -4,6 +4,7 @@
 import {resolveDiscordCallbackUrl} from "../config/servicePlan.mjs";
 import {resolveWardenRuntimeSnapshot, resolveWardenServerConfig, sanitizeWardenRuntimeSnapshot} from "../config/runtimeConfig.mjs";
 import {createLogger} from "../logging/createLogger.mjs";
+import {createLogTailRuntime} from "./logTailRuntime.mjs";
 import {createLocalAiRuntime} from "./localAiRuntime.mjs";
 import {createManagedStackRuntime} from "./managedStackRuntime.mjs";
 import {createUpdateRuntime} from "./updateRuntime.mjs";
@@ -34,23 +35,27 @@ import {createUpdateRuntime} from "./updateRuntime.mjs";
  *   getLocalAiStatus: () => Record<string, unknown>,
  *   refreshLocalAiStatus: () => Promise<Record<string, unknown>>,
  *   configureLocalAi: (payload?: {profileKey?: string, imageMode?: string, customImage?: string}) => Promise<Record<string, unknown>>,
- *   installLocalAi: () => Promise<Record<string, unknown>>,
- *   startLocalAi: () => Promise<Record<string, unknown>>,
+ *   installLocalAi: (actor?: Record<string, unknown>) => Promise<Record<string, unknown>>,
+ *   startLocalAi: (actor?: Record<string, unknown>) => Promise<Record<string, unknown>>,
+ *   removeLocalAi: (actor?: Record<string, unknown>) => Promise<Record<string, unknown>>,
  *   getUpdates: () => Promise<Record<string, unknown>>,
  *   checkUpdates: (requestedServices?: string[]) => Promise<Record<string, unknown>>,
  *   installUpdates: (requestedServices?: string[]) => Promise<Record<string, unknown>>,
+ *   tailLogs: (filters?: Record<string, unknown>) => Promise<Record<string, unknown>>,
  *   getDiscordCallbackUrl: () => string
  * }}
  */
 export const createWardenRuntime = ({
   env = process.env,
   loggerFactory = createLogger,
+  logTailRuntimeFactory = createLogTailRuntime,
   localAiRuntimeFactory = createLocalAiRuntime,
   managedStackRuntimeFactory = createManagedStackRuntime,
   updateRuntimeFactory = createUpdateRuntime
 } = {}) => {
   const config = resolveWardenServerConfig({env});
   const logger = loggerFactory("WARDEN", {env});
+  const logTails = logTailRuntimeFactory({env});
   const localAi = localAiRuntimeFactory({
     env,
     logger: loggerFactory("WARDEN_LOCALAI", {env})
@@ -130,11 +135,13 @@ export const createWardenRuntime = ({
     getLocalAiStatus: () => localAi.getStatus(),
     refreshLocalAiStatus: () => localAi.refreshStatus(),
     configureLocalAi: (payload) => localAi.configure(payload),
-    installLocalAi: () => localAi.install(),
-    startLocalAi: () => localAi.start(),
+    installLocalAi: (actor) => localAi.install(actor),
+    startLocalAi: (actor) => localAi.start(actor),
+    removeLocalAi: (actor) => localAi.remove(actor),
     getUpdates: () => updates.getStatus(),
     checkUpdates: (requestedServices) => updates.checkForUpdates(requestedServices),
     installUpdates: (requestedServices) => updates.installUpdates(requestedServices),
+    tailLogs: (filters) => logTails.tailLogs(filters),
     getDiscordCallbackUrl: () => resolveDiscordCallbackUrl({env})
   };
 };

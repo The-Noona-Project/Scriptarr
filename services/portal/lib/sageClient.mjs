@@ -136,6 +136,44 @@ export const createSageClient = (config) => {
         timeoutMs: Number.isInteger(config.bulkQueueTimeoutMs) ? config.bulkQueueTimeoutMs : 900000
       });
     },
+    createBulkRun(payload) {
+      return requestJson(config.sageBaseUrl, jsonHeaders, "/api/internal/portal/downloads/bulk-runs", {
+        method: "POST",
+        body: payload,
+        retries: 2,
+        retryDelayMs: 250,
+        timeoutMs: Number.isInteger(config.bulkQueueTimeoutMs) ? config.bulkQueueTimeoutMs : 900000
+      });
+    },
+    getBulkRunStatus(runId) {
+      return requestJson(
+        config.sageBaseUrl,
+        authHeader,
+        `/api/internal/portal/downloads/bulk-runs/${encodeURIComponent(String(runId || "").trim())}`
+      );
+    },
+    continueBulkRun(runId, payload = {}) {
+      return requestJson(
+        config.sageBaseUrl,
+        jsonHeaders,
+        `/api/internal/portal/downloads/bulk-runs/${encodeURIComponent(String(runId || "").trim())}/continue`,
+        {
+          method: "POST",
+          body: payload
+        }
+      );
+    },
+    cancelBulkRun(runId, payload = {}) {
+      return requestJson(
+        config.sageBaseUrl,
+        jsonHeaders,
+        `/api/internal/portal/downloads/bulk-runs/${encodeURIComponent(String(runId || "").trim())}/cancel`,
+        {
+          method: "POST",
+          body: payload
+        }
+      );
+    },
     listFollowNotifications() {
       return requestJson(config.sageBaseUrl, authHeader, "/api/internal/portal/notifications/follows");
     },
@@ -158,6 +196,20 @@ export const createSageClient = (config) => {
         config.sageBaseUrl,
         jsonHeaders,
         `/api/internal/portal/notifications/requests/${encodeURIComponent(requestId)}/ack`,
+        {
+          method: "POST",
+          body: {}
+        }
+      );
+    },
+    listSystemNotifications() {
+      return requestJson(config.sageBaseUrl, authHeader, "/api/internal/portal/notifications/system");
+    },
+    acknowledgeSystemNotification(notificationId) {
+      return requestJson(
+        config.sageBaseUrl,
+        jsonHeaders,
+        `/api/internal/portal/notifications/system/${encodeURIComponent(notificationId)}/ack`,
         {
           method: "POST",
           body: {}

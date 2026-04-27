@@ -32,6 +32,18 @@ const normalizeBoolean = (value) => {
   return null;
 };
 
+const normalizeTitleGroup = (value) => {
+  const normalized = normalizeString(value).toLowerCase();
+  if (normalized === "all") {
+    return "all";
+  }
+  return /^[a-z]$/.test(normalized) ? normalized : "";
+};
+
+const isMegaDownloadAllFilters = (filters = {}) =>
+  normalizeString(filters.type).toLowerCase() === "all"
+  || normalizeString(filters.titlePrefix).toLowerCase() === "all";
+
 const parseDownloadAllTokens = (raw) => {
   const parsed = new Map();
   const invalidSegments = [];
@@ -76,15 +88,15 @@ export const parseDownloadAllCommand = (content) => {
 
   const type = DOWNLOAD_ALL_TYPE_ALIASES.get(normalizeString(parsed.get("type")).toLowerCase()) ?? null;
   if (!type) {
-    errors.push("type must be one of: manga, manhwa, manhua, oel.");
+    errors.push("type must be one of: manga, manhwa, manhua, oel, all.");
   }
   const nsfw = normalizeBoolean(parsed.get("nsfw"));
   if (nsfw == null) {
     errors.push("nsfw must be true or false.");
   }
-  const titlePrefix = normalizeString(parsed.get("titlegroup"));
+  const titlePrefix = normalizeTitleGroup(parsed.get("titlegroup"));
   if (!titlePrefix) {
-    errors.push("titlegroup is required.");
+    errors.push("titlegroup must be one letter a-z or all.");
   }
 
   return {
@@ -98,11 +110,13 @@ export const parseDownloadAllCommand = (content) => {
 export const formatDownloadAllUsage = (errors = []) => {
   const lines = [
     "Use `/downloadall run type:manga nsfw:false titlegroup:a` in a DM with Noona.",
+    "Use `type:all` or `titlegroup:all` for an async mega run that pauses after each batch.",
+    "Manage mega runs with `/downloadall status runid:<id>`, `/downloadall continue runid:<id>`, or `/downloadall cancel runid:<id>`.",
     "Use `/downloadall help` to show this guide again.",
     "Legacy fallback: `downloadall type:manga nsfw:false titlegroup:a`.",
-    "Supported `type` values: manga, manhwa, manhua, oel.",
+    "Supported `type` values: manga, manhwa, manhua, oel, all.",
     "`nsfw` accepts true/false, yes/no, or 1/0.",
-    "`titlegroup` is the title prefix Scriptarr should match."
+    "`titlegroup` is the title prefix Scriptarr should match: a-z or all."
   ];
   if (errors.length > 0) {
     lines.push("", `Problems: ${errors.join(" ")}`);
@@ -146,6 +160,34 @@ export const formatBulkQueueSummary = (result = {}) => {
     formatTitleSection("Skipped ambiguous metadata titles (first 10)", result?.skippedAmbiguousMetadataTitles),
     formatTitleSection("Failed titles (first 10)", result?.failedTitles)
   ].filter(Boolean).join("\n\n");
+};
+
+export const formatBulkRunSummary = (result = {}) => {
+  const filters = result?.filters && typeof result.filters === "object" ? result.filters : {};
+  const counts = result?.counts && typeof result.counts === "object" ? result.counts : {};
+  const runId = normalizeString(result?.runId || result?.id);
+  const currentBatch = result?.currentBatch && typeof result.currentBatch === "object" ? result.currentBatch : null;
+  const lines = [
+    "Scriptarr downloadall mega run updated.",
+    `Run ID: ${runId || "unknown"}`,
+    `Status: ${normalizeString(result?.status) || "unknown"}`,
+    `Message: ${normalizeString(result?.message) || "No summary returned."}`,
+    `Filters: provider=weebcentral, type=${normalizeString(filters.type) || "unknown"}, nsfw=${String(filters.nsfw)}, titlegroup=${normalizeString(filters.titlePrefix || filters.titlegroup) || "unknown"}`,
+    `Batches completed: ${Number.parseInt(String(counts.completedBatches ?? result?.completedBatches ?? 0), 10) || 0}`,
+    `Batches remaining: ${Number.parseInt(String(counts.remainingBatches ?? result?.remainingBatches ?? 0), 10) || 0}`,
+    `Queued: ${Number.parseInt(String(counts.queued ?? result?.queuedCount ?? 0), 10) || 0}`,
+    `Skipped: ${Number.parseInt(String(counts.skipped ?? result?.skippedCount ?? 0), 10) || 0}`,
+    `Failed: ${Number.parseInt(String(counts.failed ?? result?.failedCount ?? 0), 10) || 0}`
+  ];
+  if (currentBatch) {
+    lines.push(
+      `Current batch: type=${normalizeString(currentBatch.type) || "unknown"}, titlegroup=${normalizeString(currentBatch.titlePrefix || currentBatch.titlegroup) || "unknown"}`
+    );
+  }
+  if (normalizeString(result?.status).toLowerCase() === "paused") {
+    lines.push(`Next step: use /downloadall continue runid:${runId || "<id>"} when you want the next batch.`);
+  }
+  return lines.join("\n");
 };
 
 const resolveBulkQueueFailure = (result) => {
@@ -236,11 +278,14 @@ export const executeDownloadAll = async ({
   });
 
   try {
-    const result = await sage.bulkQueueDownload({
+    const payload = {
       providerId: "weebcentral",
       ...filters,
       requestedBy: normalizeString(requestedBy)
-    });
+    };
+    const result = isMegaDownloadAllFilters(filters)
+      ? await sage.createBulkRun(payload)
+      : await sage.bulkQueueDownload(payload);
     const failure = resolveBulkQueueFailure(result);
     if (failure) {
       throw new Error(failure);
@@ -275,9 +320,45 @@ export const executeDownloadAll = async ({
   }
 };
 
+export const executeDownloadAllRunAction = async ({
+  getSettings,
+  sage,
+  requestedBy,
+  runId,
+  action = "status"
+} = {}) => {
+  const settings = typeof getSettings === "function" ? (getSettings() || {}) : {};
+  const access = resolveDownloadAllAccess({
+    settings,
+    requestedBy,
+    requireDm: false,
+    isDirectMessage: true
+  });
+  if (!access.allowed) {
+    const error = new Error(access.message);
+    error.code = access.reason;
+    throw error;
+  }
+
+  const normalizedRunId = normalizeString(runId);
+  if (!normalizedRunId) {
+    throw new Error("runid is required.");
+  }
+
+  if (action === "continue" || action === "resume") {
+    return sage.continueBulkRun(normalizedRunId, {requestedBy: normalizeString(requestedBy)});
+  }
+  if (action === "cancel") {
+    return sage.cancelBulkRun(normalizedRunId, {requestedBy: normalizeString(requestedBy)});
+  }
+  return sage.getBulkRunStatus(normalizedRunId);
+};
+
 export default {
   executeDownloadAll,
+  executeDownloadAllRunAction,
   formatBulkQueueSummary,
+  formatBulkRunSummary,
   formatDownloadAllUsage,
   isDownloadAllHelpRequest,
   parseDownloadAllCommand,

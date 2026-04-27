@@ -19,11 +19,25 @@ const createDockerOps = (overrides = {}) => ({
   ensureDockerNetwork: async () => {},
   imageExists: async () => false,
   pullDockerImage: async () => {},
+  removeDockerImage: async () => {},
   removeDockerContainer: async () => {},
   runDetachedContainer: async () => {},
   containerExists: async () => false,
   ...overrides
 });
+
+const waitForStatus = async (runtime, predicate, timeoutMs = 500) => {
+  const deadline = Date.now() + timeoutMs;
+  let status = runtime.getStatus();
+  while (Date.now() < deadline) {
+    status = runtime.getStatus();
+    if (predicate(status)) {
+      return status;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  assert.fail(`Timed out waiting for LocalAI status. Last status: ${JSON.stringify(status)}`);
+};
 
 test("localai runtime loads the last Sage-synced selection from runtime storage on initialize", async () => {
   const runtimeDir = await fs.mkdtemp(path.join(os.tmpdir(), "scriptarr-warden-localai-"));
@@ -117,10 +131,14 @@ test("localai runtime install pulls the Sage-selected custom image", async () =>
     runtimeDir
   });
 
-  const status = await runtime.install();
+  const initialStatus = await runtime.install({discordUserId: "owner-1", username: "Owner"});
+  assert.equal(initialStatus.phase, "installing");
+  assert.equal(initialStatus.job.payload.requestedByDiscordId, "owner-1");
+  const status = await waitForStatus(runtime, (current) => current.job?.status === "completed");
   assert.equal(pulledImage, "localai/localai:nightly-aio");
   assert.equal(status.installed, true);
   assert.equal(status.ready, false);
+  assert.equal(status.job.progressPercent, 100);
 });
 
 test("localai runtime start mounts persistent folders, applies hardware flags, and accepts the models fallback probe", async () => {
@@ -166,7 +184,9 @@ test("localai runtime start mounts persistent folders, applies hardware flags, a
     readinessIntervalMs: 1
   });
 
-  const status = await runtime.start();
+  const initialStatus = await runtime.start();
+  assert.equal(initialStatus.phase, "starting");
+  const status = await waitForStatus(runtime, (current) => current.job?.status === "completed");
   assert.equal(status.running, true);
   assert.equal(status.ready, true);
   assert.equal(status.message, "LocalAI container started and is ready.");
@@ -214,9 +234,55 @@ test("localai runtime start fails when the container never becomes ready", async
     readinessIntervalMs: 1
   });
 
-  const status = await runtime.start();
+  const initialStatus = await runtime.start();
+  assert.equal(initialStatus.phase, "starting");
+  const status = await waitForStatus(runtime, (current) => current.job?.status === "failed");
   assert.equal(status.running, true);
   assert.equal(status.ready, false);
-  assert.equal(status.message, "LocalAI container failed to become ready.");
+  assert.equal(status.message, "LocalAI start failed.");
   assert.match(status.lastError, /Timed out waiting for LocalAI readiness/);
+});
+
+test("localai runtime remove deletes the container and selected image", async () => {
+  const removed = [];
+  const runtimeDir = await fs.mkdtemp(path.join(os.tmpdir(), "scriptarr-warden-localai-"));
+  const runtime = createLocalAiRuntime({
+    env: {
+      SCRIPTARR_DATA_ROOT: runtimeDir
+    },
+    logger: createLogger(),
+    brokerClient: {
+      async getSetting() {
+        return {
+          value: {
+            localAiProfileKey: "cpu",
+            localAiImageMode: "preset",
+            localAiCustomImage: ""
+          }
+        };
+      }
+    },
+    dockerOps: createDockerOps({
+      imageExists: async (image) => image === "localai/localai:latest-aio-cpu" && !removed.includes(`image:${image}`),
+      containerExists: async (containerName) => containerName === "scriptarr-localai" && !removed.includes(`container:${containerName}`),
+      removeDockerContainer: async (containerName) => {
+        removed.push(`container:${containerName}`);
+      },
+      removeDockerImage: async (image) => {
+        removed.push(`image:${image}`);
+      }
+    }),
+    runtimeDir
+  });
+
+  const initialStatus = await runtime.remove({discordUserId: "owner-1"});
+  assert.equal(initialStatus.phase, "removing");
+  const status = await waitForStatus(runtime, (current) => current.job?.status === "completed");
+  assert.deepEqual(removed, [
+    "container:scriptarr-localai",
+    "image:localai/localai:latest-aio-cpu"
+  ]);
+  assert.equal(status.installed, false);
+  assert.equal(status.running, false);
+  assert.equal(status.ready, false);
 });

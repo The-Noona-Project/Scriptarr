@@ -116,6 +116,12 @@ public final class FakeRavenBrokerClient implements RavenBrokerClient {
     }
 
     @Override
+    public JsonNode deleteDownloadTask(String taskId) {
+        boolean removed = downloadTasks.remove(taskId) != null;
+        return objectMapper.valueToTree(Map.of("removed", removed ? 1 : 0));
+    }
+
+    @Override
     public JsonNode getMetadataMatch(String titleId) {
         return metadataMatches.getOrDefault(titleId, objectMapper.valueToTree(Map.of("error", "Metadata match not found.")));
     }

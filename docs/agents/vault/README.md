@@ -16,8 +16,19 @@
 - Deleting a user from Vault-backed access should clear sessions plus local group assignments, but preserve requests,
   progress, follows, bookmarks, and durable events so a future Discord sign-in can recreate that user cleanly.
 - Durable events should stay immutable, summary-oriented, and retention-managed instead of storing large raw snapshots.
+- Durable event queries should support brokered operator filters such as domain, severity, event type, actor, target,
+  text search, cursor, and limit so Moon admin pages do not fake filtering over incomplete payloads.
 - Vault now also owns `media_title_state` plus `media_chapter_reads`. Treat those records as the durable bookshelf and
   completion source of truth; `media_progress` stays focused on current reading position only.
+- Vault now also owns API key records for Moon/Sage. Store only key hashes and metadata, preserve API keys through
+  content reset, and expose resolve/list/update/revoke only through service-authenticated Vault routes for Sage.
+- Vault now exposes a service-only database explorer contract for Sage. Keep overview and table browsing allowlisted,
+  paginated, and redacted for tokens, secrets, sessions, API key hashes, passwords, and similar values. Do not add an
+  arbitrary SQL endpoint.
+- The DB explorer edit path is intentionally limited to validated JSON settings rows. Users, sessions, secrets,
+  permission groups, API keys, and durable events stay read-only from browser-admin flows.
+- Moon branding, uploaded WebP logo variants, and admin toast preferences are normal settings records. Content reset
+  must preserve them with other settings.
 - Vault's content reset path must stay content-only. It may clear requests, request work locks, progress, read state,
   follows, bookmarks, Raven catalog rows, Raven download tasks, and Raven-owned jobs, but it must not delete users,
-  permission groups, sessions, settings, secrets, or durable events.
+  permission groups, API keys, sessions, settings, secrets, or durable events.

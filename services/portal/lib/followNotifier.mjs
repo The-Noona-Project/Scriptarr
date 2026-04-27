@@ -71,6 +71,30 @@ const resolveNotificationLink = (notification, kind, publicBaseUrl) => {
 };
 
 const buildDirectMessagePayload = (notification, kind, publicBaseUrl, requestCommand) => {
+  if (kind === "system") {
+    const titleName = normalizeString(notification?.titleName, "Scriptarr system task");
+    const message = normalizeString(notification?.message, `${titleName} changed state.`);
+    const linkUrl = resolveNotificationLink(notification, kind, publicBaseUrl);
+    const error = normalizeString(notification?.error);
+    const image = normalizeString(notification?.image);
+    const errorLine = error ? `\nError: ${error}` : "";
+    const imageLine = image ? `\nImage: ${image}` : "";
+    const linkLine = linkUrl ? `\nOpen in Scriptarr: ${linkUrl}` : "";
+
+    return {
+      content: `${message}${errorLine}${imageLine}${linkLine}`,
+      embeds: [{
+        title: titleName,
+        description: message,
+        url: linkUrl || undefined,
+        fields: [
+          image ? {name: "Image", value: image} : null,
+          error ? {name: "Error", value: error} : null
+        ].filter(Boolean)
+      }]
+    };
+  }
+
   const titleName = normalizeString(notification?.titleName || notification?.title || "your Scriptarr title");
   const titleUrl = resolveNotificationLink(notification, kind, publicBaseUrl);
   const coverUrl = normalizeString(notification?.coverUrl);
@@ -218,6 +242,14 @@ export const createFollowNotifier = ({
         logger,
         publicBaseUrl,
         requestCommand
+      });
+      await deliverNotifications({
+        list: () => sage?.listSystemNotifications?.(),
+        acknowledge: (id) => sage?.acknowledgeSystemNotification?.(id),
+        kind: "system",
+        discord,
+        logger,
+        publicBaseUrl
       });
     } catch (error) {
       logger?.error?.("Portal notifier poll failed.", {error});

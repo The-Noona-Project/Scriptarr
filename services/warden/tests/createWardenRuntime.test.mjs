@@ -56,6 +56,9 @@ test("warden initialize refreshes the LocalAI runtime after stack reconciliation
       },
       async start() {
         return {};
+      },
+      async remove() {
+        return {};
       }
     }),
     managedStackRuntimeFactory: () => ({

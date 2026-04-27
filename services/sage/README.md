@@ -5,8 +5,9 @@ Sage is Scriptarr's Moon-facing auth and orchestration broker.
 Sage is also the only supported first-party internal HTTP broker. Moon talks to Sage, and Portal, Oracle, Raven, or
 Warden should use Sage's internal broker routes instead of reaching across the stack directly.
 
-It persists Moon admin Raven and Oracle settings through Vault, brokers durable job and task state, and mediates the
-browser-safe handoff to Warden for manual LocalAI or managed-service update actions.
+It persists Moon admin Raven and Oracle settings through Vault, brokers durable job and task state, mediates the
+browser-safe handoff to Warden for manual LocalAI or managed-service update actions, and exposes system notification
+queues for Portal-owned Discord DMs.
 Sage now also owns the shared metadata-first request intake flow. Moon user requests, Discord `/request`, and Moon
 admin add-title all search through Sage, which asks Raven for metadata and source availability, persists the chosen
 metadata snapshot in Vault, and later queues the exact saved Raven target during moderation or admin immediate-add.
@@ -26,6 +27,22 @@ weaker stays in manual admin review.
 Sage now also brokers durable user read-state and tag-preference routes for Moon. Moon home, title, and reader payloads
 use those brokered title or chapter reads plus explicit tag likes or dislikes to build the active bookshelf and
 personalized tag shelves instead of relying only on progress rows.
+Sage now also exposes a dedicated `/api/moon-v3/user/profile` aggregate payload so Moon's `/profile` route can render
+tabbed overview, stats, and preferences surfaces from one trusted response instead of fanning out across several
+browser calls.
+Sage now also carries a sanitized Moon `returnTo` path through Discord OAuth `state` so Moon can return the browser to
+the page where login started instead of always landing in admin or one fixed callback destination.
+For Moon admin, Sage now brokers `/api/moon-v3/admin/activity/queue` as a live queue-board payload plus task action
+routes for cancel, retry, reprioritize, and move up/down. Those routes stay Moon-safe, same-origin, and event-backed
+so the admin queue can re-fetch on SSE updates instead of polling blindly.
+That queue payload now stays recovery-focused: `needsAttention` only contains Raven recovery work with a remove
+affordance when a task is safe to clear, queued cards do not carry ETA, and running cards carry live download speed
+plus an active ETA when Raven gives Sage credible progress data. Sage also exposes `retry-all` and per-task remove
+actions for the recovery set. Warden service update or restart jobs are excluded from this recovery payload and remain
+under System/Updates/Events; Sage does not yet expose a Moon queue cleanup action for non-Raven broker jobs.
+Sage also brokers Portal's owner-only DM-only WeebCentral `/downloadall` workflow. Single concrete type plus title
+group requests still proxy to Raven's one-shot bulk queue path, while `all` selections proxy to Raven's async bulk-run
+create, status, continue/resume, and cancel paths so each batch can pause for owner approval.
 Sage also owns the root-only content reset preview plus execute flow for Moon admin. It previews Vault plus Raven reset
 scope, requires an explicit confirmation string, appends durable reset events, clears Vault's content-side state, and
 then tells Raven to wipe its managed catalog, tasks, and managed download folders.
@@ -36,9 +53,28 @@ durable events into Vault after authoritative mutations or async service updates
 Moon now reads those shared events through same-origin `/api/moon-v3/admin/events` and
 `/api/moon-v3/admin/events/stream` routes. Sage authorizes those reads by the requested event domains instead of
 falling back to one blanket system permission.
+Sage also brokers the Moon Settings hub. Branding site name, uploaded WebP logo variant metadata, toast defaults,
+personal toast overrides, Raven VPN, provider settings, request workflow, and Discord essentials all stay Vault-backed
+and browser-safe. The DB explorer routes under `/api/moon-v3/admin/settings/database` require the `database` admin
+domain, read only through Vault's allowlisted explorer contract, and only write validated settings JSON.
+The v3 Settings save surface includes explicit Raven metadata-provider, Raven download-provider, and Portal Discord
+basics routes so Moon no longer has to rely on generic legacy settings mutations for those sections.
+Admin request moderation now returns summary counts with the request list and exposes `deny` as a first-class
+`requests.write` mutation that requires a moderator comment, records durable request events, and lets the existing
+notification flow tell the requester what happened.
+Sage also brokers the Next admin System pages. `/admin/system/logs` reads Warden's allowlisted redacted Docker log
+tail through Sage, `/admin/system/events` forwards richer durable-event filters into Vault, and
+`/admin/system/updates` keeps using Warden's managed-service check/install APIs with `system.root` required for
+mutations.
+`/admin/system/tasks` is Sage's allowlisted maintenance scheduler: definitions are Scriptarr-owned, schedules are
+Vault-backed, overlapping runs are blocked per task, and every manual or scheduled run emits durable job and event
+state. `/admin/system/status` is built from Sage's endpoint registry and probes only safe read routes. `/admin/system/ai`
+centralizes Oracle settings plus brokered Warden LocalAI install, start, and remove controls with requester context for
+Portal completion DMs.
 
 Moon's legacy and v3 library routes should mirror Raven's real-or-empty library state. Sage no longer seeds preview
 titles on behalf of Moon.
-Sage also brokers Moon's trusted public automation API. It stores only the hashed admin API key, issues short-lived
-selection tokens for public search results, enforces the external NSFW and duplicate guards on request creation, and
-queues accepted external requests at the lowest priority instead of letting them cut ahead of browser or Discord work.
+Sage also brokers Moon's trusted API-key flow. It resolves hashed system keys into synthetic actors with
+permission-group grants, resolves user keys into account-scoped reader actors with admin grants stripped, keeps legacy
+public keys accepted during migration, issues short-lived selection tokens for public search results, enforces the
+external NSFW and duplicate guards on request creation, and queues accepted external requests at the lowest priority.

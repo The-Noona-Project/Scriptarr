@@ -355,6 +355,11 @@ class VpnServiceTest {
         }
 
         @Override
+        public JsonNode deleteDownloadTask(String taskId) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
         public JsonNode getMetadataMatch(String titleId) {
             throw new UnsupportedOperationException();
         }

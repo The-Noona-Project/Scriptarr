@@ -3,8 +3,9 @@
 Moon serves Scriptarr's native user app at `/` and the admin app at `/admin`.
 The user app is now installable as a same-origin PWA with a rolling recent-chapter cache for reader pages.
 
-The admin side now owns Raven VPN settings, Raven metadata provider order, and Oracle or LocalAI configuration while
-still proxying everything through Sage instead of sending the browser directly to internal services.
+The admin side now owns Raven VPN settings, Raven metadata provider order, and the dedicated `/admin/system/ai`
+surface for Oracle or LocalAI configuration while still proxying everything through Sage instead of sending the browser
+directly to internal services.
 Moon admin also owns the Raven download-provider settings so admins can decide which site-specific Raven scrapers are
 enabled as more providers land later. WeebCentral stays first by default, MangaDex is now available as a second normal
 download provider, and the Discord `downloadall` command remains intentionally pinned to WeebCentral for the
@@ -36,9 +37,14 @@ notes. If no source exists yet, Moon saves the request as `unavailable` and stil
 status list. Admins later choose sources from `/admin/requests`, unless Sage auto-approves one high-confidence source.
 The forward-facing user app itself now runs through an embedded Next.js App Router program using Once UI shells. Moon
 keeps the same public routes and same-origin APIs, but the user experience now uses a single-row megamenu header with
-plain site-name branding, a minimal avatar dropdown, a simple footer, and a dedicated `/profile` page for local
-StylePanel preferences and install actions. The older plain-JS user shell has been removed, and Library type links now live only under
-the `Library` mega menu, and `/browse` now uses A-Z shelf rows with the same Once UI scroller pattern as the home page.
+plain site-name branding, a compact anchored avatar dropdown, a simple footer, and a dedicated `/profile` page for
+local StylePanel preferences and install actions. That profile route is now a tabbed account hub with `Overview`,
+`Stats`, and `Preferences` sections instead of one long settings sheet. The older plain-JS user shell has been
+removed, and Library type links now live only under the `Library` mega menu, and `/browse` now uses A-Z shelf rows
+with the same Once UI scroller pattern as the home page.
+Discord login now also preserves the same-origin route where the user started whenever possible, so signing in from a
+title, reader, browse, request, or admin page returns to that page instead of always dropping into one fixed surface.
+If the remembered path is missing, unsafe, or not allowed for the signed-in user, Moon falls back to `/`.
 It keeps a quick-jump index rail on the left and tighter search against titles, aliases, types, and tags while browse
 cards clamp long copy until the reader opens the full title page. The home route is intentionally simpler too: it
 starts with a personalized "Your Bookshelf" continue-reading shelf, then stacks cover-led scroller rows for recently
@@ -70,10 +76,16 @@ can keep lifecycle or alias enrichment on without relying only on API-backed sou
 
 Admin routes follow the Arr-style operations model, including library, add/import, calendar, activity, wanted,
 requests, users, Discord, settings, and system sections under `/admin`.
+Moon now serves `/admin` through the embedded Next.js App Router admin app with isolated `/admin/_next` assets and
+Once UI providers. The old plain-JS admin fallback and `/admin-assets` bundle are gone; every admin route now renders
+inside the Next shell and continues to use Moon's same-origin Sage-backed APIs.
 `/admin/users` now acts as the full access-control surface: a dense user directory, reusable permission-group editor,
 group assignment panel, and recent auth or access event feed in one place. The bootstrap owner remains protected, and
 all other admin access is now derived from one or more permission groups with per-route-family `read`, `write`, or
 `root` grants.
+`/admin/requests` is the dedicated moderation inbox instead of a generic data page. It defaults to requests needing
+review, keeps saved metadata and source snapshots visible in a drawer, and calls the Sage-backed approve, resolve,
+refresh-source, override, and deny routes without resetting active edits during live refreshes.
 `/admin/library` now uses a denser Sonarr-inspired series index with live filtering, coverage bars, latest chapter,
 last release date, metadata state, and direct open or source actions.
 Each library row now opens a Sonarr-style admin title detail page at `/admin/library/<type>/<titleId>` with a
@@ -86,6 +98,12 @@ per-type naming profiles for manga, manhwa, manhua, webtoon, comic, and OEL so a
 page formats without digging through the broader settings surface.
 `/admin/calendar` now renders a month or agenda view backed by Raven chapter release dates captured from source
 scrapes and metadata enrichment instead of only showing a flat task-style table.
+`/admin/activity/queue` is now a live SSE-backed queue board instead of a static table. It splits Raven work into
+`Running`, `Queued`, and recovery-only `Needs attention` sections, refreshes without a manual page reload, and
+exposes card-level controls for retry, retry-all, cancel, priority changes, and queued-task reordering. Live refresh
+now defers while queue controls are being edited, running cards show live download speed plus an active ETA when Sage
+can estimate one credibly, and recovery cards can remove failed or stale queued tasks with their incomplete working
+folders.
 
 Fresh installs intentionally show empty library states until Raven has real imported titles to surface, and the admin
 program now ships in a dark-only theme by default.
@@ -95,12 +113,28 @@ Moon serves versioned CSS or JS asset URLs with `no-store` HTML responses so new
 bundles automatically.
 Moon's admin event history now comes from the shared Vault-backed durable event log, and the admin SPA subscribes to
 same-origin `/api/moon-v3/admin/events*` feeds for live updates instead of page-specific ad hoc polling.
-Moon admin also owns the brokered `moon.branding` setting so admins can rename the site in headers, document titles,
-and install metadata without changing the underlying Scriptarr service names.
+The admin System pages for Logs, Events, and Updates are now purpose-built Next surfaces rather than generic record
+cards. Logs use Warden's server-redacted Docker tail through Sage, Events expose durable Vault filters plus a detail
+drawer, and Updates restore check/install controls with typed confirmation for `system.root` admins.
+Tasks, Status, and AI now follow the same Next pattern. Tasks renders the Sage-owned allowlisted scheduler with cron
+editing, preview, manual run, and recent history; Status renders a grouped endpoint matrix and only probes safe read
+routes; AI owns Oracle settings, LocalAI lifecycle controls, asynchronous install/start/remove progress, completion
+toasts, and the admin test prompt.
+Moon admin also owns the general Settings hub. It manages brokered `moon.branding` site name plus uploaded logo WebP
+variants, database size summary with a Settings-only DB explorer link, toast notification preferences, project credit
+and support links, and compact Raven VPN, provider, request workflow, and Discord essentials. Section drafts stay dirty
+locally until their save succeeds, and Settings-owned saves use explicit Moon v3 endpoints rather than older generic
+admin routes.
+The DB explorer stays same-origin through Moon -> Sage -> Vault, requires the `database` admin domain, redacts
+sensitive values, and only allows validated settings JSON edits.
 The signed-in admin shell now also uses the Discord-backed user avatar when one is available, with an initials fallback
 so the top-right identity surface stays readable even without profile art.
-Moon admin also owns the trusted public API settings at `/admin/system/api`, including enable state, admin key
-rotation, and links to the same-origin Swagger docs and raw OpenAPI payload.
+Admin pages use one shared toast provider for action results, async jobs, and live admin event stream updates instead
+of page-local stacks.
+Moon admin also owns API management at `/admin/system/api`, including enable state, system-level keys assigned to
+permission groups, user-key audit for root API admins, and links to the plain same-origin Swagger docs and raw OpenAPI
+payload. Signed-in readers manage their own user-level API keys from `/profile`; those keys stay scoped to that
+reader's profile, library, follows, bookmarks, progress, and own requests.
 
 Moon now serves the public automation API under `/api/public/*`:
 
@@ -110,9 +144,9 @@ Moon now serves the public automation API under `/api/public/*`:
 - `POST /api/public/v1/requests`
 - `GET /api/public/v1/requests/<requestId>`
 
-Search stays public. Write and polling calls require `X-Scriptarr-Api-Key`, and the external API rejects NSFW titles,
-already-imported titles, already-active requests or downloads, and results without an enabled download target before
-queueing the surviving request at the lowest priority.
+Search stays public. Protected calls require `X-Scriptarr-Api-Key`; system keys inherit assigned permission groups and
+user keys are account-scoped. The external API rejects NSFW titles, already-imported titles, already-active requests or
+downloads, and results without an enabled download target before queueing the surviving request at the lowest priority.
 
 Moon now treats title art as first-class metadata too. Cover images from Raven intake and library state are rendered in
 admin Add Title, requests, queue or history, and library surfaces as well as the user browse and title views.

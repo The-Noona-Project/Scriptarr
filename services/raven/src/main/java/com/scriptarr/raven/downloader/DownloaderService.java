@@ -36,6 +36,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.CancellationException;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
@@ -63,6 +64,7 @@ public class DownloaderService {
     private static final String PRIORITY_HIGH = "high";
     private static final String PRIORITY_NORMAL = "normal";
     private static final String PRIORITY_LOW = "low";
+    private static final int TITLE_DOWNLOAD_WORKER_COUNT = 2;
     private static final int PAGE_DOWNLOAD_WORKER_COUNT = 2;
     private static final int CHAPTER_SOURCE_RETRY_ATTEMPTS = 3;
     private static final int CHAPTER_DOWNLOAD_RETRY_ATTEMPTS = 3;
@@ -79,6 +81,10 @@ public class DownloaderService {
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
 
     private final Map<String, Map<String, Object>> tasks = new ConcurrentHashMap<>();
+    private final Map<String, PrioritizedTask> queuedTasks = new ConcurrentHashMap<>();
+    private final Map<String, Thread> runningTaskThreads = new ConcurrentHashMap<>();
+    private final Set<String> cancellationRequestedTaskIds = ConcurrentHashMap.newKeySet();
+    private final AtomicLong queueSortSequence = new AtomicLong();
     private final AtomicLong queueSequence = new AtomicLong();
     private ThreadPoolExecutor queueWorker = createQueueWorker();
     private java.util.concurrent.ExecutorService pageDownloadWorker = createPageDownloadWorker();
@@ -175,6 +181,11 @@ public class DownloaderService {
                 task.put("percent", node.path("percent").asInt(0));
                 task.put("queuedAt", node.path("queuedAt").asText(Instant.now().toString()));
                 task.put("updatedAt", node.path("updatedAt").asText(Instant.now().toString()));
+                task.put("priority", normalizePriorityLabel(node.path("priority").asText(PRIORITY_NORMAL)));
+                long restoredSortOrder = normalizeSortOrder(
+                    node.has("sortOrder") ? brokerClientValue(node.path("sortOrder")) : null,
+                    -1L
+                );
                 copyIfPresent(node, task, "providerId");
                 copyIfPresent(node, task, "requestId");
                 copyIfPresent(node, task, "replacementTitleId");
@@ -183,6 +194,8 @@ public class DownloaderService {
                 copyIfPresent(node, task, "workingRoot");
                 copyIfPresent(node, task, "downloadRoot");
                 copyIfPresent(node, task, "coverUrl");
+                copyIfPresent(node, task, "startedAt");
+                copyNumberIfPresent(node, task, "downloadSpeedBytesPerSecond");
                 if (node.hasNonNull("details")) {
                     var detailsNode = node.path("details");
                     task.put("details", brokerClientPayloadToMap(detailsNode));
@@ -195,7 +208,23 @@ public class DownloaderService {
                     if (detailsNode.hasNonNull("coverUrl") && !detailsNode.path("coverUrl").asText("").isBlank()) {
                         task.put("coverUrl", detailsNode.path("coverUrl").asText(""));
                     }
+                    if (detailsNode.has("priority")) {
+                        task.put("priority", normalizePriorityLabel(detailsNode.path("priority").asText(PRIORITY_NORMAL)));
+                    }
+                    copyIfPresent(detailsNode, task, "startedAt");
+                    copyNumberIfPresent(detailsNode, task, "downloadSpeedBytesPerSecond");
+                    if (restoredSortOrder < 0) {
+                        restoredSortOrder = normalizeSortOrder(
+                            detailsNode.has("sortOrder") ? brokerClientValue(detailsNode.path("sortOrder")) : null,
+                            -1L
+                        );
+                    }
                 }
+                if (restoredSortOrder < 0) {
+                    restoredSortOrder = nextQueuedSortOrder();
+                }
+                task.put("sortOrder", restoredSortOrder);
+                rememberQueueSortOrder(restoredSortOrder);
 
                 String taskId = String.valueOf(task.get("taskId"));
                 if (taskId.isBlank()) {
@@ -335,6 +364,7 @@ public class DownloaderService {
                 List.of(),
                 List.of(),
                 List.of(),
+                List.of(),
                 List.of()
             );
         }
@@ -352,6 +382,7 @@ public class DownloaderService {
                 0,
                 0,
                 0,
+                List.of(),
                 List.of(),
                 List.of(),
                 List.of(),
@@ -376,6 +407,7 @@ public class DownloaderService {
                 0,
                 0,
                 0,
+                List.of(),
                 List.of(),
                 List.of(),
                 List.of(),
@@ -406,6 +438,7 @@ public class DownloaderService {
                 List.of(),
                 List.of(),
                 List.of(),
+                List.of(),
                 List.of()
             );
         }
@@ -416,6 +449,7 @@ public class DownloaderService {
         List<String> skippedNoMetadataTitles = new ArrayList<>();
         List<String> skippedAmbiguousMetadataTitles = new ArrayList<>();
         List<String> failedTitles = new ArrayList<>();
+        List<String> queuedTaskIds = new ArrayList<>();
         String actor = normalizeString(requestedBy, "scriptarr-portal");
         List<LibraryTitle> existingLibraryTitles = libraryService == null ? List.of() : libraryService.listTitles();
 
@@ -472,7 +506,7 @@ public class DownloaderService {
                     selectedDownload.put("nsfw", providerDetails.adultContent());
                 }
 
-                queueDownload(new DownloadRequest(
+                Map<String, Object> queuedTask = queueDownload(new DownloadRequest(
                     titleName,
                     titleUrl,
                     requestType,
@@ -484,6 +518,10 @@ public class DownloaderService {
                     "",
                     "normal"
                 ));
+                String queuedTaskId = normalizeString(queuedTask.get("taskId"));
+                if (!queuedTaskId.isBlank()) {
+                    queuedTaskIds.add(queuedTaskId);
+                }
                 queuedTitles.add(titleName);
             } catch (Exception error) {
                 failedTitles.add(titleName);
@@ -518,6 +556,7 @@ public class DownloaderService {
             skippedNoMetadataTitles.size(),
             skippedAmbiguousMetadataTitles.size(),
             failedTitles.size(),
+            queuedTaskIds,
             queuedTitles,
             skippedActiveTitles,
             skippedAdultContentTitles,
@@ -565,6 +604,9 @@ public class DownloaderService {
         task.put("selectedDownload", request.selectedDownload() == null ? Map.of() : request.selectedDownload());
         task.put("coverUrl", resolveCoverUrl(request));
         task.put("priority", normalizePriorityLabel(request.priority()));
+        task.put("sortOrder", nextQueuedSortOrder());
+        task.put("startedAt", "");
+        task.put("downloadSpeedBytesPerSecond", 0L);
         task.put("details", buildTaskDetails(task));
         tasks.put(taskId, task);
         persistTask(taskId);
@@ -581,7 +623,9 @@ public class DownloaderService {
      */
     public List<Map<String, Object>> snapshot() {
         return tasks.values().stream()
-            .sorted(Comparator.comparing(entry -> String.valueOf(entry.get("queuedAt")), Comparator.reverseOrder()))
+            .sorted(Comparator
+                .comparing((Map<String, Object> entry) -> String.valueOf(entry.get("queuedAt")), Comparator.reverseOrder())
+                .thenComparingLong(this::taskSortOrder))
             .map(Map::copyOf)
             .toList();
     }
@@ -592,15 +636,192 @@ public class DownloaderService {
      * @return aggregate queue counts
      */
     public Map<String, Object> stats() {
+        long queued = tasks.values().stream().filter(entry -> "queued".equals(entry.get("status"))).count();
         long running = tasks.values().stream().filter(entry -> "running".equals(entry.get("status"))).count();
         long failed = tasks.values().stream().filter(entry -> "failed".equals(entry.get("status"))).count();
         long complete = tasks.values().stream().filter(entry -> "completed".equals(entry.get("status"))).count();
         return Map.of(
-            "queued", tasks.size(),
+            "queued", queued,
             "running", running,
             "failed", failed,
-            "completed", complete
+            "completed", complete,
+            "activeSlots", TITLE_DOWNLOAD_WORKER_COUNT
         );
+    }
+
+    /**
+     * Cancel a queued or running Raven task.
+     *
+     * @param taskId Raven task id
+     * @return updated task snapshot
+     */
+    public synchronized Map<String, Object> cancelTask(String taskId) {
+        Map<String, Object> task = requireTask(taskId);
+        String status = normalizeString(task.get("status")).toLowerCase(Locale.ROOT);
+        if ("queued".equals(status)) {
+            removeQueuedTaskEntry(taskId);
+            update(taskId, "failed", "Cancelled by admin.", Math.max(0, Math.min(99, toInt(task.get("percent")))));
+            return Map.copyOf(task);
+        }
+        if ("running".equals(status)) {
+            cancellationRequestedTaskIds.add(taskId);
+            update(taskId, "failed", "Cancelled by admin.", Math.max(0, Math.min(99, toInt(task.get("percent")))));
+            Thread runningThread = runningTaskThreads.get(taskId);
+            if (runningThread != null) {
+                runningThread.interrupt();
+            }
+            return Map.copyOf(task);
+        }
+        throw new IllegalStateException("Only queued or running Raven tasks can be cancelled.");
+    }
+
+    /**
+     * Retry a previously failed Raven task.
+     *
+     * @param taskId Raven task id
+     * @return updated task snapshot
+     */
+    public synchronized Map<String, Object> retryTask(String taskId) {
+        Map<String, Object> task = requireTask(taskId);
+        String status = normalizeString(task.get("status")).toLowerCase(Locale.ROOT);
+        if ("queued".equals(status) || "running".equals(status) || "completed".equals(status) || SUPERSEDED_STATUS.equals(status)) {
+            throw new IllegalStateException("Only failed or stale Raven tasks can be retried.");
+        }
+        if (runningTaskThreads.containsKey(taskId)) {
+            throw new IllegalStateException("This Raven task is still winding down. Try retrying it again in a moment.");
+        }
+        cancellationRequestedTaskIds.remove(taskId);
+        task.put("status", "queued");
+        task.put("message", "Queued for Raven retry.");
+        task.put("percent", 0);
+        task.put("queuedAt", Instant.now().toString());
+        task.put("updatedAt", Instant.now().toString());
+        task.put("sortOrder", nextQueuedSortOrder());
+        task.put("startedAt", "");
+        task.put("downloadSpeedBytesPerSecond", 0L);
+        task.put("details", buildTaskDetails(task));
+        persistTask(taskId);
+        syncLinkedRequest(task, status, "queued", "Queued for Raven retry.");
+        submitQueuedTask(taskId, requestFromTask(task));
+        return Map.copyOf(task);
+    }
+
+    /**
+     * Remove a failed or queued Raven title task and its incomplete managed working folder.
+     *
+     * @param taskId Raven task id
+     * @return removal result payload
+     */
+    public synchronized Map<String, Object> removeTask(String taskId) {
+        String normalizedTaskId = normalizeString(taskId);
+        Map<String, Object> task = requireTask(normalizedTaskId);
+        String status = normalizeString(task.get("status")).toLowerCase(Locale.ROOT);
+        if ("running".equals(status) || "completed".equals(status) || SUPERSEDED_STATUS.equals(status)) {
+            throw new IllegalStateException("Only failed or stale queued Raven tasks can be removed.");
+        }
+        if (!"failed".equals(status) && !"queued".equals(status)) {
+            throw new IllegalStateException("Only failed or stale queued Raven tasks can be removed.");
+        }
+
+        removeQueuedTaskEntry(normalizedTaskId);
+        cancellationRequestedTaskIds.remove(normalizedTaskId);
+        try {
+            deletePersistedTask(normalizedTaskId);
+        } catch (IllegalStateException error) {
+            if ("queued".equals(status)) {
+                submitQueuedTask(normalizedTaskId, requestFromTask(task));
+            }
+            throw error;
+        }
+        tasks.remove(normalizedTaskId);
+        boolean deletedWorkingRoot = deleteManagedWorkingRoot(task);
+
+        return Map.of(
+            "ok", true,
+            "removed", true,
+            "taskId", normalizedTaskId,
+            "titleName", normalizeString(task.get("titleName"), "Untitled"),
+            "deletedWorkingRoot", deletedWorkingRoot
+        );
+    }
+
+    /**
+     * Change the priority band for a queued Raven task.
+     *
+     * @param taskId Raven task id
+     * @param priority target priority band
+     * @return updated task snapshot
+     */
+    public synchronized Map<String, Object> updateTaskPriority(String taskId, String priority) {
+        Map<String, Object> task = requireTask(taskId);
+        ensureQueuedTaskMutable(taskId, task);
+        String normalizedPriority = normalizePriorityLabel(priority);
+        String currentPriority = normalizePriorityLabel(String.valueOf(task.getOrDefault("priority", PRIORITY_NORMAL)));
+        if (normalizedPriority.equals(currentPriority)) {
+            return Map.copyOf(task);
+        }
+        task.put("priority", normalizedPriority);
+        task.put("sortOrder", nextQueuedSortOrder());
+        task.put("message", "Priority changed to " + normalizedPriority + ".");
+        task.put("updatedAt", Instant.now().toString());
+        task.put("details", buildTaskDetails(task));
+        persistTask(taskId);
+        requeuePendingTask(taskId, requestFromTask(task));
+        return Map.copyOf(task);
+    }
+
+    /**
+     * Move a queued Raven task up or down inside its priority band.
+     *
+     * @param taskId Raven task id
+     * @param direction up or down
+     * @return updated task snapshot
+     */
+    public synchronized Map<String, Object> moveQueuedTask(String taskId, String direction) {
+        Map<String, Object> task = requireTask(taskId);
+        ensureQueuedTaskMutable(taskId, task);
+        String normalizedDirection = normalizeString(direction).toLowerCase(Locale.ROOT);
+        if (!"up".equals(normalizedDirection) && !"down".equals(normalizedDirection)) {
+            throw new IllegalStateException("Move direction must be up or down.");
+        }
+        String priority = normalizePriorityLabel(String.valueOf(task.getOrDefault("priority", PRIORITY_NORMAL)));
+        List<Map<String, Object>> queuedInBand = tasks.values().stream()
+            .filter((entry) -> "queued".equals(normalizeString(entry.get("status")).toLowerCase(Locale.ROOT)))
+            .filter((entry) -> priority.equals(normalizePriorityLabel(String.valueOf(entry.getOrDefault("priority", PRIORITY_NORMAL)))))
+            .filter((entry) -> queuedTasks.containsKey(String.valueOf(entry.getOrDefault("taskId", ""))))
+            .sorted(Comparator.comparingLong(this::taskSortOrder))
+            .toList();
+        int currentIndex = -1;
+        for (int index = 0; index < queuedInBand.size(); index++) {
+            if (taskId.equals(String.valueOf(queuedInBand.get(index).getOrDefault("taskId", "")))) {
+                currentIndex = index;
+                break;
+            }
+        }
+        if (currentIndex < 0) {
+            throw new IllegalStateException("This Raven task is no longer in the queued band.");
+        }
+        int targetIndex = "up".equals(normalizedDirection) ? currentIndex - 1 : currentIndex + 1;
+        if (targetIndex < 0 || targetIndex >= queuedInBand.size()) {
+            throw new IllegalStateException("This Raven task cannot move " + normalizedDirection + " any further.");
+        }
+
+        Map<String, Object> swapTask = queuedInBand.get(targetIndex);
+        long currentSort = taskSortOrder(task);
+        long swapSort = taskSortOrder(swapTask);
+        task.put("sortOrder", swapSort);
+        task.put("updatedAt", Instant.now().toString());
+        task.put("message", "Moved " + normalizedDirection + " in the " + priority + " priority band.");
+        task.put("details", buildTaskDetails(task));
+        swapTask.put("sortOrder", currentSort);
+        swapTask.put("updatedAt", Instant.now().toString());
+        swapTask.put("message", "Queue order adjusted.");
+        swapTask.put("details", buildTaskDetails(swapTask));
+        persistTask(String.valueOf(task.get("taskId")));
+        persistTask(String.valueOf(swapTask.get("taskId")));
+        requeuePendingTask(String.valueOf(swapTask.get("taskId")), requestFromTask(swapTask));
+        requeuePendingTask(taskId, requestFromTask(task));
+        return Map.copyOf(task);
     }
 
     /**
@@ -634,6 +855,11 @@ public class DownloaderService {
         previousQueueWorker.shutdownNow();
         previousPageWorker.shutdownNow();
         tasks.clear();
+        queuedTasks.clear();
+        runningTaskThreads.clear();
+        cancellationRequestedTaskIds.clear();
+        queueSortSequence.set(0);
+        queueSequence.set(0);
         deleteDirectoryQuietly(logger.getDownloadsRoot().resolve(DOWNLOADING_FOLDER_NAME));
         deleteDirectoryQuietly(logger.getDownloadsRoot().resolve(DOWNLOADED_FOLDER_NAME));
         return preview;
@@ -649,13 +875,17 @@ public class DownloaderService {
     }
 
     private void process(String taskId, DownloadRequest request) {
+        queuedTasks.remove(taskId);
+        runningTaskThreads.put(taskId, Thread.currentThread());
         try {
+            throwIfCancelled(taskId);
             update(taskId, "running", "Preparing Raven download.", 5);
             if (vpnService != null) {
                 vpnService.ensureConnectedIfEnabled();
             }
 
             DownloadProvider provider = resolveProvider(request);
+            throwIfCancelled(taskId);
             List<Map<String, String>> chapters = provider.getChapters(request.titleUrl());
             if (chapters.isEmpty()) {
                 throw new IllegalStateException("No chapters were found for the requested title URL.");
@@ -680,8 +910,11 @@ public class DownloaderService {
             int total = chapters.size();
             Map<String, Map<String, String>> chapterDetailsByNumber = new LinkedHashMap<>();
             for (int index = 0; index < chapters.size(); index++) {
+                throwIfCancelled(taskId);
                 Map<String, String> chapter = chapters.get(index);
+                Instant chapterStartedAt = Instant.now();
                 Path archivePath = downloadChapterWithRetries(provider, workingRoot, request, typeLabel, chapter, namingSettings);
+                rememberDownloadSpeed(taskId, archivePath, chapterStartedAt, Instant.now());
                 String chapterNumber = normalizeStoredChapterNumber(chapter.getOrDefault("chapter_number", String.valueOf(index + 1)));
                 Map<String, String> storedChapter = new LinkedHashMap<>(chapter);
                 storedChapter.put("archive_path", archivePath.toString());
@@ -690,13 +923,16 @@ public class DownloaderService {
                 update(taskId, "running", "Downloaded chapter " + chapterNumber + ".", percent);
             }
 
+            throwIfCancelled(taskId);
             update(taskId, "running", "Promoting completed files into the Raven library.", 95);
             promoteTitleFolder(workingRoot, finalRoot);
             if (replacementDownload) {
+                throwIfCancelled(taskId);
                 update(taskId, "running", "Swapping the staged replacement into the live Raven library.", 97);
                 swapReplacementFolder(finalRoot, canonicalFinalRoot);
                 finalRoot = canonicalFinalRoot;
             }
+            throwIfCancelled(taskId);
             LibraryTitle title = libraryService.recordDownloadedTitle(
                 request.titleName(),
                 typeLabel,
@@ -724,9 +960,27 @@ public class DownloaderService {
             }
 
             update(taskId, "completed", "Raven download completed.", 100);
+        } catch (CancellationException error) {
+            markTaskCancelled(taskId);
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+            if (isCancellationRequested(taskId)) {
+                markTaskCancelled(taskId);
+            } else {
+                update(taskId, "failed", normalizeString(error.getMessage(), "Raven download failed."), 90);
+                logger.error("DOWNLOAD", "Raven download failed.", error);
+            }
         } catch (Exception error) {
-            update(taskId, "failed", normalizeString(error.getMessage(), "Raven download failed."), 90);
-            logger.error("DOWNLOAD", "Raven download failed.", error);
+            if (isCancellationRequested(taskId)) {
+                markTaskCancelled(taskId);
+            } else {
+                update(taskId, "failed", normalizeString(error.getMessage(), "Raven download failed."), 90);
+                logger.error("DOWNLOAD", "Raven download failed.", error);
+            }
+        } finally {
+            runningTaskThreads.remove(taskId);
+            queuedTasks.remove(taskId);
+            cancellationRequestedTaskIds.remove(taskId);
         }
     }
 
@@ -792,6 +1046,13 @@ public class DownloaderService {
         }
 
         if (lastIoFailure != null) {
+            if (isSourceImageNotFound(lastIoFailure)) {
+                throw new IOException(
+                    "Source image returned 404 after Raven refreshed chapter pages for " + chapter.get("href") + ". "
+                        + lastFailureMessage,
+                    lastIoFailure
+                );
+            }
             throw new IOException(lastFailureMessage, lastIoFailure);
         }
         throw new IllegalStateException(lastFailureMessage);
@@ -981,6 +1242,9 @@ public class DownloaderService {
                         + attempt + "/" + IMAGE_DOWNLOAD_RETRY_ATTEMPTS + " reason="
                         + normalizeString(error.getMessage(), "unknown")
                 );
+                if (isSourceImageNotFound(error)) {
+                    throw error;
+                }
                 if (attempt < IMAGE_DOWNLOAD_RETRY_ATTEMPTS && !sleepBeforeRetry("image download", titleName, chapterNumber, attempt, error)) {
                     break;
                 }
@@ -1001,10 +1265,24 @@ public class DownloaderService {
             .GET()
             .build();
         HttpResponse<byte[]> response = httpClient.send(request, HttpResponse.BodyHandlers.ofByteArray());
+        if (response.statusCode() == 404) {
+            throw new SourceImageNotFoundException(imageUrl);
+        }
         if (response.statusCode() < 200 || response.statusCode() >= 300) {
             throw new IOException("Image download failed with status " + response.statusCode() + " for " + imageUrl);
         }
         return response.body();
+    }
+
+    private boolean isSourceImageNotFound(Throwable error) {
+        Throwable current = error;
+        while (current != null) {
+            if (current instanceof SourceImageNotFoundException) {
+                return true;
+            }
+            current = current.getCause();
+        }
+        return false;
     }
 
     private boolean sleepBeforeRetry(String stage, String titleName, String chapterNumber, int attempt, Exception error) throws InterruptedException {
@@ -1028,11 +1306,23 @@ public class DownloaderService {
         if (task == null) {
             return;
         }
+        String nextStatus = normalizeString(status).toLowerCase(Locale.ROOT);
+        String currentStatus = normalizeString(task.get("status")).toLowerCase(Locale.ROOT);
+        if (cancellationRequestedTaskIds.contains(taskId) && "failed".equals(currentStatus) && !"failed".equals(nextStatus)) {
+            return;
+        }
         String previousStatus = String.valueOf(task.getOrDefault("status", ""));
         task.put("status", status);
         task.put("message", message);
         task.put("percent", percent);
-        task.put("updatedAt", Instant.now().toString());
+        String updatedAt = Instant.now().toString();
+        task.put("updatedAt", updatedAt);
+        if ("running".equals(nextStatus) && !"running".equals(currentStatus)) {
+            task.put("startedAt", updatedAt);
+        }
+        if (!"running".equals(nextStatus)) {
+            task.put("downloadSpeedBytesPerSecond", 0L);
+        }
         task.put("details", buildTaskDetails(task));
         persistTask(taskId);
         syncLinkedRequest(task, previousStatus, status, message);
@@ -1067,6 +1357,33 @@ public class DownloaderService {
         }
     }
 
+    private void deletePersistedTask(String taskId) {
+        try {
+            brokerClient.deleteDownloadTask(taskId);
+        } catch (Exception error) {
+            throw new IllegalStateException("Raven could not remove the persisted task snapshot.", error);
+        }
+    }
+
+    private boolean deleteManagedWorkingRoot(Map<String, Object> task) {
+        String workingRootValue = normalizeString(task.get("workingRoot"));
+        if (workingRootValue.isBlank()) {
+            return false;
+        }
+        Path downloadsRoot = logger.getDownloadsRoot();
+        if (downloadsRoot == null) {
+            return false;
+        }
+        Path downloadingRoot = downloadsRoot.resolve(DOWNLOADING_FOLDER_NAME).toAbsolutePath().normalize();
+        Path workingRoot = Path.of(workingRootValue).toAbsolutePath().normalize();
+        if (!workingRoot.startsWith(downloadingRoot) || workingRoot.equals(downloadingRoot)) {
+            logger.warn("DOWNLOAD", "Skipped unsafe Raven task working-root removal.", "path=" + workingRoot);
+            return false;
+        }
+        deleteDirectoryQuietly(workingRoot);
+        return !Files.exists(workingRoot);
+    }
+
     private DownloadProvider resolveProvider(DownloadRequest request) {
         return downloadProviderRegistry.resolve(request.providerId(), request.titleUrl())
             .orElseThrow(() -> new IllegalStateException("No enabled Raven download provider could handle the selected title URL."));
@@ -1083,6 +1400,9 @@ public class DownloaderService {
         details.put("coverUrl", String.valueOf(task.getOrDefault("coverUrl", "")));
         details.put("replacementTitleId", String.valueOf(task.getOrDefault("replacementTitleId", "")));
         details.put("priority", String.valueOf(task.getOrDefault("priority", PRIORITY_NORMAL)));
+        details.put("sortOrder", taskSortOrder(task));
+        details.put("startedAt", String.valueOf(task.getOrDefault("startedAt", "")));
+        details.put("downloadSpeedBytesPerSecond", toLong(task.get("downloadSpeedBytesPerSecond")));
         return details;
     }
 
@@ -1146,6 +1466,7 @@ public class DownloaderService {
             "providerId", String.valueOf(task.getOrDefault("providerId", "")),
             "requestId", String.valueOf(task.getOrDefault("requestId", "")),
             "priority", String.valueOf(task.getOrDefault("priority", PRIORITY_NORMAL)),
+            "sortOrder", taskSortOrder(task),
             "libraryTypeLabel", String.valueOf(task.getOrDefault("libraryTypeLabel", "")),
             "libraryTypeSlug", String.valueOf(task.getOrDefault("libraryTypeSlug", ""))
         ));
@@ -1157,7 +1478,7 @@ public class DownloaderService {
             "message", String.valueOf(task.getOrDefault("message", ""))
         ));
         payload.put("createdAt", queuedAt);
-        payload.put("startedAt", "queued".equals(status) ? null : queuedAt);
+        payload.put("startedAt", resolveTaskStartedAt(task));
         payload.put("finishedAt", isTerminalStatus(status) ? updatedAt : null);
         payload.put("updatedAt", updatedAt);
         return payload;
@@ -1175,14 +1496,15 @@ public class DownloaderService {
         payload.put("status", status);
         payload.put("message", String.valueOf(task.getOrDefault("message", "")));
         payload.put("percent", task.getOrDefault("percent", 0));
-        payload.put("sortOrder", 0);
+        payload.put("sortOrder", taskSortOrder(task));
         payload.put("payload", Map.of(
             "titleName", String.valueOf(task.getOrDefault("titleName", "")),
             "titleUrl", String.valueOf(task.getOrDefault("titleUrl", "")),
             "requestType", String.valueOf(task.getOrDefault("requestType", "manga")),
             "providerId", String.valueOf(task.getOrDefault("providerId", "")),
             "requestId", String.valueOf(task.getOrDefault("requestId", "")),
-            "priority", String.valueOf(task.getOrDefault("priority", PRIORITY_NORMAL))
+            "priority", String.valueOf(task.getOrDefault("priority", PRIORITY_NORMAL)),
+            "sortOrder", taskSortOrder(task)
         ));
         payload.put("result", Map.of(
             "titleId", String.valueOf(task.getOrDefault("titleId", "")),
@@ -1191,7 +1513,7 @@ public class DownloaderService {
             "coverUrl", String.valueOf(task.getOrDefault("coverUrl", ""))
         ));
         payload.put("createdAt", queuedAt);
-        payload.put("startedAt", "queued".equals(status) ? null : queuedAt);
+        payload.put("startedAt", resolveTaskStartedAt(task));
         payload.put("finishedAt", isTerminalStatus(status) ? updatedAt : null);
         payload.put("updatedAt", updatedAt);
         return payload;
@@ -1456,6 +1778,12 @@ public class DownloaderService {
         }
     }
 
+    private void copyNumberIfPresent(com.fasterxml.jackson.databind.JsonNode node, Map<String, Object> target, String field) {
+        if (node != null && node.hasNonNull(field) && node.path(field).isNumber()) {
+            target.put(field, node.path(field).asLong());
+        }
+    }
+
     private boolean recoverCompletedTask(String taskId) {
         Map<String, Object> task = tasks.get(taskId);
         if (task == null) {
@@ -1574,17 +1902,29 @@ public class DownloaderService {
     }
 
     private void submitQueuedTask(String taskId, DownloadRequest request) {
-        queueWorker.execute(new PrioritizedTask(
+        Map<String, Object> task = tasks.get(taskId);
+        if (task == null) {
+            return;
+        }
+        if (!task.containsKey("sortOrder")) {
+            task.put("sortOrder", nextQueuedSortOrder());
+        }
+        PrioritizedTask prioritizedTask = new PrioritizedTask(
+            taskId,
             priorityRank(request.priority()),
+            taskSortOrder(task),
             queueSequence.getAndIncrement(),
+            request,
             () -> process(taskId, request)
-        ));
+        );
+        queuedTasks.put(taskId, prioritizedTask);
+        queueWorker.execute(prioritizedTask);
     }
 
     private ThreadPoolExecutor createQueueWorker() {
         return new ThreadPoolExecutor(
-            1,
-            1,
+            TITLE_DOWNLOAD_WORKER_COUNT,
+            TITLE_DOWNLOAD_WORKER_COUNT,
             0L,
             TimeUnit.MILLISECONDS,
             new PriorityBlockingQueue<>()
@@ -1610,6 +1950,130 @@ public class DownloaderService {
             case PRIORITY_LOW -> PRIORITY_LOW;
             default -> PRIORITY_NORMAL;
         };
+    }
+
+    private Map<String, Object> requireTask(String taskId) {
+        Map<String, Object> task = tasks.get(normalizeString(taskId));
+        if (task == null) {
+            throw new IllegalStateException("Raven task not found.");
+        }
+        return task;
+    }
+
+    private void ensureQueuedTaskMutable(String taskId, Map<String, Object> task) {
+        String status = normalizeString(task.get("status")).toLowerCase(Locale.ROOT);
+        if (!"queued".equals(status) || !queuedTasks.containsKey(taskId)) {
+            throw new IllegalStateException("Only queued Raven tasks can be reordered or reprioritized.");
+        }
+    }
+
+    private DownloadRequest requestFromTask(Map<String, Object> task) {
+        return new DownloadRequest(
+            String.valueOf(task.getOrDefault("titleName", "")),
+            String.valueOf(task.getOrDefault("titleUrl", "")),
+            String.valueOf(task.getOrDefault("requestType", "manga")),
+            String.valueOf(task.getOrDefault("requestedBy", "scriptarr")),
+            String.valueOf(task.getOrDefault("providerId", "")),
+            String.valueOf(task.getOrDefault("requestId", "")),
+            normalizeMap(task.get("selectedMetadata")),
+            normalizeMap(task.get("selectedDownload")),
+            String.valueOf(task.getOrDefault("replacementTitleId", "")),
+            String.valueOf(task.getOrDefault("priority", PRIORITY_NORMAL))
+        );
+    }
+
+    private void requeuePendingTask(String taskId, DownloadRequest request) {
+        removeQueuedTaskEntry(taskId);
+        submitQueuedTask(taskId, request);
+    }
+
+    private void removeQueuedTaskEntry(String taskId) {
+        PrioritizedTask queuedTask = queuedTasks.remove(taskId);
+        if (queuedTask != null) {
+            queueWorker.getQueue().remove(queuedTask);
+        }
+    }
+
+    private boolean isCancellationRequested(String taskId) {
+        return cancellationRequestedTaskIds.contains(normalizeString(taskId));
+    }
+
+    private void throwIfCancelled(String taskId) {
+        if (isCancellationRequested(taskId)) {
+            throw new CancellationException("Cancelled by admin.");
+        }
+    }
+
+    private void markTaskCancelled(String taskId) {
+        Map<String, Object> task = tasks.get(taskId);
+        if (task == null) {
+            return;
+        }
+        update(taskId, "failed", "Cancelled by admin.", Math.max(0, Math.min(99, toInt(task.get("percent")))));
+    }
+
+    private long nextQueuedSortOrder() {
+        return queueSortSequence.getAndIncrement();
+    }
+
+    private void rememberQueueSortOrder(long sortOrder) {
+        queueSortSequence.updateAndGet((current) -> Math.max(current, sortOrder + 1));
+    }
+
+    private void rememberDownloadSpeed(String taskId, Path archivePath, Instant startedAt, Instant finishedAt) {
+        Map<String, Object> task = tasks.get(taskId);
+        if (task == null || archivePath == null || startedAt == null || finishedAt == null) {
+            return;
+        }
+        try {
+            long sizeBytes = Files.exists(archivePath) ? Files.size(archivePath) : 0L;
+            long durationMillis = Math.max(1L, Duration.between(startedAt, finishedAt).toMillis());
+            long bytesPerSecond = Math.max(0L, Math.round((sizeBytes * 1000d) / durationMillis));
+            task.put("downloadSpeedBytesPerSecond", bytesPerSecond);
+        } catch (IOException ignored) {
+            task.put("downloadSpeedBytesPerSecond", 0L);
+        }
+    }
+
+    private long taskSortOrder(Map<String, Object> task) {
+        return normalizeSortOrder(task == null ? null : task.get("sortOrder"), Long.MAX_VALUE);
+    }
+
+    private long normalizeSortOrder(Object value, long fallback) {
+        if (value instanceof Number number) {
+            return number.longValue();
+        }
+        String normalized = normalizeString(value);
+        if (normalized.isBlank()) {
+            return fallback;
+        }
+        try {
+            return Long.parseLong(normalized);
+        } catch (NumberFormatException ignored) {
+            return fallback;
+        }
+    }
+
+    private int toInt(Object value) {
+        if (value instanceof Number number) {
+            return number.intValue();
+        }
+        try {
+            return Integer.parseInt(normalizeString(value, "0"));
+        } catch (NumberFormatException ignored) {
+            return 0;
+        }
+    }
+
+    private long toLong(Object value) {
+        if (value instanceof Number number) {
+            return number.longValue();
+        }
+        try {
+            return Long.parseLong(normalizeString(value, "0"));
+        } catch (NumberFormatException ignored) {
+            return 0L;
+        }
     }
 
     private Map<String, Object> normalizeMap(Object value) {
@@ -1655,6 +2119,14 @@ public class DownloaderService {
 
     private String normalizeString(Object value) {
         return value == null ? "" : String.valueOf(value).trim();
+    }
+
+    private String resolveTaskStartedAt(Map<String, Object> task) {
+        String startedAt = normalizeString(task.get("startedAt"));
+        if (startedAt.isBlank()) {
+            return null;
+        }
+        return startedAt;
     }
 
     private String firstNonBlank(String... values) {
@@ -1742,14 +2214,33 @@ public class DownloaderService {
         }
     }
 
+    private static final class SourceImageNotFoundException extends IOException {
+        private SourceImageNotFoundException(String imageUrl) {
+            super("Source image returned 404 for " + imageUrl + ".");
+        }
+    }
+
     private static final class PrioritizedTask implements Runnable, Comparable<PrioritizedTask> {
+        private final String taskId;
         private final int priorityRank;
+        private final long sortOrder;
         private final long sequence;
+        private final DownloadRequest request;
         private final Runnable delegate;
 
-        private PrioritizedTask(int priorityRank, long sequence, Runnable delegate) {
+        private PrioritizedTask(
+            String taskId,
+            int priorityRank,
+            long sortOrder,
+            long sequence,
+            DownloadRequest request,
+            Runnable delegate
+        ) {
+            this.taskId = taskId;
             this.priorityRank = priorityRank;
+            this.sortOrder = sortOrder;
             this.sequence = sequence;
+            this.request = request;
             this.delegate = delegate;
         }
 
@@ -1763,6 +2254,10 @@ public class DownloaderService {
             int priorityComparison = Integer.compare(this.priorityRank, other.priorityRank);
             if (priorityComparison != 0) {
                 return priorityComparison;
+            }
+            int sortComparison = Long.compare(this.sortOrder, other.sortOrder);
+            if (sortComparison != 0) {
+                return sortComparison;
             }
             return Long.compare(this.sequence, other.sequence);
         }

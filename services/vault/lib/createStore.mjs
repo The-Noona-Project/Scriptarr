@@ -10,6 +10,13 @@ import {
   getDefaultGroupId,
   normalizePermissionGroup
 } from "./accessControl.mjs";
+import {
+  buildMemoryDatabaseOverview,
+  buildMysqlDatabaseOverview,
+  normalizeDatabaseSettingUpdate,
+  readMemoryDatabaseTable,
+  readMysqlDatabaseTable
+} from "./databaseExplorer.mjs";
 import {DEFAULT_EVENT_RETENTION_DAYS, normalizeEventFilters, normalizeVaultEvent} from "./vaultEvents.mjs";
 
 const nowIso = () => new Date().toISOString();
@@ -25,6 +32,13 @@ const toMysqlDateTime = (value, fallback = null) => {
   }
 
   return date.toISOString().replace("T", " ").replace("Z", "").slice(0, 23);
+};
+const toIsoTimestamp = (value, fallback = null) => {
+  if (!value) {
+    return fallback;
+  }
+  const date = value instanceof Date ? value : new Date(String(value));
+  return Number.isNaN(date.getTime()) ? fallback : date.toISOString();
 };
 const parseJsonColumn = (value, fallback = null) => {
   if (value == null) {
@@ -101,6 +115,61 @@ const CONTENT_RESET_SETTING_PREFIXES = Object.freeze([
   "moon.following.",
   "moon.reader.bookmarks."
 ]);
+const API_KEY_KINDS = new Set(["system", "user"]);
+const normalizeApiKeyKind = (value, fallback = "system") => {
+  const normalized = normalizeString(value, fallback).toLowerCase();
+  return API_KEY_KINDS.has(normalized) ? normalized : fallback;
+};
+const normalizeApiKeyCreatedBy = (value = {}) => {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return {
+      actorType: normalizeString(value.actorType, "user"),
+      actorId: normalizeString(value.actorId || value.discordUserId || value.id),
+      actorLabel: normalizeString(value.actorLabel || value.username || value.name, "Scriptarr user")
+    };
+  }
+  const actorId = normalizeString(value);
+  return {
+    actorType: actorId ? "user" : "service",
+    actorId,
+    actorLabel: actorId || "Scriptarr"
+  };
+};
+const normalizeApiKeyGroupIds = (value = []) => Array.from(new Set(
+  (Array.isArray(value) ? value : [])
+    .map((entry) => normalizeString(entry).toLowerCase())
+    .filter(Boolean)
+)).sort();
+const normalizeApiKeyRecord = (value = {}, fallback = {}) => {
+  const kind = normalizeApiKeyKind(value.kind ?? value.keyKind ?? fallback.kind, "system");
+  const createdAt = toIsoTimestamp(value.createdAt || value.created_at, fallback.createdAt || nowIso()) || nowIso();
+  const updatedAt = toIsoTimestamp(value.updatedAt || value.updated_at, fallback.updatedAt || createdAt) || createdAt;
+  return {
+    id: normalizeString(value.id || value.apiKeyId || value.api_key_id || fallback.id),
+    name: normalizeString(value.name || value.keyName || value.key_name, normalizeString(fallback.name, "API key")),
+    kind,
+    enabled: normalizeBoolean(value.enabled, fallback.enabled !== false),
+    keyHash: normalizeString(value.keyHash || value.key_hash, normalizeString(fallback.keyHash)),
+    keyPrefix: normalizeString(value.keyPrefix || value.key_prefix, normalizeString(fallback.keyPrefix)),
+    ownerDiscordUserId: kind === "user"
+      ? normalizeString(value.ownerDiscordUserId || value.owner_discord_user_id, normalizeString(fallback.ownerDiscordUserId))
+      : "",
+    createdBy: normalizeApiKeyCreatedBy(value.createdBy ?? value.created_by ?? fallback.createdBy),
+    groupIds: kind === "system" ? normalizeApiKeyGroupIds(value.groupIds ?? value.group_ids ?? fallback.groupIds) : [],
+    lastUsedAt: toIsoTimestamp(value.lastUsedAt || value.last_used_at, fallback.lastUsedAt || null),
+    createdAt,
+    updatedAt,
+    revokedAt: toIsoTimestamp(value.revokedAt || value.revoked_at, fallback.revokedAt || null)
+  };
+};
+const validateApiKeyCreate = (entry) => {
+  if (!entry.keyHash) {
+    throw createConflictError("API key hash is required.", "API_KEY_REQUIRED");
+  }
+  if (entry.kind === "user" && !entry.ownerDiscordUserId) {
+    throw createConflictError("User API keys require an owner.", "API_KEY_REQUIRED");
+  }
+};
 const REQUEST_STATUSES = new Set([
   "pending",
   "unavailable",
@@ -340,7 +409,7 @@ const normalizeRavenTitle = (title, chapters = []) => ({
   tags: Array.isArray(title.tags) ? title.tags : [],
   aliases: Array.isArray(title.aliases) ? title.aliases : [],
   metadataProvider: title.metadataProvider || "",
-  metadataMatchedAt: title.metadataMatchedAt || null,
+  metadataMatchedAt: toIsoTimestamp(title.metadataMatchedAt),
   relations: Array.isArray(title.relations) ? title.relations : [],
   sourceUrl: title.sourceUrl || "",
   coverUrl: title.coverUrl || "",
@@ -430,6 +499,7 @@ const createMemoryStore = () => {
     users: new Map(),
     permissionGroups: new Map(),
     userGroupAssignments: new Map(),
+    apiKeys: new Map(),
     sessions: new Map(),
     settings: new Map(),
     secrets: new Map(),
@@ -580,12 +650,32 @@ const createMemoryStore = () => {
   };
   const listMemoryEvents = (filters = {}) => {
     const normalized = normalizeEventFilters(filters);
-    const filtered = Array.from(state.events.values()).filter((event) =>
-      (!normalized.domains.length || normalized.domains.includes(event.domain))
-      && (!normalized.actorId || event.actorId === normalized.actorId)
-      && (!normalized.targetId || event.targetId === normalized.targetId)
-      && (!normalized.afterSequence || Number(event.sequence || 0) > normalized.afterSequence)
-    );
+    const query = normalized.query.toLowerCase();
+    const sinceTime = normalized.since ? Date.parse(normalized.since) : Number.NaN;
+    const untilTime = normalized.until ? Date.parse(normalized.until) : Number.NaN;
+    const filtered = Array.from(state.events.values()).filter((event) => {
+      const createdTime = Date.parse(event.createdAt || "");
+      const matchesQuery = !query || [
+        event.message,
+        event.domain,
+        event.eventType,
+        event.actorLabel,
+        event.actorId,
+        event.targetType,
+        event.targetId
+      ].some((value) => normalizeScalarString(value).toLowerCase().includes(query));
+      return (!normalized.domains.length || normalized.domains.includes(event.domain))
+        && (!normalized.eventTypes.length || normalized.eventTypes.includes(event.eventType))
+        && (!normalized.severities.length || normalized.severities.includes(event.severity))
+        && (!normalized.actorType || event.actorType === normalized.actorType)
+        && (!normalized.actorId || event.actorId === normalized.actorId)
+        && (!normalized.targetType || event.targetType === normalized.targetType)
+        && (!normalized.targetId || event.targetId === normalized.targetId)
+        && (!normalized.afterSequence || Number(event.sequence || 0) > normalized.afterSequence)
+        && (Number.isNaN(sinceTime) || (!Number.isNaN(createdTime) && createdTime >= sinceTime))
+        && (Number.isNaN(untilTime) || (!Number.isNaN(createdTime) && createdTime <= untilTime))
+        && matchesQuery;
+    });
     filtered.sort((left, right) => normalized.newestFirst
       ? Number(right.sequence || 0) - Number(left.sequence || 0)
       : Number(left.sequence || 0) - Number(right.sequence || 0));
@@ -736,6 +826,81 @@ const createMemoryStore = () => {
         defaultGroupId: getDefaultGroupId(groups)
       };
     },
+    async createApiKey(payload = {}) {
+      const entry = normalizeApiKeyRecord({
+        ...payload,
+        id: payload.id || `ak_${randomUUID()}`,
+        createdAt: nowIso(),
+        updatedAt: nowIso()
+      });
+      validateApiKeyCreate(entry);
+      if (Array.from(state.apiKeys.values()).some((key) => key.keyHash === entry.keyHash)) {
+        throw createConflictError("API key already exists.", "API_KEY_CONFLICT");
+      }
+      state.apiKeys.set(entry.id, entry);
+      return entry;
+    },
+    async listApiKeys(filters = {}) {
+      const kind = normalizeString(filters.kind).toLowerCase();
+      const ownerDiscordUserId = normalizeString(filters.ownerDiscordUserId);
+      const includeRevoked = filters.includeRevoked !== false;
+      return Array.from(state.apiKeys.values())
+        .filter((entry) => (!kind || entry.kind === kind)
+          && (!ownerDiscordUserId || entry.ownerDiscordUserId === ownerDiscordUserId)
+          && (includeRevoked || !entry.revokedAt))
+        .sort((left, right) => String(right.createdAt || "").localeCompare(String(left.createdAt || "")));
+    },
+    async getApiKey(apiKeyId) {
+      return state.apiKeys.get(normalizeString(apiKeyId)) || null;
+    },
+    async updateApiKey(apiKeyId, payload = {}) {
+      const existing = await this.getApiKey(apiKeyId);
+      if (!existing) {
+        return null;
+      }
+      const next = normalizeApiKeyRecord({
+        ...existing,
+        name: payload.name ?? existing.name,
+        enabled: payload.enabled ?? existing.enabled,
+        groupIds: Array.isArray(payload.groupIds) ? payload.groupIds : existing.groupIds,
+        updatedAt: nowIso()
+      }, existing);
+      state.apiKeys.set(existing.id, next);
+      return next;
+    },
+    async revokeApiKey(apiKeyId) {
+      const existing = await this.getApiKey(apiKeyId);
+      if (!existing) {
+        return null;
+      }
+      const next = normalizeApiKeyRecord({
+        ...existing,
+        enabled: false,
+        revokedAt: existing.revokedAt || nowIso(),
+        updatedAt: nowIso()
+      }, existing);
+      state.apiKeys.set(existing.id, next);
+      return next;
+    },
+    async resolveApiKey(keyHash) {
+      const normalizedHash = normalizeString(keyHash);
+      if (!normalizedHash) {
+        return null;
+      }
+      const existing = Array.from(state.apiKeys.values()).find((entry) =>
+        entry.keyHash === normalizedHash && entry.enabled && !entry.revokedAt
+      );
+      if (!existing) {
+        return null;
+      }
+      const next = normalizeApiKeyRecord({
+        ...existing,
+        lastUsedAt: nowIso(),
+        updatedAt: nowIso()
+      }, existing);
+      state.apiKeys.set(existing.id, next);
+      return next;
+    },
     async createSession({discordUserId}) {
       const token = randomToken("sess");
       const session = {
@@ -773,6 +938,16 @@ const createMemoryStore = () => {
     },
     async getSetting(key) {
       return state.settings.get(key) || null;
+    },
+    async getDatabaseOverview() {
+      return buildMemoryDatabaseOverview(state);
+    },
+    async getDatabaseTable(tableName, options = {}) {
+      return readMemoryDatabaseTable(state, tableName, options);
+    },
+    async updateDatabaseSetting(key, value) {
+      const normalized = normalizeDatabaseSettingUpdate(key, value);
+      return this.setSetting(normalized.key, normalized.value);
     },
     async setSecret(key, value) {
       state.secrets.set(key, {key, value, updatedAt: nowIso()});
@@ -1051,6 +1226,10 @@ const createMemoryStore = () => {
       });
       return state.ravenDownloadTasks.get(task.taskId);
     },
+    async deleteRavenDownloadTask(taskId) {
+      const existed = state.ravenDownloadTasks.delete(taskId);
+      return {removed: existed ? 1 : 0};
+    },
     async getRavenMetadataMatch(titleId) {
       return state.ravenMetadataMatches.get(titleId) || null;
     },
@@ -1158,6 +1337,26 @@ const createMysqlStore = (config) => {
         updated_at DATETIME NOT NULL,
         PRIMARY KEY (discord_user_id, group_id),
         INDEX idx_user_permission_groups_group (group_id)
+      )
+    `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS api_keys (
+        api_key_id VARCHAR(96) PRIMARY KEY,
+        key_name VARCHAR(255) NOT NULL,
+        key_kind VARCHAR(16) NOT NULL,
+        enabled TINYINT(1) NOT NULL DEFAULT 1,
+        key_hash CHAR(64) NOT NULL,
+        key_prefix VARCHAR(32) NOT NULL,
+        owner_discord_user_id VARCHAR(64) NULL,
+        created_by_json JSON NOT NULL,
+        group_ids_json JSON NOT NULL,
+        last_used_at DATETIME NULL,
+        revoked_at DATETIME NULL,
+        created_at DATETIME NOT NULL,
+        updated_at DATETIME NOT NULL,
+        UNIQUE KEY idx_api_keys_hash (key_hash),
+        INDEX idx_api_keys_kind_owner (key_kind, owner_discord_user_id),
+        INDEX idx_api_keys_revoked (revoked_at)
       )
     `);
     await pool.query(`
@@ -1483,6 +1682,21 @@ const createMysqlStore = (config) => {
     avatarUrl: row.avatar_url,
     role: row.role_name,
     permissions: parseJsonColumn(row.permissions_json, []),
+    createdAt: row.created_at.toISOString(),
+    updatedAt: row.updated_at.toISOString()
+  });
+  const toApiKey = (row) => normalizeApiKeyRecord({
+    id: row.api_key_id,
+    name: row.key_name,
+    kind: row.key_kind,
+    enabled: row.enabled === 1,
+    keyHash: row.key_hash,
+    keyPrefix: row.key_prefix,
+    ownerDiscordUserId: row.owner_discord_user_id,
+    createdBy: parseJsonColumn(row.created_by_json, {}),
+    groupIds: parseJsonColumn(row.group_ids_json, []),
+    lastUsedAt: row.last_used_at ? row.last_used_at.toISOString() : null,
+    revokedAt: row.revoked_at ? row.revoked_at.toISOString() : null,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString()
   });
@@ -1979,6 +2193,128 @@ const createMysqlStore = (config) => {
         defaultGroupId: getDefaultGroupId(groups)
       };
     },
+    async createApiKey(payload = {}) {
+      const entry = normalizeApiKeyRecord({
+        ...payload,
+        id: payload.id || `ak_${randomUUID()}`,
+        createdAt: nowIso(),
+        updatedAt: nowIso()
+      });
+      validateApiKeyCreate(entry);
+      try {
+        await pool.query(`
+          INSERT INTO api_keys (
+            api_key_id, key_name, key_kind, enabled, key_hash, key_prefix, owner_discord_user_id,
+            created_by_json, group_ids_json, last_used_at, revoked_at, created_at, updated_at
+          )
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `, [
+          entry.id,
+          entry.name,
+          entry.kind,
+          entry.enabled ? 1 : 0,
+          entry.keyHash,
+          entry.keyPrefix,
+          entry.ownerDiscordUserId || null,
+          JSON.stringify(entry.createdBy || {}),
+          JSON.stringify(entry.groupIds || []),
+          entry.lastUsedAt ? toMysqlDateTime(entry.lastUsedAt) : null,
+          entry.revokedAt ? toMysqlDateTime(entry.revokedAt) : null,
+          toMysqlDateTime(entry.createdAt, toMysqlDateTime(nowIso())),
+          toMysqlDateTime(entry.updatedAt, toMysqlDateTime(nowIso()))
+        ]);
+      } catch (error) {
+        if (String(error?.message || "").includes("Duplicate entry")) {
+          throw createConflictError("API key already exists.", "API_KEY_CONFLICT");
+        }
+        throw error;
+      }
+      return this.getApiKey(entry.id);
+    },
+    async listApiKeys(filters = {}) {
+      const where = [];
+      const params = [];
+      const kind = normalizeString(filters.kind).toLowerCase();
+      const ownerDiscordUserId = normalizeString(filters.ownerDiscordUserId);
+      if (kind) {
+        where.push("key_kind = ?");
+        params.push(kind);
+      }
+      if (ownerDiscordUserId) {
+        where.push("owner_discord_user_id = ?");
+        params.push(ownerDiscordUserId);
+      }
+      if (filters.includeRevoked === false) {
+        where.push("revoked_at IS NULL");
+      }
+      const [rows] = await pool.query(
+        `SELECT * FROM api_keys ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY created_at DESC`,
+        params
+      );
+      return rows.map(toApiKey);
+    },
+    async getApiKey(apiKeyId) {
+      const [rows] = await pool.query("SELECT * FROM api_keys WHERE api_key_id = ? LIMIT 1", [normalizeString(apiKeyId)]);
+      return rows[0] ? toApiKey(rows[0]) : null;
+    },
+    async updateApiKey(apiKeyId, payload = {}) {
+      const existing = await this.getApiKey(apiKeyId);
+      if (!existing) {
+        return null;
+      }
+      const next = normalizeApiKeyRecord({
+        ...existing,
+        name: payload.name ?? existing.name,
+        enabled: payload.enabled ?? existing.enabled,
+        groupIds: Array.isArray(payload.groupIds) ? payload.groupIds : existing.groupIds,
+        updatedAt: nowIso()
+      }, existing);
+      await pool.query(`
+        UPDATE api_keys
+        SET key_name = ?, enabled = ?, group_ids_json = ?, updated_at = ?
+        WHERE api_key_id = ?
+      `, [
+        next.name,
+        next.enabled ? 1 : 0,
+        JSON.stringify(next.groupIds || []),
+        toMysqlDateTime(next.updatedAt, toMysqlDateTime(nowIso())),
+        existing.id
+      ]);
+      return this.getApiKey(existing.id);
+    },
+    async revokeApiKey(apiKeyId) {
+      const existing = await this.getApiKey(apiKeyId);
+      if (!existing) {
+        return null;
+      }
+      const revokedAt = existing.revokedAt || nowIso();
+      await pool.query(`
+        UPDATE api_keys
+        SET enabled = 0, revoked_at = ?, updated_at = ?
+        WHERE api_key_id = ?
+      `, [
+        toMysqlDateTime(revokedAt, toMysqlDateTime(nowIso())),
+        toMysqlDateTime(nowIso()),
+        existing.id
+      ]);
+      return this.getApiKey(existing.id);
+    },
+    async resolveApiKey(keyHash) {
+      const normalizedHash = normalizeString(keyHash);
+      if (!normalizedHash) {
+        return null;
+      }
+      const [rows] = await pool.query(
+        "SELECT * FROM api_keys WHERE key_hash = ? AND enabled = 1 AND revoked_at IS NULL LIMIT 1",
+        [normalizedHash]
+      );
+      if (!rows[0]) {
+        return null;
+      }
+      await pool.query("UPDATE api_keys SET last_used_at = NOW(), updated_at = NOW() WHERE api_key_id = ?", [rows[0].api_key_id]);
+      const [updatedRows] = await pool.query("SELECT * FROM api_keys WHERE api_key_id = ? LIMIT 1", [rows[0].api_key_id]);
+      return updatedRows[0] ? toApiKey(updatedRows[0]) : null;
+    },
     async createSession({discordUserId}) {
       const token = randomToken("sess");
       await pool.query("INSERT INTO sessions (token, discord_user_id, created_at) VALUES (?, ?, NOW())", [token, discordUserId]);
@@ -2022,6 +2358,16 @@ const createMysqlStore = (config) => {
       return rows[0]
         ? {key: rows[0].setting_key, value: parseJsonColumn(rows[0].setting_value), updatedAt: rows[0].updated_at.toISOString()}
         : null;
+    },
+    async getDatabaseOverview() {
+      return buildMysqlDatabaseOverview(pool, config.mysql.database);
+    },
+    async getDatabaseTable(tableName, options = {}) {
+      return readMysqlDatabaseTable(pool, config.mysql.database, tableName, options);
+    },
+    async updateDatabaseSetting(key, value) {
+      const normalized = normalizeDatabaseSettingUpdate(key, value);
+      return this.setSetting(normalized.key, normalized.value);
     },
     async setSecret(key, value) {
       await pool.query(`
@@ -2070,9 +2416,25 @@ const createMysqlStore = (config) => {
         where.push(`domain_name IN (${normalized.domains.map(() => "?").join(", ")})`);
         params.push(...normalized.domains);
       }
+      if (normalized.eventTypes.length) {
+        where.push(`event_type IN (${normalized.eventTypes.map(() => "?").join(", ")})`);
+        params.push(...normalized.eventTypes);
+      }
+      if (normalized.severities.length) {
+        where.push(`severity_name IN (${normalized.severities.map(() => "?").join(", ")})`);
+        params.push(...normalized.severities);
+      }
+      if (normalized.actorType) {
+        where.push("actor_type = ?");
+        params.push(normalized.actorType);
+      }
       if (normalized.actorId) {
         where.push("actor_id = ?");
         params.push(normalized.actorId);
+      }
+      if (normalized.targetType) {
+        where.push("target_type = ?");
+        params.push(normalized.targetType);
       }
       if (normalized.targetId) {
         where.push("target_id = ?");
@@ -2081,6 +2443,29 @@ const createMysqlStore = (config) => {
       if (normalized.afterSequence) {
         where.push("event_seq > ?");
         params.push(normalized.afterSequence);
+      }
+      const since = toMysqlDateTime(normalized.since);
+      if (since) {
+        where.push("created_at >= ?");
+        params.push(since);
+      }
+      const until = toMysqlDateTime(normalized.until);
+      if (until) {
+        where.push("created_at <= ?");
+        params.push(until);
+      }
+      if (normalized.query) {
+        const query = `%${normalized.query}%`;
+        where.push(`(
+          message_text LIKE ?
+          OR domain_name LIKE ?
+          OR event_type LIKE ?
+          OR actor_label LIKE ?
+          OR actor_id LIKE ?
+          OR target_type LIKE ?
+          OR target_id LIKE ?
+        )`);
+        params.push(query, query, query, query, query, query, query);
       }
       const [rows] = await pool.query(`
         SELECT * FROM vault_events
@@ -2576,6 +2961,10 @@ const createMysqlStore = (config) => {
         queuedAt: row.queued_at.toISOString(),
         updatedAt: row.updated_at.toISOString()
       };
+    },
+    async deleteRavenDownloadTask(taskId) {
+      const [result] = await pool.query("DELETE FROM raven_download_tasks WHERE task_id = ?", [taskId]);
+      return {removed: Number(result.affectedRows || 0)};
     },
     async getRavenMetadataMatch(titleId) {
       const [rows] = await pool.query("SELECT * FROM raven_metadata_matches WHERE title_id = ? LIMIT 1", [titleId]);

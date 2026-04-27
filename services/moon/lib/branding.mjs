@@ -28,7 +28,7 @@ export const deriveShortSiteName = (siteName) => {
  * Sage is unavailable or returns an invalid response.
  *
  * @param {string} sageBaseUrl
- * @returns {Promise<{siteName: string, shortName: string}>}
+ * @returns {Promise<{siteName: string, shortName: string, logo: any}>}
  */
 export const readMoonBranding = async (sageBaseUrl) => {
   try {
@@ -44,12 +44,14 @@ export const readMoonBranding = async (sageBaseUrl) => {
     const siteName = normalizeSiteName(payload?.siteName);
     return {
       siteName,
-      shortName: deriveShortSiteName(siteName)
+      shortName: deriveShortSiteName(siteName),
+      logo: payload?.logo && typeof payload.logo === "object" ? payload.logo : {enabled: false, urls: {}}
     };
   } catch {
     return {
       siteName: DEFAULT_SITE_NAME,
-      shortName: deriveShortSiteName(DEFAULT_SITE_NAME)
+      shortName: deriveShortSiteName(DEFAULT_SITE_NAME),
+      logo: {enabled: false, urls: {}}
     };
   }
 };

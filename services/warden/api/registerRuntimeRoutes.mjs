@@ -12,6 +12,7 @@
  *   getUpdates: () => Promise<Record<string, unknown>>,
  *   checkUpdates: (requestedServices?: string[]) => Promise<Record<string, unknown>>,
  *   installUpdates: (requestedServices?: string[]) => Promise<Record<string, unknown>>,
+ *   tailLogs: (filters?: Record<string, unknown>) => Promise<Record<string, unknown>>,
  *   getDiscordCallbackUrl: () => string
  * }} runtime
  */
@@ -36,6 +37,15 @@ export const registerRuntimeRoutes = (app, runtime) => {
 
   app.get("/api/updates", async (_req, res) => {
     res.json(await runtime.getUpdates());
+  });
+
+  app.get("/api/logs", async (req, res) => {
+    res.json(await runtime.tailLogs({
+      service: req.query.service,
+      lines: req.query.lines,
+      level: req.query.level,
+      q: req.query.q
+    }));
   });
 
   app.post("/api/updates/check", async (req, res) => {

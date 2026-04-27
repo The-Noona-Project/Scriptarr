@@ -40,6 +40,7 @@ class OracleRuntimeSettings:
     local_ai_api_key: str
     open_ai_api_key: str
     api_key: str
+    llm_timeout_seconds: float
 
 
 async def resolve_oracle_runtime_settings(*, config: OracleConfig, sage_client) -> OracleRuntimeSettings:
@@ -72,5 +73,6 @@ async def resolve_oracle_runtime_settings(*, config: OracleConfig, sage_client) 
         local_ai_base_url=config.local_ai_base_url,
         local_ai_api_key=config.local_ai_api_key,
         open_ai_api_key=open_ai_api_key,
-        api_key=config.local_ai_api_key if provider == "localai" else open_ai_api_key
+        api_key=config.local_ai_api_key if provider == "localai" else open_ai_api_key,
+        llm_timeout_seconds=config.llm_timeout_seconds
     )

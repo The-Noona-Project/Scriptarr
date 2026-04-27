@@ -10,7 +10,7 @@ handles Discord, and Oracle provides optional read-only AI chat.
 ## Service Map
 
 - `scriptarr-warden`: bootstraps the stack, parses the URL-first MySQL contract, owns `scriptarr-network`, and exposes
-  manual LocalAI install or start actions
+  manual LocalAI install, start, or remove actions
 - `scriptarr-mysql`: durable shared datastore for Scriptarr when `SCRIPTARR_MYSQL_URL=SELFHOST`
 - `scriptarr-vault`: auth, permissions, settings, secrets, cache, requests, sessions, progress, and generic job broker
 - `scriptarr-sage`: Moon-facing auth plus the only supported first-party internal HTTP broker
@@ -66,7 +66,9 @@ Moon admin `/admin/users` now also runs on a group-based access model instead of
 owner stays protected outside normal reassignment, while everyone else receives one or more reusable permission groups
 with admin route-family `read`, `write`, or `root` grants plus baseline user capabilities. Scriptarr seeds `Member`,
 `Moderator`, and `Admin`, keeps exactly one default onboarding group for new or returning Discord sign-ins, and now
-backs admin activity feeds with a shared durable event log plus same-origin SSE updates.
+backs admin activity feeds with a shared durable event log plus same-origin SSE updates. The Users page is a dedicated
+access-control console with search, filters, a protected owner state, group assignment drawers, and a grant matrix
+editor instead of a generic records view.
 Raven now keeps WeebCentral first by default, exposes MangaDex as a second normal download-provider option, and enables
 Anime-Planet ahead of MangaUpdates as a scrape-based metadata source for aliases, summaries, and lifecycle hints.
 Moon admin also exposes a dedicated Discord page at `/admin/discord` for guild workflow settings, onboarding template
@@ -77,8 +79,23 @@ That reader now defaults to seamless infinite chapter scroll while keeping a sec
 still persists Moon-native progress plus bookmarks behind the same typed reader routes.
 Moon admin calendar is now backed by Raven chapter release dates captured from provider scrapes plus metadata
 enrichment, so the calendar view can surface real title-release timing instead of only generic task history.
-Moon admin also exposes `/admin/system/api` for trusted automation settings, API key generation, and same-origin
-Swagger or OpenAPI links for the public Moon API.
+Moon admin also exposes `/admin/system/api` for trusted automation settings, system-level API keys with assigned
+permission groups, personal-key audit, and same-origin Swagger or OpenAPI links. Signed-in readers can create their
+own user-level API keys from `/profile` when they want external readers or trackers to sync only their account data.
+Moon admin `/admin/settings` is now the general settings hub for site branding, WebP logo upload, database size
+summary, toast notification preferences, credits, support links, and compact inline essentials such as Raven VPN,
+metadata providers, download providers, request workflow, and Discord basics. The database summary links to
+`/admin/settings/database`, a Settings-only database explorer that requires database grants, redacts sensitive values,
+and limits edits to validated settings JSON instead of exposing arbitrary SQL. Settings-owned saves now use explicit
+Moon v3 settings routes, preserve dirty section drafts during background refreshes, and keep AI controls isolated under
+`/admin/system/ai`.
+Moon admin's System area now has purpose-built Next pages for operational automation too: `/admin/system/tasks`
+manages allowlisted cron schedules and manual runs, `/admin/system/status` shows the grouped endpoint matrix with safe
+read probes, and `/admin/system/ai` owns Oracle plus optional LocalAI settings, long-running LocalAI progress, and test
+prompts.
+
+Scriptarr is maintained by [The Noona Project](https://github.com/The-Noona-Project/Scriptarr), with community support
+available on [Discord](https://discord.gg/HMYHT8KD5v).
 
 For end-to-end Docker verification, use:
 
@@ -101,7 +118,8 @@ For end-to-end Docker verification, use:
 6. Open Moon, confirm the bootstrap surface shows the configured first owner id, and use Discord login to claim the
    first owner session.
 7. Copy the callback URL surfaced by Warden or Moon into the Discord developer portal.
-8. Finish branding, integrations, library, metadata, Raven download-provider, VPN, Oracle, moderation, and managed-service update settings in Moon admin.
+8. Finish branding, logo, notification, integrations, library, metadata, Raven download-provider, VPN, Oracle,
+   moderation, and managed-service update settings in Moon admin.
    If you use the Discord bot runtime, finish the guild id, onboarding, superuser id, and per-command role mapping in
    `/admin/discord` before syncing slash commands.
 
@@ -119,6 +137,8 @@ For end-to-end Docker verification, use:
   provider target cannot create parallel active requests.
 - Vault now also persists reusable permission groups, user-group assignments, and the shared durable event log that
   powers `/admin/users`, `/admin/requests`, `/admin/system/events`, and other live admin timelines.
+- The admin permission model includes a `database` domain. Owners bypass it, while non-owner admins need database
+  grants before they can open the redacted DB explorer under `/admin/settings/database`.
 - Duplicate request attempts now attach the requester to a hidden waitlist instead of creating a second visible row.
   If the title is already in the library, Scriptarr links directly to the title page. If the title is already queued,
   Scriptarr blocks the duplicate row and sends a Discord DM when the title becomes ready.
@@ -126,9 +146,11 @@ For end-to-end Docker verification, use:
   `/search`, `/request`, `/subscribe`, plus the owner-only DM `/downloadall` command for the configured Discord
   superuser.
 - The DM-only `downloadall` flow now stays provider-browse first but resolves metadata before queueing each title. It
-  now uses a global DM slash command as the supported path: `/downloadall run ...` and `/downloadall help`. Portal
-  still keeps the old raw DM text form as a legacy best-effort fallback, but that path depends on Discord delivering
-  normal DM message events.
+  now uses a global DM slash command as the supported path: `/downloadall run ...`, `/downloadall status ...`,
+  `/downloadall continue ...`, `/downloadall cancel ...`, and `/downloadall help`. Single concrete type plus single
+  `titlegroup` requests keep the one-shot path; `all` selections start an async mega run that pauses after each batch.
+  Portal still keeps the old raw DM text form as a legacy best-effort fallback, but that path depends on Discord
+  delivering normal DM message events.
 - The bulk flow only queues titles with one confident metadata match and reports already-active, adult-content,
   no-metadata, ambiguous-metadata, and failed skips back in the Discord DM summary instead of silently creating
   metadata-less library entries. When `nsfw:false` is used, Raven requires an explicit WeebCentral `Adult Content: No`.
@@ -144,6 +166,8 @@ For end-to-end Docker verification, use:
 - Sage and Moon now treat admin events as a first-class brokered contract. Browsers read event history and SSE updates
   only through Moon-owned `/api/moon-v3/admin/events*` routes, while async service state changes append immutable
   summaries into Vault instead of building page-specific ad hoc timelines.
+- Moon admin uses one shared toast provider for action results, async jobs, and live admin event stream updates. Global
+  defaults live in Vault settings and individual admins can keep personal notification overrides.
 - Raven now merges metadata-provider tags plus download-provider tags into one canonical tag set for library titles,
   admin review, browse/search, and personalization surfaces while preserving internal source attribution for debugging.
 - Moon home personalization now blends explicit tag likes or dislikes with inferred taste from read history, follows,
@@ -167,9 +191,26 @@ For end-to-end Docker verification, use:
 - Warden-managed LocalAI presets now use the LocalAI AIO image family and only report startup success once the LocalAI
   runtime is actually ready. Warden now starts those AIO images with the Oracle-safe text-generation preload set
   instead of the full bundled model list so first startup does not get stuck on optional speech or media models.
+- CPU LocalAI can still take tens of seconds to answer even after readiness succeeds. Oracle keeps provider-specific
+  degraded replies and waits longer for brokered admin test prompts before treating the selected AI provider as down.
+- Moon's AI page now discovers provider models through Moon -> Sage -> Oracle and constrains the Oracle model field to
+  a dropdown for the selected provider instead of letting browsers or admins type arbitrary model ids.
+- LocalAI install, start, and remove actions are asynchronous Warden lifecycle jobs. Moon shows Docker pull, container,
+  and model-readiness progress, and Portal DMs the requesting admin when the job completes or fails.
 - Raven VPN should fail closed when VPN-backed downloads are enabled and the tunnel cannot be established.
 - Raven should only report download completion after promote plus catalog persistence succeed, and it now rescans the
   `downloaded/<type>/...` tree on boot to recover missing catalog records from finished files.
+- Moon admin's live queue keeps ETA on active downloads only, shows recovery actions for failed or stale Raven title
+  tasks, excludes service update/restart jobs from Needs attention, and can remove incomplete working folders without
+  deleting promoted library content.
+- Moon admin System Tasks are allowlisted maintenance jobs only, not arbitrary shell execution. Sage persists their
+  cron schedules in Vault, prevents overlapping runs, and emits durable job or event history for scheduled and manual
+  runs.
+- Moon admin System Status lists known Moon, Sage, Vault, Raven, Warden, Portal, Oracle, and LocalAI endpoints. It only
+  probes safe read endpoints automatically; mutation and browser-session routes stay visible but are marked not probed.
+- Oracle and LocalAI controls now live under `/admin/system/ai`; the main Settings page no longer carries AI controls.
+- Moon branding now includes a brokered site name plus optional uploaded logo. Moon converts PNG, JPEG, or WebP uploads
+  to stored WebP variants for user/admin chrome and install manifest icons.
 - Raven admin repair now exposes concrete alternate provider targets per title and can queue a staged replacement
   download that keeps the current catalog row and files intact until the replacement succeeds.
 - Raven's WeebCentral scraper now follows the live source's HTMX full-chapter-list flow for long-running series, so
@@ -178,9 +219,9 @@ For end-to-end Docker verification, use:
   Vault, Sage, Moon, Raven, Portal, and Oracle.
 - Moon's user app is now installable as a PWA, keeps HTML uncached, and uses a rolling recent-chapter reader cache on
   the current device instead of bulk offline sync.
-- Moon also serves a trusted public automation API under `/api/public/*`. Search is public, writes use
-  `X-Scriptarr-Api-Key`, Swagger lives at `/api/public/docs`, and external requests are guarded against NSFW, duplicate
-  library entries, and already-active downloads before being queued at the lowest priority.
+- Moon also serves trusted API surfaces under `/api/public/*` and selected `/api/moon-v3/*` routes. Search is public,
+  protected calls use `X-Scriptarr-Api-Key`, Swagger lives at `/api/public/docs`, system keys inherit assigned
+  permission-group grants, and user keys stay scoped to the owning reader's sync data and requests.
 
 ## Docs
 

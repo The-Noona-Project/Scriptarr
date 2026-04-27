@@ -88,7 +88,9 @@ export const MoonShell = ({children}) => {
 
   useEffect(() => {
     let active = true;
-    void loadMoonChromeContext().then((nextValue) => {
+    const query = typeof window === "undefined" ? "" : window.location.search || "";
+    const currentRoute = query ? `${pathname}${query}` : pathname;
+    void loadMoonChromeContext(currentRoute).then((nextValue) => {
       if (active) {
         setChrome(nextValue);
       }
@@ -110,6 +112,7 @@ export const MoonShell = ({children}) => {
 
   const menuGroups = useMemo(() => buildMenuGroups(pathname), [pathname]);
   const title = chrome.branding?.siteName || "Scriptarr";
+  const logoUrl = chrome.branding?.logo?.urls?.chrome || "";
   const promptInstall = useMemo(() => async () => {
     if (!installPrompt) {
       return false;
@@ -129,7 +132,10 @@ export const MoonShell = ({children}) => {
       <div className="moon-app-shell">
         <header className="moon-header">
           <div className="moon-header-top">
-            <Link className="moon-brandmark" href="/"><strong>{title}</strong></Link>
+            <Link className="moon-brandmark" href="/">
+              {logoUrl ? <img src={logoUrl} alt="" /> : null}
+              <strong>{title}</strong>
+            </Link>
             <Flex gap="16" vertical="center" className="moon-header-actions">
               <div className="moon-nav-desktop">
                 <MegaMenu menuGroups={menuGroups} />

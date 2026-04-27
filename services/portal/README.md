@@ -25,11 +25,15 @@ choose the concrete download source from `/admin/requests`, unless Sage auto-app
 the metadata exists but there is no source yet, Portal can still create an `unavailable` request, and when Sage later
 finds a source it DMs the requester that the title is back in admin review or was auto-approved.
 
-`downloadall` now uses a global slash command in DMs as the supported path: `/downloadall run ...` and
+`downloadall` now uses a global slash command in DMs as the supported path: `/downloadall run ...`,
+`/downloadall status runid:<id>`, `/downloadall continue runid:<id>`, `/downloadall cancel runid:<id>`, and
 `/downloadall help`. Portal still keeps the older raw DM text parser (`downloadall ...`) as a legacy best-effort
 fallback, but that path depends on Discord delivering `messageCreate` events and should not be treated as the primary
 interface anymore. The command stays owner-only and intentionally pinned to WeebCentral, so it fails if that provider
 is disabled instead of browsing MangaDex.
+Single type plus single `titlegroup` runs still use Raven's one-shot queue path. Selecting `type:all` or
+`titlegroup:all` starts an async mega run through Sage; Raven pauses the run after each batch until the owner explicitly
+continues it from DM slash commands.
 Bulk queueing is still provider-browse first, but it now asks Raven to metadata-resolve each matched bulk title before
 queueing it. Portal only queues titles with one confident metadata match and reports already-active, adult-content,
 no-metadata, ambiguous-metadata, and failed skips in the DM summary. For `nsfw:false`, Raven only queues titles whose
@@ -42,9 +46,10 @@ Moon admin also surfaces the live Discord runtime state from Portal, including c
 capability, requested intents or partials, the most recent DM receive timestamp, the last handled `downloadall`
 timestamp, the last `downloadall` error text, and the last meaningful Discord runtime error when the bot disconnects.
 
-Portal also watches request-linked moderation and Raven completion state through Sage. When a request is approved,
-denied, or finished and the requester has a Discord id, Portal sends one deduped DM with the shared title art and the
-right Moon link instead of duplicating notification state in a separate store.
+Portal also watches request-linked moderation, Raven completion state, and Sage system notifications. When a request is
+approved, denied, or finished and the requester has a Discord id, Portal sends one deduped DM with the shared title art
+and the right Moon link instead of duplicating notification state in a separate store. Portal also DMs admins who
+request LocalAI install, start, or remove jobs when those jobs complete or fail.
 Portal now also DMs blocked duplicate requesters when they are attached to the hidden ready-notify waitlist, DMs
 waitlisted users again when the title becomes ready, DMs unavailable requesters when a source appears and the request
 moves back into admin review, and DMs them again if that unavailable request expires after 90 days.

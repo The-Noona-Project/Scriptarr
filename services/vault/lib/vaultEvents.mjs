@@ -24,6 +24,10 @@ const normalizeScalarString = (value, fallback = "") => {
   return fallback;
 };
 
+const normalizeStringList = (value) => (Array.isArray(value) ? value : value ? [value] : [])
+  .map((entry) => normalizeScalarString(entry))
+  .filter(Boolean);
+
 export const DEFAULT_EVENT_RETENTION_DAYS = 180;
 
 /**
@@ -71,19 +75,31 @@ export const normalizeVaultEvent = (value = {}, nowIso = () => new Date().toISOS
  * @param {Record<string, unknown>} [value]
  * @returns {{
  *   domains: string[],
+ *   eventTypes: string[],
+ *   severities: string[],
+ *   actorType: string,
  *   actorId: string,
+ *   targetType: string,
  *   targetId: string,
+ *   query: string,
+ *   since: string,
+ *   until: string,
  *   afterSequence: number,
  *   limit: number,
  *   newestFirst: boolean
  * }}
  */
 export const normalizeEventFilters = (value = {}) => ({
-  domains: Array.isArray(value.domains)
-    ? value.domains.map((entry) => normalizeString(entry)).filter(Boolean)
-    : [],
+  domains: normalizeStringList(value.domains),
+  eventTypes: normalizeStringList(value.eventTypes || value.eventType),
+  severities: normalizeStringList(value.severities || value.severity),
+  actorType: normalizeScalarString(value.actorType),
   actorId: normalizeScalarString(value.actorId),
+  targetType: normalizeScalarString(value.targetType),
   targetId: normalizeScalarString(value.targetId),
+  query: normalizeScalarString(value.query || value.q),
+  since: normalizeScalarString(value.since),
+  until: normalizeScalarString(value.until),
   afterSequence: Math.max(0, Number.parseInt(String(value.afterSequence || value.after || 0), 10) || 0),
   limit: Math.min(500, Math.max(1, Number.parseInt(String(value.limit || 100), 10) || 100)),
   newestFirst: value.newestFirst !== false

@@ -113,6 +113,16 @@ public interface RavenBrokerClient {
     JsonNode putDownloadTask(String taskId, Map<String, Object> payload) throws IOException, InterruptedException;
 
     /**
+     * Remove a persisted Raven download task snapshot.
+     *
+     * @param taskId stable task id
+     * @return parsed JSON response
+     * @throws IOException when the response cannot be read
+     * @throws InterruptedException when the request is interrupted
+     */
+    JsonNode deleteDownloadTask(String taskId) throws IOException, InterruptedException;
+
+    /**
      * Load a persisted Raven metadata match.
      *
      * @param titleId stable title id

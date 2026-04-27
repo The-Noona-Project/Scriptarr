@@ -15,6 +15,7 @@ export const ADMIN_ACCESS_DOMAINS = Object.freeze([
   {id: "users", label: "Users"},
   {id: "discord", label: "Discord"},
   {id: "settings", label: "Settings"},
+  {id: "database", label: "Database"},
   {id: "system", label: "System"},
   {id: "publicapi", label: "Public API"}
 ]);
@@ -25,7 +26,8 @@ export const BASELINE_USER_CAPABILITIES = Object.freeze([
   "read_library",
   "create_requests",
   "read_requests",
-  "read_ai_status"
+  "read_ai_status",
+  "manage_personal_api_keys"
 ]);
 
 const ACCESS_LEVEL_ORDER = Object.freeze({

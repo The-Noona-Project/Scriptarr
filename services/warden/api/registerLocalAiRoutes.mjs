@@ -9,8 +9,9 @@
  *   getLocalAiStatus: () => Record<string, unknown>,
  *   refreshLocalAiStatus: () => Promise<Record<string, unknown>>,
  *   configureLocalAi: (payload?: {profileKey?: string, imageMode?: string, customImage?: string}) => Promise<Record<string, unknown>>,
- *   installLocalAi: () => Promise<Record<string, unknown>>,
- *   startLocalAi: () => Promise<Record<string, unknown>>
+ *   installLocalAi: (actor?: Record<string, unknown>) => Promise<Record<string, unknown>>,
+ *   startLocalAi: (actor?: Record<string, unknown>) => Promise<Record<string, unknown>>,
+ *   removeLocalAi: (actor?: Record<string, unknown>) => Promise<Record<string, unknown>>
  * }} runtime
  */
 export const registerLocalAiRoutes = (app, runtime) => {
@@ -26,12 +27,16 @@ export const registerLocalAiRoutes = (app, runtime) => {
     res.json(await runtime.configureLocalAi(req.body || {}));
   });
 
-  app.post("/api/localai/actions/install", async (_req, res) => {
-    res.status(202).json(await runtime.installLocalAi());
+  app.post("/api/localai/actions/install", async (req, res) => {
+    res.status(202).json(await runtime.installLocalAi(req.body?.requestedBy || {}));
   });
 
-  app.post("/api/localai/actions/start", async (_req, res) => {
-    res.status(202).json(await runtime.startLocalAi());
+  app.post("/api/localai/actions/start", async (req, res) => {
+    res.status(202).json(await runtime.startLocalAi(req.body?.requestedBy || {}));
+  });
+
+  app.post("/api/localai/actions/remove", async (req, res) => {
+    res.status(202).json(await runtime.removeLocalAi(req.body?.requestedBy || {}));
   });
 };
 

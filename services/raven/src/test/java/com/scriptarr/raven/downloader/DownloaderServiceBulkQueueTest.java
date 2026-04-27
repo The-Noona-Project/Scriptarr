@@ -59,6 +59,7 @@ class DownloaderServiceBulkQueueTest {
         assertEquals(BulkQueueDownloadResult.STATUS_QUEUED, result.status());
         assertEquals(2, result.matchedCount());
         assertEquals(2, result.queuedCount());
+        assertEquals(List.of("task_1", "task_2"), result.queuedTaskIds());
         assertEquals(List.of("Alpha Start", "Another Dawn"), result.queuedTitles());
         assertEquals("owner-1", service.requests.getFirst().requestedBy());
         assertEquals("weebcentral", service.requests.getFirst().providerId());
@@ -520,7 +521,7 @@ class DownloaderServiceBulkQueueTest {
         @Override
         public Map<String, Object> queueDownload(DownloadRequest request) {
             requests.add(request);
-            return Map.of("status", "queued");
+            return Map.of("taskId", "task_" + requests.size(), "status", "queued");
         }
     }
 

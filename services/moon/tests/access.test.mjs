@@ -1,8 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import {filterRoutesForUser, hasAdminGrant} from "../apps/admin/assets/access.js";
-import {adminRoutes} from "../apps/admin/assets/routes.js";
+import {filterRoutesForUser, hasAdminGrant} from "../apps/admin-next/lib/access.js";
+import {adminRoutes} from "../apps/admin-next/lib/routes.js";
 
 test("admin access helpers honor canonical domain grants", () => {
   const user = {

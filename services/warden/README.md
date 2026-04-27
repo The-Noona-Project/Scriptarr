@@ -10,10 +10,11 @@ The supported install shape is to run Warden as its own Docker container and let
 containers through the Docker socket. Outside test mode, Warden should not be published publicly; Moon remains the
 default public first-party surface.
 
-Warden no longer pulls or starts LocalAI on first boot. It exposes manual LocalAI configuration, install, and start
-actions so Moon admin can opt into the slower AI setup later. Warden treats Sage's Oracle settings as the authoritative
-LocalAI selection, caches the last Sage-synced profile in its runtime directory, reloads that selection on boot and
-before LocalAI lifecycle actions, and waits for LocalAI readiness before reporting a successful start.
+Warden no longer pulls or starts LocalAI on first boot. It exposes manual LocalAI configuration, install, start, and
+remove actions so Moon admin can opt into the slower AI setup later or remove the selected runtime image. Warden treats
+Sage's Oracle settings as the authoritative LocalAI selection, caches the last Sage-synced profile in its runtime
+directory, reloads that selection on boot and before LocalAI lifecycle actions, and reports those lifecycle actions as
+asynchronous brokered jobs with task progress.
 
 The supported database inputs are:
 
@@ -50,11 +51,16 @@ Warden also ships the Docker-backed test stack used by repo contributors:
 
 - `/api/bootstrap`: static service plan, install mode, callback URL, and storage contract
 - `/api/runtime`: Warden self status plus live managed-service runtime details, with sensitive env values redacted
+- `/api/logs`: allowlisted, server-redacted Docker log tails for Warden and managed Scriptarr services
 - `/api/updates`: current managed-service image state plus the latest broker-backed update job snapshot
 - `/api/updates/check`: pull-first update check for the managed sibling services
 - `/api/updates/install`: asynchronous managed-service install or restart flow for the sibling services
-- `/api/localai/*`: manual LocalAI AIO selection, install, status, and readiness-gated start
+- `/api/localai/*`: manual LocalAI AIO selection, install, status, readiness-gated start, and remove
 - `/health`: service health, Docker socket availability, and latest reconcile summary
+
+Moon's `/admin/system/ai` page reaches these LocalAI endpoints only through Sage. Warden should keep status and
+profile reads safe for the System Status matrix while keeping install, start, and remove service-authenticated and
+reported through durable job or event state.
 
 ## LocalAI
 
@@ -65,8 +71,10 @@ Warden ships four LocalAI AIO presets:
 - `amd -> localai/localai:latest-aio-gpu-hipblas`
 - `intel -> localai/localai:latest-aio-gpu-intel`
 
-When admins start LocalAI, Warden applies the matching runtime flags for the selected preset, mounts the persistent
-`localai/models` and `localai/data` folders, and waits for `GET /readyz` with `GET /v1/models` as a fallback before it
-reports the container as ready. Warden also constrains the AIO `MODELS` preload set to the Oracle-safe
-`text-to-text.yaml` profile for the selected hardware so the official AIO image boots reliably instead of hanging on
-optional bundled speech or media models.
+When admins install or start LocalAI, Warden creates a long-running lifecycle job and updates separate Docker image,
+container, and model-readiness tasks so Moon can render progress without holding the HTTP request open. Starting
+LocalAI applies the matching runtime flags for the selected preset, mounts the persistent `localai/models` and
+`localai/data` folders, and waits for `GET /readyz` with `GET /v1/models` as a fallback before it reports the
+container as ready. Warden also constrains the AIO `MODELS` preload set to the Oracle-safe `text-to-text.yaml` profile
+for the selected hardware so the official AIO image boots reliably instead of hanging on optional bundled speech or
+media models. Removing LocalAI stops and removes the managed container plus the currently selected LocalAI image.

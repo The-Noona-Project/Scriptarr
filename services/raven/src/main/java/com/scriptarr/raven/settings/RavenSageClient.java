@@ -84,6 +84,11 @@ public class RavenSageClient implements RavenBrokerClient {
     }
 
     @Override
+    public JsonNode deleteDownloadTask(String taskId) throws IOException, InterruptedException {
+        return delete("/api/internal/vault/raven/download-tasks/" + encode(taskId));
+    }
+
+    @Override
     public JsonNode getMetadataMatch(String titleId) throws IOException, InterruptedException {
         return get("/api/internal/vault/raven/metadata-matches/" + encode(titleId));
     }
@@ -156,6 +161,18 @@ public class RavenSageClient implements RavenBrokerClient {
             .header("Authorization", "Bearer " + serviceToken)
             .header("Content-Type", "application/json")
             .method("PATCH", HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(payload)))
+            .build();
+        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+        return parseResponse(path, response);
+    }
+
+    private JsonNode delete(String path) throws IOException, InterruptedException {
+        HttpRequest request = HttpRequest.newBuilder()
+            .uri(URI.create(trimBaseUrl() + path))
+            .timeout(Duration.ofSeconds(10))
+            .header("Authorization", "Bearer " + serviceToken)
+            .header("Content-Type", "application/json")
+            .DELETE()
             .build();
         HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
         return parseResponse(path, response);

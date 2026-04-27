@@ -46,7 +46,7 @@ test("loadMoonChromeContext normalizes nested auth payloads from Moon auth statu
       });
     }
 
-    if (href === "/api/moon/auth/discord/url") {
+    if (href === "/api/moon/auth/discord/url?returnTo=%2Fbrowse%3Fq%3Dmoon") {
       return new Response(JSON.stringify({oauthUrl: "https://discord.example/login"}), {
         status: 200,
         headers: {"Content-Type": "application/json"}
@@ -57,7 +57,7 @@ test("loadMoonChromeContext normalizes nested auth payloads from Moon auth statu
   };
 
   try {
-    const context = await loadMoonChromeContext();
+    const context = await loadMoonChromeContext("/browse?q=moon");
     assert.deepEqual(context.branding, {siteName: "Pax-Kun"});
     assert.deepEqual(context.auth, {
       username: "CaptainPax",

@@ -1,12 +1,27 @@
 /**
  * @file Scriptarr Sage module: services/sage/lib/registerMoonV3Routes.mjs.
  */
+import {createHash, randomBytes} from "node:crypto";
 import {ADMIN_ACCESS_DOMAINS} from "@scriptarr/access";
 import {hasDomainAccess, hasPermission} from "./auth.mjs";
+import {
+  ADMIN_TOAST_GLOBAL_KEY,
+  MOON_BRANDING_KEY,
+  adminToastUserKey,
+  defaultAdminToastSettings,
+  mergeAdminToastSettings,
+  normalizeAdminToastSettings,
+  normalizeMoonBrandingSettings,
+  publicMoonBranding,
+  selectMoonLogoVariant
+} from "./adminUiSettings.mjs";
 import {appendDurableEvent, appendUserEvent, buildServiceActor, buildUserActor} from "./adminEvents.mjs";
 import {buildIntakeSelection, evaluateSelectionAgainstGuardState} from "./requestSelectionGuards.mjs";
 import {buildRequestWorkConflictPayload, isRequestWorkConflictError} from "./requestConflict.mjs";
+import {buildAdminQueuePayload} from "./buildAdminQueuePayload.mjs";
 import {buildMoonHomePayload} from "./buildMoonHomePayload.mjs";
+import {buildMoonProfilePayload} from "./buildMoonProfilePayload.mjs";
+import {buildSystemStatusPayload} from "./systemStatusRegistry.mjs";
 import {
   buildMoonUserLibraryState,
   getTagPreference,
@@ -23,12 +38,42 @@ import {
   resolveRequestTab,
   selectAutoApproveDownload
 } from "./requestFlow.mjs";
+import {PORTAL_DISCORD_KEY, normalizePortalDiscordSettings} from "./portalDiscordSettings.mjs";
 
 const defaultReaderPreferences = Object.freeze({
   readingMode: "infinite",
   pageFit: "width",
   showSidebar: false,
   showPageNumbers: true
+});
+const RAVEN_VPN_KEY = "raven.vpn";
+const RAVEN_VPN_PASSWORD_SECRET = "raven.vpn.piaPassword";
+const RAVEN_METADATA_KEY = "raven.metadata.providers";
+const RAVEN_DOWNLOAD_PROVIDERS_KEY = "raven.download.providers";
+const SAGE_REQUESTS_KEY = "sage.requests";
+const MOON_PUBLIC_API_KEY = "moon.publicApi";
+const API_KEY_SECRET_PREFIX = "scr";
+
+const generateApiKeySecret = (kind = "key") =>
+  `${API_KEY_SECRET_PREFIX}_${normalizeString(kind, "key")}_${randomBytes(24).toString("hex")}`;
+
+const hashApiKeySecret = (value) => createHash("sha256").update(normalizeString(value)).digest("hex");
+
+const keyPrefixForSecret = (value) => normalizeString(value).slice(0, 18);
+
+const sanitizeApiKeyRecord = (entry = {}) => ({
+  id: normalizeString(entry.id),
+  name: normalizeString(entry.name, "API key"),
+  kind: normalizeString(entry.kind, "system"),
+  enabled: entry.enabled !== false,
+  keyPrefix: normalizeString(entry.keyPrefix),
+  ownerDiscordUserId: normalizeString(entry.ownerDiscordUserId),
+  createdBy: entry.createdBy && typeof entry.createdBy === "object" ? entry.createdBy : {},
+  groupIds: normalizeArray(entry.groupIds).map((groupId) => normalizeString(groupId)).filter(Boolean),
+  lastUsedAt: parseIso(entry.lastUsedAt),
+  createdAt: parseIso(entry.createdAt),
+  updatedAt: parseIso(entry.updatedAt),
+  revokedAt: parseIso(entry.revokedAt)
 });
 
 const normalizeString = (value, fallback = "") => {
@@ -53,11 +98,13 @@ const EVENT_DOMAIN_ACCESS = Object.freeze({
   requests: "requests",
   discord: "discord",
   settings: "settings",
+  database: "database",
   system: "system",
   publicapi: "publicapi",
   follow: "library",
   reader: "library"
 });
+const ORACLE_ADMIN_TEST_TIMEOUT_MS = 75000;
 
 const normalizeTypeSlug = (value, fallback = "manga") => {
   const normalized = normalizeString(value, fallback)
@@ -264,26 +311,6 @@ const buildEventRows = (requests = [], tasks = []) => {
     .slice(0, 80);
 };
 
-const buildLogRows = ({bootstrap, oracle, portal, raven, titles, tasks, requests}) => {
-  const rows = [];
-
-  if (bootstrap?.services) {
-    for (const service of bootstrap.services) {
-      rows.push(`[bootstrap] ${service.name} -> ${service.image}`);
-    }
-  }
-
-  rows.push(`[oracle] provider=${oracle?.provider || "unknown"} enabled=${oracle?.enabled === true}`);
-  rows.push(`[portal] discord=${portal?.discord || "unknown"}`);
-  rows.push(`[raven] titles=${titles.length} tasks=${tasks.length}`);
-
-  for (const request of requests.slice(0, 10)) {
-    rows.push(`[request:${request.status}] ${request.title} (${request.requestedBy.username || request.requestedBy.discordUserId || "unknown"})`);
-  }
-
-  return rows;
-};
-
 const enrichProgressEntry = (entry = {}, titleIndex = new Map()) => {
   const title = titleIndex.get(normalizeString(entry.mediaId)) || {};
   return {
@@ -332,6 +359,14 @@ const withUser = (requireUser, handler) => async (req, res) => {
   });
 };
 
+const requireBrowserSession = (req, res) => {
+  if (req.authMethod === "api-key") {
+    res.status(403).json({error: "API-key authenticated requests cannot manage API keys."});
+    return false;
+  }
+  return true;
+};
+
 const withPermission = (requirePermission, permission, handler) => async (req, res) => {
   await requirePermission(permission)(req, res, async () => {
     await handler(req, res);
@@ -374,6 +409,7 @@ const mergeDisplayStrings = (...values) => {
  *   readRequestWorkflowSettings: () => Promise<Record<string, unknown>>,
  *   readOracleSettings: () => Promise<Record<string, unknown>>,
  *   readMoonBrandingSettings: () => Promise<Record<string, unknown>>,
+ *   readAdminToastSettings: (user: Record<string, unknown>) => Promise<Record<string, unknown>>,
  *   readMoonPublicApiSettings: () => Promise<Record<string, unknown>>,
  *   readPortalDiscordSettings: () => Promise<Record<string, unknown>>,
  *   serviceJson: (baseUrl: string, path: string, options?: {method?: string, body?: unknown, headers?: Record<string, string>}) => Promise<{ok: boolean, status: number, payload: any}>,
@@ -394,10 +430,14 @@ export const registerMoonV3Routes = (app, {
   readRequestWorkflowSettings,
   readOracleSettings,
   readMoonBrandingSettings,
+  readAdminToastSettings,
   readMoonPublicApiSettings,
   readPortalDiscordSettings,
   serviceJson,
-  safeJson
+  safeJson,
+  systemTaskRuntime,
+  persistOracleSettings,
+  syncWardenLocalAiConfig
 }) => {
   const fetchRavenJson = async (path, options = {}) => {
     const result = await serviceJson(config.ravenBaseUrl, path, options);
@@ -432,6 +472,43 @@ export const registerMoonV3Routes = (app, {
     ]);
 
     return normalizeArray(requests).map((request) => toRequestSummary(request, userIndex));
+  };
+
+  const buildRequestSummaryCounts = (requests = []) => {
+    const counts = {
+      total: requests.length,
+      needsReview: 0,
+      pending: 0,
+      unavailable: 0,
+      queued: 0,
+      downloading: 0,
+      failed: 0,
+      active: 0,
+      completed: 0,
+      closed: 0,
+      waitlisted: 0
+    };
+    for (const request of requests) {
+      const status = normalizeString(request.status).toLowerCase();
+      if (Object.hasOwn(counts, status)) {
+        counts[status] += 1;
+      }
+      const needsReview = status === "unavailable"
+        || (status === "pending" && !normalizeObject(request.details?.selectedDownload)?.titleUrl);
+      if (needsReview) {
+        counts.needsReview += 1;
+      }
+      if (request.tab === "closed") {
+        counts.closed += 1;
+      }
+      if (request.tab === "active") {
+        counts.active += 1;
+      }
+      if (Number.parseInt(String(request.waitlistCount || 0), 10) > 0) {
+        counts.waitlisted += 1;
+      }
+    }
+    return counts;
   };
 
   const readUserTagPreferences = async (discordUserId) =>
@@ -482,9 +559,9 @@ export const registerMoonV3Routes = (app, {
     return request ? toRequestSummary(request, userIndex) : null;
   };
 
-  const loadTasks = async () => {
+  const loadLiveRavenTasks = async () => {
     const ravenPayload = await fetchRavenJson("/v1/downloads/tasks");
-    const ravenTasks = normalizeArray(ravenPayload).map((task) => ({
+    return normalizeArray(ravenPayload).map((task) => ({
       taskId: normalizeString(task.taskId),
       jobId: normalizeString(task.jobId, normalizeString(task.taskId)),
       requestId: normalizeString(task.requestId),
@@ -493,16 +570,29 @@ export const registerMoonV3Routes = (app, {
       titleUrl: normalizeString(task.titleUrl),
       providerId: normalizeString(task.providerId),
       requestType: normalizeString(task.requestType, "manga"),
+      libraryTypeLabel: normalizeString(task.libraryTypeLabel, normalizeString(task.details?.libraryTypeLabel, normalizeString(task.requestType, "Manga"))),
       libraryTypeSlug: normalizeTypeSlug(task.libraryTypeSlug || task.requestType),
       coverUrl: normalizeString(task.coverUrl, normalizeString(task.details?.coverUrl)),
       requestedBy: normalizeString(task.requestedBy),
       status: normalizeString(task.status, "queued"),
       message: normalizeString(task.message),
       percent: Number.parseInt(String(task.percent || 0), 10) || 0,
+      priority: normalizeString(task.priority, normalizeString(task.details?.priority, "normal")),
+      sortOrder: Number.parseInt(String(task.sortOrder ?? task.details?.sortOrder ?? 0), 10) || 0,
+      details: normalizeObject(task.details, {}) || {},
+      selectedMetadata: normalizeObject(task.selectedMetadata, normalizeObject(task.details?.selectedMetadata, {}) || {}),
+      selectedDownload: normalizeObject(task.selectedDownload, normalizeObject(task.details?.selectedDownload, {}) || {}),
+      workingRoot: normalizeString(task.workingRoot, normalizeString(task.details?.workingRoot)),
+      downloadRoot: normalizeString(task.downloadRoot, normalizeString(task.details?.downloadRoot)),
       queuedAt: parseIso(task.queuedAt),
       updatedAt: parseIso(task.updatedAt),
+      ownerService: "scriptarr-raven",
       source: "raven"
     }));
+  };
+
+  const loadTasks = async () => {
+    const ravenTasks = await loadLiveRavenTasks();
     const jobs = normalizeArray(await vaultClient.listJobs()).filter((job) =>
       ["scriptarr-warden", "scriptarr-raven"].includes(normalizeString(job.ownerService))
     );
@@ -510,20 +600,34 @@ export const registerMoonV3Routes = (app, {
       normalizeArray(await vaultClient.listJobTasks(job.jobId)).map((task) => ({
         taskId: normalizeString(task.taskId),
         jobId: normalizeString(job.jobId),
+        jobKind: normalizeString(job.kind),
+        taskKey: normalizeString(task.taskKey),
         requestId: normalizeString(task.payload?.requestId, normalizeString(job.payload?.requestId)),
         titleId: normalizeString(task.result?.titleId, normalizeString(job.result?.titleId)),
         titleName: normalizeString(task.label || job.label || job.kind, "Background job"),
         titleUrl: normalizeString(task.payload?.titleUrl, normalizeString(job.payload?.titleUrl)),
         providerId: normalizeString(task.payload?.providerId, normalizeString(job.payload?.providerId)),
         requestType: normalizeString(task.payload?.requestType || job.payload?.requestType || job.kind, "job"),
+        libraryTypeLabel: normalizeString(
+          task.payload?.libraryTypeLabel || job.payload?.libraryTypeLabel,
+          normalizeString(task.payload?.requestType || job.payload?.requestType || job.kind, "Job")
+        ),
         libraryTypeSlug: normalizeTypeSlug(task.payload?.libraryTypeSlug || job.payload?.libraryTypeSlug || task.payload?.requestType || job.payload?.requestType || "manga"),
         coverUrl: normalizeString(task.result?.coverUrl, normalizeString(job.result?.coverUrl)),
         requestedBy: normalizeString(job.ownerService || task.requestedBy || "scriptarr"),
         status: normalizeString(task.status || job.status, "queued"),
         message: normalizeString(task.message || job.label || "Background task updated."),
         percent: Number.parseInt(String(task.percent || 0), 10) || 0,
+        priority: normalizeString(task.payload?.priority || job.payload?.priority, "normal"),
+        sortOrder: Number.parseInt(String(task.sortOrder || 0), 10) || 0,
+        details: {},
+        selectedMetadata: {},
+        selectedDownload: {},
+        workingRoot: normalizeString(task.result?.workingRoot, normalizeString(job.result?.workingRoot)),
+        downloadRoot: normalizeString(task.result?.downloadRoot, normalizeString(job.result?.downloadRoot)),
         queuedAt: parseIso(task.createdAt || job.createdAt),
         updatedAt: parseIso(task.updatedAt || job.updatedAt),
+        ownerService: normalizeString(job.ownerService),
         source: "broker"
       }))
     ));
@@ -824,10 +928,12 @@ export const registerMoonV3Routes = (app, {
   const requireLibraryRoot = (handler) => withAdminAccess("library", "root", handler);
   const requireAddRead = (handler) => withAdminAccess("add", "read", handler);
   const requireAddWrite = (handler) => withAdminAccess("add", "write", handler);
-  const requireImportRead = (handler) => withAdminAccess("import", "read", handler);
-  const requireCalendarRead = (handler) => withAdminAccess("calendar", "read", handler);
-  const requireActivityRead = (handler) => withAdminAccess("activity", "read", handler);
-  const requireWantedRead = (handler) => withAdminAccess("wanted", "read", handler);
+    const requireImportRead = (handler) => withAdminAccess("import", "read", handler);
+    const requireCalendarRead = (handler) => withAdminAccess("calendar", "read", handler);
+    const requireActivityRead = (handler) => withAdminAccess("activity", "read", handler);
+    const requireActivityWrite = (handler) => withAdminAccess("activity", "write", handler);
+    const requireActivityRoot = (handler) => withAdminAccess("activity", "root", handler);
+    const requireWantedRead = (handler) => withAdminAccess("wanted", "read", handler);
   const requireRequestRead = (handler) => withAdminAccess("requests", "read", handler);
   const requireRequestWrite = (handler) => withAdminAccess("requests", "write", handler);
   const requireRequestRoot = (handler) => withAdminAccess("requests", "root", handler);
@@ -837,6 +943,9 @@ export const registerMoonV3Routes = (app, {
   const requireMediaManagementRead = (handler) => withAdminAccess("mediamanagement", "read", handler);
   const requireSettingsRead = (handler) => withAdminAccess("settings", "read", handler);
   const requireSettingsWrite = (handler) => withAdminAccess("settings", "write", handler);
+  const requireSettingsRoot = (handler) => withAdminAccess("settings", "root", handler);
+  const requireDatabaseRead = (handler) => withAdminAccess("database", "read", handler);
+  const requireDatabaseWrite = (handler) => withAdminAccess("database", "write", handler);
   const requireSystemRead = (handler) => withAdminAccess("system", "read", handler);
   const requireSystemRoot = (handler) => withAdminAccess("system", "root", handler);
   const requirePublicApiRead = (handler) => withAdminAccess("publicapi", "read", handler);
@@ -859,9 +968,44 @@ export const registerMoonV3Routes = (app, {
       "read"
     ));
   };
+  const normalizeRequestedEventFilter = (value) => normalizeRequestedEventDomains(value);
+  const buildEventFiltersFromQuery = (query = {}) => ({
+    domains: normalizeRequestedEventDomains(query.domain),
+    eventTypes: normalizeRequestedEventFilter(query.eventType),
+    severities: normalizeRequestedEventFilter(query.severity),
+    actorType: normalizeString(query.actorType),
+    actorId: normalizeString(query.actorId),
+    targetType: normalizeString(query.targetType),
+    targetId: normalizeString(query.targetId),
+    query: normalizeString(query.q || query.query),
+    since: normalizeString(query.since),
+    until: normalizeString(query.until),
+    afterSequence: query.afterSequence || query.after || 0,
+    limit: query.limit || 100,
+    newestFirst: query.newestFirst !== "false"
+  });
+  const appendOptionalSearchParam = (params, key, value) => {
+    const normalized = normalizeString(value);
+    if (normalized) {
+      params.set(key, normalized);
+    }
+  };
 
   app.get("/api/moon-v3/public/branding", async (_req, res) => {
-    res.json(await readMoonBrandingSettings());
+    res.json(publicMoonBranding(await readMoonBrandingSettings()));
+  });
+
+  app.get("/api/moon-v3/public/branding/logo/:variant", async (req, res) => {
+    const logo = selectMoonLogoVariant(await readMoonBrandingSettings(), normalizeString(req.params.variant, "chrome"));
+    if (!logo) {
+      res.status(404).json({error: "Brand logo not configured."});
+      return;
+    }
+    if (logo.revision) {
+      res.setHeader("ETag", `"${logo.revision}"`);
+    }
+    res.setHeader("Cache-Control", "public, max-age=86400");
+    res.type(logo.mimeType).send(logo.buffer);
   });
 
   app.get("/api/moon-v3/admin/overview", requireOverviewRead(async (_req, res) => {
@@ -1151,10 +1295,106 @@ export const registerMoonV3Routes = (app, {
     });
   }));
 
-  app.get("/api/moon-v3/admin/activity/queue", requireActivityRead(async (_req, res) => {
-    const tasks = await loadTasks();
-    res.json({tasks: tasks.filter((entry) => entry.status === "queued" || entry.status === "running")});
-  }));
+    app.get("/api/moon-v3/admin/activity/queue", requireActivityRead(async (_req, res) => {
+      const tasks = await loadLiveRavenTasks();
+      res.json(buildAdminQueuePayload(tasks));
+    }));
+
+    app.post("/api/moon-v3/admin/activity/queue/:taskId/cancel", requireActivityWrite(async (req, res) => {
+      const tasks = await loadLiveRavenTasks();
+      const task = tasks.find((entry) => normalizeString(entry.taskId) === normalizeString(req.params.taskId));
+      if (!task) {
+        res.status(404).json({error: "Live Raven task not found."});
+        return;
+      }
+      if (normalizeString(task.status) === "running" && !hasDomainAccess(req.user, "activity", "root")) {
+        res.status(403).json({error: "Canceling a running task requires activity.root."});
+        return;
+      }
+      res.json(await fetchRavenJson(`/v1/downloads/tasks/${encodeURIComponent(req.params.taskId)}/cancel`, {
+        method: "POST"
+      }));
+    }));
+
+    app.post("/api/moon-v3/admin/activity/queue/:taskId/retry", requireActivityWrite(async (req, res) => {
+      res.json(await fetchRavenJson(`/v1/downloads/tasks/${encodeURIComponent(req.params.taskId)}/retry`, {
+        method: "POST"
+      }));
+    }));
+
+    app.post("/api/moon-v3/admin/activity/queue/:taskId/remove", requireActivityWrite(async (req, res) => {
+      const tasks = await loadLiveRavenTasks();
+      const queuePayload = buildAdminQueuePayload(tasks);
+      const task = normalizeArray(queuePayload.needsAttention)
+        .find((entry) => normalizeString(entry.taskId) === normalizeString(req.params.taskId));
+      if (!task) {
+        res.status(404).json({error: "Live Raven task not found in Needs attention."});
+        return;
+      }
+      if (task.removable !== true) {
+        res.status(409).json({error: "Only failed or stale queued Raven title tasks can be removed."});
+        return;
+      }
+      res.json(await fetchRavenJson(`/v1/downloads/tasks/${encodeURIComponent(req.params.taskId)}/remove`, {
+        method: "POST"
+      }));
+    }));
+
+    app.post("/api/moon-v3/admin/activity/queue/retry-all", requireActivityWrite(async (_req, res) => {
+      const tasks = await loadLiveRavenTasks();
+      const queuePayload = buildAdminQueuePayload(tasks);
+      const retriableTasks = normalizeArray(queuePayload.needsAttention)
+        .filter((task) => task.retriable === true && normalizeString(task.taskId));
+
+      const results = [];
+      for (const task of retriableTasks) {
+        const response = await fetchRavenJson(`/v1/downloads/tasks/${encodeURIComponent(task.taskId)}/retry`, {
+          method: "POST"
+        });
+        results.push({
+          taskId: task.taskId,
+          titleName: normalizeString(task.titleName, "Untitled"),
+          ok: response.ok,
+          status: response.status,
+          error: response.ok ? "" : normalizeString(response.payload?.error, response.statusText)
+        });
+      }
+
+      const retried = results.filter((entry) => entry.ok);
+      const failed = results.filter((entry) => !entry.ok);
+      res.json({
+        retriedCount: retried.length,
+        failedCount: failed.length,
+        message: retried.length
+          ? `Queued ${retried.length} Raven retry${retried.length === 1 ? "" : "ies"}.`
+          : "No retriable Raven tasks were waiting in Needs attention.",
+        results
+      });
+    }));
+
+    app.post("/api/moon-v3/admin/activity/queue/:taskId/priority", requireActivityWrite(async (req, res) => {
+      const priority = normalizeString(req.body?.priority).toLowerCase();
+      if (!["high", "normal", "low"].includes(priority)) {
+        res.status(400).json({error: "priority must be high, normal, or low."});
+        return;
+      }
+      res.json(await fetchRavenJson(`/v1/downloads/tasks/${encodeURIComponent(req.params.taskId)}/priority`, {
+        method: "POST",
+        body: {priority}
+      }));
+    }));
+
+    app.post("/api/moon-v3/admin/activity/queue/:taskId/move", requireActivityWrite(async (req, res) => {
+      const direction = normalizeString(req.body?.direction).toLowerCase();
+      if (!["up", "down"].includes(direction)) {
+        res.status(400).json({error: "direction must be up or down."});
+        return;
+      }
+      res.json(await fetchRavenJson(`/v1/downloads/tasks/${encodeURIComponent(req.params.taskId)}/move`, {
+        method: "POST",
+        body: {direction}
+      }));
+    }));
 
   app.get("/api/moon-v3/admin/activity/history", requireActivityRead(async (_req, res) => {
     const tasks = await loadTasks();
@@ -1197,7 +1437,11 @@ export const registerMoonV3Routes = (app, {
   }));
 
   app.get("/api/moon-v3/admin/requests", requireRequestRead(async (_req, res) => {
-    res.json({requests: await loadRequests()});
+    const requests = await loadRequests();
+    res.json({
+      requests,
+      counts: buildRequestSummaryCounts(requests)
+    });
   }));
 
   app.get("/api/moon-v3/admin/requests/metadata-search", requireRequestWrite(async (req, res) => {
@@ -1293,6 +1537,40 @@ export const registerMoonV3Routes = (app, {
       eventMessage: normalizeString(req.body?.comment, "Approved from Moon admin.")
     });
     res.status(approved.status).json(approved.payload);
+  }));
+
+  app.post("/api/moon-v3/admin/requests/:id/deny", requireRequestWrite(async (req, res) => {
+    const existing = await loadRequestById(req.params.id);
+    if (!existing) {
+      res.status(404).json({error: "Request not found."});
+      return;
+    }
+    const comment = normalizeString(req.body?.comment);
+    if (!comment) {
+      res.status(400).json({error: "A denial comment is required."});
+      return;
+    }
+
+    const denied = await vaultClient.reviewRequest(req.params.id, {
+      status: "denied",
+      comment,
+      actor: req.user.username
+    });
+    await appendEventForUser({
+      domain: "requests",
+      eventType: "request-denied",
+      severity: "warning",
+      user: req.user,
+      targetType: "request",
+      targetId: normalizeString(req.params.id),
+      message: `${req.user.username} denied a request.`,
+      metadata: {
+        requestId: normalizeString(req.params.id),
+        title: normalizeString(existing.title),
+        comment
+      }
+    });
+    res.json(toRequestSummary(denied, await loadUserIndex()));
   }));
 
   app.post("/api/moon-v3/admin/requests/:id/override", requireRequestRoot(async (req, res) => {
@@ -1659,45 +1937,471 @@ export const registerMoonV3Routes = (app, {
     res.json({naming});
   }));
 
-  app.get("/api/moon-v3/admin/settings", requireSettingsRead(async (_req, res) => {
-    const [ravenVpn, metadataProviders, downloadProviders, requestWorkflow, oracle, branding, discord, wardenStatus] = await Promise.all([
+  const buildToastSettingsPayload = async (user) => {
+    if (readAdminToastSettings) {
+      return readAdminToastSettings(user);
+    }
+    const global = defaultAdminToastSettings();
+    return {
+      global,
+      personal: null,
+      effective: mergeAdminToastSettings(global, null),
+      canEditGlobal: hasDomainAccess(user, "settings", "root")
+    };
+  };
+
+  const buildSettingsPayload = async (user) => {
+    const [ravenVpn, metadataProviders, downloadProviders, requestWorkflow, branding, discord, toastSettings, databaseOverview, ravenHealth] = await Promise.all([
       readRavenVpnSettings(),
       readMetadataProviderSettings(),
       readDownloadProviderSettings(),
       readRequestWorkflowSettings(),
-      readOracleSettings(),
       readMoonBrandingSettings(),
       readPortalDiscordSettings(),
-      safeJson(serviceJson(config.wardenBaseUrl, "/api/localai/status"))
+      buildToastSettingsPayload(user),
+      hasDomainAccess(user, "database", "read") ? vaultClient.getDatabaseOverview().catch((error) => ({
+        error: error instanceof Error ? error.message : String(error)
+      })) : null,
+      serviceJson(config.ravenBaseUrl, "/health").catch((error) => ({
+        ok: false,
+        status: 0,
+        payload: {error: error instanceof Error ? error.message : String(error)}
+      }))
     ]);
 
-    res.json({
+    return {
       ravenVpn,
+      ravenVpnRuntime: ravenHealth?.ok ? normalizeObject(ravenHealth.payload?.vpn, {}) : {
+        connected: false,
+        lastError: normalizeString(ravenHealth?.payload?.error, "Raven health is unavailable.")
+      },
       metadataProviders,
       downloadProviders,
       requestWorkflow,
-      oracle,
       branding,
+      publicBranding: publicMoonBranding(branding),
       discord,
-      warden: wardenStatus.payload || wardenStatus
+      toastSettings,
+      databaseOverview,
+      links: {
+        databaseExplorer: "/admin/settings/database",
+        noonaProject: "https://github.com/The-Noona-Project/Scriptarr",
+        supportDiscord: "https://discord.gg/HMYHT8KD5v"
+      }
+    };
+  };
+
+  app.get("/api/moon-v3/admin/settings", requireSettingsRead(async (req, res) => {
+    res.json(await buildSettingsPayload(req.user));
+  }));
+
+  app.put("/api/moon-v3/admin/settings/branding", requireSettingsWrite(async (req, res) => {
+    const existing = await readMoonBrandingSettings();
+    const nextBranding = normalizeMoonBrandingSettings({
+      ...existing,
+      ...req.body,
+      logo: existing.logo
+    });
+    await vaultClient.setSetting(MOON_BRANDING_KEY, nextBranding);
+    await appendEventForUser({
+      domain: "settings",
+      eventType: "branding-updated",
+      user: req.user,
+      targetType: "setting",
+      targetId: MOON_BRANDING_KEY,
+      message: `${req.user.username} updated Moon branding.`,
+      metadata: {
+        siteName: nextBranding.siteName
+      }
+    });
+    res.json({
+      branding: nextBranding,
+      publicBranding: publicMoonBranding(nextBranding)
     });
   }));
 
+  app.put("/api/moon-v3/admin/settings/branding/logo", requireSettingsWrite(async (req, res) => {
+    const existing = await readMoonBrandingSettings();
+    const now = new Date().toISOString();
+    const nextBranding = normalizeMoonBrandingSettings({
+      ...existing,
+      logo: {
+        enabled: true,
+        revision: normalizeString(req.body?.revision, `logo-${Date.now()}`),
+        updatedAt: now,
+        updatedBy: buildUserActor(req.user, req.authMethod === "api-key" ? "api-key" : "admin"),
+        originalMimeType: normalizeString(req.body?.originalMimeType),
+        originalBytes: Number.parseInt(String(req.body?.originalBytes || 0), 10) || 0,
+        variants: req.body?.variants || {}
+      }
+    });
+    await vaultClient.setSetting(MOON_BRANDING_KEY, nextBranding);
+    await appendEventForUser({
+      domain: "settings",
+      eventType: "brand-logo-updated",
+      user: req.user,
+      targetType: "setting",
+      targetId: MOON_BRANDING_KEY,
+      message: `${req.user.username} updated the brand logo.`,
+      metadata: {
+        revision: nextBranding.logo?.revision,
+        originalBytes: nextBranding.logo?.originalBytes
+      }
+    });
+    res.json({
+      branding: nextBranding,
+      publicBranding: publicMoonBranding(nextBranding)
+    });
+  }));
+
+  app.delete("/api/moon-v3/admin/settings/branding/logo", requireSettingsWrite(async (req, res) => {
+    const existing = await readMoonBrandingSettings();
+    const nextBranding = normalizeMoonBrandingSettings({
+      ...existing,
+      logo: {
+        enabled: false,
+        revision: "",
+        variants: {}
+      }
+    });
+    await vaultClient.setSetting(MOON_BRANDING_KEY, nextBranding);
+    await appendEventForUser({
+      domain: "settings",
+      eventType: "brand-logo-removed",
+      user: req.user,
+      targetType: "setting",
+      targetId: MOON_BRANDING_KEY,
+      message: `${req.user.username} removed the brand logo.`,
+      metadata: {}
+    });
+    res.json({
+      branding: nextBranding,
+      publicBranding: publicMoonBranding(nextBranding)
+    });
+  }));
+
+  app.put("/api/moon-v3/admin/settings/toasts/personal", requireSettingsRead(async (req, res) => {
+    const global = normalizeAdminToastSettings((await vaultClient.getSetting(ADMIN_TOAST_GLOBAL_KEY))?.value);
+    const personal = normalizeAdminToastSettings(req.body || {}, global);
+    await vaultClient.setSetting(adminToastUserKey(req.user.discordUserId), personal);
+    res.json(await buildToastSettingsPayload(req.user));
+  }));
+
+  app.put("/api/moon-v3/admin/settings/toasts/global", requireSettingsRoot(async (req, res) => {
+    const global = normalizeAdminToastSettings(req.body || {});
+    await vaultClient.setSetting(ADMIN_TOAST_GLOBAL_KEY, global);
+    await appendEventForUser({
+      domain: "settings",
+      eventType: "toast-settings-updated",
+      user: req.user,
+      targetType: "setting",
+      targetId: ADMIN_TOAST_GLOBAL_KEY,
+      message: `${req.user.username} updated admin toast defaults.`,
+      metadata: {}
+    });
+    res.json(await buildToastSettingsPayload(req.user));
+  }));
+
+  app.put("/api/moon-v3/admin/settings/raven/vpn", requireSettingsWrite(async (req, res) => {
+    const existing = await readRavenVpnSettings();
+    const password = normalizeString(req.body?.piaPassword);
+    const nextSettings = {
+      key: RAVEN_VPN_KEY,
+      enabled: req.body?.enabled === true,
+      region: normalizeString(req.body?.region, existing.region || "us_california"),
+      piaUsername: normalizeString(req.body?.piaUsername, existing.piaUsername)
+    };
+    await vaultClient.setSetting(RAVEN_VPN_KEY, nextSettings);
+    if (password) {
+      await vaultClient.setSecret(RAVEN_VPN_PASSWORD_SECRET, password);
+    }
+    const saved = await readRavenVpnSettings();
+    await appendEventForUser({
+      domain: "settings",
+      eventType: "raven-vpn-updated",
+      user: req.user,
+      targetType: "setting",
+      targetId: RAVEN_VPN_KEY,
+      message: `${req.user.username} updated Raven VPN settings.`,
+      metadata: {
+        enabled: saved.enabled,
+        region: saved.region
+      }
+    });
+    res.json(saved);
+  }));
+
+  app.put("/api/moon-v3/admin/settings/raven/metadata", requireSettingsWrite(async (req, res) => {
+    const existing = await readMetadataProviderSettings();
+    const nextSettings = {
+      ...existing,
+      key: RAVEN_METADATA_KEY,
+      providers: normalizeArray(req.body?.providers).length ? normalizeArray(req.body.providers) : normalizeArray(existing.providers)
+    };
+    await vaultClient.setSetting(RAVEN_METADATA_KEY, nextSettings);
+    const saved = await readMetadataProviderSettings();
+    await appendEventForUser({
+      domain: "settings",
+      eventType: "metadata-providers-updated",
+      user: req.user,
+      targetType: "setting",
+      targetId: RAVEN_METADATA_KEY,
+      message: `${req.user.username} updated the metadata provider stack.`,
+      metadata: {
+        providers: normalizeArray(saved.providers).map((provider) => ({
+          id: normalizeString(provider.id),
+          enabled: provider.enabled !== false,
+          priority: provider.priority
+        }))
+      }
+    });
+    res.json(saved);
+  }));
+
+  app.put("/api/moon-v3/admin/settings/raven/download-providers", requireSettingsWrite(async (req, res) => {
+    const existing = await readDownloadProviderSettings();
+    const nextSettings = {
+      ...existing,
+      key: RAVEN_DOWNLOAD_PROVIDERS_KEY,
+      providers: normalizeArray(req.body?.providers).length ? normalizeArray(req.body.providers) : normalizeArray(existing.providers)
+    };
+    await vaultClient.setSetting(RAVEN_DOWNLOAD_PROVIDERS_KEY, nextSettings);
+    const saved = await readDownloadProviderSettings();
+    await appendEventForUser({
+      domain: "settings",
+      eventType: "download-providers-updated",
+      user: req.user,
+      targetType: "setting",
+      targetId: RAVEN_DOWNLOAD_PROVIDERS_KEY,
+      message: `${req.user.username} updated the download provider stack.`,
+      metadata: {
+        providers: normalizeArray(saved.providers).map((provider) => ({
+          id: normalizeString(provider.id),
+          enabled: provider.enabled !== false,
+          priority: provider.priority
+        }))
+      }
+    });
+    res.json(saved);
+  }));
+
+  app.put("/api/moon-v3/admin/settings/portal/discord", requireSettingsWrite(async (req, res) => {
+    const existing = normalizePortalDiscordSettings(await readPortalDiscordSettings());
+    const body = normalizeObject(req.body, {}) || {};
+    const onboarding = normalizeObject(body.onboarding, {}) || {};
+    const hasField = (source, key) => Object.hasOwn(source, key);
+    const nextSettings = normalizePortalDiscordSettings({
+      ...existing,
+      guildId: hasField(body, "guildId") ? normalizeString(body.guildId) : existing.guildId,
+      superuserId: hasField(body, "superuserId") ? normalizeString(body.superuserId) : existing.superuserId,
+      onboarding: {
+        ...existing.onboarding,
+        channelId: hasField(onboarding, "channelId") ? normalizeString(onboarding.channelId) : existing.onboarding?.channelId,
+        template: hasField(onboarding, "template") ? normalizeString(onboarding.template) : existing.onboarding?.template
+      },
+      commands: existing.commands
+    });
+    await vaultClient.setSetting(PORTAL_DISCORD_KEY, nextSettings);
+    await appendEventForUser({
+      domain: "discord",
+      eventType: "discord-settings-updated",
+      user: req.user,
+      targetType: "setting",
+      targetId: PORTAL_DISCORD_KEY,
+      message: `${req.user.username} updated Discord basics from Settings.`,
+      metadata: {
+        guildId: nextSettings.guildId,
+        onboardingChannelId: nextSettings.onboarding.channelId
+      }
+    });
+    res.json(await readPortalDiscordSettings());
+  }));
+
+  app.put("/api/moon-v3/admin/settings/request-workflow", requireSettingsWrite(async (req, res) => {
+    const existing = await readRequestWorkflowSettings();
+    const nextSettings = {
+      ...existing,
+      autoApproveAndDownload: req.body?.autoApproveAndDownload === true
+    };
+    await vaultClient.setSetting(SAGE_REQUESTS_KEY, nextSettings);
+    await appendEventForUser({
+      domain: "settings",
+      eventType: "request-workflow-updated",
+      user: req.user,
+      targetType: "setting",
+      targetId: SAGE_REQUESTS_KEY,
+      message: `${req.user.username} updated request workflow automation.`,
+      metadata: {
+        autoApproveAndDownload: nextSettings.autoApproveAndDownload
+      }
+    });
+    res.json(await readRequestWorkflowSettings());
+  }));
+
+  app.get("/api/moon-v3/admin/settings/database", requireDatabaseRead(async (_req, res) => {
+    res.json(await vaultClient.getDatabaseOverview());
+  }));
+
+  app.get("/api/moon-v3/admin/settings/database/tables/:tableName", requireDatabaseRead(async (req, res) => {
+    const table = await vaultClient.getDatabaseTable(req.params.tableName, {
+      limit: req.query.limit,
+      offset: req.query.offset,
+      query: req.query.q || req.query.query || ""
+    });
+    if (!table) {
+      res.status(404).json({error: "Database table not found."});
+      return;
+    }
+    res.json(table);
+  }));
+
+  app.put("/api/moon-v3/admin/settings/database/tables/settings/rows/:settingKey", requireDatabaseWrite(async (req, res) => {
+    const setting = await vaultClient.updateDatabaseSetting(req.params.settingKey, req.body?.value);
+    await appendEventForUser({
+      domain: "database",
+      eventType: "database-setting-updated",
+      severity: "warning",
+      user: req.user,
+      targetType: "setting",
+      targetId: normalizeString(setting?.key, req.params.settingKey),
+      message: `${req.user.username} updated a database setting through the explorer.`,
+      metadata: {
+        settingKey: normalizeString(setting?.key, req.params.settingKey)
+      }
+    });
+    res.json(setting);
+  }));
+
+  const buildSystemApiPayload = async (user) => {
+    const [settings, groups, allKeys] = await Promise.all([
+      readMoonPublicApiSettings(),
+      vaultClient.listPermissionGroups(),
+      vaultClient.listApiKeys({})
+    ]);
+    const rootAccess = hasDomainAccess(user, "publicapi", "root");
+    return {
+      settings,
+      groups: normalizeArray(groups),
+      systemKeys: normalizeArray(allKeys).filter((entry) => normalizeString(entry.kind) === "system").map(sanitizeApiKeyRecord),
+      userKeys: rootAccess
+        ? normalizeArray(allKeys).filter((entry) => normalizeString(entry.kind) === "user").map(sanitizeApiKeyRecord)
+        : [],
+      canAuditUserKeys: rootAccess,
+      docsUrl: "/api/public/docs",
+      openApiUrl: "/api/public/openapi.json"
+    };
+  };
+
+  app.get("/api/moon-v3/admin/system/api", requirePublicApiRead(async (req, res) => {
+    res.json(await buildSystemApiPayload(req.user));
+  }));
+
+  app.put("/api/moon-v3/admin/system/api/settings", requirePublicApiRoot(async (req, res) => {
+    const current = await readMoonPublicApiSettings();
+    const enabled = typeof req.body?.enabled === "boolean" ? req.body.enabled : current.enabled;
+    await vaultClient.setSetting(MOON_PUBLIC_API_KEY, {
+      key: MOON_PUBLIC_API_KEY,
+      enabled,
+      lastRotatedAt: current.lastRotatedAt || null
+    });
+    await appendEvent({
+      ...buildUserActor(req.user, req.authMethod === "api-key" ? "api-key" : "admin"),
+      domain: "publicapi",
+      eventType: "public-api-settings-updated",
+      targetType: "setting",
+      targetId: MOON_PUBLIC_API_KEY,
+      message: `${req.user.username} updated public API settings.`,
+      metadata: {enabled}
+    });
+    res.json(await buildSystemApiPayload(req.user));
+  }));
+
+  app.post("/api/moon-v3/admin/system/api/keys", requirePublicApiRoot(async (req, res) => {
+    const secret = generateApiKeySecret("system");
+    const apiKey = await vaultClient.createApiKey({
+      name: normalizeString(req.body?.name, "System API key"),
+      kind: "system",
+      enabled: req.body?.enabled !== false,
+      keyHash: hashApiKeySecret(secret),
+      keyPrefix: keyPrefixForSecret(secret),
+      groupIds: normalizeArray(req.body?.groupIds).map((groupId) => normalizeString(groupId)).filter(Boolean),
+      createdBy: buildUserActor(req.user, req.authMethod === "api-key" ? "api-key" : "admin")
+    });
+    await appendEvent({
+      ...buildUserActor(req.user, req.authMethod === "api-key" ? "api-key" : "admin"),
+      domain: "publicapi",
+      eventType: "system-api-key-created",
+      targetType: "api-key",
+      targetId: apiKey.id,
+      message: `${req.user.username} created a system API key.`,
+      metadata: {
+        apiKeyId: apiKey.id,
+        groupIds: sanitizeApiKeyRecord(apiKey).groupIds
+      }
+    });
+    res.status(201).json({
+      apiKey: sanitizeApiKeyRecord(apiKey),
+      secret
+    });
+  }));
+
+  app.patch("/api/moon-v3/admin/system/api/keys/:apiKeyId", requirePublicApiRoot(async (req, res) => {
+    const existing = await vaultClient.getApiKey(req.params.apiKeyId);
+    if (!existing || normalizeString(existing.kind) !== "system") {
+      res.status(404).json({error: "System API key not found."});
+      return;
+    }
+    const apiKey = await vaultClient.updateApiKey(req.params.apiKeyId, {
+      name: req.body?.name,
+      enabled: req.body?.enabled,
+      groupIds: req.body?.groupIds
+    });
+    await appendEvent({
+      ...buildUserActor(req.user, req.authMethod === "api-key" ? "api-key" : "admin"),
+      domain: "publicapi",
+      eventType: "system-api-key-updated",
+      targetType: "api-key",
+      targetId: apiKey.id,
+      message: `${req.user.username} updated a system API key.`,
+      metadata: {
+        apiKeyId: apiKey.id,
+        enabled: apiKey.enabled,
+        groupIds: sanitizeApiKeyRecord(apiKey).groupIds
+      }
+    });
+    res.json({apiKey: sanitizeApiKeyRecord(apiKey)});
+  }));
+
+  app.delete("/api/moon-v3/admin/system/api/keys/:apiKeyId", requirePublicApiRoot(async (req, res) => {
+    const apiKey = await vaultClient.revokeApiKey(req.params.apiKeyId);
+    if (!apiKey) {
+      res.status(404).json({error: "API key not found."});
+      return;
+    }
+    await appendEvent({
+      ...buildUserActor(req.user, req.authMethod === "api-key" ? "api-key" : "admin"),
+      domain: "publicapi",
+      eventType: `${normalizeString(apiKey.kind, "api")}-api-key-revoked`,
+      targetType: "api-key",
+      targetId: apiKey.id,
+      message: `${req.user.username} revoked an API key.`,
+      metadata: {
+        apiKeyId: apiKey.id,
+        kind: normalizeString(apiKey.kind)
+      }
+    });
+    res.json({apiKey: sanitizeApiKeyRecord(apiKey)});
+  }));
+
   app.get("/api/moon-v3/admin/events", withUser(requireUser, async (req, res) => {
-    const domains = normalizeRequestedEventDomains(req.query.domain);
-    if (!ensureEventReadAccess(req.user, domains)) {
+    const filters = buildEventFiltersFromQuery(req.query);
+    if (!ensureEventReadAccess(req.user, filters.domains)) {
       res.status(403).json({error: "Missing admin grant for the requested event domains."});
       return;
     }
     res.json({
-      events: normalizeArray(await vaultClient.listEvents({
-        domains,
-        actorId: normalizeString(req.query.actorId),
-        targetId: normalizeString(req.query.targetId),
-        afterSequence: req.query.afterSequence || req.query.after || 0,
-        limit: req.query.limit || 100,
-        newestFirst: req.query.newestFirst !== "false"
-      }))
+      events: normalizeArray(await vaultClient.listEvents(filters)),
+      filters
     });
   }));
 
@@ -1745,20 +2449,28 @@ export const registerMoonV3Routes = (app, {
     });
   }));
 
-  app.get("/api/moon-v3/admin/system/status", requireSystemRead(async (_req, res) => {
-    const [services, bootstrap, runtime, contentReset] = await Promise.all([
+  const buildAdminSystemStatus = async () => {
+    const [matrix, services, bootstrap, runtime] = await Promise.all([
+      buildSystemStatusPayload({config, serviceJson, includeChecks: true}),
       loadServiceStatus(),
-      safeJson(serviceJson(config.wardenBaseUrl, "/api/bootstrap")),
-      safeJson(serviceJson(config.wardenBaseUrl, "/api/runtime")),
-      previewContentReset()
+      safeJson(serviceJson(config.wardenBaseUrl, "/api/bootstrap", {timeoutMs: 2200})),
+      safeJson(serviceJson(config.wardenBaseUrl, "/api/runtime", {timeoutMs: 2200}))
     ]);
 
-    res.json({
+    return {
+      ...matrix,
       services,
       bootstrap: bootstrap.payload || bootstrap,
-      runtime: runtime.payload || runtime,
-      contentReset
-    });
+      runtime: runtime.payload || runtime
+    };
+  };
+
+  app.get("/api/moon-v3/admin/system/status", requireSystemRead(async (_req, res) => {
+    res.json(await buildAdminSystemStatus());
+  }));
+
+  app.post("/api/moon-v3/admin/system/status/check", requireSystemRead(async (_req, res) => {
+    res.json(await buildAdminSystemStatus());
   }));
 
   app.get("/api/moon-v3/admin/system/content-reset/preview", requireSystemRoot(async (_req, res) => {
@@ -1820,11 +2532,172 @@ export const registerMoonV3Routes = (app, {
   }));
 
   app.get("/api/moon-v3/admin/system/tasks", requireSystemRead(async (_req, res) => {
-    const [tasks, requests] = await Promise.all([loadTasks(), loadRequests()]);
+    const [scheduler, requests] = await Promise.all([
+      systemTaskRuntime.getTaskPayload(),
+      loadRequests()
+    ]);
     res.json({
-      tasks,
+      ...scheduler,
       pendingRequests: requests.filter((entry) => entry.status === "pending")
     });
+  }));
+
+  app.patch("/api/moon-v3/admin/system/tasks/:taskId", requireSystemRoot(async (req, res) => {
+    res.json(await systemTaskRuntime.persistTaskSchedule(req.params.taskId, req.body || {}));
+  }));
+
+  app.post("/api/moon-v3/admin/system/tasks/:taskId/preview", requireSystemRoot(async (req, res) => {
+    res.json(await systemTaskRuntime.previewTaskSchedule(req.params.taskId, req.body || {}));
+  }));
+
+  app.post("/api/moon-v3/admin/system/tasks/:taskId/run", requireSystemRoot(async (req, res) => {
+    const job = await systemTaskRuntime.runTask(req.params.taskId, {
+      manual: true,
+      actor: buildUserActor(req.user, "admin")
+    });
+    res.json(job);
+  }));
+
+  app.get("/api/moon-v3/admin/system/ai", requireSystemRead(async (_req, res) => {
+    const [oracle, oracleHealth, oracleStatus, localAiStatus, localAiProfile] = await Promise.all([
+      readOracleSettings(),
+      safeJson(serviceJson(config.oracleBaseUrl, "/health", {timeoutMs: 2200})),
+      safeJson(serviceJson(config.oracleBaseUrl, "/api/status", {timeoutMs: 2200})),
+      safeJson(serviceJson(config.wardenBaseUrl, "/api/localai/status", {timeoutMs: 3000})),
+      safeJson(serviceJson(config.wardenBaseUrl, "/api/localai/profile", {timeoutMs: 2200}))
+    ]);
+    const modelProvider = normalizeString(oracle?.provider, "openai").toLowerCase();
+    const safeModelProvider = ["openai", "localai"].includes(modelProvider) ? modelProvider : "openai";
+    const modelOptions = await safeJson(serviceJson(config.oracleBaseUrl, `/api/models?provider=${encodeURIComponent(safeModelProvider)}`, {
+      timeoutMs: 6500
+    }));
+    res.json({
+      oracle,
+      oracleHealth: oracleHealth.payload || oracleHealth,
+      oracleStatus: oracleStatus.payload || oracleStatus,
+      localAi: localAiStatus.payload || localAiStatus,
+      localAiProfile: localAiProfile.payload || localAiProfile,
+      modelOptions: modelOptions.payload || modelOptions
+    });
+  }));
+
+  app.put("/api/moon-v3/admin/system/ai/oracle", requireSettingsWrite(async (req, res) => {
+    res.json(await persistOracleSettings(req.user, req.body || {}));
+  }));
+
+  app.get("/api/moon-v3/admin/system/ai/models", requireSystemRead(async (req, res) => {
+    const requestedProvider = normalizeString(req.query.provider, "openai").toLowerCase();
+    const provider = ["openai", "localai"].includes(requestedProvider) ? requestedProvider : "openai";
+    const result = await safeJson(serviceJson(config.oracleBaseUrl, `/api/models?provider=${encodeURIComponent(provider)}`, {
+      timeoutMs: 6500
+    }));
+    res.status(result.status || (result.ok === false ? 502 : 200)).json(result.payload || result);
+  }));
+
+  const readLocalAiActionSettings = async (body = {}) => {
+    const persisted = await readOracleSettings();
+    if (!body || !Object.keys(body).length) {
+      return persisted;
+    }
+    const imageMode = normalizeString(body.localAiImageMode, persisted.localAiImageMode);
+    return {
+      ...persisted,
+      localAiProfileKey: normalizeString(body.localAiProfileKey, persisted.localAiProfileKey),
+      localAiImageMode: ["preset", "custom"].includes(imageMode) ? imageMode : persisted.localAiImageMode,
+      localAiCustomImage: normalizeString(body.localAiCustomImage)
+    };
+  };
+
+  app.post("/api/moon-v3/admin/system/ai/localai/install", requireSystemRoot(async (req, res) => {
+    const oracleSettings = await readLocalAiActionSettings(req.body || {});
+    await syncWardenLocalAiConfig(oracleSettings);
+    const result = await safeJson(serviceJson(config.wardenBaseUrl, "/api/localai/actions/install", {
+      method: "POST",
+      body: {
+        requestedBy: {
+          discordUserId: normalizeString(req.user?.discordUserId),
+          username: normalizeString(req.user?.username, "Admin")
+        }
+      },
+      timeoutMs: 10000
+    }));
+    await appendEvent({
+      ...buildUserActor(req.user, "admin"),
+      domain: "system",
+      eventType: "localai-install-requested",
+      severity: "info",
+      targetType: "service",
+      targetId: "scriptarr-warden",
+      message: `${req.user.username} started the LocalAI install flow from Moon admin AI.`,
+      metadata: {
+        result: result.payload || result
+      }
+    });
+    res.status(result.status || (result.ok === false ? 502 : 200)).json(result.payload || result);
+  }));
+
+  app.post("/api/moon-v3/admin/system/ai/localai/start", requireSystemRoot(async (req, res) => {
+    const oracleSettings = await readLocalAiActionSettings(req.body || {});
+    await syncWardenLocalAiConfig(oracleSettings);
+    const result = await safeJson(serviceJson(config.wardenBaseUrl, "/api/localai/actions/start", {
+      method: "POST",
+      body: {
+        requestedBy: {
+          discordUserId: normalizeString(req.user?.discordUserId),
+          username: normalizeString(req.user?.username, "Admin")
+        }
+      },
+      timeoutMs: 10000
+    }));
+    await appendEvent({
+      ...buildUserActor(req.user, "admin"),
+      domain: "system",
+      eventType: "localai-start-requested",
+      severity: "info",
+      targetType: "service",
+      targetId: "scriptarr-warden",
+      message: `${req.user.username} started LocalAI from Moon admin AI.`,
+      metadata: {
+        result: result.payload || result
+      }
+    });
+    res.status(result.status || (result.ok === false ? 502 : 200)).json(result.payload || result);
+  }));
+
+  app.post("/api/moon-v3/admin/system/ai/localai/remove", requireSystemRoot(async (req, res) => {
+    const result = await safeJson(serviceJson(config.wardenBaseUrl, "/api/localai/actions/remove", {
+      method: "POST",
+      body: {
+        requestedBy: {
+          discordUserId: normalizeString(req.user?.discordUserId),
+          username: normalizeString(req.user?.username, "Admin")
+        }
+      },
+      timeoutMs: 10000
+    }));
+    await appendEvent({
+      ...buildUserActor(req.user, "admin"),
+      domain: "system",
+      eventType: "localai-remove-requested",
+      severity: "info",
+      targetType: "service",
+      targetId: "scriptarr-warden",
+      message: `${req.user.username} requested LocalAI removal from Moon admin AI.`,
+      metadata: {
+        result: result.payload || result
+      }
+    });
+    res.status(result.status || (result.ok === false ? 502 : 200)).json(result.payload || result);
+  }));
+
+  app.post("/api/moon-v3/admin/system/ai/test", requireSystemRead(async (req, res) => {
+    const message = normalizeString(req.body?.message, "Say hello from Scriptarr.");
+    const result = await safeJson(serviceJson(config.oracleBaseUrl, "/api/chat", {
+      method: "POST",
+      body: {message},
+      timeoutMs: ORACLE_ADMIN_TEST_TIMEOUT_MS
+    }));
+    res.status(result.status || (result.ok === false ? 502 : 200)).json(result.payload || result);
   }));
 
   app.get("/api/moon-v3/admin/system/updates", requireSystemRead(async (_req, res) => {
@@ -1852,41 +2725,30 @@ export const registerMoonV3Routes = (app, {
     res.status(updates.status).json(updates.payload);
   }));
 
-  app.get("/api/moon-v3/admin/system/events", requireSystemRead(async (_req, res) => {
+  app.get("/api/moon-v3/admin/system/events", requireSystemRead(async (req, res) => {
+    const filters = buildEventFiltersFromQuery(req.query);
     res.json({
       events: normalizeArray(await vaultClient.listEvents({
-        limit: 120
-      }))
+        ...filters,
+        limit: filters.limit || 120
+      })),
+      filters
     });
   }));
 
-  app.get("/api/moon-v3/admin/system/logs", requireSystemRead(async (_req, res) => {
-    const [bootstrap, oracle, portal, raven, titles, tasks, requests] = await Promise.all([
-      safeJson(serviceJson(config.wardenBaseUrl, "/api/bootstrap")),
-      safeJson(fetch(`${config.oracleBaseUrl}/health`).then((response) => response.json())),
-      safeJson(fetch(`${config.portalBaseUrl}/health`).then((response) => response.json())),
-      safeJson(fetch(`${config.ravenBaseUrl}/health`).then((response) => response.json())),
-      loadLibrary(),
-      loadTasks(),
-      loadRequests()
-    ]);
-
-    res.json({
-      entries: buildLogRows({
-        bootstrap: bootstrap.payload || bootstrap,
-        oracle,
-        portal,
-        raven,
-        titles,
-        tasks,
-        requests
-      })
-    });
+  app.get("/api/moon-v3/admin/system/logs", requireSystemRead(async (req, res) => {
+    const params = new URLSearchParams();
+    appendOptionalSearchParam(params, "service", req.query.service);
+    appendOptionalSearchParam(params, "lines", req.query.lines);
+    appendOptionalSearchParam(params, "level", req.query.level);
+    appendOptionalSearchParam(params, "q", req.query.q || req.query.query);
+    const logs = await serviceJson(config.wardenBaseUrl, `/api/logs${params.size ? `?${params.toString()}` : ""}`);
+    res.status(logs.status).json(logs.payload);
   }));
 
-  app.get("/api/moon-v3/user/home", withUser(requireUser, async (req, res) => {
-    const [titles, requests, userLibrary] = await Promise.all([
-      loadLibrary(),
+    app.get("/api/moon-v3/user/home", withUser(requireUser, async (req, res) => {
+      const [titles, requests, userLibrary] = await Promise.all([
+        loadLibrary(),
       loadRequests(),
       loadUserLibraryState(req.user.discordUserId)
     ]);
@@ -1898,7 +2760,131 @@ export const registerMoonV3Routes = (app, {
       following: userLibrary.following,
       discordUserId: req.user.discordUserId,
       tagPreferences: userLibrary.tagPreferences
+      }));
     }));
+
+    app.get("/api/moon-v3/user/profile", withUser(requireUser, async (req, res) => {
+      const [requests, userLibrary] = await Promise.all([
+        loadRequests(),
+        loadUserLibraryState(req.user.discordUserId)
+      ]);
+      const userRequests = requests.filter((entry) => entry.requestedBy.discordUserId === req.user.discordUserId);
+
+      res.json({
+        user: {
+          discordUserId: normalizeString(req.user.discordUserId),
+          username: normalizeString(req.user.username, "Reader"),
+          avatarUrl: normalizeString(req.user.avatarUrl),
+          role: normalizeString(req.user.role, "member")
+        },
+        ...buildMoonProfilePayload({
+          userLibrary,
+          requests: userRequests
+        }),
+        adminCapable: hasDomainAccess(req.user, "overview", "read"),
+        tagPreferences: userLibrary.tagPreferences
+      });
+    }));
+
+  app.get("/api/moon-v3/user/api-keys", withUser(requireUser, async (req, res) => {
+    if (!requireBrowserSession(req, res)) {
+      return;
+    }
+    const keys = await vaultClient.listApiKeys({
+      kind: "user",
+      ownerDiscordUserId: req.user.discordUserId
+    });
+    res.json({
+      apiKeys: normalizeArray(keys).map(sanitizeApiKeyRecord),
+      canManageApiKeys: hasPermission(req.user, "manage_personal_api_keys")
+    });
+  }));
+
+  app.post("/api/moon-v3/user/api-keys", withUser(requireUser, async (req, res) => {
+    if (!requireBrowserSession(req, res)) {
+      return;
+    }
+    if (!hasPermission(req.user, "manage_personal_api_keys")) {
+      res.status(403).json({error: "Missing permission: manage_personal_api_keys"});
+      return;
+    }
+    const secret = generateApiKeySecret("user");
+    const apiKey = await vaultClient.createApiKey({
+      name: normalizeString(req.body?.name, "Reader API key"),
+      kind: "user",
+      enabled: req.body?.enabled !== false,
+      keyHash: hashApiKeySecret(secret),
+      keyPrefix: keyPrefixForSecret(secret),
+      ownerDiscordUserId: req.user.discordUserId,
+      createdBy: buildUserActor(req.user, "user")
+    });
+    await appendEventForUser({
+      domain: "publicapi",
+      eventType: "user-api-key-created",
+      user: req.user,
+      targetType: "api-key",
+      targetId: apiKey.id,
+      message: `${req.user.username} created a user API key.`,
+      metadata: {
+        apiKeyId: apiKey.id
+      }
+    });
+    res.status(201).json({
+      apiKey: sanitizeApiKeyRecord(apiKey),
+      secret
+    });
+  }));
+
+  app.patch("/api/moon-v3/user/api-keys/:apiKeyId", withUser(requireUser, async (req, res) => {
+    if (!requireBrowserSession(req, res)) {
+      return;
+    }
+    const existing = await vaultClient.getApiKey(req.params.apiKeyId);
+    if (!existing || normalizeString(existing.kind) !== "user" || normalizeString(existing.ownerDiscordUserId) !== req.user.discordUserId) {
+      res.status(404).json({error: "User API key not found."});
+      return;
+    }
+    const apiKey = await vaultClient.updateApiKey(existing.id, {
+      name: req.body?.name,
+      enabled: req.body?.enabled
+    });
+    await appendEventForUser({
+      domain: "publicapi",
+      eventType: "user-api-key-updated",
+      user: req.user,
+      targetType: "api-key",
+      targetId: existing.id,
+      message: `${req.user.username} updated a user API key.`,
+      metadata: {
+        apiKeyId: existing.id,
+        enabled: apiKey?.enabled
+      }
+    });
+    res.json({apiKey: sanitizeApiKeyRecord(apiKey)});
+  }));
+
+  app.delete("/api/moon-v3/user/api-keys/:apiKeyId", withUser(requireUser, async (req, res) => {
+    if (!requireBrowserSession(req, res)) {
+      return;
+    }
+    const existing = await vaultClient.getApiKey(req.params.apiKeyId);
+    if (!existing || normalizeString(existing.kind) !== "user" || normalizeString(existing.ownerDiscordUserId) !== req.user.discordUserId) {
+      res.status(404).json({error: "User API key not found."});
+      return;
+    }
+    const apiKey = await vaultClient.revokeApiKey(existing.id);
+    await appendEventForUser({
+      domain: "publicapi",
+      eventType: "user-api-key-revoked",
+      user: req.user,
+      targetType: "api-key",
+      targetId: existing.id,
+      message: `${req.user.username} revoked a user API key.`,
+      metadata: {
+        apiKeyId: existing.id
+      }
+    });
+    res.json({apiKey: sanitizeApiKeyRecord(apiKey)});
   }));
 
   app.get("/api/moon-v3/user/library", withUser(requireUser, async (_req, res) => {

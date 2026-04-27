@@ -97,3 +97,54 @@ test("bulkQueueDownload times out when Sage never answers", async () => {
     });
   }
 });
+
+test("bulk run helpers call the Sage async downloadall broker routes", async () => {
+  const seen = [];
+  const server = http.createServer(async (req, res) => {
+    const chunks = [];
+    for await (const chunk of req) {
+      chunks.push(chunk);
+    }
+    const body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : null;
+    seen.push({method: req.method, url: req.url, body});
+    res.writeHead(200, {"Content-Type": "application/json"});
+    res.end(JSON.stringify({
+      runId: "bulk-run-1",
+      status: req.url.endsWith("/cancel") ? "cancelled" : "paused"
+    }));
+  });
+
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const baseUrl = `http://127.0.0.1:${server.address().port}`;
+  const sage = createSageClient({
+    sageBaseUrl: baseUrl,
+    serviceToken: "portal-service-token"
+  });
+
+  try {
+    await sage.createBulkRun({
+      providerId: "weebcentral",
+      type: "all",
+      nsfw: false,
+      titlePrefix: "all",
+      requestedBy: "253987219969146890"
+    });
+    await sage.getBulkRunStatus("bulk-run-1");
+    await sage.continueBulkRun("bulk-run-1", {requestedBy: "owner-1"});
+    await sage.cancelBulkRun("bulk-run-1", {requestedBy: "owner-1"});
+
+    assert.deepEqual(seen.map((entry) => [entry.method, entry.url]), [
+      ["POST", "/api/internal/portal/downloads/bulk-runs"],
+      ["GET", "/api/internal/portal/downloads/bulk-runs/bulk-run-1"],
+      ["POST", "/api/internal/portal/downloads/bulk-runs/bulk-run-1/continue"],
+      ["POST", "/api/internal/portal/downloads/bulk-runs/bulk-run-1/cancel"]
+    ]);
+    assert.equal(seen[0].body.providerId, "weebcentral");
+    assert.deepEqual(seen[2].body, {requestedBy: "owner-1"});
+    assert.deepEqual(seen[3].body, {requestedBy: "owner-1"});
+  } finally {
+    await new Promise((resolve, reject) => {
+      server.close((error) => error ? reject(error) : resolve());
+    });
+  }
+});

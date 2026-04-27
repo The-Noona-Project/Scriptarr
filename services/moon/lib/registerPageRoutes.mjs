@@ -1,29 +1,9 @@
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import crypto from "node:crypto";
 import {canAccessAdmin as canAccessMoonAdmin} from "@scriptarr/access";
 import {deriveShortSiteName, normalizeSiteName, readMoonBranding} from "./branding.mjs";
 import {proxyJson} from "./proxy.mjs";
-
-/**
- * Read a static Moon HTML entry file.
- *
- * @param {string} filePath
- * @returns {Promise<string>}
- */
-const readHtml = (filePath) => fs.readFile(filePath, "utf8");
-
-const hashContent = (content) => crypto.createHash("sha256").update(content).digest("hex").slice(0, 12);
-
-const toVersionedAssetPath = (assetPath, content) => `${assetPath}?v=${hashContent(content)}`;
-
-const renderVersionedHtml = async (htmlPath, replacements) => {
-  let html = await readHtml(htmlPath);
-  for (const [from, to] of replacements) {
-    html = html.replaceAll(from, to);
-  }
-  return html;
-};
 
 const collectAssetFiles = async (rootPath) => {
   const entries = await fs.readdir(rootPath, {withFileTypes: true});
@@ -61,69 +41,7 @@ const resolveAssetVersion = async (rootPath, extensions) => {
   return hash.digest("hex").slice(0, 12);
 };
 
-const appendAssetVersion = (assetPath, version) => {
-  if (!version) {
-    return assetPath;
-  }
-  return assetPath.includes("?") ? `${assetPath}&v=${version}` : `${assetPath}?v=${version}`;
-};
-
 const canAccessAdmin = (user) => canAccessMoonAdmin(user);
-
-const rewriteJavascriptImports = (source, version) =>
-  source
-    .replace(/(from\s*["'])(\.{1,2}\/[^"']+\.js)(["'])/g, (_match, prefix, specifier, suffix) =>
-      `${prefix}${appendAssetVersion(specifier, version)}${suffix}`
-    )
-    .replace(/(import\s*["'])(\.{1,2}\/[^"']+\.js)(["'])/g, (_match, prefix, specifier, suffix) =>
-      `${prefix}${appendAssetVersion(specifier, version)}${suffix}`
-    )
-    .replace(/(import\s*\(\s*["'])(\.{1,2}\/[^"']+\.js)(["']\s*\))/g, (_match, prefix, specifier, suffix) =>
-      `${prefix}${appendAssetVersion(specifier, version)}${suffix}`
-    );
-
-const staticAssetOptions = () => ({
-  immutable: true,
-  maxAge: "1y",
-  setHeaders: (response, assetPath) => {
-    if (String(assetPath).endsWith(".js")) {
-      response.setHeader("Cache-Control", "no-store");
-    }
-  }
-});
-
-const registerVersionedJsAssets = (app, routePrefix, assetsPath, resolveVersion) => {
-  app.use(routePrefix, async (request, response, next) => {
-    if (!request.path.endsWith(".js")) {
-      next();
-      return;
-    }
-
-    const relativePath = String(request.path).replace(/^\/+/, "");
-    const assetPath = path.resolve(assetsPath, relativePath);
-    const resolvedRoot = path.resolve(assetsPath);
-
-    if (!assetPath.startsWith(resolvedRoot)) {
-      response.status(400).end("Invalid asset path.");
-      return;
-    }
-
-    try {
-      const [source, version] = await Promise.all([
-        fs.readFile(assetPath, "utf8"),
-        resolveVersion()
-      ]);
-      response.setHeader("Cache-Control", "no-store");
-      response.type("text/javascript").send(rewriteJavascriptImports(source, version));
-    } catch (error) {
-      if (error?.code === "ENOENT") {
-        next();
-        return;
-      }
-      next(error);
-    }
-  });
-};
 
 const renderServiceWorker = ({assetVersion}) => `
 const STATIC_CACHE = "moon-static-${assetVersion}";
@@ -264,44 +182,56 @@ const renderUserFallbackHtml = ({siteName}) => `<!doctype html>
 </html>`;
 
 /**
- * Register Moon's static assets, legacy redirects, and the two HTML program
- * entry points used by the admin and user SPAs.
+ * Register Moon's static assets, compatibility redirects, and the embedded
+ * Next entry points used by the admin and user apps.
  *
  * @param {import("express").Express} app
  * @param {{
  *   config?: {sageBaseUrl?: string},
  *   getSessionToken?: (request: import("express").Request) => string,
+ *   adminNextRuntime?: {handle: (request: import("http").IncomingMessage, response: import("http").ServerResponse) => Promise<void>} | null,
  *   userNextRuntime?: {handle: (request: import("http").IncomingMessage, response: import("http").ServerResponse) => Promise<void>} | null
  * }} [options]
  * @returns {void}
  */
-export const registerPageRoutes = (app, {config = {}, getSessionToken = () => "", userNextRuntime = null} = {}) => {
-  const adminHtmlPath = path.join(process.cwd(), "apps", "admin", "index.html");
-  const adminAssetsPath = path.join(process.cwd(), "apps", "admin", "assets");
+export const registerPageRoutes = (app, {adminNextRuntime = null, config = {}, getSessionToken = () => "", userNextRuntime = null} = {}) => {
   const userNextAppPath = path.join(process.cwd(), "apps", "user-next");
   const userIconPath = path.join(userNextAppPath, "app", "icon.svg");
   const userMaskableIconPath = path.join(userNextAppPath, "app", "icon-maskable.svg");
-  const adminStylesPath = path.join(process.cwd(), "apps", "admin", "assets", "styles.css");
   const resolveUserAssetVersion = () => resolveAssetVersion(userNextAppPath, new Set([".js", ".jsx", ".css", ".svg"]));
-  const resolveAdminJsVersion = () => resolveAssetVersion(adminAssetsPath, new Set([".js"]));
   const loadBranding = () => readMoonBranding(config.sageBaseUrl || "");
-
-  registerVersionedJsAssets(app, "/admin-assets", adminAssetsPath, resolveAdminJsVersion);
-  app.use("/admin-assets", express.static(adminAssetsPath, staticAssetOptions()));
-
-  const renderAdminHtml = async () => {
-    const [styles, jsVersion, branding] = await Promise.all([
-      fs.readFile(adminStylesPath, "utf8"),
-      resolveAdminJsVersion(),
-      loadBranding()
-    ]);
-
-    return renderVersionedHtml(adminHtmlPath, [
-      ["__MOON_ADMIN_TITLE__", `${normalizeSiteName(branding.siteName)} Admin`],
-      ["__MOON_SITE_NAME__", normalizeSiteName(branding.siteName)],
-      ["/admin-assets/styles.css", toVersionedAssetPath("/admin-assets/styles.css", styles)],
-      ["/admin-assets/app.js", appendAssetVersion("/admin-assets/app.js", jsVersion)]
-    ]);
+  const fallbackManifestIcons = () => [
+    {
+      src: "/icon.svg",
+      sizes: "any",
+      type: "image/svg+xml",
+      purpose: "any"
+    },
+    {
+      src: "/icon-maskable.svg",
+      sizes: "any",
+      type: "image/svg+xml",
+      purpose: "maskable"
+    }
+  ];
+  const manifestIconsForBranding = (branding) => {
+    const urls = branding?.logo?.urls || {};
+    return branding?.logo?.enabled && urls.icon192 && urls.icon512
+      ? [
+        {
+          src: urls.icon192,
+          sizes: "192x192",
+          type: "image/webp",
+          purpose: "any"
+        },
+        {
+          src: urls.icon512,
+          sizes: "512x512",
+          type: "image/webp",
+          purpose: "any maskable"
+        }
+      ]
+      : fallbackManifestIcons();
   };
 
   app.get("/downloads", (_req, res) => {
@@ -338,20 +268,7 @@ export const registerPageRoutes = (app, {config = {}, getSessionToken = () => ""
       display: "standalone",
       background_color: "#0f1418",
       theme_color: "#0f1418",
-      icons: [
-        {
-          src: "/icon.svg",
-          sizes: "any",
-          type: "image/svg+xml",
-          purpose: "any"
-        },
-        {
-          src: "/icon-maskable.svg",
-          sizes: "any",
-          type: "image/svg+xml",
-          purpose: "maskable"
-        }
-      ]
+      icons: manifestIconsForBranding(branding)
     }));
   });
 
@@ -393,12 +310,22 @@ export const registerPageRoutes = (app, {config = {}, getSessionToken = () => ""
     return false;
   };
 
+  if (adminNextRuntime) {
+    app.all("/admin/_next/*splat", async (req, res) => {
+      await adminNextRuntime.handle(req, res);
+    });
+  }
+
   app.get("/admin", async (req, res) => {
     if (await guardAdminRequest(req, res)) {
       return;
     }
     res.setHeader("Cache-Control", "no-store");
-    res.type("html").send(await renderAdminHtml());
+    if (adminNextRuntime) {
+      await adminNextRuntime.handle(req, res);
+      return;
+    }
+    res.status(503).type("html").send("<!doctype html><title>Moon Admin unavailable</title><main><h1>Moon Admin unavailable</h1><p>The embedded Next admin runtime is not ready.</p></main>");
   });
 
   app.get("/admin/*splat", async (req, res) => {
@@ -406,7 +333,11 @@ export const registerPageRoutes = (app, {config = {}, getSessionToken = () => ""
       return;
     }
     res.setHeader("Cache-Control", "no-store");
-    res.type("html").send(await renderAdminHtml());
+    if (adminNextRuntime) {
+      await adminNextRuntime.handle(req, res);
+      return;
+    }
+    res.status(503).type("html").send("<!doctype html><title>Moon Admin unavailable</title><main><h1>Moon Admin unavailable</h1><p>The embedded Next admin runtime is not ready.</p></main>");
   });
 
   app.get("/", async (_req, res) => {
@@ -429,6 +360,10 @@ export const registerPageRoutes = (app, {config = {}, getSessionToken = () => ""
 
   app.all("/api/*splat", (_req, res) => {
     res.status(404).json({error: "Not found"});
+  });
+
+  app.all("/admin-assets/*splat", (_req, res) => {
+    res.status(404).json({error: "Admin assets moved to /admin/_next."});
   });
 
   app.get("/*splat", async (_req, res) => {

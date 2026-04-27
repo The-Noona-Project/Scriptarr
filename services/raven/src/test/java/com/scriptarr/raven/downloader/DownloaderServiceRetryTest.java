@@ -22,11 +22,12 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
-import java.util.stream.Stream;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Integration-style coverage for Raven's retrying download worker behavior.
@@ -132,6 +133,92 @@ class DownloaderServiceRetryTest {
     }
 
     /**
+     * Verify Raven refreshes chapter page URLs after a source image returns
+     * 404 instead of retrying only the stale image URL.
+     *
+     * @throws Exception when the local test server cannot be used
+     */
+    @Test
+    void queueDownloadRefreshesChapterPagesAfterImageNotFound() throws Exception {
+        server = HttpServer.create(new InetSocketAddress(0), 0);
+        server.createContext("/images/stale.jpg", (exchange) -> respond(exchange, 404, "missing"));
+        server.createContext("/images/fresh.jpg", (exchange) -> {
+            exchange.getResponseHeaders().add("Content-Type", "image/jpeg");
+            respond(exchange, 200, "fresh-image");
+        });
+        server.start();
+        AtomicInteger resolveAttempts = new AtomicInteger();
+        int port = server.getAddress().getPort();
+
+        TestContext context = createContext(new FakeDownloadProvider(
+            () -> resolveAttempts.incrementAndGet() == 1
+                ? List.of("http://127.0.0.1:" + port + "/images/stale.jpg")
+                : List.of("http://127.0.0.1:" + port + "/images/fresh.jpg")
+        ));
+
+        service.queueDownload(new DownloadRequest(
+            "Refresh Series",
+            "https://weebcentral.com/series/refresh-series",
+            "Manga",
+            "tester",
+            "weebcentral",
+            "",
+            Map.of(),
+            Map.of(),
+            "",
+            "normal"
+        ));
+
+        Map<String, Object> task = awaitTerminalTask(service);
+
+        assertEquals("completed", task.get("status"));
+        assertEquals(2, resolveAttempts.get());
+        assertEquals(1, context.libraryService().listTitles().size());
+    }
+
+    /**
+     * Verify admins can remove a failed task without touching promoted library
+     * content.
+     *
+     * @throws Exception when the local test server cannot be used
+     */
+    @Test
+    void removeTaskDeletesFailedWorkingFolderAndPersistedTask() throws Exception {
+        server = HttpServer.create(new InetSocketAddress(0), 0);
+        server.createContext("/images/missing.jpg", (exchange) -> respond(exchange, 404, "missing"));
+        server.start();
+        String imageUrl = "http://127.0.0.1:" + server.getAddress().getPort() + "/images/missing.jpg";
+
+        TestContext context = createContext(new FakeDownloadProvider(() -> List.of(imageUrl)));
+
+        service.queueDownload(new DownloadRequest(
+            "Broken Series",
+            "https://weebcentral.com/series/broken-series",
+            "Manga",
+            "tester",
+            "weebcentral",
+            "",
+            Map.of(),
+            Map.of(),
+            "",
+            "normal"
+        ));
+
+        Map<String, Object> failedTask = awaitTerminalTask(service);
+        Path workingRoot = Path.of(String.valueOf(failedTask.get("workingRoot")));
+
+        assertEquals("failed", failedTask.get("status"));
+        assertTrue(Files.exists(workingRoot));
+
+        Map<String, Object> result = service.removeTask(String.valueOf(failedTask.get("taskId")));
+
+        assertEquals(true, result.get("removed"));
+        assertEquals(0, service.snapshot().size());
+        assertEquals(0, context.brokerClient().listDownloadTasks().size());
+        assertFalse(Files.exists(workingRoot));
+    }
+
+    /**
      * Verify a queued Raven title can persist its selected metadata snapshot
      * into the durable library projection after download completion.
      *
@@ -208,24 +295,24 @@ class DownloaderServiceRetryTest {
             .resolve("A_Common_Story_of_a_Lady_s_New_Life");
         Files.createDirectories(completedRoot);
         Files.writeString(
-            completedRoot.resolve("A Common Story of a Lady’s New Life c001 [Scriptarr].cbz"),
+            completedRoot.resolve("A Common Story of a Lady's New Life c001 [Scriptarr].cbz"),
             "fake-archive",
             StandardCharsets.UTF_8
         );
 
-        brokerClient.putDownloadTask("failed-task", Map.of(
-            "taskId", "failed-task",
-            "jobId", "failed-task",
-            "titleId", "",
-            "titleName", "A Common Story of a Lady’s New Life",
-            "titleUrl", "https://weebcentral.com/series/common-story",
-            "requestType", "Manhwa",
-            "requestedBy", "tester",
-            "status", "failed",
-            "message", "Failed to persist Raven title.",
-            "percent", 90,
-            "queuedAt", "2026-04-24T00:00:00Z",
-            "updatedAt", "2026-04-24T00:00:00Z"
+        brokerClient.putDownloadTask("failed-task", Map.ofEntries(
+            Map.entry("taskId", "failed-task"),
+            Map.entry("jobId", "failed-task"),
+            Map.entry("titleId", ""),
+            Map.entry("titleName", "A Common Story of a Lady's New Life"),
+            Map.entry("titleUrl", "https://weebcentral.com/series/common-story"),
+            Map.entry("requestType", "Manhwa"),
+            Map.entry("requestedBy", "tester"),
+            Map.entry("status", "failed"),
+            Map.entry("message", "Failed to persist Raven title."),
+            Map.entry("percent", 90),
+            Map.entry("queuedAt", "2026-04-24T00:00:00Z"),
+            Map.entry("updatedAt", "2026-04-24T00:00:00Z")
         ));
 
         service = new DownloaderService(

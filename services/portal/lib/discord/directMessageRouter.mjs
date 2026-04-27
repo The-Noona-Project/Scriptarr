@@ -1,6 +1,7 @@
 import {
   executeDownloadAll,
   formatBulkQueueSummary,
+  formatBulkRunSummary,
   formatDownloadAllUsage,
   isDownloadAllHelpRequest,
   parseDownloadAllCommand,
@@ -157,9 +158,13 @@ export const createDirectMessageHandler = ({getSettings, sage, logger, onRuntime
     return true;
   }
 
+  const isMega = String(parsed.filters.type).toLowerCase() === "all"
+    || String(parsed.filters.titlePrefix).toLowerCase() === "all";
   await sendReplySequence(
     message,
-    `Queueing Scriptarr bulk download for type=${parsed.filters.type}, nsfw=${parsed.filters.nsfw}, titlegroup=${parsed.filters.titlePrefix}...`
+    isMega
+      ? `Starting Scriptarr async mega downloadall run for type=${parsed.filters.type}, nsfw=${parsed.filters.nsfw}, titlegroup=${parsed.filters.titlePrefix}. It will pause after each batch for owner continuation.`
+      : `Queueing Scriptarr bulk download for type=${parsed.filters.type}, nsfw=${parsed.filters.nsfw}, titlegroup=${parsed.filters.titlePrefix}...`
   );
 
   try {
@@ -172,7 +177,12 @@ export const createDirectMessageHandler = ({getSettings, sage, logger, onRuntime
       filters: parsed.filters,
       source: "dm-text"
     });
-    await sendReplySequence(message, formatBulkQueueSummary(result.payload || result));
+    await sendReplySequence(
+      message,
+      isMega
+        ? formatBulkRunSummary(result.payload || result)
+        : formatBulkQueueSummary(result.payload || result)
+    );
   } catch (error) {
     await sendReplySequence(message, `Scriptarr bulk queue failed: ${error?.message || String(error)}`);
   }
@@ -182,6 +192,7 @@ export const createDirectMessageHandler = ({getSettings, sage, logger, onRuntime
 
 export {
   formatBulkQueueSummary,
+  formatBulkRunSummary,
   formatDownloadAllUsage,
   isDownloadAllHelpRequest,
   parseDownloadAllCommand,

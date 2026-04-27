@@ -1,7 +1,21 @@
 /**
  * @file Scriptarr Sage module: services/sage/lib/auth.mjs.
  */
-import {canAccessAdmin, hasGrant} from "@scriptarr/access";
+import {createHash} from "node:crypto";
+import {
+  canAccessAdmin,
+  deriveLegacyPermissions,
+  hasGrant,
+  mergeAdminGrantMaps,
+  normalizeCapabilities
+} from "@scriptarr/access";
+
+const USER_API_KEY_PERMISSIONS = new Set([
+  "read_library",
+  "create_requests",
+  "read_requests",
+  "read_ai_status"
+]);
 
 const getBearerToken = (header) => {
   if (!header) {
@@ -9,6 +23,92 @@ const getBearerToken = (header) => {
   }
   const [scheme, token] = header.split(" ");
   return scheme?.toLowerCase() === "bearer" ? token || "" : "";
+};
+
+const normalizeString = (value, fallback = "") => {
+  const normalized = typeof value === "string" ? value.trim() : "";
+  return normalized || fallback;
+};
+
+const hashPresentedApiKey = (value) => createHash("sha256").update(normalizeString(value)).digest("hex");
+
+const sanitizeApiKeyRecord = (apiKey = {}) => ({
+  id: normalizeString(apiKey.id),
+  name: normalizeString(apiKey.name, "API key"),
+  kind: normalizeString(apiKey.kind),
+  keyPrefix: normalizeString(apiKey.keyPrefix),
+  ownerDiscordUserId: normalizeString(apiKey.ownerDiscordUserId),
+  groupIds: Array.isArray(apiKey.groupIds) ? apiKey.groupIds.map((entry) => normalizeString(entry)).filter(Boolean) : [],
+  createdBy: apiKey.createdBy && typeof apiKey.createdBy === "object" ? apiKey.createdBy : {},
+  lastUsedAt: normalizeString(apiKey.lastUsedAt),
+  createdAt: normalizeString(apiKey.createdAt),
+  updatedAt: normalizeString(apiKey.updatedAt)
+});
+
+const buildSystemApiKeyUser = async (vaultClient, apiKey) => {
+  const groups = Array.isArray(apiKey.groupIds) && apiKey.groupIds.length
+    ? (await vaultClient.listPermissionGroups()).filter((group) => apiKey.groupIds.includes(group.id))
+    : [];
+  const adminGrants = mergeAdminGrantMaps(groups.map((group) => group.adminGrants));
+  const permissions = deriveLegacyPermissions({
+    role: "api-key",
+    permissions: normalizeCapabilities(groups.flatMap((group) => group.permissions || [])),
+    adminGrants
+  });
+  return {
+    discordUserId: `api-key:${apiKey.id}`,
+    username: apiKey.name || "System API key",
+    role: "api-key",
+    isOwner: false,
+    groups,
+    adminGrants,
+    permissions
+  };
+};
+
+const buildUserApiKeyUser = async (vaultClient, apiKey) => {
+  const owner = await vaultClient.getUserByDiscordId(apiKey.ownerDiscordUserId);
+  if (!owner) {
+    return null;
+  }
+  return {
+    discordUserId: owner.discordUserId,
+    username: owner.username || "Reader",
+    avatarUrl: owner.avatarUrl || null,
+    role: "member",
+    isOwner: false,
+    groups: [],
+    adminGrants: {},
+    permissions: normalizeCapabilities(owner.permissions).filter((permission) => USER_API_KEY_PERMISSIONS.has(permission))
+  };
+};
+
+/**
+ * Resolve an API-key header into the same user shape used by session routes.
+ *
+ * @param {ReturnType<import("./vaultClient.mjs").createVaultClient>} vaultClient
+ * @param {string} presentedKey
+ * @returns {Promise<{user: any, apiKey: any} | null>}
+ */
+export const resolveApiKeySession = async (vaultClient, presentedKey) => {
+  const normalizedKey = normalizeString(presentedKey);
+  if (!normalizedKey) {
+    return null;
+  }
+  const apiKey = await vaultClient.resolveApiKey(hashPresentedApiKey(normalizedKey));
+  if (!apiKey) {
+    return null;
+  }
+  const user = apiKey.kind === "user"
+    ? await buildUserApiKeyUser(vaultClient, apiKey)
+    : await buildSystemApiKeyUser(vaultClient, apiKey);
+  if (!user) {
+    return null;
+  }
+  return {
+    user,
+    apiKey: sanitizeApiKeyRecord(apiKey)
+  };
 };
 
 const LEGACY_PERMISSION_DOMAIN_MAP = Object.freeze({
@@ -88,6 +188,20 @@ export const hasPermission = (user, permission) => {
  * @returns {import("express").RequestHandler}
  */
 export const requireSession = (vaultClient) => async (req, res, next) => {
+  const presentedApiKey = req.get("X-Scriptarr-Api-Key");
+  if (presentedApiKey) {
+    const resolved = await resolveApiKeySession(vaultClient, presentedApiKey);
+    if (!resolved) {
+      res.status(401).json({error: "Invalid API key."});
+      return;
+    }
+    req.user = resolved.user;
+    req.apiKey = resolved.apiKey;
+    req.authMethod = "api-key";
+    next();
+    return;
+  }
+
   const token = getBearerToken(req.headers.authorization);
   if (!token) {
     res.status(401).json({error: "Missing session token."});
@@ -100,6 +214,7 @@ export const requireSession = (vaultClient) => async (req, res, next) => {
   }
   req.sessionToken = token;
   req.user = user;
+  req.authMethod = "session";
   next();
 };
 

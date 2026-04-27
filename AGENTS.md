@@ -30,6 +30,9 @@ Read this before editing Scriptarr.
 - `npm run docker:healthcheck`
 - `npm run docker:test`
 - `npm run docker:test:teardown`
+- `npm run test`
+- `npm run test:js`
+- `npm run test:raven`
 
 ## Service Index
 
@@ -52,6 +55,8 @@ Read this before editing Scriptarr.
   and download snapshots so moderation can queue the exact saved Raven target later.
 - Moon web request creation now lives in `/myrequests`. Keep the web requester flow metadata-first there instead of
   reintroducing older request-entry surfaces.
+- Moon Discord login should preserve a sanitized same-origin return path when possible and fall back to `/` if the
+  remembered route is missing, unsafe, or no longer allowed for the signed-in user.
 - Moon also owns the trusted public automation API. Keep external search and request traffic behind Moon's
   `/api/public/*` routes, store only hashed API keys in Vault through Sage, and preserve the NSFW, duplicate, and
   lowest-priority guards on external queueing.
@@ -72,6 +77,9 @@ Read this before editing Scriptarr.
 - `raven.naming` is now profile-based by library type, and Moon admin owns that workflow at
   `/admin/mediamanagement`.
 - LocalAI is optional to overall platform health; degrade safely when AI dependencies are unavailable.
+- Moon admin's `/admin/activity/queue` is the live Raven queue board. Keep it SSE-backed, limit `Needs attention` to
+  failed or stale Raven title tasks, show ETA only for active downloads with credible telemetry, and only remove
+  incomplete managed working folders from recovery actions.
 - Prefer Docker-based verification for cross-service work. `npm run docker:healthcheck` is the default smoke path for
   agents and contributors, while `npm run docker:test` remains the deeper end-to-end flow. `npm run docker:test:teardown`
   is the matching manual cleanup path when the deeper test stack is left running.

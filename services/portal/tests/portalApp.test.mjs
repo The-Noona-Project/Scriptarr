@@ -138,7 +138,7 @@ test("portal HTTP surface covers command inventory, request routing, chat routin
       assert.equal(body.discordUserId, "253987219969146890");
       assert.equal(body.title, "Dandadan");
       assert.equal(body.selectedMetadata.providerSeriesId, "md-1");
-      assert.equal(body.selectedDownload, undefined);
+      assert.equal(body.selectedDownload, null);
       return {
         status: 201,
         body: {
@@ -377,6 +377,26 @@ test("portal notifier delivers follow, approval, denial, and completion DMs once
         ackedIds.add(requestId);
         acknowledged.push(`request:${requestId}`);
         return {ok: true};
+      },
+      async listSystemNotifications() {
+        return {
+          ok: true,
+          payload: {
+            notifications: ackedIds.has("localai:job-1:completed") ? [] : [{
+              id: "localai:job-1:completed",
+              discordUserId: "user-1",
+              titleName: "LocalAI",
+              message: "LocalAI startup completed. The runtime is ready for Oracle.",
+              image: "localai/localai:latest-aio-cpu",
+              linkUrl: "https://pax-kun.com/admin/system/ai"
+            }]
+          }
+        };
+      },
+      async acknowledgeSystemNotification(notificationId) {
+        ackedIds.add(notificationId);
+        acknowledged.push(`system:${notificationId}`);
+        return {ok: true};
       }
     },
     requestCommand: {
@@ -400,6 +420,7 @@ test("portal notifier delivers follow, approval, denial, and completion DMs once
   assert.ok(sent.some((entry) => entry.payload?.content.includes("**Absolute Duo**, is ready")));
   assert.ok(sent.some((entry) => entry.payload?.content.includes("moved it back into admin review")));
   assert.ok(sent.some((entry) => entry.payload?.content.includes("expired after 90 days")));
+  assert.ok(sent.some((entry) => entry.payload?.content.includes("LocalAI startup completed")));
   assert.ok(sent.some((entry) => entry.payload?.content.includes("https://pax-kun.com/myrequests")));
   assert.ok(sent.some((entry) => entry.payload?.embeds?.[0]?.image?.url === "https://images.example/solo.jpg"));
   assert.deepEqual(acknowledged.sort(), [
@@ -410,6 +431,7 @@ test("portal notifier delivers follow, approval, denial, and completion DMs once
     "request:request-4:blocked:user-2",
     "request:request-5:ready:user-3",
     "request:request-6:source-found",
-    "request:request-7:expired"
+    "request:request-7:expired",
+    "system:localai:job-1:completed"
   ]);
 });

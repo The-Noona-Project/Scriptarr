@@ -12,6 +12,8 @@
   or command-sync problem back through Moon admin.
 - Portal now also owns requester approval, denial, and completion DMs. Keep those notifications deduped by request id
   plus decision state, and reuse the shared `coverUrl` plus Moon public base URL when they are available.
+- Portal also sends deduped system DMs for LocalAI lifecycle jobs exposed by Sage, including install, start, and
+  remove completion or failure notices for the Discord-backed admin who requested the action.
 - Portal-originated async request and Discord-runtime state that matters to operators should now be mirrored into the
   shared durable event log through Sage's internal broker routes instead of living only in Portal-local memory.
 - `/request` now mirrors Moon's metadata-first wizard. Portal should search raw metadata rows first, then submit one

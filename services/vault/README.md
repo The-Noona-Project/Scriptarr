@@ -12,9 +12,17 @@ new or returning Discord sign-ins.
 Vault now also persists title-level and chapter-level read state for Moon's bookshelf and completion logic. Progress
 rows still track the current reading position, while the read-state model determines whether a title is active on the
 bookshelf or fully completed.
+Vault now also persists first-class API key records for Moon and Sage. It stores hashed key material plus metadata for
+system keys, user-owned keys, permission-group assignment, last-used timestamps, and revocation state; plaintext API
+keys are never stored.
+Vault also exposes a service-only database explorer contract for Sage. It reports overview and table data through an
+allowlisted, paginated, redacted path and never accepts arbitrary SQL from browser flows. The first write path is
+limited to validated JSON rows in `settings`; users, sessions, secrets, permission groups, API keys, and durable
+events remain read-only through the explorer.
 Its content reset path is content-only, not a factory reset: requests, work locks, progress, read state, follows,
 reader bookmarks, Raven catalog rows, Raven tasks, and Raven-owned jobs are cleared, while users, permission groups,
-sessions, settings, secrets, and durable events remain intact.
+API keys, sessions, settings, secrets, and durable events remain intact.
 
 It also stores the Raven VPN settings, Raven metadata provider configuration, Oracle provider state, and Oracle
-secrets used by the rest of the stack.
+secrets used by the rest of the stack. Moon branding, uploaded WebP logo variants, and admin toast preferences are
+normal Vault settings and survive content reset with other settings.

@@ -7,6 +7,7 @@ import {registerLegacyApiRoutes} from "./registerLegacyApiRoutes.mjs";
 import {registerMoonV3ProxyRoutes} from "./registerMoonV3ProxyRoutes.mjs";
 import {registerPageRoutes} from "./registerPageRoutes.mjs";
 import {registerPublicApiRoutes} from "./registerPublicApiRoutes.mjs";
+import {createAdminNextRuntime} from "./createAdminNextRuntime.mjs";
 import {createUserNextRuntime} from "./createUserNextRuntime.mjs";
 
 /**
@@ -26,6 +27,7 @@ import {createUserNextRuntime} from "./createUserNextRuntime.mjs";
 export const createMoonApp = async ({logger = createLogger("MOON")} = {}) => {
   const config = resolveMoonConfig();
   const app = express();
+  const adminNextRuntime = await createAdminNextRuntime({logger});
   const userNextRuntime = await createUserNextRuntime({logger});
 
   app.use(express.json());
@@ -50,7 +52,7 @@ export const createMoonApp = async ({logger = createLogger("MOON")} = {}) => {
   registerLegacyApiRoutes(app, {config, getSessionToken});
   registerMoonV3ProxyRoutes(app, {config, getSessionToken});
   registerPublicApiRoutes(app, {config});
-  registerPageRoutes(app, {config, getSessionToken, userNextRuntime});
+  registerPageRoutes(app, {adminNextRuntime, config, getSessionToken, userNextRuntime});
 
   logger.info("Moon app initialized.", {
     sageBaseUrl: config.sageBaseUrl

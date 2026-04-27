@@ -8,6 +8,13 @@ import {DEFAULT_EVENT_RETENTION_DAYS} from "./vaultEvents.mjs";
 const JSON_BODY_LIMIT = "10mb";
 const EVENT_PRUNE_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const requireJson = express.json({limit: JSON_BODY_LIMIT});
+const readQueryList = (query, key) => {
+  const value = query[key];
+  if (Array.isArray(value)) {
+    return value.map((entry) => String(entry)).filter(Boolean);
+  }
+  return value ? [String(value)] : [];
+};
 const sendStoreError = (logger, res, error, context = {}) => {
   if (error?.code === "OWNER_ALREADY_CLAIMED") {
     logger.warn("Owner claim was rejected because an owner already exists.", context);
@@ -34,7 +41,7 @@ const sendStoreError = (logger, res, error, context = {}) => {
     });
     return true;
   }
-  if (["PROTECTED_OWNER", "DEFAULT_GROUP_REQUIRED", "PERMISSION_GROUP_CONFLICT"].includes(error?.code)) {
+  if (["PROTECTED_OWNER", "DEFAULT_GROUP_REQUIRED", "PERMISSION_GROUP_CONFLICT", "API_KEY_CONFLICT", "API_KEY_REQUIRED", "DATABASE_SETTING_INVALID"].includes(error?.code)) {
     logger.warn("Vault rejected an access-control mutation.", {
       ...context,
       code: error.code
@@ -164,6 +171,61 @@ export const createVaultApp = async ({logger = createLogger("VAULT")} = {}) => {
     }
   });
 
+  app.get("/api/service/api-keys", async (req, res) => {
+    res.json(await store.listApiKeys({
+      kind: req.query.kind ? String(req.query.kind) : "",
+      ownerDiscordUserId: req.query.ownerDiscordUserId ? String(req.query.ownerDiscordUserId) : "",
+      includeRevoked: req.query.includeRevoked !== "false"
+    }));
+  });
+
+  app.post("/api/service/api-keys", requireJson, async (req, res) => {
+    try {
+      res.status(201).json(await store.createApiKey(req.body || {}));
+    } catch (error) {
+      if (sendStoreError(logger, res, error, {apiKeyName: req.body?.name})) {
+        return;
+      }
+      throw error;
+    }
+  });
+
+  app.post("/api/service/api-keys/resolve", requireJson, async (req, res) => {
+    const apiKey = await store.resolveApiKey(req.body?.keyHash);
+    if (!apiKey) {
+      res.status(404).json({error: "API key not found."});
+      return;
+    }
+    res.json(apiKey);
+  });
+
+  app.get("/api/service/api-keys/:apiKeyId", async (req, res) => {
+    const apiKey = await store.getApiKey(req.params.apiKeyId);
+    if (!apiKey) {
+      res.status(404).json({error: "API key not found."});
+      return;
+    }
+    res.json(apiKey);
+  });
+
+  app.patch("/api/service/api-keys/:apiKeyId", requireJson, async (req, res) => {
+    const apiKey = await store.updateApiKey(req.params.apiKeyId, req.body || {});
+    if (!apiKey) {
+      res.status(404).json({error: "API key not found."});
+      return;
+    }
+    res.json(apiKey);
+  });
+
+  app.delete("/api/service/api-keys/:apiKeyId", async (req, res) => {
+    const apiKey = await store.revokeApiKey(req.params.apiKeyId);
+    if (!apiKey) {
+      res.status(404).json({error: "API key not found."});
+      return;
+    }
+    res.json(apiKey);
+  });
+
   app.delete("/api/service/users/:discordUserId", async (req, res) => {
     try {
       const user = await store.deleteUser(req.params.discordUserId);
@@ -230,6 +292,34 @@ export const createVaultApp = async ({logger = createLogger("VAULT")} = {}) => {
     res.json(await store.setSetting(req.params.key, req.body.value));
   });
 
+  app.get("/api/service/database/overview", async (_req, res) => {
+    res.json(await store.getDatabaseOverview());
+  });
+
+  app.get("/api/service/database/tables/:tableName", async (req, res) => {
+    const table = await store.getDatabaseTable(req.params.tableName, {
+      limit: req.query.limit,
+      offset: req.query.offset,
+      query: req.query.q || req.query.query || ""
+    });
+    if (!table) {
+      res.status(404).json({error: "Database table not found."});
+      return;
+    }
+    res.json(table);
+  });
+
+  app.put("/api/service/database/tables/settings/rows/:settingKey", requireJson, async (req, res) => {
+    try {
+      res.json(await store.updateDatabaseSetting(req.params.settingKey, req.body?.value));
+    } catch (error) {
+      if (sendStoreError(logger, res, error, {settingKey: req.params.settingKey})) {
+        return;
+      }
+      throw error;
+    }
+  });
+
   app.get("/api/service/secrets/:key", async (req, res) => {
     const secret = await store.getSecret(req.params.key);
     res.json(secret || {key: req.params.key, value: null});
@@ -240,15 +330,17 @@ export const createVaultApp = async ({logger = createLogger("VAULT")} = {}) => {
   });
 
   app.get("/api/service/events", async (req, res) => {
-    const domains = Array.isArray(req.query.domain)
-      ? req.query.domain.map((value) => String(value))
-      : req.query.domain
-        ? [String(req.query.domain)]
-        : [];
     res.json(await store.listEvents({
-      domains,
+      domains: readQueryList(req.query, "domain"),
+      eventTypes: readQueryList(req.query, "eventType"),
+      severities: readQueryList(req.query, "severity"),
+      actorType: req.query.actorType ? String(req.query.actorType) : "",
       actorId: req.query.actorId ? String(req.query.actorId) : "",
+      targetType: req.query.targetType ? String(req.query.targetType) : "",
       targetId: req.query.targetId ? String(req.query.targetId) : "",
+      query: req.query.q || req.query.query || "",
+      since: req.query.since || "",
+      until: req.query.until || "",
       afterSequence: req.query.afterSequence || req.query.after || 0,
       limit: req.query.limit || 100,
       newestFirst: req.query.newestFirst !== "false"
@@ -408,6 +500,10 @@ export const createVaultApp = async ({logger = createLogger("VAULT")} = {}) => {
       ...req.body,
       taskId: req.params.taskId
     }));
+  });
+
+  app.delete("/api/service/raven/download-tasks/:taskId", async (req, res) => {
+    res.json(await store.deleteRavenDownloadTask(req.params.taskId));
   });
 
   app.get("/api/service/raven/metadata-matches/:titleId", async (req, res) => {

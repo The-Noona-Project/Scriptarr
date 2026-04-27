@@ -13,22 +13,12 @@ const docsHtml = () => `<!doctype html>
     <title>Scriptarr Moon Public API</title>
     <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css">
     <style>
-      body { margin: 0; background: #0c1117; color: #e8edf2; font-family: "IBM Plex Sans", system-ui, sans-serif; }
-      .swagger-shell { padding: 24px; }
-      .swagger-header { margin-bottom: 20px; }
-      .swagger-header h1 { margin: 0 0 8px; font-size: 2rem; }
-      .swagger-header p { margin: 0; color: #9fb0c2; }
-      #swagger-ui { background: #ffffff; border-radius: 16px; overflow: hidden; }
+      body { margin: 0; background: #fff; }
+      #swagger-ui { min-height: 100vh; }
     </style>
   </head>
   <body>
-    <main class="swagger-shell">
-      <header class="swagger-header">
-        <h1>Scriptarr Moon Public API</h1>
-        <p>Trusted automation API for safe title search and queueing. Use the <code>X-Scriptarr-Api-Key</code> header for protected operations.</p>
-      </header>
-      <div id="swagger-ui"></div>
-    </main>
+    <div id="swagger-ui"></div>
     <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
     <script>
       window.ui = SwaggerUIBundle({

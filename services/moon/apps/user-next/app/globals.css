@@ -59,7 +59,14 @@ a {
 .moon-brandmark {
   display: inline-flex;
   align-items: center;
+  gap: 10px;
   min-height: 40px;
+}
+
+.moon-brandmark img {
+  width: 34px;
+  height: 34px;
+  object-fit: contain;
 }
 
 .moon-brandmark strong {
@@ -567,21 +574,38 @@ a {
 }
 
 .moon-profile-menu {
-  display: flex;
+  position: relative;
+  display: inline-flex;
+  align-items: center;
 }
 
 .moon-avatar-trigger {
   padding: 0;
-  border: 0;
-  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.03);
   cursor: pointer;
+  transition: transform 160ms ease, border-color 160ms ease, background 160ms ease;
+}
+
+.moon-avatar-trigger:hover,
+.moon-avatar-trigger.is-open {
+  transform: translateY(-1px);
+  border-color: rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.06);
 }
 
 .moon-profile-dropdown {
-  padding: 8px;
+  position: absolute;
+  top: calc(100% + 12px);
+  right: 0;
+  min-width: 180px;
   background: rgba(8, 14, 20, 0.96);
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 20px;
+  box-shadow: 0 22px 46px rgba(0, 0, 0, 0.34);
+  padding: 8px;
+  z-index: 60;
 }
 
 .moon-profile-dropdown-link {
@@ -615,6 +639,10 @@ a {
   gap: 24px;
 }
 
+.moon-profile-tabs-head {
+  align-items: flex-end;
+}
+
 .moon-profile-summary {
   padding-bottom: 28px;
 }
@@ -631,7 +659,8 @@ a {
   font-size: clamp(1.8rem, 3vw, 2.8rem);
 }
 
-.moon-profile-grid {
+.moon-profile-grid,
+.moon-profile-tab-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
   gap: 18px;
@@ -657,10 +686,96 @@ a {
 }
 
 .moon-profile-inline-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   padding: 8px 12px;
   border-radius: 999px;
   border: 1px solid rgba(255, 255, 255, 0.08);
   background: rgba(255, 255, 255, 0.04);
+}
+
+.moon-profile-inline-link-button {
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.moon-profile-inline-link-button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.moon-profile-tab-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.moon-profile-tab {
+  padding: 10px 16px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+  color: rgba(255, 248, 240, 0.84);
+  transition: background 160ms ease, border-color 160ms ease;
+}
+
+.moon-profile-tab:hover,
+.moon-profile-tab.is-active {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.16);
+}
+
+.moon-profile-metric-card {
+  min-height: 160px;
+  align-content: start;
+}
+
+.moon-profile-metric-card strong {
+  font-size: clamp(1.8rem, 4vw, 2.6rem);
+}
+
+.moon-profile-metric-card span {
+  color: rgba(240, 237, 232, 0.72);
+}
+
+.moon-profile-preview-row {
+  align-items: center;
+}
+
+.moon-profile-key-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+}
+
+.moon-profile-key-form input {
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 16px;
+  background: rgba(10, 16, 24, 0.88);
+  color: rgba(245, 239, 234, 0.92);
+  font: inherit;
+}
+
+.moon-secret-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  border: 1px solid rgba(255, 221, 128, 0.28);
+  border-radius: 16px;
+  background: rgba(255, 221, 128, 0.08);
+  padding: 12px;
+}
+
+.moon-secret-panel strong {
+  overflow-wrap: anywhere;
+  font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+  font-size: 0.84rem;
 }
 
 .moon-footer {

@@ -420,28 +420,58 @@ export const runDetachedContainer = async ({
  * Pull a Docker image and stream progress lines through the provided logger.
  *
  * @param {string} image
- * @param {{logger?: {info: Function}}} [options]
+ * @param {{logger?: {info: Function}, onProgress?: (line: string) => void}} [options]
  * @returns {Promise<void>}
  */
-export const pullDockerImage = async (image, {logger} = {}) => {
+export const pullDockerImage = async (image, {logger, onProgress} = {}) => {
+  const handleLine = (line) => {
+    onProgress?.(line);
+    logger?.info("Docker pull output.", {
+      image,
+      output: line
+    });
+  };
+
   await runDocker(["pull", image], {
-    onStdoutLine: logger
-      ? (line) => {
-        logger.info("Docker pull output.", {
-          image,
-          output: line
-        });
-      }
-      : undefined,
-    onStderrLine: logger
-      ? (line) => {
-        logger.info("Docker pull progress.", {
-          image,
-          output: line
-        });
-      }
-      : undefined
+    onStdoutLine: logger || onProgress ? handleLine : undefined,
+    onStderrLine: logger || onProgress ? handleLine : undefined
   });
+};
+
+/**
+ * Remove a Docker image if it exists locally.
+ *
+ * @param {string} image
+ * @param {{ignoreMissing?: boolean}} [options]
+ * @returns {Promise<void>}
+ */
+export const removeDockerImage = async (image, {ignoreMissing = true} = {}) => {
+  try {
+    await runDocker(["rmi", image]);
+  } catch (error) {
+    if (!ignoreMissing || !/No such image|not found/i.test(String(error))) {
+      throw error;
+    }
+  }
+};
+
+/**
+ * Read recent Docker log lines for a managed container.
+ *
+ * @param {string} containerName
+ * @param {{lines?: number}} [options]
+ * @returns {Promise<string>}
+ */
+export const readDockerContainerLogs = async (containerName, {lines = 250} = {}) => {
+  const safeLines = Math.min(1000, Math.max(1, Number.parseInt(String(lines), 10) || 250));
+  const {stdout, stderr} = await runDocker([
+    "logs",
+    "--tail",
+    String(safeLines),
+    "--timestamps",
+    containerName
+  ]);
+  return [stdout, stderr].filter(Boolean).join("\n");
 };
 
 /**

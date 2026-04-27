@@ -58,6 +58,12 @@ const requestJson = async (baseUrl, headers, path, {method = "GET", body, allowS
  *   updatePermissionGroup: (groupId: string, payload: Record<string, unknown>) => Promise<any>,
  *   deletePermissionGroup: (groupId: string) => Promise<any>,
  *   assignUserGroups: (discordUserId: string, groupIds: string[]) => Promise<any>,
+ *   createApiKey: (payload: Record<string, unknown>) => Promise<any>,
+ *   listApiKeys: (filters?: Record<string, unknown>) => Promise<any>,
+ *   getApiKey: (apiKeyId: string) => Promise<any>,
+ *   updateApiKey: (apiKeyId: string, payload: Record<string, unknown>) => Promise<any>,
+ *   revokeApiKey: (apiKeyId: string) => Promise<any>,
+ *   resolveApiKey: (keyHash: string) => Promise<any>,
  *   deleteUser: (discordUserId: string) => Promise<any>,
  *   createSession: (discordUserId: string) => Promise<any>,
  *   clearSession: (token: string) => Promise<any>,
@@ -70,6 +76,9 @@ const requestJson = async (baseUrl, headers, path, {method = "GET", body, allowS
  *   getRequest: (id: string | number) => Promise<any>,
  *   getSetting: (key: string) => Promise<any>,
  *   setSetting: (key: string, value: unknown) => Promise<any>,
+ *   getDatabaseOverview: () => Promise<any>,
+ *   getDatabaseTable: (tableName: string, filters?: Record<string, unknown>) => Promise<any>,
+ *   updateDatabaseSetting: (key: string, value: unknown) => Promise<any>,
  *   getSecret: (key: string) => Promise<any>,
  *   setSecret: (key: string, value: unknown) => Promise<any>,
  *   createRequest: (payload: Record<string, unknown>) => Promise<any>,
@@ -148,6 +157,62 @@ export const createVaultClient = (config) => {
         body: {groupIds},
         allowStatuses: [404],
         context: "Failed to assign permission groups in Vault"
+      });
+      return status === 404 ? null : payload;
+    },
+    async createApiKey(payload) {
+      return (await requestJson(baseUrl, headers, "/api/service/api-keys", {
+        method: "POST",
+        body: payload,
+        context: "Failed to create an API key in Vault"
+      })).payload;
+    },
+    async listApiKeys(filters = {}) {
+      const params = new URLSearchParams();
+      if (filters.kind) {
+        params.set("kind", String(filters.kind));
+      }
+      if (filters.ownerDiscordUserId) {
+        params.set("ownerDiscordUserId", String(filters.ownerDiscordUserId));
+      }
+      if (filters.includeRevoked === false) {
+        params.set("includeRevoked", "false");
+      }
+      const suffix = params.toString() ? `?${params.toString()}` : "";
+      return (await requestJson(baseUrl, headers, `/api/service/api-keys${suffix}`, {
+        context: "Failed to list API keys from Vault"
+      })).payload;
+    },
+    async getApiKey(apiKeyId) {
+      const {status, payload} = await requestJson(baseUrl, headers, `/api/service/api-keys/${encodeURIComponent(apiKeyId)}`, {
+        allowStatuses: [404],
+        context: "Failed to load an API key from Vault"
+      });
+      return status === 404 ? null : payload;
+    },
+    async updateApiKey(apiKeyId, payload) {
+      const {status, payload: responsePayload} = await requestJson(baseUrl, headers, `/api/service/api-keys/${encodeURIComponent(apiKeyId)}`, {
+        method: "PATCH",
+        body: payload,
+        allowStatuses: [404],
+        context: "Failed to update an API key in Vault"
+      });
+      return status === 404 ? null : responsePayload;
+    },
+    async revokeApiKey(apiKeyId) {
+      const {status, payload} = await requestJson(baseUrl, headers, `/api/service/api-keys/${encodeURIComponent(apiKeyId)}`, {
+        method: "DELETE",
+        allowStatuses: [404],
+        context: "Failed to revoke an API key in Vault"
+      });
+      return status === 404 ? null : payload;
+    },
+    async resolveApiKey(keyHash) {
+      const {status, payload} = await requestJson(baseUrl, headers, "/api/service/api-keys/resolve", {
+        method: "POST",
+        body: {keyHash},
+        allowStatuses: [404],
+        context: "Failed to resolve an API key in Vault"
       });
       return status === 404 ? null : payload;
     },
@@ -245,6 +310,32 @@ export const createVaultClient = (config) => {
         body: JSON.stringify({value})
       });
       return json(response);
+    },
+    async getDatabaseOverview() {
+      return (await requestJson(baseUrl, headers, "/api/service/database/overview", {
+        context: "Failed to load database overview from Vault"
+      })).payload;
+    },
+    async getDatabaseTable(tableName, filters = {}) {
+      const searchParams = new URLSearchParams();
+      for (const [key, value] of Object.entries(filters)) {
+        if (value != null && value !== "") {
+          searchParams.set(key, String(value));
+        }
+      }
+      const suffix = searchParams.size ? `?${searchParams.toString()}` : "";
+      const {status, payload} = await requestJson(baseUrl, headers, `/api/service/database/tables/${encodeURIComponent(tableName)}${suffix}`, {
+        allowStatuses: [404],
+        context: "Failed to load a database table from Vault"
+      });
+      return status === 404 ? null : payload;
+    },
+    async updateDatabaseSetting(key, value) {
+      return (await requestJson(baseUrl, headers, `/api/service/database/tables/settings/rows/${encodeURIComponent(key)}`, {
+        method: "PUT",
+        body: {value},
+        context: "Failed to update a database setting in Vault"
+      })).payload;
     },
     async getSecret(key) {
       const response = await fetch(`${baseUrl}/api/service/secrets/${encodeURIComponent(key)}`, {
@@ -382,6 +473,12 @@ export const createVaultClient = (config) => {
         method: "PUT",
         body: payload,
         context: "Failed to upsert a Raven download task in Vault"
+      })).payload;
+    },
+    async deleteRavenDownloadTask(taskId) {
+      return (await requestJson(baseUrl, headers, `/api/service/raven/download-tasks/${encodeURIComponent(taskId)}`, {
+        method: "DELETE",
+        context: "Failed to delete a Raven download task in Vault"
       })).payload;
     },
     async getRavenMetadataMatch(titleId) {

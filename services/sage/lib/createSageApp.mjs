@@ -6,15 +6,31 @@ import express from "express";
 import {createLogger} from "@scriptarr/logging";
 import {resolveSageConfig} from "./config.mjs";
 import {createVaultClient} from "./vaultClient.mjs";
-import {buildCallbackUrl, buildDiscordOauthUrl, exchangeDiscordCode} from "./discordAuth.mjs";
+import {
+  buildCallbackUrl,
+  buildDiscordOauthUrl,
+  exchangeDiscordCode,
+  parseDiscordOauthState,
+  sanitizeReturnToPath
+} from "./discordAuth.mjs";
 import {hasPermission, requireAdminGrant, requirePermission, requireSession} from "./auth.mjs";
 import {appendUserEvent} from "./adminEvents.mjs";
+import {
+  ADMIN_TOAST_GLOBAL_KEY,
+  MOON_BRANDING_KEY,
+  adminToastUserKey,
+  defaultAdminToastSettings,
+  defaultMoonBrandingSettings,
+  mergeAdminToastSettings,
+  normalizeAdminToastSettings,
+  normalizeMoonBrandingSettings
+} from "./adminUiSettings.mjs";
 import {registerMoonV3Routes} from "./registerMoonV3Routes.mjs";
 import {createServiceAuth} from "./serviceAuth.mjs";
 import {registerInternalBrokerRoutes} from "./registerInternalBrokerRoutes.mjs";
 import {buildIntakeSelection, evaluateSelectionAgainstGuardState} from "./requestSelectionGuards.mjs";
 import {buildRequestWorkConflictPayload, isRequestWorkConflictError} from "./requestConflict.mjs";
-import {getUnavailableRequestSweepIntervalMs, runUnavailableRequestSweep} from "./unavailableRequestSweep.mjs";
+import {createSystemTaskRuntime} from "./systemTaskRuntime.mjs";
 import {
   PORTAL_DISCORD_KEY,
   knownPortalDiscordCommands,
@@ -31,7 +47,6 @@ const RAVEN_DOWNLOAD_PROVIDERS_KEY = "raven.download.providers";
 const SAGE_REQUESTS_KEY = "sage.requests";
 const ORACLE_SETTINGS_KEY = "oracle.settings";
 const ORACLE_OPENAI_API_KEY_SECRET = "oracle.openai.apiKey";
-const MOON_BRANDING_KEY = "moon.branding";
 const MOON_PUBLIC_API_KEY = "moon.publicApi";
 const MOON_PUBLIC_API_HASH_SECRET = "moon.publicApi.keyHash";
 const ORACLE_OPENAI_DEFAULT_MODEL = process.env.SCRIPTARR_ORACLE_OPENAI_MODEL || "gpt-4.1-mini";
@@ -94,13 +109,17 @@ const loadWardenStatus = async (baseUrl) => {
 
 const serviceJson = async (baseUrl, servicePath, options = {}) => {
   const method = options.method || "GET";
+  const timeoutMs = Number.isFinite(Number(options.timeoutMs)) && Number(options.timeoutMs) > 0
+    ? Number(options.timeoutMs)
+    : 0;
   const response = await fetch(`${baseUrl}${servicePath}`, {
     method,
     headers: {
       "Content-Type": "application/json",
       ...(options.headers || {})
     },
-    body: options.body == null ? undefined : JSON.stringify(options.body)
+    body: options.body == null ? undefined : JSON.stringify(options.body),
+    signal: timeoutMs > 0 ? AbortSignal.timeout(timeoutMs) : undefined
   });
   const text = await response.text();
   const payload = text ? JSON.parse(text) : null;
@@ -202,10 +221,6 @@ const defaultOracleSettings = () => ({
   openAiApiKeyConfigured: false
 });
 
-const defaultMoonBrandingSettings = () => ({
-  key: MOON_BRANDING_KEY,
-  siteName: "Scriptarr"
-});
 const defaultMoonPublicApiSettings = () => ({
   key: MOON_PUBLIC_API_KEY,
   enabled: false,
@@ -347,15 +362,6 @@ const normalizeOracleSettings = (value, secretValue) => {
   };
 };
 
-const normalizeMoonBrandingSettings = (value) => {
-  const defaults = defaultMoonBrandingSettings();
-  const siteName = normalizeString(value?.siteName, defaults.siteName).slice(0, 80).trim();
-  return {
-    ...defaults,
-    siteName: siteName || defaults.siteName
-  };
-};
-
 const normalizeMoonPublicApiSettings = (value, hashValue) => {
   const defaults = defaultMoonPublicApiSettings();
   const rotatedAt = normalizeString(value?.lastRotatedAt);
@@ -418,6 +424,24 @@ const readMoonBrandingSettings = async (vaultClient) => {
   return normalizeMoonBrandingSettings(settingsValue);
 };
 
+const readAdminToastSettings = async (vaultClient, user = {}) => {
+  const discordUserId = normalizeString(user?.discordUserId);
+  const [globalSetting, personalSetting] = await Promise.all([
+    readSetting(vaultClient, ADMIN_TOAST_GLOBAL_KEY, defaultAdminToastSettings()),
+    discordUserId
+      ? readSetting(vaultClient, adminToastUserKey(discordUserId), null)
+      : null
+  ]);
+  const global = normalizeAdminToastSettings(globalSetting);
+  const personal = personalSetting ? normalizeAdminToastSettings(personalSetting, global) : null;
+  return {
+    global,
+    personal,
+    effective: mergeAdminToastSettings(global, personal),
+    canEditGlobal: user?.isOwner === true || user?.role === "owner"
+  };
+};
+
 const readMoonPublicApiSettings = async (vaultClient) => {
   const [settingsValue, apiKeyHash] = await Promise.all([
     readSetting(vaultClient, MOON_PUBLIC_API_KEY, defaultMoonPublicApiSettings()),
@@ -476,8 +500,45 @@ const syncWardenLocalAiConfig = async (config, oracleSettings) => {
   };
   return safeJson(serviceJson(config.wardenBaseUrl, "/api/localai/config", {
     method: "PUT",
-    body: payload
+    body: payload,
+    timeoutMs: 3000
   }));
+};
+
+const persistOracleSettings = async ({config, vaultClient, user, body, appendAdminUserEvent}) => {
+  const password = normalizeString(body?.openAiApiKey);
+  const existingSecret = await readSecret(vaultClient, ORACLE_OPENAI_API_KEY_SECRET);
+  const nextSettings = normalizeOracleSettings(body, password || existingSecret);
+  await vaultClient.setSetting(ORACLE_SETTINGS_KEY, {
+    key: ORACLE_SETTINGS_KEY,
+    enabled: nextSettings.enabled,
+    provider: nextSettings.provider,
+    model: nextSettings.model,
+    temperature: nextSettings.temperature,
+    localAiProfileKey: nextSettings.localAiProfileKey,
+    localAiImageMode: nextSettings.localAiImageMode,
+    localAiCustomImage: nextSettings.localAiCustomImage
+  });
+  if (password) {
+    await vaultClient.setSecret(ORACLE_OPENAI_API_KEY_SECRET, password);
+  }
+  const wardenSync = await syncWardenLocalAiConfig(config, nextSettings);
+  await appendAdminUserEvent(user, {
+    domain: "settings",
+    eventType: "oracle-settings-updated",
+    targetType: "setting",
+    targetId: ORACLE_SETTINGS_KEY,
+    message: `${user.username} updated Oracle settings.`,
+    metadata: {
+      enabled: nextSettings.enabled,
+      provider: nextSettings.provider,
+      model: nextSettings.model
+    }
+  });
+  return {
+    ...(await readOracleSettings(vaultClient)),
+    wardenSync: wardenSync.payload || wardenSync
+  };
 };
 
 const loadLegacyLibrary = async (config) => {
@@ -649,31 +710,69 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
     };
   };
 
-  const hasValidPublicApiKey = async (presentedKey) => {
+  const resolveStoredApiKey = async (presentedKey) => {
+    const normalizedKey = normalizeString(presentedKey);
+    if (!normalizedKey) {
+      return null;
+    }
+    const apiKey = await vaultClient.resolveApiKey(hashPublicApiKey(normalizedKey));
+    if (!apiKey) {
+      return null;
+    }
+    return {
+      id: normalizeString(apiKey.id),
+      name: normalizeString(apiKey.name, "API key"),
+      kind: normalizeString(apiKey.kind, "system"),
+      ownerDiscordUserId: normalizeString(apiKey.ownerDiscordUserId),
+      keyPrefix: normalizeString(apiKey.keyPrefix)
+    };
+  };
+
+  const hasValidLegacyPublicApiKey = async (presentedKey) => {
     const storedHash = normalizeString(await readSecret(vaultClient, MOON_PUBLIC_API_HASH_SECRET));
     const normalizedKey = normalizeString(presentedKey);
     if (!storedHash || !normalizedKey) {
-      return false;
+      return null;
     }
     const presentedHash = hashPublicApiKey(normalizedKey);
     const storedBuffer = Buffer.from(storedHash, "utf8");
     const presentedBuffer = Buffer.from(presentedHash, "utf8");
-    return storedBuffer.length === presentedBuffer.length && timingSafeEqual(storedBuffer, presentedBuffer);
+    if (storedBuffer.length !== presentedBuffer.length || !timingSafeEqual(storedBuffer, presentedBuffer)) {
+      return null;
+    }
+    return {
+      id: "legacy-public-api",
+      name: "Legacy public API key",
+      kind: "legacy",
+      ownerDiscordUserId: "",
+      keyPrefix: ""
+    };
+  };
+
+  const resolvePublicApiKey = async (presentedKey) => {
+    const settings = await readMoonPublicApiSettings(vaultClient);
+    if (!settings.enabled) {
+      return {disabled: true, apiKey: null};
+    }
+    return {
+      disabled: false,
+      apiKey: await resolveStoredApiKey(presentedKey) || await hasValidLegacyPublicApiKey(presentedKey)
+    };
   };
 
   const requirePublicApiKey = async (req, res, next) => {
-    const settings = await readMoonPublicApiSettings(vaultClient);
-    if (!settings.enabled) {
+    const resolved = await resolvePublicApiKey(req.get("X-Scriptarr-Api-Key"));
+    if (resolved.disabled) {
       res.status(503).json({error: "The public Moon API is disabled."});
       return;
     }
 
-    const apiKey = req.get("X-Scriptarr-Api-Key");
-    if (!(await hasValidPublicApiKey(apiKey))) {
+    if (!resolved.apiKey) {
       res.status(401).json({error: "A valid X-Scriptarr-Api-Key header is required."});
       return;
     }
 
+    req.publicApiKey = resolved.apiKey;
     await next();
   };
 
@@ -746,6 +845,116 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
           parameters: [{name: "requestId", in: "path", required: true, schema: {type: "string"}}],
           responses: {"200": {description: "Request status"}}
         }
+      },
+      "/api/moon-v3/user/profile": {
+        get: {
+          summary: "Read the authenticated user's profile summary",
+          description: "Requires a user-level API key or browser session. User-level keys are scoped to their owner.",
+          security: [{ScriptarrApiKey: []}],
+          responses: {"200": {description: "Profile summary"}}
+        }
+      },
+      "/api/moon-v3/user/api-keys": {
+        get: {
+          summary: "List personal API keys",
+          description: "Requires a browser session with manage_personal_api_keys. API keys cannot manage other API keys.",
+          responses: {"200": {description: "Personal API keys"}}
+        },
+        post: {
+          summary: "Create a personal user-level API key",
+          description: "Requires a browser session with manage_personal_api_keys. The secret is returned once.",
+          responses: {"201": {description: "Created personal API key"}}
+        }
+      },
+      "/api/moon-v3/user/api-keys/{apiKeyId}": {
+        patch: {
+          summary: "Rename or enable a personal API key",
+          description: "Requires a browser session with manage_personal_api_keys.",
+          parameters: [{name: "apiKeyId", in: "path", required: true, schema: {type: "string"}}],
+          responses: {"200": {description: "Updated personal API key"}}
+        },
+        delete: {
+          summary: "Revoke a personal API key",
+          description: "Requires a browser session with manage_personal_api_keys.",
+          parameters: [{name: "apiKeyId", in: "path", required: true, schema: {type: "string"}}],
+          responses: {"200": {description: "Revoked personal API key"}}
+        }
+      },
+      "/api/moon-v3/user/library": {
+        get: {
+          summary: "Read library metadata for reader clients",
+          description: "Requires a user-level API key or browser session.",
+          security: [{ScriptarrApiKey: []}],
+          responses: {"200": {description: "Library titles"}}
+        }
+      },
+      "/api/moon-v3/user/reader/progress": {
+        get: {
+          summary: "List the authenticated user's reader progress",
+          security: [{ScriptarrApiKey: []}],
+          responses: {"200": {description: "Reader progress"}}
+        },
+        put: {
+          summary: "Update the authenticated user's reader progress",
+          security: [{ScriptarrApiKey: []}],
+          responses: {"200": {description: "Updated progress"}}
+        }
+      },
+      "/api/moon-v3/user/following": {
+        get: {
+          summary: "List the authenticated user's followed titles",
+          security: [{ScriptarrApiKey: []}],
+          responses: {"200": {description: "Followed titles"}}
+        },
+        post: {
+          summary: "Follow a title as the authenticated user",
+          security: [{ScriptarrApiKey: []}],
+          responses: {"201": {description: "Follow saved"}}
+        }
+      },
+      "/api/moon-v3/user/reader/bookmarks": {
+        get: {
+          summary: "List the authenticated user's reader bookmarks",
+          security: [{ScriptarrApiKey: []}],
+          responses: {"200": {description: "Bookmarks"}}
+        },
+        post: {
+          summary: "Create or replace one of the authenticated user's bookmarks",
+          security: [{ScriptarrApiKey: []}],
+          responses: {"201": {description: "Bookmark saved"}}
+        }
+      },
+      "/api/moon-v3/admin/system/api": {
+        get: {
+          summary: "Read API key administration state",
+          description: "Requires a system-level API key or browser session with publicapi.read.",
+          security: [{ScriptarrApiKey: []}],
+          responses: {"200": {description: "API administration state"}}
+        }
+      },
+      "/api/moon-v3/admin/system/api/keys": {
+        post: {
+          summary: "Create a system-level API key",
+          description: "Requires publicapi.root. The secret is returned once.",
+          security: [{ScriptarrApiKey: []}],
+          responses: {"201": {description: "Created API key"}}
+        }
+      },
+      "/api/moon-v3/admin/system/api/keys/{apiKeyId}": {
+        patch: {
+          summary: "Update a system-level API key",
+          description: "Requires publicapi.root.",
+          security: [{ScriptarrApiKey: []}],
+          parameters: [{name: "apiKeyId", in: "path", required: true, schema: {type: "string"}}],
+          responses: {"200": {description: "Updated API key"}}
+        },
+        delete: {
+          summary: "Revoke a system-level API key",
+          description: "Requires publicapi.root.",
+          security: [{ScriptarrApiKey: []}],
+          parameters: [{name: "apiKeyId", in: "path", required: true, schema: {type: "string"}}],
+          responses: {"200": {description: "Revoked API key"}}
+        }
       }
     }
   });
@@ -776,10 +985,12 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
     });
   });
 
-  app.get("/api/auth/discord/url", (_req, res) => {
+  app.get("/api/auth/discord/url", (req, res) => {
+    const returnTo = sanitizeReturnToPath(req.query?.returnTo, "/");
     res.json({
       callbackUrl: buildCallbackUrl(config),
-      oauthUrl: buildDiscordOauthUrl(config)
+      oauthUrl: buildDiscordOauthUrl(config, {returnTo}),
+      returnTo
     });
   });
 
@@ -791,6 +1002,7 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
         return;
       }
       const bootstrapBefore = await vaultClient.getBootstrapStatus();
+      const authState = parseDiscordOauthState(req.query?.state);
       const identity = await exchangeDiscordCode(config, code);
       const user = await upsertUserFromDiscord({vaultClient, config, identity});
       const session = await vaultClient.createSession(user.discordUserId);
@@ -808,7 +1020,7 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
           role: user.role
         }
       }, logger);
-      res.json({token: session.token, user});
+      res.json({token: session.token, user, returnTo: authState.returnTo});
     } catch (error) {
       logger.warn("Discord callback login failed.", {
         codePresent: Boolean(req.query.code),
@@ -1164,38 +1376,13 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
   });
 
   app.put("/api/admin/settings/oracle", requireAdminGrant(vaultClient, "settings", "write"), async (req, res) => {
-    const password = normalizeString(req.body.openAiApiKey);
-    const nextSettings = normalizeOracleSettings(req.body, password || await readSecret(vaultClient, ORACLE_OPENAI_API_KEY_SECRET));
-    await vaultClient.setSetting(ORACLE_SETTINGS_KEY, {
-      key: ORACLE_SETTINGS_KEY,
-      enabled: nextSettings.enabled,
-      provider: nextSettings.provider,
-      model: nextSettings.model,
-      temperature: nextSettings.temperature,
-      localAiProfileKey: nextSettings.localAiProfileKey,
-      localAiImageMode: nextSettings.localAiImageMode,
-      localAiCustomImage: nextSettings.localAiCustomImage
-    });
-    if (password) {
-      await vaultClient.setSecret(ORACLE_OPENAI_API_KEY_SECRET, password);
-    }
-    const wardenSync = await syncWardenLocalAiConfig(config, nextSettings);
-    await appendAdminUserEvent(req.user, {
-      domain: "settings",
-      eventType: "oracle-settings-updated",
-      targetType: "setting",
-      targetId: ORACLE_SETTINGS_KEY,
-      message: `${req.user.username} updated Oracle settings.`,
-      metadata: {
-        enabled: nextSettings.enabled,
-        provider: nextSettings.provider,
-        model: nextSettings.model
-      }
-    });
-    res.json({
-      ...(await readOracleSettings(vaultClient)),
-      wardenSync: wardenSync.payload || wardenSync
-    });
+    res.json(await persistOracleSettings({
+      config,
+      vaultClient,
+      user: req.user,
+      body: req.body,
+      appendAdminUserEvent
+    }));
   });
 
   app.get("/api/admin/settings/moon/branding", requireAdminGrant(vaultClient, "settings", "read"), async (_req, res) => {
@@ -1203,7 +1390,12 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
   });
 
   app.put("/api/admin/settings/moon/branding", requireAdminGrant(vaultClient, "settings", "write"), async (req, res) => {
-    const nextSettings = normalizeMoonBrandingSettings(req.body);
+    const existing = await readMoonBrandingSettings(vaultClient);
+    const nextSettings = normalizeMoonBrandingSettings({
+      ...existing,
+      ...req.body,
+      logo: req.body?.logo === undefined ? existing.logo : req.body.logo
+    });
     await vaultClient.setSetting(MOON_BRANDING_KEY, nextSettings);
     await appendAdminUserEvent(req.user, {
       domain: "settings",
@@ -1431,6 +1623,10 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
       return;
     }
 
+    const apiActor = req.publicApiKey || {};
+    const requesterId = apiActor.kind === "user" && apiActor.ownerDiscordUserId
+      ? apiActor.ownerDiscordUserId
+      : "external-api";
     let request;
     try {
       request = await vaultClient.createRequest({
@@ -1438,14 +1634,16 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
         title: selection.canonicalTitle,
         requestType: selection.requestType,
         notes: normalizeString(req.body?.notes),
-        requestedBy: "external-api",
+        requestedBy: requesterId,
         status: "pending",
         details: {
           query: selection.query,
           selectedMetadata: selection.selectedMetadata,
           selectedDownload: selection.selectedDownload,
           availability: "available",
-          coverUrl: selection.coverUrl
+          coverUrl: selection.coverUrl,
+          apiKeyId: normalizeString(apiActor.id),
+          apiKeyKind: normalizeString(apiActor.kind)
         }
       });
     } catch (error) {
@@ -1464,7 +1662,7 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
         requestType: selection.requestType,
         providerId: normalizeString(selection.selectedDownload?.providerId),
         requestId: String(request.id),
-        requestedBy: "external-api",
+        requestedBy: requesterId,
         priority: "low",
         selectedMetadata: selection.selectedMetadata,
         selectedDownload: selection.selectedDownload
@@ -1499,7 +1697,9 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
         selectedDownload: selection.selectedDownload,
         coverUrl: selection.coverUrl,
         jobId: normalizeString(queued.payload?.jobId),
-        taskId: normalizeString(queued.payload?.taskId)
+        taskId: normalizeString(queued.payload?.taskId),
+        apiKeyId: normalizeString(apiActor.id),
+        apiKeyKind: normalizeString(apiActor.kind)
       }
     });
 
@@ -1511,6 +1711,10 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
   app.get("/api/public/v1/requests/:id", requirePublicApiKey, async (req, res) => {
     const request = await vaultClient.getRequest(req.params.id);
     if (!request) {
+      res.status(404).json({error: "Request not found."});
+      return;
+    }
+    if (req.publicApiKey?.kind === "user" && normalizeString(request.requestedBy) !== normalizeString(req.publicApiKey.ownerDiscordUserId)) {
       res.status(404).json({error: "Request not found."});
       return;
     }
@@ -1532,7 +1736,14 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
     const oracleSettings = await readOracleSettings(vaultClient);
     await syncWardenLocalAiConfig(config, oracleSettings);
     const result = await safeJson(serviceJson(config.wardenBaseUrl, "/api/localai/actions/install", {
-      method: "POST"
+      method: "POST",
+      body: {
+        requestedBy: {
+          discordUserId: normalizeString(req.user?.discordUserId),
+          username: normalizeString(req.user?.username, "Admin")
+        }
+      },
+      timeoutMs: 10000
     }));
     await appendAdminUserEvent(req.user, {
       domain: "system",
@@ -1551,7 +1762,14 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
     const oracleSettings = await readOracleSettings(vaultClient);
     await syncWardenLocalAiConfig(config, oracleSettings);
     const result = await safeJson(serviceJson(config.wardenBaseUrl, "/api/localai/actions/start", {
-      method: "POST"
+      method: "POST",
+      body: {
+        requestedBy: {
+          discordUserId: normalizeString(req.user?.discordUserId),
+          username: normalizeString(req.user?.username, "Admin")
+        }
+      },
+      timeoutMs: 10000
     }));
     await appendAdminUserEvent(req.user, {
       domain: "system",
@@ -1559,6 +1777,30 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
       targetType: "service",
       targetId: "scriptarr-warden",
       message: `${req.user.username} started LocalAI.`,
+      metadata: {
+        result: result.payload || result
+      }
+    });
+    res.status(result.status || 200).json(result.payload || result);
+  });
+
+  app.post("/api/admin/warden/localai/remove", requireAdminGrant(vaultClient, "system", "root"), async (req, res) => {
+    const result = await safeJson(serviceJson(config.wardenBaseUrl, "/api/localai/actions/remove", {
+      method: "POST",
+      body: {
+        requestedBy: {
+          discordUserId: normalizeString(req.user?.discordUserId),
+          username: normalizeString(req.user?.username, "Admin")
+        }
+      },
+      timeoutMs: 10000
+    }));
+    await appendAdminUserEvent(req.user, {
+      domain: "system",
+      eventType: "localai-remove-requested",
+      targetType: "service",
+      targetId: "scriptarr-warden",
+      message: `${req.user.username} requested LocalAI removal.`,
       metadata: {
         result: result.payload || result
       }
@@ -1619,6 +1861,14 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
     readRequestWorkflowSettings: () => readRequestWorkflowSettings(vaultClient)
   });
 
+  const systemTaskRuntime = createSystemTaskRuntime({
+    config,
+    vaultClient,
+    serviceJson,
+    logger,
+    readRequestWorkflowSettings: () => readRequestWorkflowSettings(vaultClient)
+  });
+
   registerMoonV3Routes(app, {
     config,
     logger,
@@ -1633,10 +1883,26 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
     readRequestWorkflowSettings: () => readRequestWorkflowSettings(vaultClient),
     readOracleSettings: () => readOracleSettings(vaultClient),
     readMoonBrandingSettings: () => readMoonBrandingSettings(vaultClient),
+    readAdminToastSettings: (user) => readAdminToastSettings(vaultClient, user),
     readMoonPublicApiSettings: () => readMoonPublicApiSettings(vaultClient),
-    readPortalDiscordSettings: () => readPortalDiscordSettings(vaultClient),
+    readPortalDiscordSettings: async () => {
+      const settings = await readPortalDiscordSettings(vaultClient);
+      return {
+        ...settings,
+        runtime: await loadPortalDiscordRuntime(config, settings)
+      };
+    },
     serviceJson,
-    safeJson
+    safeJson,
+    systemTaskRuntime,
+    persistOracleSettings: (user, body) => persistOracleSettings({
+      config,
+      vaultClient,
+      user,
+      body,
+      appendAdminUserEvent
+    }),
+    syncWardenLocalAiConfig: (oracleSettings) => syncWardenLocalAiConfig(config, oracleSettings)
   });
 
   app.use((error, _req, res, _next) => {
@@ -1654,21 +1920,8 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
     });
   });
 
-  const unavailableRequestSweepTimer = setInterval(() => {
-    void runUnavailableRequestSweep({
-      config,
-      vaultClient,
-      serviceJson,
-      logger,
-      readRequestWorkflowSettings: () => readRequestWorkflowSettings(vaultClient)
-    }).catch((error) => {
-      logger.warn("Unavailable request sweep failed.", {
-        error
-      });
-    });
-  }, getUnavailableRequestSweepIntervalMs());
-  unavailableRequestSweepTimer.unref?.();
-  app.locals.unavailableRequestSweepTimer = unavailableRequestSweepTimer;
+  systemTaskRuntime.start();
+  app.locals.systemTaskRuntime = systemTaskRuntime;
 
   logger.info("Sage app initialized.", {
     publicBaseUrl: config.publicBaseUrl

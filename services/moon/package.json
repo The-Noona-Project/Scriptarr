@@ -5,7 +5,9 @@
   "type": "module",
   "main": "server.mjs",
   "scripts": {
-    "build": "next build ./apps/user-next",
+    "build": "npm run build:user && npm run build:admin",
+    "build:admin": "next build ./apps/admin-next",
+    "build:user": "next build ./apps/user-next",
     "start": "node server.mjs",
     "test": "node --test tests/**/*.test.mjs"
   },

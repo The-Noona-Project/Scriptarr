@@ -20,15 +20,32 @@
 - Sage now brokers group-based admin access too. Keep canonical route-family grants in session payloads, preserve the
   temporary derived legacy permission array for compatibility, and use reusable permission groups instead of reviving
   direct role or flat-permission mutation flows for non-owner users.
+- The admin access model includes a `database` domain. Owners may bypass it, but non-owner admins need explicit
+  database grants before Sage should serve DB explorer payloads or settings-table edits.
 - Sage now also brokers Moon's durable title/chapter read-state and tag-preference actions. Keep the user-facing Moon
   routes browser-safe, write the durable state through Vault, and rebuild home/title/reader payloads from explicit tag
   preferences plus inferred taste from read history, follows, and the active bookshelf.
+- Keep `/api/moon-v3/user/profile` as the dedicated aggregate payload for Moon's tabbed `/profile` route. That
+  response should stay focused on trusted identity, bookshelf/completion stats, request counts, and recent activity
+  instead of forcing the browser to stitch several unrelated APIs together.
+- Broker Moon's sanitized Discord auth `returnTo` path through OAuth `state`, and let Moon's callback relay enforce
+  the final fallback to `/` when the remembered route is invalid or the signed-in user cannot access it.
 - Moon's root-only content reset is Sage-owned orchestration. Keep the preview plus execute flow brokered, require the
   explicit confirmation string, append `content-reset-started` and `content-reset-completed` events, clear Vault's
   content-side state first, then trigger Raven's managed storage reset.
+- `/api/moon-v3/admin/activity/queue` now feeds Moon's live queue board. Keep that payload grouped into `running`,
+  `queued`, and `needsAttention` sections, and keep the cancel, retry, remove, priority, and move routes as Moon-safe
+  wrappers around Raven task-control operations.
+- Keep `needsAttention` limited to retriable or stale Raven title-task recovery work, not generic admin events. The
+  queue payload should surface removable flags for failed or stale queued tasks, never put ETA on queued cards, and
+  only put speed or ETA on running cards when Raven provides credible data. Keep the brokered `retry-all` action for
+  the retriable recovery set.
 - Keep `sage.requests.autoApproveAndDownload` high-confidence only. Auto-pick one source only when Raven's confidence
   signals and warnings make that safe; otherwise leave the request in manual admin review.
 - Persist Raven and Oracle admin settings through Vault instead of service-local files.
+- Persist Moon branding and admin toast preferences through Vault settings too. Logo uploads should arrive from Moon
+  already normalized into WebP variants, and Sage should expose public branding metadata without leaking stored image
+  payloads except through the explicit public logo variant routes.
 - Broker Portal's Discord workflow settings through the shared `portal.discord` setting, and keep Portal-facing broker
   routes for intake search, request creation, library search, follow updates, onboarding tests, and Raven bulk queue.
 - Portal's Raven bulk queue broker route now requires an explicit `providerId`. Keep `downloadall` locked to the
@@ -39,8 +56,9 @@
   configuration.
 - Persist and expose brokered `raven.naming` settings, including the fallback naming profile plus the per-type naming
   profiles Moon now edits from `/admin/mediamanagement`.
-- Sage also brokers Moon's trusted public automation API. Keep API keys hashed at rest, issue short-lived
-  selection tokens for search results, and preserve the lowest-priority queue stamp for accepted external requests.
+- Sage also brokers Moon's trusted API-key auth. Keep system keys resolved through assigned permission groups, user keys
+  resolved only to their owner with admin grants stripped, API keys hashed at rest, short-lived selection tokens for
+  search results, and the lowest-priority queue stamp for accepted external requests.
 - Keep Warden status aggregation split by endpoint contract instead of flattening bootstrap and runtime payloads
   together.
 - Keep full JSDoc on exported Sage `.mjs` source and tests so the ESLint doc gate stays green.
@@ -56,6 +74,33 @@
 - Sage now owns the shared admin event read path too. Keep `/api/moon-v3/admin/events` and
   `/api/moon-v3/admin/events/stream` same-origin and Moon-safe, authorize them by the requested event domains, and use
   internal broker routes plus Vault's durable event log instead of ad hoc page-specific aggregations.
+- Sage owns the Settings DB explorer broker at `/api/moon-v3/admin/settings/database`. Keep overview, table browsing,
+  and settings-row edits behind database grants, route all data through Vault, redact sensitive values, and never add
+  arbitrary SQL endpoints.
+- Sage owns the admin toast settings broker. Global defaults require `settings.root`; personal overrides must be scoped
+  to the signed-in admin's Discord user id.
+- Sage owns the explicit v3 Settings save routes for Raven metadata providers, Raven download providers, and Portal
+  Discord basics. Preserve legacy routes during migration, but keep new Moon Settings forms on the v3 save surface.
+- Sage owns admin request summary counts and the request deny mutation. Deny requires `requests.write`, rejects blank
+  comments, stores the moderator comment and timeline entry, appends a durable request event, and leaves notification
+  delivery to the existing requester-notification flow.
+- Sage also owns the browser-safe System-page broker contracts. `/api/moon-v3/admin/system/logs` should enforce
+  `system.read` and proxy only Warden's redacted log-tail API; `/api/moon-v3/admin/system/events` should forward
+  durable event filters to Vault; `/api/moon-v3/admin/system/updates/check` and `/install` should stay `system.root`.
+- Sage owns the admin maintenance scheduler behind `/api/moon-v3/admin/system/tasks`. Keep the job catalog
+  allowlisted, store cron schedules in Vault under Sage-owned settings, prevent overlapping runs per task, and append
+  durable job snapshots plus events for manual or scheduled runs.
+- Sage owns the System Status endpoint registry. Keep `/api/moon-v3/admin/system/status` grouped by service, probe
+  only safe read endpoints, keep mutation and browser-session routes visible as `not_probed`, and avoid adding
+  browser-direct status calls around Moon.
+- Sage owns the dedicated AI admin broker at `/api/moon-v3/admin/system/ai`. Oracle settings saves require
+  `settings.write`, LocalAI lifecycle actions require `system.root`, install/start/remove requests should pass the
+  Moon admin requester context to Warden, and admin test prompts should degrade safely when Oracle or LocalAI is
+  unavailable. Keep the admin test timeout long enough for CPU-only LocalAI prompts instead of assuming readiness
+  means fast generation. Model discovery must stay brokered through Oracle; Moon should never call OpenAI or LocalAI
+  directly from the browser.
+- Sage should expose acked system-notification queues for Portal so Warden LocalAI lifecycle jobs can DM the admin who
+  requested them without making Portal poll Warden directly.
 - Service-originated async changes from Raven, Portal, or Warden should append immutable summary events through Sage's
   internal broker routes after the authoritative mutation succeeds so `/admin/users`, `/admin/requests`, and
   `/admin/system/events` all reflect the same truth.

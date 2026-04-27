@@ -1,6 +1,8 @@
 import {
   executeDownloadAll,
+  executeDownloadAllRunAction,
   formatBulkQueueSummary,
+  formatBulkRunSummary,
   formatDownloadAllUsage
 } from "../downloadAllShared.mjs";
 import {sendInteractionReply} from "../utils.mjs";
@@ -10,6 +12,7 @@ const STRING_OPTION_TYPE = 3;
 const BOOLEAN_OPTION_TYPE = 5;
 
 const TYPE_CHOICES = Object.freeze([
+  {name: "All", value: "all"},
   {name: "Manga", value: "Manga"},
   {name: "Manhwa", value: "Manhwa"},
   {name: "Manhua", value: "Manhua"},
@@ -52,7 +55,19 @@ export const createDownloadAllCommand = ({
       subcommand("run", "Queue a WeebCentral bulk download for one title prefix.", [
         stringOption("type", "Library type to browse.", true, TYPE_CHOICES),
         booleanOption("nsfw", "Whether adult titles are allowed.", true),
-        stringOption("titlegroup", "Title prefix letter or group, like a.", true)
+        stringOption("titlegroup", "Enter a single letter a-z, or all.", true)
+      ]),
+      subcommand("continue", "Continue the next batch for a paused mega downloadall run.", [
+        stringOption("runid", "Run id returned by /downloadall run.", true)
+      ]),
+      subcommand("resume", "Alias for continue on a paused mega downloadall run.", [
+        stringOption("runid", "Run id returned by /downloadall run.", true)
+      ]),
+      subcommand("status", "Inspect a mega downloadall run.", [
+        stringOption("runid", "Run id returned by /downloadall run.", true)
+      ]),
+      subcommand("cancel", "Cancel a mega downloadall run.", [
+        stringOption("runid", "Run id returned by /downloadall run.", true)
       ]),
       subcommand("help", "Show downloadall usage.")
     ]
@@ -81,6 +96,34 @@ export const createDownloadAllCommand = ({
     }
 
     await interaction.deferReply?.({flags: 64});
+    if (["continue", "resume", "status", "cancel"].includes(subcommandName)) {
+      try {
+        const result = await executeDownloadAllRunAction({
+          getSettings,
+          sage,
+          requestedBy,
+          runId: interaction.options?.getString?.("runid"),
+          action: subcommandName
+        });
+        const failure = result?.ok === false
+          ? result.payload?.error || result.payload?.message || `Sage returned ${result.status || "an error"}.`
+          : "";
+        if (failure) {
+          throw new Error(failure);
+        }
+        await sendInteractionReply(interaction, {
+          content: formatBulkRunSummary(result.payload || result),
+          ephemeral: true
+        });
+      } catch (error) {
+        await sendInteractionReply(interaction, {
+          content: `Scriptarr downloadall ${subcommandName} failed: ${error?.message || String(error)}`,
+          ephemeral: true
+        });
+      }
+      return;
+    }
+
     const filters = {
       type: interaction.options?.getString?.("type"),
       nsfw: interaction.options?.getBoolean?.("nsfw"),
@@ -98,7 +141,9 @@ export const createDownloadAllCommand = ({
         source: "dm-slash"
       });
       await sendInteractionReply(interaction, {
-        content: formatBulkQueueSummary(result.payload || result),
+        content: result?.payload?.runId || result?.runId
+          ? formatBulkRunSummary(result.payload || result)
+          : formatBulkQueueSummary(result.payload || result),
         ephemeral: true
       });
     } catch (error) {

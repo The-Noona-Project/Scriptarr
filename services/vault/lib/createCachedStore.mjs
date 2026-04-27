@@ -145,6 +145,46 @@ export const createCachedStore = (
       invalidatePrefix("session-user:");
       return user;
     },
+    async createApiKey(payload) {
+      const apiKey = await baseStore.createApiKey(payload);
+      invalidatePrefix("api-keys:");
+      writeEntry(`api-key:${apiKey.id}`, apiKey);
+      return apiKey;
+    },
+    async listApiKeys(filters = {}) {
+      return readThrough(makeListKey("api-keys", filters), () => baseStore.listApiKeys(filters));
+    },
+    async getApiKey(apiKeyId) {
+      return readThrough(`api-key:${apiKeyId}`, () => baseStore.getApiKey(apiKeyId));
+    },
+    async updateApiKey(apiKeyId, payload) {
+      const apiKey = await baseStore.updateApiKey(apiKeyId, payload);
+      invalidatePrefix("api-keys:");
+      if (apiKey) {
+        writeEntry(`api-key:${apiKey.id}`, apiKey);
+      } else {
+        invalidate(`api-key:${apiKeyId}`);
+      }
+      return apiKey;
+    },
+    async revokeApiKey(apiKeyId) {
+      const apiKey = await baseStore.revokeApiKey(apiKeyId);
+      invalidatePrefix("api-keys:");
+      if (apiKey) {
+        writeEntry(`api-key:${apiKey.id}`, apiKey);
+      } else {
+        invalidate(`api-key:${apiKeyId}`);
+      }
+      return apiKey;
+    },
+    async resolveApiKey(keyHash) {
+      const apiKey = await baseStore.resolveApiKey(keyHash);
+      if (apiKey) {
+        invalidatePrefix("api-keys:");
+        writeEntry(`api-key:${apiKey.id}`, apiKey);
+      }
+      return apiKey;
+    },
     async deleteUser(discordUserId) {
       const user = await baseStore.deleteUser(discordUserId);
       invalidate("users:list", `user:${discordUserId}`);
@@ -189,6 +229,17 @@ export const createCachedStore = (
     },
     async getSetting(key) {
       return readThrough(`setting:${key}`, () => baseStore.getSetting(key));
+    },
+    async getDatabaseOverview() {
+      return baseStore.getDatabaseOverview();
+    },
+    async getDatabaseTable(tableName, options = {}) {
+      return baseStore.getDatabaseTable(tableName, options);
+    },
+    async updateDatabaseSetting(key, value) {
+      const setting = await baseStore.updateDatabaseSetting(key, value);
+      writeEntry(`setting:${key}`, setting);
+      return setting;
     },
     async setSecret(key, value) {
       const secret = await baseStore.setSecret(key, value);
@@ -341,6 +392,11 @@ export const createCachedStore = (
       const task = await baseStore.upsertRavenDownloadTask(payload);
       invalidate("raven-download-tasks:list");
       return task;
+    },
+    async deleteRavenDownloadTask(taskId) {
+      const result = await baseStore.deleteRavenDownloadTask(taskId);
+      invalidate("raven-download-tasks:list");
+      return result;
     },
     async getRavenMetadataMatch(titleId) {
       return readThrough(`raven-metadata:${titleId}`, () => baseStore.getRavenMetadataMatch(titleId));

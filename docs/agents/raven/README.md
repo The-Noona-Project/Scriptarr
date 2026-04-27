@@ -35,6 +35,11 @@
   scraper class.
 - `/downloadall` remains a special case even with multiple providers. That owner-only Discord bulk path must stay
   pinned to WeebCentral and fail fast if WeebCentral is disabled instead of browsing MangaDex.
+- Durable mega `/downloadall` runs live under Raven's `/v1/downloads/bulk-runs` API and must persist parent run plus
+  batch state through Sage's generic job broker. Preserve group-first ordering for expanded runs (`A Manga`, `A
+  Manhwa`, `A Manhua`, `A OEL`, then `B...`), keep each batch on the existing WeebCentral-only `nsfw:false` metadata
+  confidence path, store the run-owned Raven title task ids in batch state, and resume by skipping completed batches
+  instead of re-queueing them.
 - New Raven catalog entries should use opaque durable ids instead of title slugs. Treat title ids as opaque route
   parameters everywhere outside Raven's internals.
 - Download tasks should only reach `100%` after file promotion and brokered catalog persistence both succeed. When a
@@ -43,6 +48,17 @@
   through Sage's internal broker routes so Vault can append them into the shared durable event log.
 - Startup recovery should rescan finished `downloaded/<type>/...` content, backfill missing catalog rows, and collapse
   duplicate restorable tasks so Moon queue views only see one logical download.
+- Raven now runs up to two title downloads globally. Preserve priority ordering across those two active slots and keep
+  queued-task move up/down behavior limited to work that has not started yet.
+- Preserve real task telemetry for Moon admin. Active title tasks should carry a true `startedAt` when the attempt
+  begins, and Raven should only expose `downloadSpeedBytesPerSecond` when it can measure a credible live rate from the
+  current work instead of inventing one.
+- Keep queue recovery semantics tight. Failed or stale title tasks can feed Moon's `Needs attention` surface, but
+  unrelated operational or service events should never be reclassified as Raven queue recovery items. Removing a failed
+  or stale queued task may delete only its incomplete managed `downloading/<type>` working folder, never promoted
+  library content.
+- When upstream image URLs return 404, Raven should refresh the chapter page list before failing the task and should
+  leave true source-image failures with clear chapter/page context for the recovery queue.
 - Raven now also supports staged source replacement for existing library titles. Keep replacement downloads isolated in
   fresh working and downloaded roots, then only swap the live folder and catalog identity after the replacement
   succeeds.

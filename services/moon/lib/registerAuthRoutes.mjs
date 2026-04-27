@@ -1,5 +1,6 @@
 import {serializeCookie} from "./cookies.mjs";
 import {proxyJson} from "./proxy.mjs";
+import {canAccessAdmin as canAccessMoonAdmin} from "@scriptarr/access";
 
 /**
  * Serialize the current request query object back into a URL query string.
@@ -24,6 +25,84 @@ const toQueryString = (query) => {
   }
 
   return params.toString();
+};
+
+const sanitizeReturnToPath = (value, fallback = "/") => {
+  const normalized = typeof value === "string" ? value.trim() : "";
+  if (!normalized.startsWith("/") || normalized.startsWith("//")) {
+    return fallback;
+  }
+  if (normalized.startsWith("/api/")) {
+    return fallback;
+  }
+  return normalized || fallback;
+};
+
+const escapeHtml = (value) => String(value ?? "")
+  .replaceAll("&", "&amp;")
+  .replaceAll("<", "&lt;")
+  .replaceAll(">", "&gt;")
+  .replaceAll("\"", "&quot;");
+
+const canAccessAdmin = (user) => canAccessMoonAdmin(user);
+
+const resolvePublicOrigin = (config, req) => {
+  try {
+    if (config?.publicBaseUrl) {
+      return new URL(config.publicBaseUrl).origin;
+    }
+  } catch {
+    // Fall back to the request host below.
+  }
+  return `${req.protocol || "https"}://${req.get("host") || "localhost"}`;
+};
+
+const renderAuthRelayPage = ({targetPath, publicOrigin}) => {
+  const safeTarget = JSON.stringify(sanitizeReturnToPath(targetPath, "/"));
+  const safeOrigin = JSON.stringify(publicOrigin || "");
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Signing in…</title>
+    <meta http-equiv="refresh" content="2;url=${escapeHtml(targetPath)}">
+    <style>
+      body { font-family: system-ui, sans-serif; background: #0f1418; color: #f3efe8; display: grid; place-items: center; min-height: 100vh; margin: 0; }
+      main { max-width: 420px; padding: 24px; border-radius: 18px; background: rgba(17, 24, 31, 0.92); border: 1px solid rgba(112, 132, 152, 0.2); }
+      a { color: #f3efe8; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Moon finished signing you in.</h1>
+      <p>Returning you to Scriptarr…</p>
+      <p><a href="${escapeHtml(targetPath)}">Continue now</a></p>
+    </main>
+    <script>
+      const targetPath = ${safeTarget};
+      const publicOrigin = ${safeOrigin};
+      const payload = {type: "scriptarr-auth-complete", returnTo: targetPath};
+
+      try {
+        if (window.opener && !window.opener.closed) {
+          try {
+            window.opener.postMessage(payload, publicOrigin || "*");
+          } catch {}
+          try {
+            window.opener.location.replace(targetPath);
+          } catch {}
+          try {
+            window.opener.focus();
+          } catch {}
+          window.close();
+        }
+      } catch {}
+
+      window.location.replace(targetPath);
+    </script>
+  </body>
+</html>`;
 };
 
 /**
@@ -52,7 +131,10 @@ export const registerAuthRoutes = (app, {config, getSessionToken, logger}) => {
   });
 
   app.get("/api/moon/auth/discord/url", async (req, res) => {
-    const result = await proxyToSage(req, "/api/auth/discord/url");
+    const query = toQueryString({
+      returnTo: sanitizeReturnToPath(req.query?.returnTo, "/")
+    });
+    const result = await proxyToSage(req, `/api/auth/discord/url${query ? `?${query}` : ""}`);
     res.status(result.status).json(result.payload);
   });
 
@@ -70,7 +152,17 @@ export const registerAuthRoutes = (app, {config, getSessionToken, logger}) => {
     }
 
     res.setHeader("Set-Cookie", serializeCookie(config.sessionCookieName, result.payload.token));
-    res.redirect("/admin");
+    const fallbackPath = sanitizeReturnToPath(result.payload?.returnTo, "/");
+    const targetPath = fallbackPath.startsWith("/admin") && !canAccessAdmin(result.payload?.user)
+      ? "/"
+      : fallbackPath;
+    res
+      .status(200)
+      .type("html")
+      .send(renderAuthRelayPage({
+        targetPath,
+        publicOrigin: resolvePublicOrigin(config, req)
+      }));
   });
 
   app.get("/api/moon/auth/status", async (req, res) => {

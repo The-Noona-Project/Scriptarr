@@ -4,6 +4,58 @@
 const encode = encodeURIComponent;
 
 /**
+ * Normalize a caller-supplied return path so Moon only redirects back to safe
+ * same-origin app routes after Discord auth completes.
+ *
+ * @param {unknown} value
+ * @param {string} [fallback]
+ * @returns {string}
+ */
+export const sanitizeReturnToPath = (value, fallback = "/") => {
+  const normalized = typeof value === "string" ? value.trim() : "";
+  if (!normalized.startsWith("/") || normalized.startsWith("//")) {
+    return fallback;
+  }
+  if (normalized.startsWith("/api/")) {
+    return fallback;
+  }
+  return normalized || fallback;
+};
+
+/**
+ * Encode Moon's post-auth redirect hints into Discord's OAuth state payload.
+ *
+ * @param {{returnTo?: string}} [value]
+ * @returns {string}
+ */
+export const buildDiscordOauthState = ({returnTo = "/"} = {}) =>
+  Buffer.from(JSON.stringify({
+    returnTo: sanitizeReturnToPath(returnTo, "/")
+  }), "utf8").toString("base64url");
+
+/**
+ * Decode a Discord OAuth state payload back into Scriptarr's auth hints.
+ *
+ * @param {unknown} value
+ * @returns {{returnTo: string}}
+ */
+export const parseDiscordOauthState = (value) => {
+  const normalized = typeof value === "string" ? value.trim() : "";
+  if (!normalized) {
+    return {returnTo: "/"};
+  }
+
+  try {
+    const parsed = JSON.parse(Buffer.from(normalized, "base64url").toString("utf8"));
+    return {
+      returnTo: sanitizeReturnToPath(parsed?.returnTo, "/")
+    };
+  } catch {
+    return {returnTo: "/"};
+  }
+};
+
+/**
  * Resolve the Discord OAuth callback URL Moon should send admins through.
  *
  * @param {{publicBaseUrl: string}} config
@@ -17,12 +69,14 @@ export const buildCallbackUrl = (config) =>
  * Build the Discord OAuth authorize URL with Scriptarr's fixed identify scope.
  *
  * @param {{discordClientId: string, publicBaseUrl: string}} config
+ * @param {{returnTo?: string}} [options]
  * @returns {string}
  */
-export const buildDiscordOauthUrl = (config) => {
+export const buildDiscordOauthUrl = (config, {returnTo = "/"} = {}) => {
   const callbackUrl = buildCallbackUrl(config);
   const scopes = encode("identify");
-  return `https://discord.com/oauth2/authorize?client_id=${encode(config.discordClientId)}&response_type=code&redirect_uri=${encode(callbackUrl)}&scope=${scopes}`;
+  const state = encode(buildDiscordOauthState({returnTo}));
+  return `https://discord.com/oauth2/authorize?client_id=${encode(config.discordClientId)}&response_type=code&redirect_uri=${encode(callbackUrl)}&scope=${scopes}&state=${state}`;
 };
 
 /**

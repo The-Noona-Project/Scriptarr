@@ -15,6 +15,26 @@ from .sage_client import SageClient
 from .status import read_scriptarr_status
 
 LOGGER = logging.getLogger("scriptarr.oracle")
+OPENAI_MODELS_URL = "https://api.openai.com/v1/models"
+LOCALAI_DEFAULT_MODEL = "gpt-4"
+OPENAI_COMPATIBLE_PREFIXES = ("gpt-", "o1", "o3", "o4", "chatgpt-")
+OPENAI_INCOMPATIBLE_MODEL_TOKENS = (
+    "audio",
+    "babbage",
+    "codex",
+    "computer-use",
+    "dall-e",
+    "davinci",
+    "embedding",
+    "image",
+    "moderation",
+    "realtime",
+    "search",
+    "sora",
+    "transcribe",
+    "tts",
+    "whisper"
+)
 
 
 def _localai_models_url(base_url: str) -> str:
@@ -33,13 +53,131 @@ async def probe_local_ai(runtime) -> bool:
         return False
 
 
+def _provider_label(provider: str) -> str:
+    return "LocalAI" if provider == "localai" else "OpenAI" if provider == "openai" else "the AI provider"
+
+
+def _provider_fallback_reply(persona_name: str, provider: str) -> str:
+    return f"{persona_name} is in read-only fallback mode because {_provider_label(provider)} is unavailable right now."
+
+
+def _normalize_string(value: object, fallback: str = "") -> str:
+    normalized = str(value).strip() if value is not None else ""
+    return normalized or fallback
+
+
+def _normalize_provider(value: object, fallback: str = "openai") -> str:
+    normalized = _normalize_string(value, fallback).lower()
+    return normalized if normalized in {"openai", "localai"} else fallback
+
+
+def _provider_default_model(provider: str, config: OracleConfig) -> str:
+    if provider == "localai":
+        return LOCALAI_DEFAULT_MODEL
+    return _normalize_string(config.open_ai_model, "gpt-4.1-mini")
+
+
+def _selected_model_for_provider(provider: str, runtime, config: OracleConfig) -> str:
+    if provider == runtime.provider:
+        return _normalize_string(runtime.model, _provider_default_model(provider, config))
+    return _provider_default_model(provider, config)
+
+
+def _model_option(model_id: str) -> dict[str, str]:
+    return {
+        "id": model_id,
+        "label": model_id
+    }
+
+
+def _extract_model_ids(payload: object) -> list[str]:
+    data = payload.get("data") if isinstance(payload, dict) else payload
+    entries = data if isinstance(data, list) else []
+    model_ids: list[str] = []
+    seen: set[str] = set()
+    for entry in entries:
+        model_id = _normalize_string(entry.get("id") if isinstance(entry, dict) else entry)
+        if not model_id or model_id in seen:
+            continue
+        seen.add(model_id)
+        model_ids.append(model_id)
+    return model_ids
+
+
+def _is_oracle_compatible_openai_model(model_id: str) -> bool:
+    normalized = model_id.lower()
+    candidate = normalized[3:] if normalized.startswith("ft:") else normalized
+    if any(token in candidate for token in OPENAI_INCOMPATIBLE_MODEL_TOKENS):
+        return False
+    return candidate.startswith(OPENAI_COMPATIBLE_PREFIXES)
+
+
+def _fallback_models_payload(provider: str, selected_model: str, config: OracleConfig, error: str) -> dict[str, object]:
+    fallback_model = _normalize_string(selected_model, _provider_default_model(provider, config))
+    return {
+        "provider": provider,
+        "selectedModel": fallback_model,
+        "models": [_model_option(fallback_model)],
+        "source": "current" if _normalize_string(selected_model) else "default",
+        "ok": False,
+        "error": error
+    }
+
+
+def _models_payload(provider: str, model_ids: list[str], selected_model: str, config: OracleConfig) -> dict[str, object]:
+    unique_ids = sorted(dict.fromkeys(model_ids), key=lambda value: value.lower())
+    if not unique_ids:
+        return _fallback_models_payload(provider, selected_model, config, "No compatible models were returned.")
+    selected = _normalize_string(selected_model)
+    default_model = _provider_default_model(provider, config)
+    if selected not in unique_ids:
+        selected = default_model if default_model in unique_ids else unique_ids[0]
+    return {
+        "provider": provider,
+        "selectedModel": selected,
+        "models": [_model_option(model_id) for model_id in unique_ids],
+        "source": "live",
+        "ok": True,
+        "error": None
+    }
+
+
+async def fetch_models_json(url: str, headers: dict[str, str] | None = None) -> object:
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        response = await client.get(url, headers=headers or {})
+    response.raise_for_status()
+    return response.json()
+
+
+async def discover_provider_models(*, provider: str, runtime, config: OracleConfig, fetch_models_json_fn=fetch_models_json) -> dict[str, object]:
+    normalized_provider = _normalize_provider(provider, runtime.provider)
+    selected_model = _selected_model_for_provider(normalized_provider, runtime, config)
+
+    try:
+        if normalized_provider == "localai":
+            payload = await fetch_models_json_fn(_localai_models_url(runtime.local_ai_base_url), {})
+            return _models_payload(normalized_provider, _extract_model_ids(payload), selected_model, config)
+
+        if not runtime.open_ai_api_key_configured:
+            return _fallback_models_payload(normalized_provider, selected_model, config, "OpenAI API key is not configured.")
+
+        payload = await fetch_models_json_fn(OPENAI_MODELS_URL, {
+            "Authorization": f"Bearer {runtime.open_ai_api_key}"
+        })
+        model_ids = [model_id for model_id in _extract_model_ids(payload) if _is_oracle_compatible_openai_model(model_id)]
+        return _models_payload(normalized_provider, model_ids, selected_model, config)
+    except Exception as error:  # noqa: BLE001
+        return _fallback_models_payload(normalized_provider, selected_model, config, str(error))
+
+
 def create_app(
     *,
     logger: logging.Logger | None = None,
     config: OracleConfig | None = None,
     sage_client=None,
     probe_local_ai_fn=probe_local_ai,
-    invoke_oracle_fn=invoke_oracle
+    invoke_oracle_fn=invoke_oracle,
+    fetch_models_json_fn=fetch_models_json
 ) -> FastAPI:
     active_logger = logger or LOGGER
     active_config = config or resolve_oracle_config()
@@ -78,6 +216,17 @@ def create_app(
                 "model": runtime.model
             }
         }
+
+    @app.get("/api/models")
+    async def models(request: Request) -> dict[str, object]:
+        runtime = await resolve_oracle_runtime_settings(config=active_config, sage_client=active_sage_client)
+        provider = _normalize_provider(request.query_params.get("provider"), runtime.provider)
+        return await discover_provider_models(
+            provider=provider,
+            runtime=runtime,
+            config=active_config,
+            fetch_models_json_fn=fetch_models_json_fn
+        )
 
     @app.post("/api/chat")
     async def chat(request: Request):
@@ -137,7 +286,7 @@ def create_app(
                 return {
                     "ok": True,
                     "degraded": True,
-                    "reply": f"{active_config.noona_persona_name} is in read-only fallback mode because LocalAI is unavailable right now.",
+                    "reply": _provider_fallback_reply(active_config.noona_persona_name, runtime.provider),
                     "status": status_payload,
                     "error": "LocalAI probe failed."
                 }
@@ -159,7 +308,7 @@ def create_app(
             return {
                 "ok": True,
                 "degraded": True,
-                "reply": f"{active_config.noona_persona_name} is in read-only fallback mode because LocalAI is unavailable right now.",
+                "reply": _provider_fallback_reply(active_config.noona_persona_name, runtime.provider),
                 "status": status_payload,
                 "error": str(error)
             }

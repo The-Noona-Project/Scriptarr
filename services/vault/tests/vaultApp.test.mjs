@@ -101,6 +101,44 @@ test("vault exposes bootstrap status and request intake lifecycle", async () => 
   server.close();
 });
 
+test("vault deletes persisted Raven download tasks", async () => {
+  const {app} = await createVaultApp();
+  const server = app.listen(0);
+  const {port} = server.address();
+  const baseUrl = `http://127.0.0.1:${port}`;
+
+  const headers = {
+    "Authorization": "Bearer sage-dev-token",
+    "Content-Type": "application/json"
+  };
+
+  await fetch(`${baseUrl}/api/service/raven/download-tasks/task-remove-1`, {
+    method: "PUT",
+    headers,
+    body: JSON.stringify({
+      taskId: "task-remove-1",
+      titleName: "Ares",
+      titleUrl: "https://weebcentral.com/series/ares",
+      requestType: "manhwa",
+      status: "failed",
+      percent: 90
+    })
+  });
+
+  const removed = await fetch(`${baseUrl}/api/service/raven/download-tasks/task-remove-1`, {
+    method: "DELETE",
+    headers
+  }).then((response) => response.json());
+  assert.equal(removed.removed, 1);
+
+  const tasks = await fetch(`${baseUrl}/api/service/raven/download-tasks`, {
+    headers
+  }).then((response) => response.json());
+  assert.equal(tasks.some((task) => task.taskId === "task-remove-1"), false);
+
+  server.close();
+});
+
 test("vault durably rejects duplicate active request work keys and releases them when requests stop being active", async () => {
   const {app} = await createVaultApp();
   const server = app.listen(0);
@@ -655,6 +693,13 @@ test("vault manages permission groups, durable events, and deleted-user recreati
   assert.equal(accessEvents.length, 1);
   assert.equal(accessEvents[0].domain, "access");
 
+  const filteredEvents = await fetch(
+    `${baseUrl}/api/service/events?domain=access&eventType=user-groups-updated&severity=info&targetType=user&q=Reader`,
+    {headers}
+  ).then((response) => response.json());
+  assert.equal(filteredEvents.length, 1);
+  assert.equal(filteredEvents[0].targetId, "reader-1");
+
   const pruneResult = await fetch(`${baseUrl}/api/service/events/prune?retentionDays=30`, {
     method: "DELETE",
     headers
@@ -683,6 +728,152 @@ test("vault manages permission groups, durable events, and deleted-user recreati
   }).then((response) => response.json());
   assert.equal(recreatedReader.role, "member");
   assert.equal(recreatedReader.groups[0].id, "member");
+
+  server.close();
+});
+
+test("vault stores durable API keys as hashed records and preserves them through content reset", async () => {
+  const {app} = await createVaultApp();
+  const server = app.listen(0);
+  const {port} = server.address();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const headers = {
+    "Authorization": "Bearer sage-dev-token",
+    "Content-Type": "application/json"
+  };
+
+  const systemKey = await fetch(`${baseUrl}/api/service/api-keys`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      name: "Automation",
+      kind: "system",
+      keyHash: "a".repeat(64),
+      keyPrefix: "scr_system_abc",
+      groupIds: ["admin"],
+      createdBy: {
+        actorType: "owner",
+        actorId: "owner-1",
+        actorLabel: "Owner One"
+      }
+    })
+  }).then((response) => response.json());
+  assert.equal(systemKey.kind, "system");
+  assert.equal(systemKey.keyHash, "a".repeat(64));
+  assert.equal(systemKey.secret, undefined);
+  assert.deepEqual(systemKey.groupIds, ["admin"]);
+
+  const userKey = await fetch(`${baseUrl}/api/service/api-keys`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      name: "Reader Sync",
+      kind: "user",
+      keyHash: "b".repeat(64),
+      keyPrefix: "scr_user_abc",
+      ownerDiscordUserId: "reader-1",
+      groupIds: ["admin"],
+      createdBy: {
+        actorType: "user",
+        actorId: "reader-1",
+        actorLabel: "Reader One"
+      }
+    })
+  }).then((response) => response.json());
+  assert.equal(userKey.kind, "user");
+  assert.equal(userKey.ownerDiscordUserId, "reader-1");
+  assert.deepEqual(userKey.groupIds, []);
+
+  const resolved = await fetch(`${baseUrl}/api/service/api-keys/resolve`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({keyHash: "a".repeat(64)})
+  }).then((response) => response.json());
+  assert.equal(resolved.id, systemKey.id);
+  assert.ok(resolved.lastUsedAt);
+
+  const disabled = await fetch(`${baseUrl}/api/service/api-keys/${systemKey.id}`, {
+    method: "PATCH",
+    headers,
+    body: JSON.stringify({
+      enabled: false,
+      groupIds: ["moderator"]
+    })
+  }).then((response) => response.json());
+  assert.equal(disabled.enabled, false);
+  assert.deepEqual(disabled.groupIds, ["moderator"]);
+
+  const disabledResolve = await fetch(`${baseUrl}/api/service/api-keys/resolve`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({keyHash: "a".repeat(64)})
+  });
+  assert.equal(disabledResolve.status, 404);
+
+  const revoked = await fetch(`${baseUrl}/api/service/api-keys/${userKey.id}`, {
+    method: "DELETE",
+    headers
+  }).then((response) => response.json());
+  assert.equal(revoked.enabled, false);
+  assert.ok(revoked.revokedAt);
+
+  await fetch(`${baseUrl}/api/service/content-reset/execute`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({})
+  });
+
+  const keysAfterReset = await fetch(`${baseUrl}/api/service/api-keys`, {
+    headers
+  }).then((response) => response.json());
+  assert.equal(keysAfterReset.some((entry) => entry.id === systemKey.id), true);
+  assert.equal(keysAfterReset.some((entry) => entry.id === userKey.id), true);
+
+  server.close();
+});
+
+test("vault exposes safe database explorer summaries, redaction, and settings edits", async () => {
+  const {app} = await createVaultApp();
+  const server = app.listen(0);
+  const {port} = server.address();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const headers = {
+    "Authorization": "Bearer sage-dev-token",
+    "Content-Type": "application/json"
+  };
+
+  await fetch(`${baseUrl}/api/service/settings/raven.vpn`, {
+    method: "PUT",
+    headers,
+    body: JSON.stringify({value: {enabled: false, region: "us_california"}})
+  });
+  await fetch(`${baseUrl}/api/service/secrets/oracle.openai.apiKey`, {
+    method: "PUT",
+    headers,
+    body: JSON.stringify({value: "sk-secret"})
+  });
+
+  const overview = await fetch(`${baseUrl}/api/service/database/overview`, {headers}).then((response) => response.json());
+  assert.equal(overview.driver, "memory");
+  assert.equal(overview.tables.some((table) => table.name === "settings" && table.editable), true);
+  assert.equal(overview.tables.some((table) => table.name === "secrets" && !table.editable), true);
+
+  const secretsTable = await fetch(`${baseUrl}/api/service/database/tables/secrets`, {headers}).then((response) => response.json());
+  assert.equal(secretsTable.rows[0].secret_value, "[redacted]");
+
+  const settingsTable = await fetch(`${baseUrl}/api/service/database/tables/settings?q=raven.vpn`, {headers}).then((response) => response.json());
+  assert.equal(settingsTable.rows[0].setting_key, "raven.vpn");
+  assert.deepEqual(settingsTable.rows[0].setting_value, {enabled: false, region: "us_california"});
+
+  const updated = await fetch(`${baseUrl}/api/service/database/tables/settings/rows/raven.vpn`, {
+    method: "PUT",
+    headers,
+    body: JSON.stringify({value: {enabled: true, region: "us_west"}})
+  }).then((response) => response.json());
+  assert.deepEqual(updated.value, {enabled: true, region: "us_west"});
+
+  const missing = await fetch(`${baseUrl}/api/service/database/tables/not_real`, {headers});
+  assert.equal(missing.status, 404);
 
   server.close();
 });

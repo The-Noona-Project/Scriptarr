@@ -18,12 +18,19 @@
 - LocalAI presets now use the LocalAI AIO image family. Warden must mount persistent LocalAI state, pass the correct
   hardware flags for the selected preset, wait for readiness before reporting success, and constrain the AIO `MODELS`
   preload set to the Oracle-safe text generation profile instead of the full bundled list.
+- LocalAI install, start, and remove actions must be asynchronous lifecycle jobs mirrored through Sage or Vault with
+  task progress for image pull, container work, and model readiness.
 - AI acceleration is optional; safe fallback is required.
 - The repo-level Docker test stack is Warden-managed, starts a containerized Warden first, and should stay aligned with
   the runtime service plan.
 - Warden's public bootstrap and runtime APIs must redact secrets before Moon or other operators consume them.
+- Warden's log-tail API must stay allowlisted to managed Scriptarr containers and must redact secrets server-side
+  before Sage or Moon ever see log entries. There is intentionally no raw-log toggle.
 - The managed-service update path lives behind Moon -> Sage -> Warden and only targets the sibling first-party
   services. Warden and MySQL are informational or manual in the current product scope.
+- Warden LocalAI status, profile, install, start, and remove actions are now driven from Moon's `/admin/system/ai` page
+  through Sage. Keep those APIs service-auth only, readiness-gated where applicable, and safe to surface in the System
+  Status matrix as read probes where applicable.
 - Warden should inject Sage broker settings into Portal, Oracle, and Raven instead of direct first-party base URLs.
 - Update jobs should be mirrored into the shared broker as durable jobs and job tasks, not left as Warden-only memory.
 - Warden-originated runtime or update transitions that matter to operators should be reported through Sage's internal

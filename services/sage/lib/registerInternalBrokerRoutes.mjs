@@ -106,6 +106,8 @@ const safeServiceJson = async (promise) => {
 
 const FOLLOW_NOTIFICATION_ACK_PREFIX = "portal.followNotifications";
 const REQUEST_NOTIFICATION_ACK_PREFIX = "portal.requestNotifications";
+const SYSTEM_NOTIFICATION_ACK_KEY = "portal.systemNotifications.localaiLifecycle";
+const LOCALAI_JOB_KIND = "localai-lifecycle";
 
 const normalizeTitleKey = (value) => normalizeString(value)
   .toLowerCase()
@@ -223,6 +225,16 @@ const readAckedFollowNotifications = async (vaultClient, discordUserId) =>
 
 const writeAckedFollowNotifications = async (vaultClient, discordUserId, taskIds) =>
   vaultClient.setSetting(`${FOLLOW_NOTIFICATION_ACK_PREFIX}.${discordUserId}`, normalizeArray(taskIds)
+    .map((entry) => normalizeString(entry))
+    .filter(Boolean));
+
+const readAckedSystemNotifications = async (vaultClient) =>
+  normalizeArray((await vaultClient.getSetting(SYSTEM_NOTIFICATION_ACK_KEY))?.value)
+    .map((entry) => normalizeString(entry))
+    .filter(Boolean);
+
+const writeAckedSystemNotifications = async (vaultClient, notificationIds) =>
+  vaultClient.setSetting(SYSTEM_NOTIFICATION_ACK_KEY, normalizeArray(notificationIds)
     .map((entry) => normalizeString(entry))
     .filter(Boolean));
 
@@ -379,6 +391,18 @@ const validatePortalBulkQueueProvider = (providerId) => {
     return "Portal bulk queue is locked to the WeebCentral provider.";
   }
   return "";
+};
+
+const buildPortalBulkDownloadPayload = (body = {}) => {
+  const titleGroup = normalizeString(body?.titlegroup || body?.titleGroup || body?.titlePrefix);
+  return {
+    providerId: normalizeString(body?.providerId),
+    type: normalizeString(body?.type),
+    nsfw: body?.nsfw,
+    titlegroup: titleGroup,
+    titlePrefix: titleGroup,
+    requestedBy: normalizeString(body?.requestedBy, "scriptarr-portal")
+  };
 };
 
 const buildPortalStatusSummary = async ({config, vaultClient, serviceJson}) => {
@@ -790,6 +814,70 @@ const buildRequestNotifications = async ({config, vaultClient, serviceJson}) => 
   return notifications.slice(0, 100);
 };
 
+const localAiActionVerb = (action) => {
+  switch (normalizeString(action).toLowerCase()) {
+    case "install":
+      return "install";
+    case "start":
+      return "startup";
+    case "remove":
+      return "removal";
+    default:
+      return "lifecycle action";
+  }
+};
+
+const buildSystemNotifications = async ({config, vaultClient}) => {
+  const [users, jobs, ackedIds] = await Promise.all([
+    vaultClient.listUsers(),
+    vaultClient.listJobs({
+      ownerService: "scriptarr-warden",
+      kind: LOCALAI_JOB_KIND
+    }),
+    readAckedSystemNotifications(vaultClient)
+  ]);
+  const acked = new Set(ackedIds);
+  const usersByDiscordId = new Map(normalizeArray(users)
+    .map((user) => [normalizeScalarString(user?.discordUserId), user])
+    .filter(([discordUserId]) => discordUserId));
+  const adminUrl = `${normalizeString(config.publicBaseUrl).replace(/\/+$/g, "")}/admin/system/ai`;
+
+  return normalizeArray(jobs)
+    .filter((job) => ["completed", "failed"].includes(normalizeString(job?.status).toLowerCase()))
+    .map((job) => {
+      const status = normalizeString(job?.status).toLowerCase();
+      const payload = normalizeObject(job?.payload, {}) || {};
+      const result = normalizeObject(job?.result, {}) || {};
+      const action = normalizeString(payload.action, "manage");
+      const discordUserId = normalizeScalarString(payload.requestedByDiscordId, normalizeScalarString(job?.requestedBy));
+      const id = `localai:${normalizeString(job?.jobId)}:${status}`;
+      const image = normalizeString(result.image, normalizeString(payload.image));
+      const actionVerb = localAiActionVerb(action);
+      const succeeded = status === "completed";
+      return {
+        id,
+        type: "localai-lifecycle",
+        decisionType: status,
+        discordUserId,
+        username: normalizeString(usersByDiscordId.get(discordUserId)?.username, normalizeString(payload.requestedByUsername, "Admin")),
+        titleName: "LocalAI",
+        status,
+        action,
+        actionLabel: actionVerb,
+        image,
+        jobId: normalizeString(job?.jobId),
+        linkUrl: adminUrl,
+        message: succeeded
+          ? `LocalAI ${actionVerb} completed. ${action === "start" ? "The runtime is ready for Oracle." : "The admin AI page has the latest status."}`
+          : `LocalAI ${actionVerb} failed and needs attention in the admin AI page.`,
+        error: normalizeString(job?.error, normalizeString(result.error)),
+        completedAt: normalizeString(job?.finishedAt, normalizeString(job?.updatedAt))
+      };
+    })
+    .filter((notification) => notification.id && notification.discordUserId && usersByDiscordId.has(notification.discordUserId) && !acked.has(notification.id))
+    .slice(0, 50);
+};
+
 /**
  * Register Sage's token-authenticated internal broker routes. These routes are
  * for first-party service-to-service traffic only; browser clients should
@@ -913,23 +1001,66 @@ export const registerInternalBrokerRoutes = (app, {
     });
   };
   const appendDownloadTaskEvent = async (serviceName, beforeTask, afterTask) => {
+    if (!afterTask && !beforeTask) {
+      return;
+    }
     if (!afterTask) {
+      await appendServiceEvent(serviceName, {
+        domain: "activity",
+        eventType: "download-task-removed",
+        severity: "info",
+        targetType: "download-task",
+        targetId: normalizeString(beforeTask.taskId),
+        message: `${describeService(serviceName)} removed the ${normalizeString(beforeTask.titleName, "download")} task from the queue.`,
+        metadata: {
+          taskId: normalizeString(beforeTask.taskId),
+          requestId: normalizeString(beforeTask.requestId),
+          titleId: normalizeString(beforeTask.titleId),
+          titleName: normalizeString(beforeTask.titleName),
+          providerId: normalizeString(beforeTask.providerId),
+          status: normalizeString(beforeTask.status),
+          percent: Number(beforeTask.percent || 0),
+          priority: normalizeString(beforeTask.priority),
+          sortOrder: Number(beforeTask.sortOrder || 0)
+        }
+      });
       return;
     }
     const previousStatus = normalizeString(beforeTask?.status);
     const nextStatus = normalizeString(afterTask?.status);
-    if (beforeTask?.taskId && previousStatus === nextStatus) {
+    const previousPriority = normalizeString(beforeTask?.priority);
+    const nextPriority = normalizeString(afterTask?.priority);
+    const previousSortOrder = Number(beforeTask?.sortOrder || 0);
+    const nextSortOrder = Number(afterTask?.sortOrder || 0);
+    if (
+      beforeTask?.taskId
+      && previousStatus === nextStatus
+      && previousPriority === nextPriority
+      && previousSortOrder === nextSortOrder
+    ) {
       return;
     }
+    const eventType = !beforeTask?.taskId
+      ? "download-task-created"
+      : previousStatus !== nextStatus
+        ? `download-task-${nextStatus || "updated"}`
+        : previousPriority !== nextPriority
+          ? "download-task-priority"
+          : "download-task-reordered";
+    const message = !beforeTask?.taskId
+      ? `${describeService(serviceName)} created a download task for ${normalizeString(afterTask.titleName, "a title")}.`
+      : previousStatus !== nextStatus
+        ? `${describeService(serviceName)} moved the ${normalizeString(afterTask.titleName, "download")} task to ${nextStatus || "updated"}.`
+        : previousPriority !== nextPriority
+          ? `${describeService(serviceName)} changed ${normalizeString(afterTask.titleName, "a download")} to ${nextPriority || "normal"} priority.`
+          : `${describeService(serviceName)} reordered ${normalizeString(afterTask.titleName, "a download")} inside the queue.`;
     await appendServiceEvent(serviceName, {
       domain: "activity",
-      eventType: beforeTask?.taskId ? `download-task-${nextStatus || "updated"}` : "download-task-created",
+      eventType,
       severity: nextStatus === "failed" ? "warning" : "info",
       targetType: "download-task",
       targetId: normalizeString(afterTask.taskId),
-      message: beforeTask?.taskId
-        ? `${describeService(serviceName)} moved the ${normalizeString(afterTask.titleName, "download")} task to ${nextStatus || "updated"}.`
-        : `${describeService(serviceName)} created a download task for ${normalizeString(afterTask.titleName, "a title")}.`,
+      message,
       metadata: {
         taskId: normalizeString(afterTask.taskId),
         requestId: normalizeString(afterTask.requestId),
@@ -937,7 +1068,9 @@ export const registerInternalBrokerRoutes = (app, {
         titleName: normalizeString(afterTask.titleName),
         providerId: normalizeString(afterTask.providerId),
         status: nextStatus,
-        percent: Number(afterTask.percent || 0)
+        percent: Number(afterTask.percent || 0),
+        priority: nextPriority,
+        sortOrder: nextSortOrder
       }
     });
   };
@@ -1290,6 +1423,16 @@ export const registerInternalBrokerRoutes = (app, {
     res.json(task);
   }));
 
+  app.delete("/api/internal/vault/raven/download-tasks/:taskId", withService(requireService, ["scriptarr-raven"], async (req, res) => {
+    const previous = normalizeArray(await vaultClient.listRavenDownloadTasks())
+      .find((task) => normalizeString(task.taskId) === normalizeString(req.params.taskId)) || null;
+    const result = await vaultClient.deleteRavenDownloadTask(req.params.taskId);
+    if (previous) {
+      await appendDownloadTaskEvent(req.serviceName, previous, null);
+    }
+    res.json(result);
+  }));
+
   app.get("/api/internal/vault/raven/metadata-matches/:titleId", withService(requireService, ["scriptarr-raven"], async (req, res) => {
     res.json(await vaultClient.getRavenMetadataMatch(req.params.titleId));
   }));
@@ -1616,13 +1759,7 @@ export const registerInternalBrokerRoutes = (app, {
     }
     await proxyResult(res, serviceJson(config.ravenBaseUrl, "/v1/downloads/bulk-queue", {
       method: "POST",
-      body: {
-        providerId: normalizeString(req.body?.providerId),
-        type: normalizeString(req.body?.type),
-        nsfw: req.body?.nsfw,
-        titlePrefix: normalizeString(req.body?.titlePrefix),
-        requestedBy: normalizeString(req.body?.requestedBy, "scriptarr-portal")
-      }
+      body: buildPortalBulkDownloadPayload(req.body)
     }));
   }));
 
@@ -1634,11 +1771,48 @@ export const registerInternalBrokerRoutes = (app, {
     }
     await proxyResult(res, serviceJson(config.ravenBaseUrl, "/v1/downloads/bulk-queue", {
       method: "POST",
+      body: buildPortalBulkDownloadPayload(req.body)
+    }));
+  }));
+
+  app.post("/api/internal/portal/downloads/bulk-runs", withService(requireService, ["scriptarr-portal"], async (req, res) => {
+    const providerError = validatePortalBulkQueueProvider(req.body?.providerId);
+    if (providerError) {
+      res.status(400).json({error: providerError});
+      return;
+    }
+    await proxyResult(res, serviceJson(config.ravenBaseUrl, "/v1/downloads/bulk-runs", {
+      method: "POST",
+      body: buildPortalBulkDownloadPayload(req.body)
+    }));
+  }));
+
+  app.get("/api/internal/portal/downloads/bulk-runs/:runId", withService(requireService, ["scriptarr-portal"], async (req, res) => {
+    await proxyResult(res, serviceJson(config.ravenBaseUrl, `/v1/downloads/bulk-runs/${encodeURIComponent(req.params.runId)}`));
+  }));
+
+  app.post("/api/internal/portal/downloads/bulk-runs/:runId/continue", withService(requireService, ["scriptarr-portal"], async (req, res) => {
+    await proxyResult(res, serviceJson(config.ravenBaseUrl, `/v1/downloads/bulk-runs/${encodeURIComponent(req.params.runId)}/continue`, {
+      method: "POST",
       body: {
-        providerId: normalizeString(req.body?.providerId),
-        type: normalizeString(req.body?.type),
-        nsfw: req.body?.nsfw,
-        titlePrefix: normalizeString(req.body?.titlePrefix),
+        requestedBy: normalizeString(req.body?.requestedBy, "scriptarr-portal")
+      }
+    }));
+  }));
+
+  app.post("/api/internal/portal/downloads/bulk-runs/:runId/resume", withService(requireService, ["scriptarr-portal"], async (req, res) => {
+    await proxyResult(res, serviceJson(config.ravenBaseUrl, `/v1/downloads/bulk-runs/${encodeURIComponent(req.params.runId)}/continue`, {
+      method: "POST",
+      body: {
+        requestedBy: normalizeString(req.body?.requestedBy, "scriptarr-portal")
+      }
+    }));
+  }));
+
+  app.post("/api/internal/portal/downloads/bulk-runs/:runId/cancel", withService(requireService, ["scriptarr-portal"], async (req, res) => {
+    await proxyResult(res, serviceJson(config.ravenBaseUrl, `/v1/downloads/bulk-runs/${encodeURIComponent(req.params.runId)}/cancel`, {
+      method: "POST",
+      body: {
         requestedBy: normalizeString(req.body?.requestedBy, "scriptarr-portal")
       }
     }));
@@ -1690,6 +1864,30 @@ export const registerInternalBrokerRoutes = (app, {
     res.json({
       ok: true,
       requestId: buildRequestNotificationId(parsed.requestId, parsed.decisionType)
+    });
+  }));
+
+  app.get("/api/internal/portal/notifications/system", withService(requireService, ["scriptarr-portal"], async (_req, res) => {
+    res.json({
+      notifications: await buildSystemNotifications({config, vaultClient})
+    });
+  }));
+
+  app.post("/api/internal/portal/notifications/system/:notificationId/ack", withService(requireService, ["scriptarr-portal"], async (req, res) => {
+    const notificationId = normalizeString(req.params.notificationId);
+    if (!notificationId) {
+      res.status(400).json({error: "A valid system notification id is required."});
+      return;
+    }
+
+    const current = await readAckedSystemNotifications(vaultClient);
+    if (!current.includes(notificationId)) {
+      await writeAckedSystemNotifications(vaultClient, [...current, notificationId]);
+    }
+
+    res.json({
+      ok: true,
+      notificationId
     });
   }));
 };

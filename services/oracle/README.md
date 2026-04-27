@@ -15,5 +15,17 @@ Oracle preserves the same internal contract used elsewhere in Scriptarr:
 - `GET /api/status`
 - `POST /api/chat`
 
+Moon admin now manages Oracle from `/admin/system/ai` through Sage. That page saves provider, model, temperature, and
+masked OpenAI key state, shows Oracle health, and sends a small brokered test prompt without exposing Oracle directly
+to the browser.
+
+Oracle also exposes `GET /api/models?provider=openai|localai` for Sage-brokered admin model discovery. OpenAI models
+are filtered to Oracle-compatible text or chat families, while LocalAI models are read from the OpenAI-compatible
+`/v1/models` endpoint.
+
+Oracle returns provider-specific degraded replies when OpenAI or LocalAI fails. The LLM call timeout defaults to 60
+seconds and can be tuned with `SCRIPTARR_ORACLE_LLM_TIMEOUT_SECONDS`, which gives CPU-only LocalAI enough room for
+small admin test prompts.
+
 The service keeps the existing env names for Sage, OpenAI, and LocalAI so Warden, Moon, Sage, and Portal do not need
 to change how they configure or call Oracle.

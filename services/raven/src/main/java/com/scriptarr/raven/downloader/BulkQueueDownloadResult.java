@@ -17,6 +17,7 @@ import java.util.List;
  * @param skippedNoMetadataCount number of titles skipped because no confident metadata match was found
  * @param skippedAmbiguousMetadataCount number of titles skipped because metadata resolution was ambiguous
  * @param failedCount number of titles that failed to queue
+ * @param queuedTaskIds queued Raven task ids
  * @param queuedTitles queued title names
  * @param skippedActiveTitles skipped active title names
  * @param skippedAdultContentTitles skipped adult or unverified adult title names
@@ -36,6 +37,7 @@ public record BulkQueueDownloadResult(
     int skippedNoMetadataCount,
     int skippedAmbiguousMetadataCount,
     int failedCount,
+    List<String> queuedTaskIds,
     List<String> queuedTitles,
     List<String> skippedActiveTitles,
     List<String> skippedAdultContentTitles,
@@ -63,6 +65,7 @@ public record BulkQueueDownloadResult(
      * @param skippedNoMetadataCount number of titles skipped because no confident metadata match was found
      * @param skippedAmbiguousMetadataCount number of titles skipped because metadata resolution was ambiguous
      * @param failedCount number of titles that failed to queue
+     * @param queuedTaskIds queued Raven task ids
      * @param queuedTitles queued title names
      * @param skippedActiveTitles skipped active title names
      * @param skippedAdultContentTitles skipped adult or unverified adult title names
@@ -82,6 +85,7 @@ public record BulkQueueDownloadResult(
         skippedNoMetadataCount = Math.max(0, skippedNoMetadataCount);
         skippedAmbiguousMetadataCount = Math.max(0, skippedAmbiguousMetadataCount);
         failedCount = Math.max(0, failedCount);
+        queuedTaskIds = queuedTaskIds == null ? List.of() : List.copyOf(queuedTaskIds);
         queuedTitles = queuedTitles == null ? List.of() : List.copyOf(queuedTitles);
         skippedActiveTitles = skippedActiveTitles == null ? List.of() : List.copyOf(skippedActiveTitles);
         skippedAdultContentTitles = skippedAdultContentTitles == null ? List.of() : List.copyOf(skippedAdultContentTitles);

@@ -9,6 +9,8 @@ process.env.NODE_ENV = "test";
 const {createMoonApp} = await import("../lib/createMoonApp.mjs");
 
 const closeServer = (server) => new Promise((resolve, reject) => {
+  server?.closeIdleConnections?.();
+  server?.closeAllConnections?.();
   server.close((error) => {
     if (error) {
       reject(error);
@@ -25,6 +27,7 @@ const closeServer = (server) => new Promise((resolve, reject) => {
  * @returns {Promise<http.Server>}
  */
 const createSageStub = ({requests = []} = {}) => Promise.resolve(http.createServer(async (request, response) => {
+  const requestUrl = new URL(request.url || "/", "http://moon.test");
   const body = await new Promise((resolve) => {
     const chunks = [];
     request.on("data", (chunk) => chunks.push(chunk));
@@ -33,18 +36,19 @@ const createSageStub = ({requests = []} = {}) => Promise.resolve(http.createServ
   requests.push({
     method: request.method,
     url: request.url,
+    apiKey: request.headers["x-scriptarr-api-key"] || "",
     body
   });
 
   const authorization = request.headers.authorization || "";
 
-  if (request.url === "/api/moon-v3/public/branding") {
+  if (requestUrl.pathname === "/api/moon-v3/public/branding") {
     response.writeHead(200, {"Content-Type": "application/json"});
     response.end(JSON.stringify({siteName: "Pax Library"}));
     return;
   }
 
-  if (request.url === "/api/moon-v3/user/library") {
+  if (requestUrl.pathname === "/api/moon-v3/user/library") {
     response.writeHead(200, {"Content-Type": "application/json"});
     response.end(JSON.stringify({
       titles: [{id: "dan-da-dan", title: "Dandadan", libraryTypeSlug: "webtoon", libraryTypeLabel: "Webtoon"}]
@@ -52,13 +56,131 @@ const createSageStub = ({requests = []} = {}) => Promise.resolve(http.createServ
     return;
   }
 
-  if (request.url === "/api/moon-v3/user/reader/title/dan-da-dan/chapter/chapter-1/page/0") {
+  if (requestUrl.pathname === "/api/moon-v3/admin/system/api") {
+    response.writeHead(200, {"Content-Type": "application/json"});
+    response.end(JSON.stringify({
+      settings: {enabled: true},
+      groups: [{id: "admin", name: "Admin"}],
+      systemKeys: [],
+      userKeys: [],
+      docsUrl: "/api/public/docs",
+      openApiUrl: "/api/public/openapi.json"
+    }));
+    return;
+  }
+
+  if (requestUrl.pathname === "/api/moon-v3/admin/settings") {
+    response.writeHead(200, {"Content-Type": "application/json"});
+    response.end(JSON.stringify({
+      branding: {siteName: "Pax Library", logo: {enabled: false}},
+      publicBranding: {siteName: "Pax Library", logo: {enabled: false, urls: {}}},
+      ravenVpn: {enabled: false, region: "us_california"},
+      metadataProviders: {providers: []},
+      downloadProviders: {providers: []},
+      requestWorkflow: {autoApproveAndDownload: false},
+      discord: {guildId: "", superuserId: "", onboarding: {}, runtime: {}},
+      toastSettings: {
+        global: {actionToasts: true, jobToasts: true, liveEventToasts: true, severities: {info: true, success: true, warning: true, error: true}},
+        personal: null,
+        effective: {actionToasts: true, jobToasts: true, liveEventToasts: true, severities: {info: true, success: true, warning: true, error: true}},
+        canEditGlobal: true
+      },
+      databaseOverview: {driver: "memory", tableCount: 1, rowCount: 1, totalBytes: 128, tables: [{name: "settings", rowCount: 1, editable: true}]},
+      links: {databaseExplorer: "/admin/settings/database"}
+    }));
+    return;
+  }
+
+  if (requestUrl.pathname === "/api/moon-v3/admin/settings/database") {
+    response.writeHead(200, {"Content-Type": "application/json"});
+    response.end(JSON.stringify({
+      driver: "memory",
+      database: "memory",
+      tableCount: 1,
+      rowCount: 1,
+      totalBytes: 128,
+      generatedAt: "2026-04-26T12:00:00.000Z",
+      tables: [{name: "settings", rowCount: 1, editable: true, totalBytes: 128}]
+    }));
+    return;
+  }
+
+  if (requestUrl.pathname === "/api/moon-v3/admin/settings/branding/logo" && request.method === "PUT") {
+    const parsed = body ? JSON.parse(body) : {};
+    response.writeHead(200, {"Content-Type": "application/json"});
+    response.end(JSON.stringify({
+      branding: {siteName: "Pax Library", logo: {enabled: true, revision: parsed.revision}},
+      publicBranding: {siteName: "Pax Library", logo: {enabled: true, urls: {chrome: "/api/moon/v3/public/branding/logo/chrome"}}},
+      receivedVariantNames: Object.keys(parsed.variants || {})
+    }));
+    return;
+  }
+
+  if ([
+    "/api/moon-v3/admin/settings/raven/metadata",
+    "/api/moon-v3/admin/settings/raven/download-providers",
+    "/api/moon-v3/admin/settings/portal/discord"
+  ].includes(requestUrl.pathname) && request.method === "PUT") {
+    response.writeHead(200, {"Content-Type": "application/json"});
+    response.end(body || "{}");
+    return;
+  }
+
+  if (requestUrl.pathname === "/api/moon-v3/admin/users") {
+    response.writeHead(200, {"Content-Type": "application/json"});
+    response.end(JSON.stringify({
+      users: [{discordUserId: "owner-1", username: "Owner", role: "owner", isOwner: true, groups: []}],
+      groups: [{id: "member", name: "Member", isDefault: true, permissions: ["read_library"], adminGrants: {}}],
+      defaultGroupId: "member",
+      domains: ["users", "requests"],
+      events: []
+    }));
+    return;
+  }
+
+  if (requestUrl.pathname === "/api/moon-v3/admin/requests") {
+    response.writeHead(200, {"Content-Type": "application/json"});
+    response.end(JSON.stringify({
+      counts: {total: 1, needsReview: 1},
+      requests: [{
+        id: "request-1",
+        title: "Dandadan",
+        status: "pending",
+        tab: "active",
+        requestedBy: {discordUserId: "reader-1", username: "Reader"},
+        details: {selectedMetadata: {provider: "mangadex"}, selectedDownload: null},
+        timeline: []
+      }]
+    }));
+    return;
+  }
+
+  if (requestUrl.pathname === "/api/moon-v3/admin/requests/request-1/deny" && request.method === "POST") {
+    response.writeHead(200, {"Content-Type": "application/json"});
+    response.end(JSON.stringify({
+      id: "request-1",
+      status: "denied",
+      moderatorComment: JSON.parse(body || "{}").comment
+    }));
+    return;
+  }
+
+  if (requestUrl.pathname === "/api/moon-v3/user/api-keys") {
+    response.writeHead(200, {"Content-Type": "application/json"});
+    response.end(JSON.stringify({
+      apiKeys: [],
+      canManageApiKeys: true
+    }));
+    return;
+  }
+
+  if (requestUrl.pathname === "/api/moon-v3/user/reader/title/dan-da-dan/chapter/chapter-1/page/0") {
     response.writeHead(200, {"Content-Type": "image/svg+xml"});
     response.end("<svg xmlns=\"http://www.w3.org/2000/svg\"><text>reader-page</text></svg>");
     return;
   }
 
-  if (request.url === "/api/auth/status") {
+  if (requestUrl.pathname === "/api/auth/status") {
     if (authorization === "Bearer admin-token") {
       response.writeHead(200, {"Content-Type": "application/json"});
       response.end(JSON.stringify({
@@ -90,15 +212,45 @@ const createSageStub = ({requests = []} = {}) => Promise.resolve(http.createServ
     return;
   }
 
-  if (request.url === "/api/auth/bootstrap-status") {
+  if (requestUrl.pathname === "/api/auth/bootstrap-status") {
     response.writeHead(200, {"Content-Type": "application/json"});
     response.end(JSON.stringify({ownerClaimed: true, superuserId: "owner-1"}));
     return;
   }
 
-  if (request.url === "/api/auth/discord/url") {
+  if (requestUrl.pathname === "/api/auth/discord/url") {
     response.writeHead(200, {"Content-Type": "application/json"});
-    response.end(JSON.stringify({oauthUrl: "https://discord.example/login"}));
+    response.end(JSON.stringify({
+      oauthUrl: "https://discord.example/login",
+      returnTo: requestUrl.searchParams.get("returnTo") || "/"
+    }));
+    return;
+  }
+
+  if (requestUrl.pathname === "/api/auth/discord/callback") {
+    const scenario = requestUrl.searchParams.get("scenario") || "member";
+    const memberUser = {
+      id: "member-1",
+      discordId: "discord-member-1",
+      username: "LibraryFan",
+      role: "member",
+      permissions: ["create_requests"],
+      avatarUrl: "https://cdn.discordapp.com/avatars/member.png"
+    };
+    const adminUser = {
+      id: "admin-1",
+      discordId: "discord-admin-1",
+      username: "CaptainPax",
+      role: "owner",
+      permissions: ["admin", "manage_settings", "read_library"],
+      avatarUrl: "https://cdn.discordapp.com/avatars/admin.png"
+    };
+    response.writeHead(200, {"Content-Type": "application/json"});
+    response.end(JSON.stringify({
+      token: scenario === "admin" ? "admin-token" : "member-token",
+      user: scenario === "admin" ? adminUser : memberUser,
+      returnTo: requestUrl.searchParams.get("returnTo") || "/"
+    }));
     return;
   }
 
@@ -283,11 +435,10 @@ test("moon serves branded split entry documents, typed routes, PWA assets, and M
 
   assert.match(userPage, /Pax Library/);
   assert.doesNotMatch(userPage, /Scriptarr Moon/);
-  assert.match(adminPage, /Pax Library Admin/);
+  assert.equal(adminPageResponse.status, 503);
+  assert.match(adminPage, /Moon Admin unavailable/);
   assert.match(userPage, /manifest\.webmanifest/);
   assert.match(userPage, /icon\.svg/);
-  assert.match(adminPage, /\/admin-assets\/styles\.css\?v=/);
-  assert.match(adminPage, /\/admin-assets\/app\.js\?v=/);
   assert.equal(userPageResponse.headers.get("cache-control"), "no-store");
   assert.equal(adminPageResponse.headers.get("cache-control"), "no-store");
   assert.equal(libraryRouteResponse.headers.get("cache-control"), "no-store");
@@ -300,8 +451,7 @@ test("moon serves branded split entry documents, typed routes, PWA assets, and M
   assert.match(await profileRouteResponse.text(), /manifest\.webmanifest/);
 
   const adminAppResponse = await fetch(`${baseUrl}/admin-assets/app.js`);
-  assert.equal(adminAppResponse.headers.get("cache-control"), "no-store");
-  assert.match(await adminAppResponse.text(), /\.\/main\.js\?v=/);
+  assert.equal(adminAppResponse.status, 404);
 
   const manifestResponse = await fetch(`${baseUrl}/manifest.webmanifest`);
   assert.match(manifestResponse.headers.get("content-type") || "", /application\/manifest\+json/);
@@ -455,6 +605,73 @@ test("moon serves branded split entry documents, typed routes, PWA assets, and M
     titles: [{id: "dan-da-dan", title: "Dandadan", libraryTypeSlug: "webtoon", libraryTypeLabel: "Webtoon"}]
   });
 
+  const apiAdminResponse = await fetch(`${baseUrl}/api/moon/v3/admin/system/api`, {
+    headers: {"X-Scriptarr-Api-Key": "system-secret"}
+  });
+  assert.equal(apiAdminResponse.status, 200);
+  assert.equal((await apiAdminResponse.json()).settings.enabled, true);
+
+  const settingsResponse = await fetch(`${baseUrl}/api/moon/v3/admin/settings`);
+  assert.equal(settingsResponse.status, 200);
+  assert.equal((await settingsResponse.json()).databaseOverview.tables[0].name, "settings");
+
+  const databaseExplorerResponse = await fetch(`${baseUrl}/api/moon/v3/admin/settings/database`);
+  assert.equal(databaseExplorerResponse.status, 200);
+  assert.equal((await databaseExplorerResponse.json()).tables[0].editable, true);
+
+  const tinyPng = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
+    "base64"
+  );
+  const logoUploadResponse = await fetch(`${baseUrl}/api/moon/v3/admin/settings/branding/logo`, {
+    method: "PUT",
+    headers: {"Content-Type": "image/png"},
+    body: tinyPng
+  });
+  assert.equal(logoUploadResponse.status, 200);
+  assert.deepEqual((await logoUploadResponse.json()).receivedVariantNames.sort(), ["chrome", "icon192", "icon512"]);
+
+  const userKeysResponse = await fetch(`${baseUrl}/api/moon-v3/user/api-keys`);
+  assert.equal(userKeysResponse.status, 200);
+  assert.deepEqual(await userKeysResponse.json(), {
+    apiKeys: [],
+    canManageApiKeys: true
+  });
+
+  const metadataSave = await fetch(`${baseUrl}/api/moon/v3/admin/settings/raven/metadata`, {
+    method: "PUT",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({providers: [{id: "mangadex", enabled: false}]})
+  });
+  assert.equal(metadataSave.status, 200);
+
+  const downloadProvidersSave = await fetch(`${baseUrl}/api/moon/v3/admin/settings/raven/download-providers`, {
+    method: "PUT",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({providers: [{id: "weebcentral", enabled: true}]})
+  });
+  assert.equal(downloadProvidersSave.status, 200);
+
+  const discordBasicsSave = await fetch(`${baseUrl}/api/moon/v3/admin/settings/portal/discord`, {
+    method: "PUT",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({guildId: "guild-1"})
+  });
+  assert.equal(discordBasicsSave.status, 200);
+
+  const usersPayload = await fetch(`${baseUrl}/api/moon/v3/admin/users`).then((response) => response.json());
+  assert.equal(usersPayload.groups[0].id, "member");
+
+  const requestsPayload = await fetch(`${baseUrl}/api/moon/v3/admin/requests`).then((response) => response.json());
+  assert.equal(requestsPayload.counts.needsReview, 1);
+
+  const denyResponse = await fetch(`${baseUrl}/api/moon/v3/admin/requests/request-1/deny`, {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({comment: "Wrong match."})
+  });
+  assert.equal(denyResponse.status, 200);
+
   const pageResponse = await fetch(`${baseUrl}/api/moon/v3/user/reader/title/dan-da-dan/chapter/chapter-1/page/0`);
   assert.equal(pageResponse.status, 200);
   assert.match(pageResponse.headers.get("content-type") || "", /image\/svg\+xml/);
@@ -494,6 +711,17 @@ test("moon serves branded split entry documents, typed routes, PWA assets, and M
   assert.ok(requests.some((entry) => entry.method === "GET" && entry.url === "/api/admin/settings/moon/public-api"));
   assert.ok(requests.some((entry) => entry.method === "POST" && entry.url === "/api/admin/settings/moon/public-api/key"));
   assert.ok(requests.some((entry) => entry.method === "GET" && entry.url === "/api/public/openapi.json"));
+  assert.ok(requests.some((entry) => entry.method === "GET" && entry.url === "/api/moon-v3/admin/system/api" && entry.apiKey === "system-secret"));
+  assert.ok(requests.some((entry) => entry.method === "GET" && entry.url === "/api/moon-v3/admin/settings"));
+  assert.ok(requests.some((entry) => entry.method === "GET" && entry.url === "/api/moon-v3/admin/settings/database"));
+  assert.ok(requests.some((entry) => entry.method === "PUT" && entry.url === "/api/moon-v3/admin/settings/branding/logo"));
+  assert.ok(requests.some((entry) => entry.method === "PUT" && entry.url === "/api/moon-v3/admin/settings/raven/metadata"));
+  assert.ok(requests.some((entry) => entry.method === "PUT" && entry.url === "/api/moon-v3/admin/settings/raven/download-providers"));
+  assert.ok(requests.some((entry) => entry.method === "PUT" && entry.url === "/api/moon-v3/admin/settings/portal/discord"));
+  assert.ok(requests.some((entry) => entry.method === "GET" && entry.url === "/api/moon-v3/admin/users"));
+  assert.ok(requests.some((entry) => entry.method === "GET" && entry.url === "/api/moon-v3/admin/requests"));
+  assert.ok(requests.some((entry) => entry.method === "POST" && entry.url === "/api/moon-v3/admin/requests/request-1/deny"));
+  assert.ok(requests.some((entry) => entry.method === "GET" && entry.url === "/api/moon-v3/user/api-keys"));
 
   await closeServer(server);
   await closeServer(sageStub);
@@ -524,8 +752,8 @@ test("moon redirects signed-in non-admin sessions away from admin while allowing
   const adminResponse = await fetch(`${baseUrl}/admin`, {
     headers: {cookie: "scriptarr_session=admin-token"}
   });
-  assert.equal(adminResponse.status, 200);
-  assert.match(await adminResponse.text(), /Pax Library Admin/);
+  assert.equal(adminResponse.status, 503);
+  assert.match(await adminResponse.text(), /Moon Admin unavailable/);
 
   const memberAuthLookups = requests.filter((entry) => entry.url === "/api/auth/status").length;
   assert.ok(memberAuthLookups >= 2);
