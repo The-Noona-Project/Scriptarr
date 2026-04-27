@@ -32,7 +32,7 @@ export const adminRoutes = [
   {id: "activity-history", path: "/admin/activity/history", title: "History", description: "Completed and failed Raven task history.", navLabel: "History", group: "Activity", domain: "activity", ported: true},
   {id: "activity-blocklist", path: "/admin/activity/blocklist", title: "Blocklist", description: "Denied and blocked requests that Raven should not retry.", navLabel: "Blocklist", group: "Activity", domain: "activity", ported: true},
   {id: "wanted-missing", path: "/admin/wanted/missing-chapters", title: "Missing Chapters", description: "Tracked titles that still have chapter gaps.", navLabel: "Missing Chapters", group: "Wanted", domain: "wanted", ported: true},
-  {id: "wanted-metadata", path: "/admin/wanted/metadata-gaps", title: "Metadata Gaps", description: "Titles that still need better provider coverage or summaries.", navLabel: "Metadata Gaps", group: "Wanted", domain: "wanted", ported: true},
+  {id: "wanted-metadata", path: "/admin/wanted/metadata", title: "Metadata", description: "Titles that still need better provider coverage, summaries, aliases, tags, or covers.", navLabel: "Metadata", group: "Wanted", domain: "wanted", ported: true},
   {id: "requests", path: "/admin/requests", title: "Requests", description: "Moderate Moon and Discord requests from one queue.", navLabel: "Requests", group: "Community", domain: "requests", ported: true},
   {id: "users", path: "/admin/users", title: "Users", description: "Groups, permissions, and Discord-linked members.", navLabel: "Users", group: "Community", domain: "users", ported: true},
   {id: "discord", path: "/admin/discord", title: "Discord", description: "Guild workflow settings, slash-command access, onboarding, and Portal runtime status.", navLabel: "Discord", group: "System", domain: "discord", ported: true},
@@ -40,7 +40,7 @@ export const adminRoutes = [
   {id: "settings", path: "/admin/settings", title: "Settings", description: "Branding, Raven VPN, metadata providers, and request workflow settings.", navLabel: "Settings", group: "System", domain: "settings", ported: true},
   {id: "settings-database", path: "/admin/settings/database", title: "Database Explorer", description: "Vault-owned database tables, sizes, redacted rows, and safe settings edits.", navLabel: "Database", group: "System", domain: "database", ported: true, hidden: true},
   {id: "system-api", path: "/admin/system/api", title: "API", description: "Public Moon API access, admin automation key, and Swagger docs.", navLabel: "API", group: "System", domain: "publicapi", ported: true},
-  {id: "system-status", path: "/admin/system/status", title: "System Status", description: "Grouped endpoint registry, safe probes, and service health.", navLabel: "Status", group: "System", domain: "system", ported: true},
+  {id: "system-status", path: "/admin/system/status", title: "System Status", description: "Grouped endpoint registry, GET probes, and service health.", navLabel: "Status", group: "System", domain: "system", ported: true},
   {id: "system-tasks", path: "/admin/system/tasks", title: "Tasks", description: "Cron-driven allowlisted maintenance jobs and recent runs.", navLabel: "Tasks", group: "System", domain: "system", ported: true},
   {id: "system-ai", path: "/admin/system/ai", title: "AI", description: "Oracle and LocalAI settings, runtime state, and test prompts.", navLabel: "AI", group: "System", domain: "system", ported: true},
   {id: "system-updates", path: "/admin/system/updates", title: "Updates", description: "Current image tags and published channels.", navLabel: "Updates", group: "System", domain: "system", ported: true},
@@ -88,6 +88,9 @@ export const getAdminNavigationGroups = () => ["Manage", "Monitor", "Activity", 
  */
 export const matchAdminRoute = (pathname) => {
   const normalizedPathname = String(pathname || "/admin").replace(/\/+$/, "") || "/admin";
+  if (normalizedPathname === "/admin/wanted/metadata-gaps") {
+    return adminRoutes.find((route) => route.id === "wanted-metadata");
+  }
   const staticRoute = adminRoutes.find((route) => route.path === normalizedPathname);
   if (staticRoute) {
     return staticRoute;

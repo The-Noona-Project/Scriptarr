@@ -19,7 +19,7 @@ const DEFAULT_TASKS = Object.freeze([
   {
     taskId: "health-status-snapshot",
     label: "Health/status snapshot",
-    description: "Probe safe read endpoints and write a durable system event summary.",
+    description: "Probe GET/read endpoints and write a durable system event summary.",
     cronExpression: "*/15 * * * *",
     enabled: true
   },

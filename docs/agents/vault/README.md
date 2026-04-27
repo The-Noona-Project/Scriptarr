@@ -29,6 +29,8 @@
   permission groups, API keys, and durable events stay read-only from browser-admin flows.
 - Moon branding, uploaded WebP logo variants, and admin toast preferences are normal settings records. Content reset
   must preserve them with other settings.
+- Brokered Portal Discord settings now include the release notification channel id, and durable release notification
+  acknowledgments are normal settings-backed state that content reset should preserve.
 - Vault's content reset path must stay content-only. It may clear requests, request work locks, progress, read state,
   follows, bookmarks, Raven catalog rows, Raven download tasks, and Raven-owned jobs, but it must not delete users,
   permission groups, API keys, sessions, settings, secrets, or durable events.

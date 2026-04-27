@@ -105,6 +105,77 @@ const createSageStub = ({requests = []} = {}) => Promise.resolve(http.createServ
     return;
   }
 
+  if (requestUrl.pathname === "/api/moon-v3/admin/calendar") {
+    response.writeHead(200, {"Content-Type": "application/json"});
+    response.end(JSON.stringify({
+      entries: [{
+        id: "completed:title-1",
+        kind: "title_completed",
+        eventDate: "2026-04-21T12:00:00.000Z",
+        titleId: "title-1",
+        title: "Completed Title",
+        titleStatus: "completed",
+        libraryTypeSlug: "manga",
+        libraryTypeLabel: "Manga",
+        titleUrl: "/title/manga/title-1",
+        readerUrl: "/reader/manga/title-1/chapter-1"
+      }],
+      counts: {totalEntries: 1, chapterEntries: 0, completedMarkers: 1, undatedCompletedCount: 0}
+    }));
+    return;
+  }
+
+  if (requestUrl.pathname === "/api/moon-v3/admin/discord" && request.method === "GET") {
+    response.writeHead(200, {"Content-Type": "application/json"});
+    response.end(JSON.stringify({
+      settings: {
+        guildId: "guild-1",
+        superuserId: "owner-1",
+        onboarding: {channelId: "welcome-1", template: "Welcome {user_mention}"},
+        notifications: {releaseChannelId: "release-1"},
+        commands: {request: {enabled: true, roleId: "role-1"}}
+      },
+      runtime: {
+        connected: true,
+        authConfigured: true,
+        botTokenConfigured: true,
+        registeredGuildId: "guild-1",
+        commandInventory: [{name: "request", label: "/request", registered: true, status: "Registered", roleManaged: true}]
+      },
+      commandCatalog: [{id: "request", name: "request", description: "Create a request"}]
+    }));
+    return;
+  }
+
+  if (requestUrl.pathname === "/api/moon-v3/admin/discord" && request.method === "PUT") {
+    response.writeHead(200, {"Content-Type": "application/json"});
+    response.end(JSON.stringify({
+      settings: body ? JSON.parse(body) : {},
+      runtime: {connected: true, reload: {ok: true}},
+      commandCatalog: [{id: "request", name: "request"}]
+    }));
+    return;
+  }
+
+  if (requestUrl.pathname === "/api/moon-v3/admin/discord/runtime/reload" && request.method === "POST") {
+    response.writeHead(200, {"Content-Type": "application/json"});
+    response.end(JSON.stringify({
+      settings: {},
+      runtime: {connected: true, reload: {ok: true}},
+      commandCatalog: []
+    }));
+    return;
+  }
+
+  if (
+    ["/api/moon-v3/admin/discord/onboarding/test", "/api/moon-v3/admin/discord/release-notifications/test"].includes(requestUrl.pathname)
+    && request.method === "POST"
+  ) {
+    response.writeHead(200, {"Content-Type": "application/json"});
+    response.end(JSON.stringify({ok: true, channelId: "release-1"}));
+    return;
+  }
+
   if (requestUrl.pathname === "/api/moon-v3/admin/settings/branding/logo" && request.method === "PUT") {
     const parsed = body ? JSON.parse(body) : {};
     response.writeHead(200, {"Content-Type": "application/json"});
@@ -619,6 +690,14 @@ test("moon serves branded split entry documents, typed routes, PWA assets, and M
   assert.equal(databaseExplorerResponse.status, 200);
   assert.equal((await databaseExplorerResponse.json()).tables[0].editable, true);
 
+  const calendarResponse = await fetch(`${baseUrl}/api/moon/v3/admin/calendar`);
+  assert.equal(calendarResponse.status, 200);
+  assert.equal((await calendarResponse.json()).counts.completedMarkers, 1);
+
+  const discordV3Response = await fetch(`${baseUrl}/api/moon/v3/admin/discord`);
+  assert.equal(discordV3Response.status, 200);
+  assert.equal((await discordV3Response.json()).settings.notifications.releaseChannelId, "release-1");
+
   const tinyPng = Buffer.from(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
     "base64"
@@ -659,6 +738,20 @@ test("moon serves branded split entry documents, typed routes, PWA assets, and M
   });
   assert.equal(discordBasicsSave.status, 200);
 
+  const discordV3Save = await fetch(`${baseUrl}/api/moon/v3/admin/discord`, {
+    method: "PUT",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({guildId: "guild-2", notifications: {releaseChannelId: "release-2"}})
+  });
+  assert.equal(discordV3Save.status, 200);
+
+  const discordReleaseTest = await fetch(`${baseUrl}/api/moon/v3/admin/discord/release-notifications/test`, {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({notifications: {releaseChannelId: "release-2"}})
+  });
+  assert.equal(discordReleaseTest.status, 200);
+
   const usersPayload = await fetch(`${baseUrl}/api/moon/v3/admin/users`).then((response) => response.json());
   assert.equal(usersPayload.groups[0].id, "member");
 
@@ -684,6 +777,10 @@ test("moon serves branded split entry documents, typed routes, PWA assets, and M
   const redirectResponse = await fetch(`${baseUrl}/downloads`, {redirect: "manual"});
   assert.equal(redirectResponse.status, 302);
   assert.equal(redirectResponse.headers.get("location"), "/admin/activity/queue");
+
+  const metadataRedirectResponse = await fetch(`${baseUrl}/admin/wanted/metadata-gaps`, {redirect: "manual"});
+  assert.equal(metadataRedirectResponse.status, 302);
+  assert.equal(metadataRedirectResponse.headers.get("location"), "/admin/wanted/metadata");
 
   const namingResponse = await fetch(`${baseUrl}/api/moon/admin/settings/raven/naming`);
   assert.equal(namingResponse.status, 200);
@@ -714,6 +811,10 @@ test("moon serves branded split entry documents, typed routes, PWA assets, and M
   assert.ok(requests.some((entry) => entry.method === "GET" && entry.url === "/api/moon-v3/admin/system/api" && entry.apiKey === "system-secret"));
   assert.ok(requests.some((entry) => entry.method === "GET" && entry.url === "/api/moon-v3/admin/settings"));
   assert.ok(requests.some((entry) => entry.method === "GET" && entry.url === "/api/moon-v3/admin/settings/database"));
+  assert.ok(requests.some((entry) => entry.method === "GET" && entry.url === "/api/moon-v3/admin/calendar"));
+  assert.ok(requests.some((entry) => entry.method === "GET" && entry.url === "/api/moon-v3/admin/discord"));
+  assert.ok(requests.some((entry) => entry.method === "PUT" && entry.url === "/api/moon-v3/admin/discord"));
+  assert.ok(requests.some((entry) => entry.method === "POST" && entry.url === "/api/moon-v3/admin/discord/release-notifications/test"));
   assert.ok(requests.some((entry) => entry.method === "PUT" && entry.url === "/api/moon-v3/admin/settings/branding/logo"));
   assert.ok(requests.some((entry) => entry.method === "PUT" && entry.url === "/api/moon-v3/admin/settings/raven/metadata"));
   assert.ok(requests.some((entry) => entry.method === "PUT" && entry.url === "/api/moon-v3/admin/settings/raven/download-providers"));

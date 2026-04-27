@@ -23,15 +23,51 @@ const pruneMap = (entries, now, ttlMs) => {
   }
 };
 
+const normalizeTimestamp = (value) => Math.max(0, Number.parseInt(String(value || 0), 10) || 0);
+
+const entriesToMap = (entries) => {
+  const result = new Map();
+  const iterable = Array.isArray(entries) ? entries : Object.entries(entries || {});
+  for (const entry of iterable) {
+    const [key, createdAt] = Array.isArray(entry) ? entry : [];
+    const normalizedKey = normalizeString(key);
+    const normalizedCreatedAt = normalizeTimestamp(createdAt);
+    if (normalizedKey && normalizedCreatedAt) {
+      result.set(normalizedKey, normalizedCreatedAt);
+    }
+  }
+  return result;
+};
+
 /**
  * Build empty toast dedupe state.
  *
+ * @param {{ids?: Array<[string, number]> | Record<string, number>, fingerprints?: Array<[string, number]> | Record<string, number>}} [snapshot]
  * @returns {{ids: Map<string, number>, fingerprints: Map<string, number>}}
  */
-export const createToastDedupeState = () => ({
-  ids: new Map(),
-  fingerprints: new Map()
+export const createToastDedupeState = (snapshot = {}) => ({
+  ids: entriesToMap(snapshot.ids),
+  fingerprints: entriesToMap(snapshot.fingerprints)
 });
+
+/**
+ * Serialize a dedupe state so it can survive a browser refresh.
+ *
+ * @param {{ids: Map<string, number>, fingerprints: Map<string, number>}} state
+ * @param {{now?: number, eventIdTtlMs?: number, eventMessageTtlMs?: number}} [options]
+ * @returns {{ids: Array<[string, number]>, fingerprints: Array<[string, number]>}}
+ */
+export const serializeToastDedupeState = (state, options = {}) => {
+  const now = Number.isFinite(Number(options.now)) ? Number(options.now) : Date.now();
+  const eventIdTtlMs = Number.isFinite(Number(options.eventIdTtlMs)) ? Number(options.eventIdTtlMs) : EVENT_ID_DEDUPE_TTL_MS;
+  const eventMessageTtlMs = Number.isFinite(Number(options.eventMessageTtlMs)) ? Number(options.eventMessageTtlMs) : EVENT_MESSAGE_DEDUPE_TTL_MS;
+  pruneMap(state.ids, now, eventIdTtlMs);
+  pruneMap(state.fingerprints, now, eventMessageTtlMs);
+  return {
+    ids: Array.from(state.ids.entries()),
+    fingerprints: Array.from(state.fingerprints.entries())
+  };
+};
 
 /**
  * Build a stable message fingerprint for noisy live-event toasts.
@@ -82,4 +118,3 @@ export const shouldShowToast = (state, input = {}, options = {}) => {
 
   return true;
 };
-

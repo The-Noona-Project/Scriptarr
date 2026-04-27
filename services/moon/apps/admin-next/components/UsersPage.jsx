@@ -13,7 +13,9 @@ import {
   filterUsers,
   grantLevels,
   patchGroupGrant,
-  serializeGroupDraft
+  resolveExistingUserSelection,
+  serializeGroupDraft,
+  userRowKey
 } from "../lib/adminUsers.js";
 import {formatDate, formatDisplayValue, normalizeString} from "../lib/format.js";
 import {AdminActionBanner, AdminDenseTable, AdminDrawer, AdminFilterBar, AdminStatusBadge} from "./AdminUi.jsx";
@@ -28,8 +30,6 @@ const emptyPayload = Object.freeze({
   defaultGroupId: "",
   events: []
 });
-
-const userKey = (user) => normalizeString(user.discordUserId, normalizeString(user.id));
 
 const groupNames = (user) => normalizeArray(user.groups).map((group) => normalizeString(group.name, group.id)).join(", ") || "No groups";
 
@@ -99,13 +99,11 @@ export const UsersPage = ({user}) => {
   const domains = normalizeArray(payload.domains);
   const metrics = useMemo(() => buildUserMetrics(users, groups), [users, groups]);
   const visibleUsers = useMemo(() => filterUsers(users, {query, filter}), [users, query, filter]);
-  const selectedUser = users.find((entry) => userKey(entry) === selectedUserId) || null;
+  const selectedUser = users.find((entry) => userRowKey(entry) === selectedUserId) || null;
 
   useEffect(() => {
-    if (!selectedUserId && visibleUsers[0]) {
-      setSelectedUserId(userKey(visibleUsers[0]));
-    }
-  }, [selectedUserId, visibleUsers]);
+    setSelectedUserId((current) => resolveExistingUserSelection(users, current));
+  }, [users]);
 
   useEffect(() => {
     setSelectedGroupIds(normalizeArray(selectedUser?.groups).map((group) => normalizeString(group.id)).filter(Boolean));
@@ -132,7 +130,7 @@ export const UsersPage = ({user}) => {
       return;
     }
     setBusy("user-groups");
-    const result = await requestJson(`/api/moon/v3/admin/users/${encodeURIComponent(userKey(selectedUser))}/groups`, {
+    const result = await requestJson(`/api/moon/v3/admin/users/${encodeURIComponent(userRowKey(selectedUser))}/groups`, {
       method: "PUT",
       json: {groupIds: selectedGroupIds}
     });
@@ -148,7 +146,7 @@ export const UsersPage = ({user}) => {
       return;
     }
     setBusy("delete-user");
-    const result = await requestJson(`/api/moon/v3/admin/users/${encodeURIComponent(userKey(selectedUser))}`, {
+    const result = await requestJson(`/api/moon/v3/admin/users/${encodeURIComponent(userRowKey(selectedUser))}`, {
       method: "DELETE"
     });
     setBusy("");
@@ -256,9 +254,9 @@ export const UsersPage = ({user}) => {
           </div>
           <AdminDenseTable
             rows={visibleUsers}
-            getKey={(row) => userKey(row)}
+            getKey={(row) => userRowKey(row)}
             selectedKey={selectedUserId}
-            onRowClick={(row) => setSelectedUserId(userKey(row))}
+            onRowClick={(row) => setSelectedUserId(userRowKey(row))}
             columns={[
               {key: "username", label: "User", render: (row) => <strong>{formatDisplayValue(row.username, "Unknown")}</strong>},
               {key: "role", label: "Access", render: (row) => <AdminStatusBadge tone={accessTone(row)}>{formatDisplayValue(row.accessSummary?.label, row.role)}</AdminStatusBadge>},

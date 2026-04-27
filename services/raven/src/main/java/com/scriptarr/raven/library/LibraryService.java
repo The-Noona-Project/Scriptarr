@@ -222,7 +222,8 @@ public final class LibraryService {
             firstNonBlank(existing != null ? existing.coverUrl() : "", coverUrl),
             workingRoot != null ? workingRoot.toString() : (existing != null ? existing.workingRoot() : ""),
             downloadRoot != null ? downloadRoot.toString() : (existing != null ? existing.downloadRoot() : ""),
-            List.copyOf(normalizedChapters)
+            List.copyOf(normalizedChapters),
+            existing != null ? existing.updatedAt() : null
         );
 
         LibraryTitle persisted = upsertTitle(nextTitle);
@@ -252,7 +253,8 @@ public final class LibraryService {
             persisted.coverUrl(),
             persisted.workingRoot(),
             persisted.downloadRoot(),
-            List.copyOf(persistedChapters)
+            List.copyOf(persistedChapters),
+            persisted.updatedAt()
         );
     }
 
@@ -332,7 +334,8 @@ public final class LibraryService {
             existing.coverUrl(),
             existing.workingRoot(),
             existing.downloadRoot(),
-            Optional.ofNullable(existing.chapters()).orElse(List.of())
+            Optional.ofNullable(existing.chapters()).orElse(List.of()),
+            existing.updatedAt()
         );
         upsertTitle(updated);
         return updated;
@@ -550,6 +553,7 @@ public final class LibraryService {
                     resolveArchiveTimestamp(archive),
                     true,
                     archive.toString(),
+                    null,
                     null
                 ));
             }
@@ -578,7 +582,8 @@ public final class LibraryService {
                 existing != null ? existing.coverUrl() : "",
                 workingRoot != null ? workingRoot.toString() : (existing != null ? existing.workingRoot() : ""),
                 folder.toString(),
-                List.copyOf(chapters)
+                List.copyOf(chapters),
+                existing != null ? existing.updatedAt() : null
             );
             upsertTitle(title);
             replaceChapters(titleId, chapters);
@@ -692,7 +697,8 @@ public final class LibraryService {
             firstNonBlank(preferred.coverUrl(), secondary.coverUrl()),
             firstNonBlank(preferred.workingRoot(), secondary.workingRoot()),
             firstNonBlank(preferred.downloadRoot(), secondary.downloadRoot()),
-            List.copyOf(mergedChapters)
+            List.copyOf(mergedChapters),
+            firstNonBlank(preferred.updatedAt(), secondary.updatedAt())
         );
     }
 
@@ -724,7 +730,8 @@ public final class LibraryService {
             title.coverUrl(),
             title.workingRoot(),
             title.downloadRoot(),
-            title.chapters()
+            title.chapters(),
+            title.updatedAt()
         );
     }
 
@@ -790,7 +797,8 @@ public final class LibraryService {
             firstNonBlank(preferred.releaseDate(), secondary.releaseDate()),
             preferred.available() || secondary.available(),
             firstNonBlank(preferred.archivePath(), secondary.archivePath()),
-            firstNonBlank(preferred.sourceUrl(), secondary.sourceUrl())
+            firstNonBlank(preferred.sourceUrl(), secondary.sourceUrl()),
+            firstNonBlank(preferred.updatedAt(), secondary.updatedAt())
         );
     }
 
@@ -889,7 +897,8 @@ public final class LibraryService {
                 chapter.releaseDate(),
                 chapter.available(),
                 chapter.archivePath(),
-                chapter.sourceUrl()
+                chapter.sourceUrl(),
+                chapter.updatedAt()
             ));
         }
 
@@ -924,7 +933,8 @@ public final class LibraryService {
                 firstNonBlank(chapter.releaseDate(), persisted != null ? persisted.releaseDate() : ""),
                 chapter.available() || (persisted != null && persisted.available()),
                 firstNonBlank(chapter.archivePath(), persisted != null ? persisted.archivePath() : ""),
-                firstNonBlank(chapter.sourceUrl(), persisted != null ? persisted.sourceUrl() : "")
+                firstNonBlank(chapter.sourceUrl(), persisted != null ? persisted.sourceUrl() : ""),
+                firstNonBlank(chapter.updatedAt(), persisted != null ? persisted.updatedAt() : "")
             ));
         }
         return normalizeChapters(titleId, merged);

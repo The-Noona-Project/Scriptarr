@@ -23,7 +23,7 @@ const endpointForRoute = (route) => {
     "activity-history": "/api/moon/v3/admin/activity/history",
     "activity-blocklist": "/api/moon/v3/admin/activity/blocklist",
     "wanted-missing": "/api/moon/v3/admin/wanted/missing-chapters",
-    "wanted-metadata": "/api/moon/v3/admin/wanted/metadata-gaps",
+    "wanted-metadata": "/api/moon/v3/admin/wanted/metadata",
     requests: "/api/moon/v3/admin/requests",
     users: "/api/moon/v3/admin/users",
     discord: "/api/moon/admin/settings/portal/discord",

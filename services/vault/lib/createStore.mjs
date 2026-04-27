@@ -415,6 +415,7 @@ const normalizeRavenTitle = (title, chapters = []) => ({
   coverUrl: title.coverUrl || "",
   workingRoot: title.workingRoot || "",
   downloadRoot: title.downloadRoot || "",
+  updatedAt: toIsoTimestamp(title.updatedAt || title.updated_at),
   chapters: sortRavenChapters(chapters)
 });
 
@@ -1817,7 +1818,8 @@ const createMysqlStore = (config) => {
     sourceUrl: row.source_url,
     coverUrl: row.cover_url,
     workingRoot: row.working_root,
-    downloadRoot: row.download_root
+    downloadRoot: row.download_root,
+    updatedAt: row.updated_at ? row.updated_at.toISOString() : null
   }, chapters);
   const toRequest = (row) => {
     const details = normalizeRequestDetails(parseJsonColumn(row.request_details_json, {}));

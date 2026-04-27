@@ -32,6 +32,9 @@ const normalizeObject = (value, fallback = null) => value && typeof value === "o
  *     channelId: string,
  *     template: string
  *   },
+ *   notifications: {
+ *     releaseChannelId: string
+ *   },
  *   commands: Record<string, {enabled: boolean, roleId: string}>
  * }}
  */
@@ -42,6 +45,9 @@ export const defaultPortalDiscordSettings = () => ({
   onboarding: {
     channelId: "",
     template: "Welcome to {guild_name}, {user_mention}! Start reading at {moon_url}"
+  },
+  notifications: {
+    releaseChannelId: ""
   },
   commands: Object.fromEntries(knownPortalDiscordCommands.map((command) => [
     command.id,
@@ -63,6 +69,7 @@ export const normalizePortalDiscordSettings = (value) => {
   const defaults = defaultPortalDiscordSettings();
   const source = normalizeObject(value, {}) || {};
   const onboarding = normalizeObject(source.onboarding, {}) || {};
+  const notifications = normalizeObject(source.notifications, {}) || {};
   const requestedCommands = normalizeObject(source.commands, {}) || {};
 
   return {
@@ -72,6 +79,9 @@ export const normalizePortalDiscordSettings = (value) => {
     onboarding: {
       channelId: normalizeString(onboarding.channelId),
       template: normalizeString(onboarding.template, defaults.onboarding.template).slice(0, 1200)
+    },
+    notifications: {
+      releaseChannelId: normalizeString(notifications.releaseChannelId)
     },
     commands: Object.fromEntries(knownPortalDiscordCommands.map((command) => {
       const requested = normalizeObject(requestedCommands[command.id], {}) || {};

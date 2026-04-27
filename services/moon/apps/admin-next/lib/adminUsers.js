@@ -12,6 +12,29 @@ export const normalizeString = (value, fallback = "") => {
 };
 
 /**
+ * Resolve the stable table and drawer key for a user row.
+ *
+ * @param {Record<string, unknown>} user
+ * @returns {string}
+ */
+export const userRowKey = (user = {}) => normalizeString(user.discordUserId, normalizeString(user.id));
+
+/**
+ * Preserve an explicit user drawer selection only while that user still exists.
+ *
+ * @param {Array<Record<string, unknown>>} users
+ * @param {string} selectedUserId
+ * @returns {string}
+ */
+export const resolveExistingUserSelection = (users = [], selectedUserId = "") => {
+  const normalized = normalizeString(selectedUserId);
+  if (!normalized) {
+    return "";
+  }
+  return normalizeArray(users).some((user) => userRowKey(user) === normalized) ? normalized : "";
+};
+
+/**
  * Normalize a grant level for the matrix editor.
  *
  * @param {unknown} value
@@ -146,5 +169,7 @@ export default {
   grantLevels,
   normalizeGrantLevel,
   patchGroupGrant,
-  serializeGroupDraft
+  resolveExistingUserSelection,
+  serializeGroupDraft,
+  userRowKey
 };

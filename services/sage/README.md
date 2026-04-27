@@ -58,17 +58,22 @@ personal toast overrides, Raven VPN, provider settings, request workflow, and Di
 and browser-safe. The DB explorer routes under `/api/moon-v3/admin/settings/database` require the `database` admin
 domain, read only through Vault's allowlisted explorer contract, and only write validated settings JSON.
 The v3 Settings save surface includes explicit Raven metadata-provider, Raven download-provider, and Portal Discord
-basics routes so Moon no longer has to rely on generic legacy settings mutations for those sections.
+basics routes so Moon no longer has to rely on generic legacy settings mutations for those sections. Sage also exposes
+the dedicated Discord settings routes for the full `/admin/discord` page, including release notification channel tests.
 Admin request moderation now returns summary counts with the request list and exposes `deny` as a first-class
 `requests.write` mutation that requires a moderator comment, records durable request events, and lets the existing
 notification flow tell the requester what happened.
+`/api/moon-v3/admin/calendar` now returns chapter release entries plus completed-title markers, preserving undated
+completed counts so Moon can surface finished catalog titles that do not have reliable chapter dates.
+
 Sage also brokers the Next admin System pages. `/admin/system/logs` reads Warden's allowlisted redacted Docker log
 tail through Sage, `/admin/system/events` forwards richer durable-event filters into Vault, and
 `/admin/system/updates` keeps using Warden's managed-service check/install APIs with `system.root` required for
 mutations.
 `/admin/system/tasks` is Sage's allowlisted maintenance scheduler: definitions are Scriptarr-owned, schedules are
 Vault-backed, overlapping runs are blocked per task, and every manual or scheduled run emits durable job and event
-state. `/admin/system/status` is built from Sage's endpoint registry and probes only safe read routes. `/admin/system/ai`
+state. `/admin/system/status` is built from Sage's endpoint registry, checks GET/read routes, classifies auth-gated
+reads as protected, and leaves mutation routes unprobed. `/admin/system/ai`
 centralizes Oracle settings plus brokered Warden LocalAI install, start, and remove controls with requester context for
 Portal completion DMs.
 
@@ -78,3 +83,9 @@ Sage also brokers Moon's trusted API-key flow. It resolves hashed system keys in
 permission-group grants, resolves user keys into account-scoped reader actors with admin grants stripped, keeps legacy
 public keys accepted during migration, issues short-lived selection tokens for public search results, enforces the
 external NSFW and duplicate guards on request creation, and queues accepted external requests at the lowest priority.
+Sage also owns the admin Wanted repair routes. `/api/moon-v3/admin/wanted/metadata` is canonical, the old
+`metadata-gaps` route remains an alias, metadata search is scoped with the Raven library id, metadata apply calls
+Raven identify, and missing-chapter repair stays on the existing staged replacement download broker.
+Sage also owns Portal's release notification queue. Completed Raven tasks become stable `release:<taskId>` channel
+notifications when a release channel is configured, and Portal acknowledges them through Sage only after Discord
+accepts the channel message.

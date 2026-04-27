@@ -106,6 +106,7 @@ const safeServiceJson = async (promise) => {
 
 const FOLLOW_NOTIFICATION_ACK_PREFIX = "portal.followNotifications";
 const REQUEST_NOTIFICATION_ACK_PREFIX = "portal.requestNotifications";
+const RELEASE_NOTIFICATION_ACK_KEY = "portal.releaseNotifications";
 const SYSTEM_NOTIFICATION_ACK_KEY = "portal.systemNotifications.localaiLifecycle";
 const LOCALAI_JOB_KIND = "localai-lifecycle";
 
@@ -199,6 +200,7 @@ const buildFollowEntry = (payload = {}) => ({
 });
 
 const followNotificationId = (discordUserId, taskId) => `${discordUserId}::${taskId}`;
+const releaseNotificationId = (taskId) => `release:${normalizeString(taskId)}`;
 
 const parseFollowNotificationId = (value) => {
   const [discordUserId = "", taskId = ""] = normalizeString(value).split("::");
@@ -227,6 +229,17 @@ const writeAckedFollowNotifications = async (vaultClient, discordUserId, taskIds
   vaultClient.setSetting(`${FOLLOW_NOTIFICATION_ACK_PREFIX}.${discordUserId}`, normalizeArray(taskIds)
     .map((entry) => normalizeString(entry))
     .filter(Boolean));
+
+const readAckedReleaseNotifications = async (vaultClient) =>
+  normalizeArray((await vaultClient.getSetting(RELEASE_NOTIFICATION_ACK_KEY))?.value)
+    .map((entry) => normalizeString(entry))
+    .filter(Boolean);
+
+const writeAckedReleaseNotifications = async (vaultClient, notificationIds) =>
+  vaultClient.setSetting(RELEASE_NOTIFICATION_ACK_KEY, normalizeArray(notificationIds)
+    .map((entry) => normalizeString(entry))
+    .filter(Boolean)
+    .slice(-500));
 
 const readAckedSystemNotifications = async (vaultClient) =>
   normalizeArray((await vaultClient.getSetting(SYSTEM_NOTIFICATION_ACK_KEY))?.value)
@@ -563,6 +576,103 @@ const buildFollowNotifications = async ({config, vaultClient, serviceJson}) => {
   }
 
   return notifications.slice(0, 50);
+};
+
+const buildReleaseNotifications = async ({config, vaultClient, serviceJson}) => {
+  const settings = await readPortalDiscordSettings(vaultClient);
+  const channelId = normalizeString(settings?.notifications?.releaseChannelId);
+  if (!channelId) {
+    return [];
+  }
+
+  const [tasksResponse, libraryResponse, acked] = await Promise.all([
+    safeServiceJson(serviceJson(config.ravenBaseUrl, "/v1/downloads/tasks")),
+    safeServiceJson(serviceJson(config.ravenBaseUrl, "/v1/library")),
+    readAckedReleaseNotifications(vaultClient)
+  ]);
+  const ackedSet = new Set(acked);
+  const libraryTitles = normalizeArray(libraryResponse.payload?.titles);
+  const byId = new Map();
+  const bySourceUrl = new Map();
+  const byIdentity = new Map();
+  for (const title of libraryTitles) {
+    const titleId = normalizeScalarString(title?.id);
+    if (titleId && !byId.has(titleId)) {
+      byId.set(titleId, title);
+    }
+    const sourceUrl = normalizeString(title?.sourceUrl);
+    if (sourceUrl && !bySourceUrl.has(sourceUrl)) {
+      bySourceUrl.set(sourceUrl, title);
+    }
+    const identity = titleIdentityKey(title?.title, title?.libraryTypeSlug || title?.mediaType);
+    if (identity && !byIdentity.has(identity)) {
+      byIdentity.set(identity, title);
+    }
+  }
+
+  const resolveTitle = (task = {}) => {
+    const titleId = normalizeScalarString(task.titleId);
+    if (titleId && byId.has(titleId)) {
+      return byId.get(titleId);
+    }
+    const sourceUrl = normalizeString(task.titleUrl);
+    if (sourceUrl && bySourceUrl.has(sourceUrl)) {
+      return bySourceUrl.get(sourceUrl);
+    }
+    const identity = titleIdentityKey(task.titleName, task.libraryTypeSlug || task.mediaType || task.requestType);
+    return identity && byIdentity.has(identity) ? byIdentity.get(identity) : null;
+  };
+
+  const newestChapter = (title = {}) => [...normalizeArray(title.chapters)]
+    .filter((chapter) => normalizeString(chapter?.id) && chapter?.available !== false)
+    .sort((left, right) => {
+      const rightTime = Date.parse(normalizeString(right?.releaseDate || right?.updatedAt));
+      const leftTime = Date.parse(normalizeString(left?.releaseDate || left?.updatedAt));
+      if (Number.isFinite(rightTime) && Number.isFinite(leftTime) && rightTime !== leftTime) {
+        return rightTime - leftTime;
+      }
+      const rightNumber = Number.parseFloat(String(right?.chapterNumber || "0"));
+      const leftNumber = Number.parseFloat(String(left?.chapterNumber || "0"));
+      if (Number.isFinite(leftNumber) && Number.isFinite(rightNumber) && leftNumber !== rightNumber) {
+        return rightNumber - leftNumber;
+      }
+      return normalizeString(right?.label).localeCompare(normalizeString(left?.label));
+    })[0] || null;
+
+  return normalizeArray(tasksResponse.payload)
+    .filter((task) => normalizeString(task?.status) === "completed")
+    .sort((left, right) => normalizeString(right?.updatedAt).localeCompare(normalizeString(left?.updatedAt)))
+    .map((task) => {
+      const taskId = normalizeString(task?.taskId);
+      const id = releaseNotificationId(taskId);
+      const matchedTitle = resolveTitle(task);
+      const titleId = normalizeScalarString(task?.titleId, normalizeScalarString(matchedTitle?.id));
+      const typeSlug = normalizeTypeSlug(task?.libraryTypeSlug || matchedTitle?.libraryTypeSlug || task?.requestType || matchedTitle?.mediaType);
+      const chapter = newestChapter(matchedTitle);
+      const titleUrl = titleId
+        ? `${config.publicBaseUrl}/title/${encodeURIComponent(typeSlug)}/${encodeURIComponent(titleId)}`
+        : "";
+      const readerUrl = titleId && chapter?.id
+        ? `${config.publicBaseUrl}/reader/${encodeURIComponent(typeSlug)}/${encodeURIComponent(chapter.id)}`
+        : "";
+      return {
+        id,
+        channelId,
+        taskId,
+        titleId,
+        titleName: normalizeString(task?.titleName, normalizeString(matchedTitle?.title, "Untitled")),
+        libraryTypeSlug: typeSlug,
+        chapterId: normalizeString(chapter?.id),
+        chapterLabel: normalizeString(task?.message, normalizeString(chapter?.label, normalizeString(matchedTitle?.latestChapter, "Latest chapter"))),
+        coverUrl: normalizeString(task?.coverUrl, normalizeString(matchedTitle?.coverUrl)),
+        titleUrl,
+        readerUrl,
+        linkUrl: readerUrl || titleUrl,
+        completedAt: normalizeString(task?.updatedAt)
+      };
+    })
+    .filter((notification) => notification.taskId && notification.id && !ackedSet.has(notification.id))
+    .slice(0, 50);
 };
 
 const buildRequestNotifications = async ({config, vaultClient, serviceJson}) => {
@@ -1839,6 +1949,30 @@ export const registerInternalBrokerRoutes = (app, {
     res.json({
       ok: true,
       notificationId: followNotificationId(parsed.discordUserId, parsed.taskId)
+    });
+  }));
+
+  app.get("/api/internal/portal/notifications/releases", withService(requireService, ["scriptarr-portal"], async (_req, res) => {
+    res.json({
+      notifications: await buildReleaseNotifications({config, vaultClient, serviceJson})
+    });
+  }));
+
+  app.post("/api/internal/portal/notifications/releases/:notificationId/ack", withService(requireService, ["scriptarr-portal"], async (req, res) => {
+    const notificationId = normalizeString(req.params.notificationId);
+    if (!notificationId.startsWith("release:")) {
+      res.status(400).json({error: "A valid release notification id is required."});
+      return;
+    }
+
+    const current = await readAckedReleaseNotifications(vaultClient);
+    if (!current.includes(notificationId)) {
+      await writeAckedReleaseNotifications(vaultClient, [...current, notificationId]);
+    }
+
+    res.json({
+      ok: true,
+      notificationId
     });
   }));
 

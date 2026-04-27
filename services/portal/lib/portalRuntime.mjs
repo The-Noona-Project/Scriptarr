@@ -5,7 +5,7 @@ import {createDirectMessageHandler} from "./discord/directMessageRouter.mjs";
 import {createRoleManager} from "./discord/roleManager.mjs";
 import {normalizePortalDiscordSettings} from "./discord/settings.mjs";
 import {normalizeString} from "./discord/utils.mjs";
-import {createFollowNotifier} from "./followNotifier.mjs";
+import {buildReleaseChannelPayload, createFollowNotifier} from "./followNotifier.mjs";
 
 const renderTemplate = (template, values) => Object.entries(values).reduce(
   (current, [key, value]) => current.replaceAll(`{${key}}`, normalizeString(value)),
@@ -455,6 +455,33 @@ export const createPortalRuntime = ({
     };
   };
 
+  const sendReleaseNotificationTest = async (payload = {}) => {
+    const notification = payload.notification || {};
+    const channelId = normalizeString(
+      notification.channelId
+      || payload.settings?.notifications?.releaseChannelId,
+      settings.notifications?.releaseChannelId || ""
+    );
+    if (!channelId) {
+      throw new Error("A release notification channel id is required.");
+    }
+    if (!discord || !state.connected) {
+      throw new Error("Portal Discord runtime is not connected.");
+    }
+    const messagePayload = buildReleaseChannelPayload({
+      ...notification,
+      channelId
+    }, config.publicBaseUrl);
+    await discord.sendChannelMessage(channelId, messagePayload);
+    return {
+      channelId,
+      notification: {
+        ...notification,
+        channelId
+      }
+    };
+  };
+
   return {
     start,
     stop,
@@ -477,7 +504,8 @@ export const createPortalRuntime = ({
       };
     },
     renderOnboarding,
-    sendOnboardingTest
+    sendOnboardingTest,
+    sendReleaseNotificationTest
   };
 };
 

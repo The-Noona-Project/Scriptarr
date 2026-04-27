@@ -11,8 +11,8 @@ enabled as more providers land later. WeebCentral stays first by default, MangaD
 download provider, and the Discord `downloadall` command remains intentionally pinned to WeebCentral for the
 configured owner account.
 Moon admin now also includes a dedicated Discord page at `/admin/discord` for guild workflow settings, slash-command
-role gates, onboarding template or channel management, and Portal runtime visibility without exposing Discord
-credentials in the browser.
+role gates, onboarding template or channel management, release-channel posts, and Portal runtime visibility without
+exposing Discord credentials in the browser.
 That Discord page now distinguishes connected command runtime, command-sync health, onboarding capability, and the last
 meaningful Portal runtime error instead of collapsing everything into one disconnected status.
 
@@ -85,7 +85,12 @@ all other admin access is now derived from one or more permission groups with pe
 `root` grants.
 `/admin/requests` is the dedicated moderation inbox instead of a generic data page. It defaults to requests needing
 review, keeps saved metadata and source snapshots visible in a drawer, and calls the Sage-backed approve, resolve,
-refresh-source, override, and deny routes without resetting active edits during live refreshes.
+refresh-source, override, and deny routes without resetting active edits during live refreshes. It supports safe bulk
+refresh-source and bulk deny actions, but keeps approval and source resolution per request.
+`/admin/wanted/metadata` is the dedicated metadata repair page. The old `/admin/wanted/metadata-gaps` path redirects
+there, and staff can search provider matches and apply one to the selected library title through Sage.
+`/admin/wanted/missing-chapters` is the dedicated coverage repair page, showing missing counts and Raven repair
+candidates that queue safe staged replacement downloads through the existing library repair route.
 `/admin/library` now uses a denser Sonarr-inspired series index with live filtering, coverage bars, latest chapter,
 last release date, metadata state, and direct open or source actions.
 Each library row now opens a Sonarr-style admin title detail page at `/admin/library/<type>/<titleId>` with a
@@ -97,7 +102,9 @@ it can queue a safe staged replacement download without deleting the current lib
 per-type naming profiles for manga, manhwa, manhua, webtoon, comic, and OEL so admins can preview and save archive or
 page formats without digging through the broader settings surface.
 `/admin/calendar` now renders a month or agenda view backed by Raven chapter release dates captured from source
-scrapes and metadata enrichment instead of only showing a flat task-style table.
+scrapes and metadata enrichment instead of only showing a flat task-style table. Completed titles get one dated
+completion marker when chapter dates are incomplete, while fully undated completed titles remain visible in the
+summary count.
 `/admin/activity/queue` is now a live SSE-backed queue board instead of a static table. It splits Raven work into
 `Running`, `Queued`, and recovery-only `Needs attention` sections, refreshes without a manual page reload, and
 exposes card-level controls for retry, retry-all, cancel, priority changes, and queued-task reordering. Live refresh
@@ -117,9 +124,9 @@ The admin System pages for Logs, Events, and Updates are now purpose-built Next 
 cards. Logs use Warden's server-redacted Docker tail through Sage, Events expose durable Vault filters plus a detail
 drawer, and Updates restore check/install controls with typed confirmation for `system.root` admins.
 Tasks, Status, and AI now follow the same Next pattern. Tasks renders the Sage-owned allowlisted scheduler with cron
-editing, preview, manual run, and recent history; Status renders a grouped endpoint matrix and only probes safe read
-routes; AI owns Oracle settings, LocalAI lifecycle controls, asynchronous install/start/remove progress, completion
-toasts, and the admin test prompt.
+editing, preview, manual run, and recent history; Status renders a grouped endpoint matrix, checks GET/read routes,
+shows auth-gated reads as protected, and leaves mutation routes unprobed; AI owns Oracle settings, LocalAI lifecycle
+controls, asynchronous install/start/remove progress, completion toasts, and the admin test prompt.
 Moon admin also owns the general Settings hub. It manages brokered `moon.branding` site name plus uploaded logo WebP
 variants, database size summary with a Settings-only DB explorer link, toast notification preferences, project credit
 and support links, and compact Raven VPN, provider, request workflow, and Discord essentials. Section drafts stay dirty

@@ -705,6 +705,101 @@ select {
   background: rgba(245, 159, 66, 0.14);
 }
 
+.admin-calendar-month-input {
+  width: 150px;
+}
+
+.admin-calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  border: 1px solid rgba(154, 178, 194, 0.18);
+  border-radius: 16px;
+  overflow: hidden;
+}
+
+.admin-calendar-weekday,
+.admin-calendar-day {
+  min-width: 0;
+  border-right: 1px solid rgba(154, 178, 194, 0.14);
+  border-bottom: 1px solid rgba(154, 178, 194, 0.14);
+}
+
+.admin-calendar-weekday:nth-child(7n),
+.admin-calendar-day:nth-child(7n) {
+  border-right: 0;
+}
+
+.admin-calendar-weekday {
+  padding: 10px;
+  background: rgba(255, 255, 255, 0.045);
+  color: var(--admin-muted);
+  font-size: 0.74rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.admin-calendar-day {
+  min-height: 132px;
+  padding: 10px;
+  background: rgba(9, 15, 18, 0.44);
+}
+
+.admin-calendar-day.is-muted {
+  background: rgba(9, 15, 18, 0.18);
+  color: rgba(245, 248, 250, 0.48);
+}
+
+.admin-calendar-date {
+  margin-bottom: 8px;
+  font-weight: 800;
+}
+
+.admin-calendar-events {
+  display: grid;
+  gap: 6px;
+}
+
+.admin-calendar-event {
+  display: grid;
+  gap: 2px;
+  width: 100%;
+  min-height: 42px;
+  padding: 7px 8px;
+  border: 1px solid rgba(154, 178, 194, 0.2);
+  border-radius: 8px;
+  background: rgba(18, 27, 32, 0.92);
+  color: #fff;
+  text-align: left;
+  cursor: pointer;
+}
+
+.admin-calendar-event:hover {
+  border-color: rgba(245, 159, 66, 0.6);
+}
+
+.admin-calendar-event.is-complete {
+  border-color: rgba(31, 209, 135, 0.42);
+  background: rgba(13, 58, 45, 0.82);
+}
+
+.admin-calendar-event strong,
+.admin-calendar-event span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.admin-calendar-event strong {
+  font-size: 0.76rem;
+}
+
+.admin-calendar-event span,
+.admin-calendar-more {
+  color: var(--admin-muted);
+  font-size: 0.72rem;
+}
+
 .admin-status-accordion-list {
   overflow: hidden;
   border: 1px solid var(--admin-border);

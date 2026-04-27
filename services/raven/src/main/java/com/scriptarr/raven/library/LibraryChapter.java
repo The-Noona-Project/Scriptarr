@@ -14,6 +14,7 @@ public record LibraryChapter(
     String releaseDate,
     boolean available,
     String archivePath,
-    String sourceUrl
+    String sourceUrl,
+    String updatedAt
 ) {
 }

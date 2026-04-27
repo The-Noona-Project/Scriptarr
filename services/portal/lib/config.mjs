@@ -71,6 +71,9 @@ export const resolvePortalConfig = (env = process.env) => ({
         "Welcome to Scriptarr, {username}. Requests are moderated, and Noona can answer read-only status questions."
       )
     },
+    notifications: {
+      releaseChannelId: normalizeOptionalString(env.SCRIPTARR_DISCORD_RELEASE_CHANNEL_ID)
+    },
     commands: resolveCommandDefaults(env)
   }
 });

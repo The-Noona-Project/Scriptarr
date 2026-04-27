@@ -72,13 +72,15 @@ editor instead of a generic records view.
 Raven now keeps WeebCentral first by default, exposes MangaDex as a second normal download-provider option, and enables
 Anime-Planet ahead of MangaUpdates as a scrape-based metadata source for aliases, summaries, and lifecycle hints.
 Moon admin also exposes a dedicated Discord page at `/admin/discord` for guild workflow settings, onboarding template
-or channel management, per-command role gates, and Portal runtime visibility without exposing Discord credentials.
+or channel management, per-command role gates, release-channel posts, and Portal runtime visibility without exposing
+Discord credentials.
 Moon's user app now runs as an embedded Next.js App Router frontend with Once UI shells, a megamenu header, avatar
 profile controls, a simple footer, and an immersive full-page reader.
 That reader now defaults to seamless infinite chapter scroll while keeping a secondary fit-width paged mode, and it
 still persists Moon-native progress plus bookmarks behind the same typed reader routes.
 Moon admin calendar is now backed by Raven chapter release dates captured from provider scrapes plus metadata
-enrichment, so the calendar view can surface real title-release timing instead of only generic task history.
+enrichment, and completed catalog titles get a dated completion marker when chapter dates are missing so finished
+series are not silently dropped from the calendar.
 Moon admin also exposes `/admin/system/api` for trusted automation settings, system-level API keys with assigned
 permission groups, personal-key audit, and same-origin Swagger or OpenAPI links. Signed-in readers can create their
 own user-level API keys from `/profile` when they want external readers or trackers to sync only their account data.
@@ -137,6 +139,9 @@ For end-to-end Docker verification, use:
   provider target cannot create parallel active requests.
 - Vault now also persists reusable permission groups, user-group assignments, and the shared durable event log that
   powers `/admin/users`, `/admin/requests`, `/admin/system/events`, and other live admin timelines.
+- Moon admin Wanted now has dedicated Missing Chapters and Metadata pages. `/admin/wanted/metadata` is the canonical
+  metadata repair route, while the old `/admin/wanted/metadata-gaps` path redirects there. Metadata applies through
+  Sage into Raven's identify flow, and missing chapter repair queues Raven's safe staged replacement downloads.
 - The admin permission model includes a `database` domain. Owners bypass it, while non-owner admins need database
   grants before they can open the redacted DB explorer under `/admin/settings/database`.
 - Duplicate request attempts now attach the requester to a hidden waitlist instead of creating a second visible row.
@@ -161,6 +166,9 @@ For end-to-end Docker verification, use:
   creating parallel subscription data.
 - Portal now sends requester Discord DMs when a moderated request is approved, denied, or completed, reusing the same
   title art and Moon links the rest of the stack exposes.
+- Portal can also post completed Raven downloads to the configured Discord release channel from `/admin/discord`.
+  Those release posts use stable `release:<taskId>` notification ids and are acknowledged only after Discord accepts
+  the channel message, so restarts do not repost successful releases.
 - Portal also sends DMs when duplicate blockers attach a user to the ready-notify waitlist, when an unavailable
   request later finds a source, and when an unavailable request expires after 90 days.
 - Sage and Moon now treat admin events as a first-class brokered contract. Browsers read event history and SSE updates
@@ -206,8 +214,8 @@ For end-to-end Docker verification, use:
 - Moon admin System Tasks are allowlisted maintenance jobs only, not arbitrary shell execution. Sage persists their
   cron schedules in Vault, prevents overlapping runs, and emits durable job or event history for scheduled and manual
   runs.
-- Moon admin System Status lists known Moon, Sage, Vault, Raven, Warden, Portal, Oracle, and LocalAI endpoints. It only
-  probes safe read endpoints automatically; mutation and browser-session routes stay visible but are marked not probed.
+- Moon admin System Status lists known Moon, Sage, Vault, Raven, Warden, Portal, Oracle, and LocalAI endpoints. It
+  checks GET/read endpoints, reports auth-gated reads as protected, and keeps mutation routes visible but not probed.
 - Oracle and LocalAI controls now live under `/admin/system/ai`; the main Settings page no longer carries AI controls.
 - Moon branding now includes a brokered site name plus optional uploaded logo. Moon converts PNG, JPEG, or WebP uploads
   to stored WebP variants for user/admin chrome and install manifest icons.

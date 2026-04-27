@@ -67,7 +67,8 @@ class MetadataServiceTest {
             "",
             "",
             tempDir.resolve("downloaded").resolve("comic").resolve("Blacksad").toString(),
-            List.of(new LibraryChapter("title-1-c1", "Chapter 1", "1", 1, null, true, "", ""))
+            List.of(new LibraryChapter("title-1-c1", "Chapter 1", "1", 1, null, true, "", "", null)),
+            null
         );
         brokerClient.setLibraryTitle(comicTitle);
 
@@ -144,7 +145,8 @@ class MetadataServiceTest {
             "",
             "",
             tempDir.resolve("downloaded").resolve("manga").resolve("One_Piece").toString(),
-            List.of(new LibraryChapter("title-2-c1", "Chapter 1", "1", 1, null, true, "", ""))
+            List.of(new LibraryChapter("title-2-c1", "Chapter 1", "1", 1, null, true, "", "", null)),
+            null
         ));
 
         MetadataService service = new MetadataService(

@@ -47,7 +47,8 @@
   already normalized into WebP variants, and Sage should expose public branding metadata without leaking stored image
   payloads except through the explicit public logo variant routes.
 - Broker Portal's Discord workflow settings through the shared `portal.discord` setting, and keep Portal-facing broker
-  routes for intake search, request creation, library search, follow updates, onboarding tests, and Raven bulk queue.
+  routes for intake search, request creation, library search, follow updates, onboarding tests, release channel tests,
+  and Raven bulk queue.
 - Portal's Raven bulk queue broker route now requires an explicit `providerId`. Keep `downloadall` locked to the
   WeebCentral provider on the Sage side too so Portal cannot accidentally fall through to MangaDex when that owner-only
   DM command is used. Preserve the `nsfw` flag exactly as Portal sends it so Raven can enforce explicit
@@ -63,8 +64,9 @@
   together.
 - Keep full JSDoc on exported Sage `.mjs` source and tests so the ESLint doc gate stays green.
 - Legacy `/api/library` behavior must mirror Raven's real-or-empty library state instead of injecting scaffold titles.
-- Moon admin calendar now depends on richer Raven chapter data. Keep `/api/moon-v3/admin/calendar` focused on dated
-  release entries with enough title context for Moon to render a calendar-first operational view.
+- Moon admin calendar now depends on richer Raven chapter and title timestamps. Keep
+  `/api/moon-v3/admin/calendar` focused on dated chapter releases plus one completed-title marker per finished title
+  when fallback dates exist, and return an undated completed count when no safe date is available.
 - `/api/moon-v3/admin/library/:titleId` is now the brokered admin drill-down payload for Moon's Sonarr-style title
   detail route. Keep it rich enough to combine title lifecycle status, related requests, active or recent Raven tasks,
   and chapter-level release or archive fields without forcing Moon to fan out into multiple browser calls.
@@ -84,6 +86,9 @@
 - Sage owns admin request summary counts and the request deny mutation. Deny requires `requests.write`, rejects blank
   comments, stores the moderator comment and timeline entry, appends a durable request event, and leaves notification
   delivery to the existing requester-notification flow.
+- Sage owns the Wanted metadata and missing-chapter broker routes. Keep `/api/moon-v3/admin/wanted/metadata` canonical,
+  keep `/metadata-gaps` as a legacy alias, pass library ids into Raven metadata search, apply chosen matches through
+  Raven identify, and keep missing-chapter repair on the existing library repair/replace-source flow.
 - Sage also owns the browser-safe System-page broker contracts. `/api/moon-v3/admin/system/logs` should enforce
   `system.read` and proxy only Warden's redacted log-tail API; `/api/moon-v3/admin/system/events` should forward
   durable event filters to Vault; `/api/moon-v3/admin/system/updates/check` and `/install` should stay `system.root`.
@@ -91,8 +96,8 @@
   allowlisted, store cron schedules in Vault under Sage-owned settings, prevent overlapping runs per task, and append
   durable job snapshots plus events for manual or scheduled runs.
 - Sage owns the System Status endpoint registry. Keep `/api/moon-v3/admin/system/status` grouped by service, probe
-  only safe read endpoints, keep mutation and browser-session routes visible as `not_probed`, and avoid adding
-  browser-direct status calls around Moon.
+  GET/read endpoints, classify auth-gated reads as `protected`, keep mutation routes visible as `not_probed`, and
+  avoid adding browser-direct status calls around Moon.
 - Sage owns the dedicated AI admin broker at `/api/moon-v3/admin/system/ai`. Oracle settings saves require
   `settings.write`, LocalAI lifecycle actions require `system.root`, install/start/remove requests should pass the
   Moon admin requester context to Warden, and admin test prompts should degrade safely when Oracle or LocalAI is
@@ -101,6 +106,8 @@
   directly from the browser.
 - Sage should expose acked system-notification queues for Portal so Warden LocalAI lifecycle jobs can DM the admin who
   requested them without making Portal poll Warden directly.
+- Sage should expose acked release-channel notification queues for Portal from completed Raven download tasks. Use
+  stable `release:<taskId>` ids and only mark them acknowledged after Portal confirms the Discord channel send.
 - Service-originated async changes from Raven, Portal, or Warden should append immutable summary events through Sage's
   internal broker routes after the authoritative mutation succeeds so `/admin/users`, `/admin/requests`, and
   `/admin/system/events` all reflect the same truth.

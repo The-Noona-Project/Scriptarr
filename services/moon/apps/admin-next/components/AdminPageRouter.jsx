@@ -9,8 +9,12 @@ import {matchAdminRoute} from "../lib/routes.js";
 import AddTitlePage from "./AddTitlePage.jsx";
 import AdminDataPage from "./AdminDataPage.jsx";
 import {useAdminChrome} from "./AdminProviders.jsx";
+import CalendarPage from "./CalendarPage.jsx";
 import DatabaseExplorerPage from "./DatabaseExplorerPage.jsx";
+import DiscordPage from "./DiscordPage.jsx";
 import MediaManagementPage from "./MediaManagementPage.jsx";
+import MetadataPage from "./MetadataPage.jsx";
+import MissingChaptersPage from "./MissingChaptersPage.jsx";
 import QueuePage from "./QueuePage.jsx";
 import RequestsPage from "./RequestsPage.jsx";
 import SettingsPage from "./SettingsPage.jsx";
@@ -82,6 +86,14 @@ export const AdminPageRouter = ({pathname}) => {
     return <AddTitlePage />;
   }
 
+  if (route.id === "calendar") {
+    return <CalendarPage />;
+  }
+
+  if (route.id === "discord") {
+    return <DiscordPage user={chrome.user} />;
+  }
+
   if (route.id === "mediamanagement") {
     return <MediaManagementPage user={chrome.user} />;
   }
@@ -92,6 +104,14 @@ export const AdminPageRouter = ({pathname}) => {
 
   if (route.id === "requests") {
     return <RequestsPage user={chrome.user} />;
+  }
+
+  if (route.id === "wanted-metadata") {
+    return <MetadataPage user={chrome.user} />;
+  }
+
+  if (route.id === "wanted-missing") {
+    return <MissingChaptersPage user={chrome.user} />;
   }
 
   if (route.id === "users") {

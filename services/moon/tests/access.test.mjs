@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {filterRoutesForUser, hasAdminGrant} from "../apps/admin-next/lib/access.js";
-import {adminRoutes} from "../apps/admin-next/lib/routes.js";
+import {adminRoutes, matchAdminRoute} from "../apps/admin-next/lib/routes.js";
 
 test("admin access helpers honor canonical domain grants", () => {
   const user = {
@@ -33,4 +33,12 @@ test("admin navigation only renders routes granted to the current user", () => {
   assert.equal(routeIds.includes("users"), true);
   assert.equal(routeIds.includes("library"), false);
   assert.equal(routeIds.includes("system-status"), false);
+});
+
+test("wanted metadata route is canonical while legacy path still resolves", () => {
+  const metadataRoute = adminRoutes.find((route) => route.id === "wanted-metadata");
+
+  assert.equal(metadataRoute?.path, "/admin/wanted/metadata");
+  assert.equal(metadataRoute?.navLabel, "Metadata");
+  assert.equal(matchAdminRoute("/admin/wanted/metadata-gaps").id, "wanted-metadata");
 });

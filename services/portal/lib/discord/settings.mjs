@@ -37,6 +37,9 @@ export const normalizePortalDiscordSettings = (value = {}, defaults = {}) => {
         normalizedDefaults?.onboarding?.template || "Welcome to Scriptarr, {username}."
       )
     },
+    notifications: {
+      releaseChannelId: normalizeOptionalString(source?.notifications?.releaseChannelId ?? normalizedDefaults?.notifications?.releaseChannelId)
+    },
     commands: nextCommands
   };
 };

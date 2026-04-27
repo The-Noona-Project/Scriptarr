@@ -130,7 +130,10 @@ const createDependencyStub = ({
     localAiProfile: 0,
     localAiConfig: 0,
     localAiInstall: 0,
-    localAiStart: 0
+    localAiStart: 0,
+    releaseNotificationTest: 0,
+    metadataIdentify: 0,
+    metadataSearchUrls: []
   };
   let currentLibraryTitles = [...libraryTitles];
   let currentDownloadTasks = [...downloadTasks];
@@ -211,6 +214,24 @@ const createDependencyStub = ({
           ok: true,
           channelId: payload?.settings?.onboarding?.channelId || "",
           rendered: payload?.rendered || "Welcome to Scriptarr, CaptainPax!"
+        }));
+      });
+      return;
+    }
+
+    if (request.url === "/api/notifications/release/test" && request.method === "POST") {
+      calls.releaseNotificationTest += 1;
+      let body = "";
+      request.on("data", (chunk) => {
+        body += chunk;
+      });
+      request.on("end", () => {
+        const payload = JSON.parse(body || "{}");
+        response.writeHead(200, {"Content-Type": "application/json"});
+        response.end(JSON.stringify({
+          ok: true,
+          channelId: payload?.notification?.channelId || "",
+          notification: payload?.notification || {}
         }));
       });
       return;
@@ -394,6 +415,49 @@ const createDependencyStub = ({
       return;
     }
 
+    if (request.url?.endsWith("/repair-options") && request.url.startsWith("/v1/library/")) {
+      const titleId = decodeURIComponent(String(request.url).replace("/v1/library/", "").replace("/repair-options", ""));
+      const title = libraryById.get(titleId);
+      if (!title) {
+        response.writeHead(404, {"Content-Type": "application/json"});
+        response.end(JSON.stringify({error: "Title not found."}));
+        return;
+      }
+      response.writeHead(200, {"Content-Type": "application/json"});
+      response.end(JSON.stringify({
+        titleId,
+        currentSourceUrl: title.sourceUrl || "",
+        options: [{
+          providerId: "weebcentral",
+          providerName: "WeebCentral",
+          titleName: title.title,
+          titleUrl: `https://weebcentral.com/series/${title.id}`,
+          chapterCount: Number(title.chapterCount || 0) + 2,
+          coverageLabel: `1-${Number(title.chapterCount || 0) + 2} (${Number(title.chapterCount || 0) + 2} chapters)`,
+          matchScore: 120,
+          warnings: []
+        }]
+      }));
+      return;
+    }
+
+    if (request.url?.endsWith("/replace-source") && request.url.startsWith("/v1/library/") && request.method === "POST") {
+      const titleId = decodeURIComponent(String(request.url).replace("/v1/library/", "").replace("/replace-source", ""));
+      const title = libraryById.get(titleId);
+      if (!title) {
+        response.writeHead(404, {"Content-Type": "application/json"});
+        response.end(JSON.stringify({error: "Title not found."}));
+        return;
+      }
+      response.writeHead(202, {"Content-Type": "application/json"});
+      response.end(JSON.stringify({
+        taskId: "replacement-task-1",
+        status: "queued",
+        titleId
+      }));
+      return;
+    }
+
     if (request.url?.startsWith("/v1/library/")) {
       const titleId = decodeURIComponent(String(request.url).replace("/v1/library/", ""));
       const title = libraryById.get(titleId);
@@ -515,6 +579,7 @@ const createDependencyStub = ({
 
     if (request.url?.startsWith("/v1/metadata/search?name=")) {
       const query = new URL(`http://stub${request.url}`).searchParams.get("name") || "";
+      calls.metadataSearchUrls.push(request.url);
       response.writeHead(200, {"Content-Type": "application/json"});
       response.end(JSON.stringify([{
         provider: "mangadex",
@@ -527,6 +592,54 @@ const createDependencyStub = ({
         type: "webtoon",
         typeSlug: "webtoon"
       }]));
+      return;
+    }
+
+    if (request.url?.startsWith("/v1/metadata/series-details")) {
+      const url = new URL(`http://stub${request.url}`);
+      response.writeHead(200, {"Content-Type": "application/json"});
+      response.end(JSON.stringify({
+        provider: url.searchParams.get("provider") || "mangadex",
+        providerSeriesId: url.searchParams.get("providerSeriesId") || "md-1",
+        title: "Dandadan",
+        summary: "Aliens and yokai.",
+        coverUrl: "https://images.example/dandadan.jpg",
+        aliases: ["Dan Da Dan"],
+        tags: ["action"],
+        type: "webtoon",
+        typeSlug: "webtoon",
+        status: "watching"
+      }));
+      return;
+    }
+
+    if (request.url === "/v1/metadata/identify" && request.method === "POST") {
+      let body = "";
+      request.on("data", (chunk) => {
+        body += chunk;
+      });
+      request.on("end", () => {
+        calls.metadataIdentify += 1;
+        const payload = JSON.parse(body || "{}");
+        currentLibraryTitles = currentLibraryTitles.map((title) => title.id === payload.libraryId ? {
+          ...title,
+          metadataProvider: payload.provider,
+          metadataMatchedAt: "2026-04-26T12:00:00.000Z",
+          summary: title.summary || "Aliens and yokai.",
+          coverUrl: title.coverUrl || "https://images.example/dandadan.jpg",
+          aliases: title.aliases?.length ? title.aliases : ["Dan Da Dan"],
+          tags: title.tags?.length ? title.tags : ["action"]
+        } : title);
+        syncLibraryIndex();
+        response.writeHead(200, {"Content-Type": "application/json"});
+        response.end(JSON.stringify({
+          ok: true,
+          provider: payload.provider,
+          providerSeriesId: payload.providerSeriesId,
+          libraryId: payload.libraryId,
+          message: "Raven applied the selected metadata match."
+        }));
+      });
       return;
     }
 
@@ -1214,6 +1327,96 @@ test("sage keeps Moon library routes empty when Raven has no imported titles", a
   assert.equal(overview.counts.titles, 0);
   assert.equal(overview.counts.missingChapters, 0);
   assert.equal(overview.counts.metadataGaps, 0);
+
+  await closeServer(sageServer);
+  await closeServer(vaultServer);
+  await closeServer(dependencyStub.server);
+});
+
+test("sage exposes wanted metadata and missing chapter workflows", async () => {
+  const {app: vaultApp} = await createVaultApp();
+  const vaultServer = vaultApp.listen(0);
+  const vaultPort = vaultServer.address().port;
+
+  const gapTitle = {
+    ...defaultLibraryTitle,
+    id: "needs-metadata",
+    title: "Needs Metadata",
+    coverUrl: "",
+    summary: "",
+    tags: [],
+    aliases: [],
+    metadataProvider: "",
+    metadataMatchedAt: "",
+    chapterCount: 10,
+    chaptersDownloaded: 7
+  };
+  const dependencyStub = await createDependencyStub({
+    libraryTitles: [defaultLibraryTitle, gapTitle]
+  });
+  dependencyStub.server.listen(0);
+  const dependencyPort = dependencyStub.server.address().port;
+
+  process.env.SCRIPTARR_VAULT_BASE_URL = `http://127.0.0.1:${vaultPort}`;
+  process.env.SCRIPTARR_WARDEN_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_PORTAL_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_ORACLE_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_RAVEN_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_PUBLIC_BASE_URL = "https://pax-kun.com";
+  process.env.SCRIPTARR_DISCORD_CLIENT_ID = "discord-client-id";
+  process.env.SCRIPTARR_DISCORD_CLIENT_SECRET = "discord-client-secret";
+
+  installDiscordFetchStub();
+
+  const {app: sageApp} = await createSageApp();
+  const sageServer = sageApp.listen(0);
+  const sagePort = sageServer.address().port;
+  const baseUrl = `http://127.0.0.1:${sagePort}`;
+
+  const ownerClaim = await signInViaDiscord(baseUrl);
+  const headers = {
+    "Authorization": `Bearer ${ownerClaim.token}`,
+    "Content-Type": "application/json"
+  };
+
+  const missing = await fetch(`${baseUrl}/api/moon-v3/admin/wanted/missing-chapters`, {headers}).then((response) => response.json());
+  assert.equal(missing.counts.totalTitles, 2);
+  assert.equal(missing.counts.affectedTitles, 2);
+  assert.equal(missing.counts.totalMissing, 163);
+
+  const metadata = await fetch(`${baseUrl}/api/moon-v3/admin/wanted/metadata`, {headers}).then((response) => response.json());
+  assert.equal(metadata.counts.total, 1);
+  assert.equal(metadata.counts.missingProvider, 1);
+  assert.equal(metadata.counts.missingMatchedAt, 1);
+  assert.equal(metadata.counts.missingSummary, 1);
+  assert.equal(metadata.counts.missingAliases, 1);
+  assert.equal(metadata.counts.missingTags, 1);
+  assert.equal(metadata.counts.missingCover, 1);
+
+  const legacyMetadata = await fetch(`${baseUrl}/api/moon-v3/admin/wanted/metadata-gaps`, {headers}).then((response) => response.json());
+  assert.equal(legacyMetadata.counts.total, metadata.counts.total);
+
+  const search = await fetch(`${baseUrl}/api/moon-v3/admin/wanted/metadata/needs-metadata/search?query=Needs%20Metadata`, {
+    headers
+  }).then((response) => response.json());
+  assert.equal(search.results[0].provider, "mangadex");
+  assert.equal(dependencyStub.calls.metadataSearchUrls.some((url) => url.includes("libraryId=needs-metadata")), true);
+
+  const invalidIdentify = await fetch(`${baseUrl}/api/moon-v3/admin/wanted/metadata/needs-metadata/identify`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({selectedMetadata: {provider: "mangadex"}})
+  });
+  assert.equal(invalidIdentify.status, 400);
+
+  const identify = await fetch(`${baseUrl}/api/moon-v3/admin/wanted/metadata/needs-metadata/identify`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({selectedMetadata: search.results[0]})
+  }).then((response) => response.json());
+  assert.equal(identify.result.ok, true);
+  assert.equal(identify.title.metadataProvider, "mangadex");
+  assert.equal(dependencyStub.calls.metadataIdentify, 1);
 
   await closeServer(sageServer);
   await closeServer(vaultServer);
@@ -3090,6 +3293,9 @@ test("sage round-trips brokered Portal Discord settings and exposes them in admi
         channelId: "channel-456",
         template: "Welcome to {siteName}, {username}!"
       },
+      notifications: {
+        releaseChannelId: "release-789"
+      },
       commands: {
         request: {
           enabled: true,
@@ -3107,6 +3313,7 @@ test("sage round-trips brokered Portal Discord settings and exposes them in admi
   assert.equal(savedDiscord.superuserId, "owner-1");
   assert.equal(savedDiscord.commands.request.roleId, "role-request");
   assert.equal(savedDiscord.commands.subscribe.enabled, false);
+  assert.equal(savedDiscord.notifications.releaseChannelId, "release-789");
   assert.equal(savedDiscord.runtime.authConfigured, true);
   assert.equal(savedDiscord.runtime.botTokenConfigured, true);
 
@@ -3119,6 +3326,33 @@ test("sage round-trips brokered Portal Discord settings and exposes them in admi
   }).then((response) => response.json());
   assert.equal(onboardingPreview.rendered, "Welcome to Scriptarr, CaptainPax!");
 
+  const discordPayload = await fetch(`${baseUrl}/api/moon-v3/admin/discord`, {
+    headers
+  }).then((response) => response.json());
+  assert.equal(discordPayload.settings.notifications.releaseChannelId, "release-789");
+  assert.ok(discordPayload.commandCatalog.some((command) => command.id === "request"));
+
+  const savedV3 = await fetch(`${baseUrl}/api/moon-v3/admin/discord`, {
+    method: "PUT",
+    headers,
+    body: JSON.stringify({
+      ...discordPayload.settings,
+      notifications: {
+        releaseChannelId: "release-999"
+      }
+    })
+  }).then((response) => response.json());
+  assert.equal(savedV3.settings.notifications.releaseChannelId, "release-999");
+  assert.equal(savedV3.runtime.reload.ok, true);
+
+  const releaseTest = await fetch(`${baseUrl}/api/moon-v3/admin/discord/release-notifications/test`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(savedV3.settings)
+  }).then((response) => response.json());
+  assert.equal(releaseTest.channelId, "release-999");
+  assert.equal(dependencyStub.calls.releaseNotificationTest, 1);
+
   const aggregatedSettings = await fetch(`${baseUrl}/api/moon-v3/admin/settings`, {
     headers: {
       "Authorization": `Bearer ${ownerClaim.token}`
@@ -3126,6 +3360,7 @@ test("sage round-trips brokered Portal Discord settings and exposes them in admi
   }).then((response) => response.json());
   assert.equal(aggregatedSettings.discord.guildId, "guild-123");
   assert.equal(aggregatedSettings.discord.commands.request.roleId, "role-request");
+  assert.equal(aggregatedSettings.discord.notifications.releaseChannelId, "release-999");
 
   await closeServer(sageServer);
   await closeServer(vaultServer);

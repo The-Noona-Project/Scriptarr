@@ -39,8 +39,8 @@ queueing it. Portal only queues titles with one confident metadata match and rep
 no-metadata, ambiguous-metadata, and failed skips in the DM summary. For `nsfw:false`, Raven only queues titles whose
 WeebCentral detail page explicitly says `Adult Content: No`; adult or unverified titles are skipped.
 
-Guild id, onboarding settings, DM superuser id, and per-command role gates are managed from Moon admin at
-`/admin/discord`. Discord bot credentials remain env-managed.
+Guild id, onboarding settings, release notification channel id, DM superuser id, and per-command role gates are
+managed from Moon admin at `/admin/discord`. Discord bot credentials remain env-managed.
 
 Moon admin also surfaces the live Discord runtime state from Portal, including command-sync health, onboarding
 capability, requested intents or partials, the most recent DM receive timestamp, the last handled `downloadall`
@@ -50,6 +50,9 @@ Portal also watches request-linked moderation, Raven completion state, and Sage 
 approved, denied, or finished and the requester has a Discord id, Portal sends one deduped DM with the shared title art
 and the right Moon link instead of duplicating notification state in a separate store. Portal also DMs admins who
 request LocalAI install, start, or remove jobs when those jobs complete or fail.
+When `/admin/discord` has a release channel id, Portal also polls Sage for completed Raven download notifications,
+posts one channel message with the best Moon read or title link, and acknowledges the stable `release:<taskId>` id only
+after the send succeeds.
 Portal now also DMs blocked duplicate requesters when they are attached to the hidden ready-notify waitlist, DMs
 waitlisted users again when the title becomes ready, DMs unavailable requesters when a source appears and the request
 moves back into admin review, and DMs them again if that unavailable request expires after 90 days.

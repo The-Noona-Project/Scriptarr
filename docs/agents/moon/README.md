@@ -89,8 +89,8 @@
   enabled state, free cron expression, timezone, next-run preview, manual run, last-run status, and recent history.
   Refresh quietly so cron drafts and focused controls are never wiped by SSE.
 - `/admin/system/status` is the grouped endpoint matrix. Use Once UI grouped sections for Moon, Sage, Vault, Raven,
-  Warden, Portal, Oracle, and LocalAI, and keep mutation or browser-session endpoints visible but clearly marked as
-  not probed.
+  Warden, Portal, Oracle, and LocalAI, check GET/read endpoints, show auth-gated reads as protected, and keep mutation
+  endpoints visible but clearly marked as not probed.
 - `/admin/settings` is the general Settings hub. Keep branding, logo upload or remove, database summary, credits,
   support links, toast notification preferences, Raven VPN, metadata providers, download providers, request workflow,
   and Discord basics there. Do not drift AI controls back into this page. Keep section drafts protected from background
@@ -108,7 +108,8 @@
   same-origin, and honest about what will be deleted: content-side requests, progress, read state, follows, bookmarks,
   Raven catalog state, Raven task state, and managed Raven download folders only.
 - `/admin/discord` should surface Portal capability state honestly: command runtime, command sync, onboarding
-  availability, and the last meaningful runtime error should all be visible without forcing the admin to read logs.
+  availability, release notification channel id, and the last meaningful runtime error should all be visible without
+  forcing the admin to read logs.
 - `/admin/library` should stay dense and operational, closer to Sonarr's series index than to a marketing gallery.
   Favor sortable status, release, coverage, and path information over oversized cards.
 - `/admin/library/:type/:titleId` is the admin drill-down companion to that dense index. Keep it operational and
@@ -120,13 +121,19 @@
 - `/admin/mediamanagement` is the dedicated Raven naming surface. Keep one fallback naming profile plus per-type
   profiles for manga, manhwa, manhua, webtoon, comic, and OEL in sync with the brokered `raven.naming` payload.
 - `/admin/calendar` should consume real release entries, not just task history. Prefer chapter release dates captured
-  from Raven's provider scrapes plus metadata enrichment and present them in a calendar-first operational view.
+  from Raven's provider scrapes plus metadata enrichment, add one completion marker for finished titles with fallback
+  dates, and keep undated completed titles visible in the summary instead of dropping them silently.
 - `/admin/requests` should surface the saved metadata, metadata-site links, merged tags, linked Raven task state, and
   the resolve path for `unavailable` requests instead of assuming every request is immediately approvable.
 - `/admin/requests` now also owns the source-pick and override path for requester metadata picks. Moderators can
   replace metadata or download selections before they approve or resolve the request. The page is a moderation inbox,
   not a raw table: default to Needs review, keep active request edits stable across SSE refreshes, and require a
-  moderator comment before calling the deny route.
+  moderator comment before calling the deny route. Bulk actions are limited to refresh-source and deny; approvals stay
+  per request so staff make one source decision at a time.
+- `/admin/wanted/metadata` is the canonical metadata repair surface. Keep `/admin/wanted/metadata-gaps` as a redirect
+  only, search provider matches through Sage with the library id, and apply selected matches through Raven identify.
+- `/admin/wanted/missing-chapters` is the coverage repair surface. Keep repair candidates and staged replacement
+  queueing brokered through the existing library repair routes instead of adding browser-direct Raven calls.
 - `/admin/users` now owns the group-based access model. Keep the protected owner visible but read-only, keep one
   required default onboarding group, and treat group assignment as the way to make moderators or other admins instead
   of reviving flat role toggles. Use the domains payload as the source of truth for the grant matrix.

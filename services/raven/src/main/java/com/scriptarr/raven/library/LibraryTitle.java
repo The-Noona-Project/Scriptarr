@@ -29,6 +29,7 @@ public record LibraryTitle(
     String coverUrl,
     String workingRoot,
     String downloadRoot,
-    List<LibraryChapter> chapters
+    List<LibraryChapter> chapters,
+    String updatedAt
 ) {
 }

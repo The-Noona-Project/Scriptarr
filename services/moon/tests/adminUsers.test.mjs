@@ -6,7 +6,9 @@ import {
   buildUserMetrics,
   filterUsers,
   patchGroupGrant,
-  serializeGroupDraft
+  resolveExistingUserSelection,
+  serializeGroupDraft,
+  userRowKey
 } from "../apps/admin-next/lib/adminUsers.js";
 
 test("admin users helpers count and filter access buckets", () => {
@@ -41,4 +43,17 @@ test("admin users helpers normalize group grant drafts", () => {
   assert.equal(serialized.adminGrants.users, "read");
   assert.equal(serialized.adminGrants.requests, "root");
   assert.deepEqual(serialized.permissions, ["read_library", "create_requests"]);
+});
+
+test("admin users selection helper never auto-opens the first visible user", () => {
+  const users = [
+    {discordUserId: "first", username: "First"},
+    {id: "fallback-id", username: "Fallback"}
+  ];
+
+  assert.equal(userRowKey(users[0]), "first");
+  assert.equal(userRowKey(users[1]), "fallback-id");
+  assert.equal(resolveExistingUserSelection(users, ""), "");
+  assert.equal(resolveExistingUserSelection(users, "first"), "first");
+  assert.equal(resolveExistingUserSelection(users, "missing"), "");
 });

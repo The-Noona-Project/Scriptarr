@@ -8,12 +8,16 @@ import {useEffect, useMemo, useState} from "react";
 import {hasAdminGrant} from "../lib/access.js";
 import {requestJson, useAdminEventStaleness, useAdminJson} from "../lib/api.js";
 import {
+  bulkDenyCandidates,
+  bulkRefreshCandidates,
   buildRequestCounts,
   filterRequests,
   normalizeArray,
   normalizeString,
   requestActionState,
   requestCoverUrl,
+  requestRowKey,
+  resolveExistingRequestSelection,
   requestTabs
 } from "../lib/adminRequests.js";
 import {formatDate, formatDisplayValue} from "../lib/format.js";
@@ -25,7 +29,6 @@ const emptyPayload = Object.freeze({
   counts: {}
 });
 
-const requestKey = (request) => normalizeString(request.id);
 const sourceKey = (entry) => `${normalizeString(entry.providerId, normalizeString(entry.provider))}:${normalizeString(entry.titleUrl, normalizeString(entry.providerSeriesId))}`;
 
 const statusTone = (status) => {
@@ -110,6 +113,8 @@ export const RequestsPage = ({user}) => {
   const [tab, setTab] = useState("needsReview");
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState("");
+  const [selectedBulkIds, setSelectedBulkIds] = useState([]);
+  const [bulkDenyComment, setBulkDenyComment] = useState("");
   const [denyComment, setDenyComment] = useState("");
   const [sourceQuery, setSourceQuery] = useState("");
   const [metadataResults, setMetadataResults] = useState([]);
@@ -134,14 +139,24 @@ export const RequestsPage = ({user}) => {
   const requests = normalizeArray(data?.requests);
   const counts = data?.counts || buildRequestCounts(requests);
   const visibleRequests = useMemo(() => filterRequests(requests, {tab, query}), [requests, tab, query]);
-  const selectedRequest = requests.find((request) => requestKey(request) === selectedId) || null;
+  const selectedRequest = requests.find((request) => requestRowKey(request) === selectedId) || null;
+  const selectedBulkRequests = useMemo(() => {
+    const selected = new Set(selectedBulkIds);
+    return requests.filter((request) => selected.has(requestRowKey(request)));
+  }, [requests, selectedBulkIds]);
+  const bulkRefreshable = useMemo(() => bulkRefreshCandidates(selectedBulkRequests, {canWrite}), [selectedBulkRequests, canWrite]);
+  const bulkDeniable = useMemo(() => bulkDenyCandidates(selectedBulkRequests, {canWrite}), [selectedBulkRequests, canWrite]);
+  const allVisibleSelected = visibleRequests.length > 0 && visibleRequests.every((request) => selectedBulkIds.includes(requestRowKey(request)));
   const actions = requestActionState(selectedRequest || {}, {canWrite, canRoot});
 
   useEffect(() => {
-    if (!selectedId && visibleRequests[0]) {
-      setSelectedId(requestKey(visibleRequests[0]));
-    }
-  }, [selectedId, visibleRequests]);
+    setSelectedId((current) => resolveExistingRequestSelection(requests, current));
+  }, [requests]);
+
+  useEffect(() => {
+    const existing = new Set(requests.map((request) => requestRowKey(request)));
+    setSelectedBulkIds((current) => current.filter((id) => existing.has(id)));
+  }, [requests]);
 
   useEffect(() => {
     if (!selectedRequest) {
@@ -166,13 +181,70 @@ export const RequestsPage = ({user}) => {
       return null;
     }
     setBusy(label);
-    const result = await requestJson(`/api/moon/v3/admin/requests/${encodeURIComponent(requestKey(selectedRequest))}${path}`, options);
+    const result = await requestJson(`/api/moon/v3/admin/requests/${encodeURIComponent(requestRowKey(selectedRequest))}${path}`, options);
     setBusy("");
     setResult(result.ok, result.ok ? `${label} complete.` : result.payload?.error || `Moon could not ${label.toLowerCase()}.`, category);
     if (result.ok) {
       await refresh();
     }
     return result;
+  };
+
+  const toggleBulkRequest = (requestId) => {
+    setSelectedBulkIds((current) =>
+      current.includes(requestId) ? current.filter((entry) => entry !== requestId) : [...current, requestId]
+    );
+  };
+
+  const toggleAllVisible = () => {
+    const visibleIds = visibleRequests.map((request) => requestRowKey(request)).filter(Boolean);
+    setSelectedBulkIds((current) => {
+      if (visibleIds.length && visibleIds.every((id) => current.includes(id))) {
+        return current.filter((id) => !visibleIds.includes(id));
+      }
+      return [...new Set([...current, ...visibleIds])];
+    });
+  };
+
+  const runBulkAction = async (label, rows, path, optionsForRow, category = "action") => {
+    if (!rows.length) {
+      setResult(false, `No selected requests can ${label.toLowerCase()}.`);
+      return;
+    }
+    setBusy(label);
+    let okCount = 0;
+    let lastError = "";
+    for (const request of rows) {
+      const result = await requestJson(`/api/moon/v3/admin/requests/${encodeURIComponent(requestRowKey(request))}${path}`, optionsForRow(request));
+      if (result.ok) {
+        okCount += 1;
+      } else {
+        lastError = result.payload?.error || `Could not ${label.toLowerCase()} ${request.title || "request"}.`;
+      }
+    }
+    setBusy("");
+    const ok = okCount === rows.length;
+    setResult(ok, ok
+      ? `${label} complete for ${okCount} request${okCount === 1 ? "" : "s"}.`
+      : `${label} completed for ${okCount}/${rows.length}. ${lastError}`, category);
+    await refresh();
+  };
+
+  const refreshSelectedSources = async () => {
+    await runBulkAction("Refresh sources", bulkRefreshable, "/refresh-sources", () => ({method: "POST"}));
+  };
+
+  const denySelectedRequests = async () => {
+    const comment = normalizeString(bulkDenyComment);
+    if (!comment) {
+      setResult(false, "Enter a bulk denial comment first.");
+      return;
+    }
+    await runBulkAction("Deny", bulkDeniable, "/deny", () => ({
+      method: "POST",
+      json: {comment}
+    }));
+    setBulkDenyComment("");
   };
 
   const searchMetadata = async () => {
@@ -310,12 +382,38 @@ export const RequestsPage = ({user}) => {
             <h2>{visibleRequests.length} request{visibleRequests.length === 1 ? "" : "s"}</h2>
           </div>
         </div>
+        {selectedBulkIds.length ? (
+          <div className="admin-confirm-panel">
+            <div>
+              <div className="admin-kicker">Bulk moderation</div>
+              <strong>{selectedBulkIds.length} selected</strong>
+              <p className="admin-muted">{bulkRefreshable.length} can refresh sources. {bulkDeniable.length} can be denied.</p>
+            </div>
+            <input
+              aria-label="Bulk denial comment"
+              value={bulkDenyComment}
+              onChange={(event) => setBulkDenyComment(event.target.value)}
+              placeholder="Required for bulk deny"
+            />
+            <button className="admin-button ghost" type="button" disabled={!bulkRefreshable.length || busy === "Refresh sources"} onClick={() => void refreshSelectedSources()}>Refresh selected sources</button>
+            <button className="admin-button ghost danger" type="button" disabled={!bulkDeniable.length || !normalizeString(bulkDenyComment) || busy === "Deny"} onClick={() => void denySelectedRequests()}>Deny selected</button>
+          </div>
+        ) : null}
         <AdminDenseTable
           rows={visibleRequests}
-          getKey={(row) => requestKey(row)}
+          getKey={(row) => requestRowKey(row)}
           selectedKey={selectedId}
-          onRowClick={(row) => setSelectedId(requestKey(row))}
+          onRowClick={(row) => setSelectedId(requestRowKey(row))}
           columns={[
+            {key: "select", label: "", render: (row) => (
+              <input
+                aria-label={`Select ${normalizeString(row.title, "request")}`}
+                checked={selectedBulkIds.includes(requestRowKey(row))}
+                onChange={() => toggleBulkRequest(requestRowKey(row))}
+                onClick={(event) => event.stopPropagation()}
+                type="checkbox"
+              />
+            )},
             {key: "title", label: "Request", render: (row) => (
               <div className="admin-inline-record">
                 <RequestCover request={row} />
@@ -332,6 +430,11 @@ export const RequestsPage = ({user}) => {
           ]}
           empty="No requests match this view."
         />
+        {visibleRequests.length ? (
+          <button className="admin-button ghost small" type="button" onClick={toggleAllVisible}>
+            {allVisibleSelected ? "Clear visible selection" : "Select visible"}
+          </button>
+        ) : null}
       </section>
 
       <AdminDrawer

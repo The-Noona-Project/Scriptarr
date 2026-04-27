@@ -24,17 +24,20 @@ Architecture invariants:
 - Raven intake is now grouped by concrete provider target and edition-aware, so plain vs colored variants only stay
   separate when they truly resolve to different provider URLs.
 - Portal's Discord runtime is now live again, and the brokered `portal.discord` settings object is the source of truth
-  for guild id, onboarding, per-command role gates, and DM superuser rules.
+  for guild id, onboarding, per-command role gates, release channel posts, and DM superuser rules.
 - Moon now serves trusted API-key surfaces and plain same-origin Swagger docs. Search is public, protected calls use
   `X-Scriptarr-Api-Key`, system keys inherit assigned permission groups, user keys stay scoped to the owning reader,
   and accepted external requests must stay at the lowest queue priority.
 - Active requests now use a durable Vault work key so duplicate submissions across Moon, Discord, admin, and the
   public API collapse cleanly under concurrency.
 - Request-linked moderation and Raven completion events can now trigger one Portal DM per request state when a Discord
-  id is available.
+  id is available. Completed Raven tasks can also queue one release-channel post with a durable `release:<taskId>` ack.
 - Moon web request creation now lives in `/myrequests`, Discord `/request` now uses the same metadata-only requester
   flow, admins choose download sources during approval from `/admin/requests`, and unavailable requests are Sage-owned
   records that recheck every 4 hours and expire after 90 days.
+- Moon admin Wanted uses dedicated repair pages: `/admin/wanted/metadata` for provider metadata apply, and
+  `/admin/wanted/missing-chapters` for coverage repair via staged replacement downloads. The old metadata-gaps path is
+  legacy-only and should redirect.
 - Raven now exposes merged metadata-provider and download-provider tags as one canonical tag set for library and
   moderation surfaces, while keeping source attribution internally for debugging.
 - Raven stores in-flight downloads under `downloading/<type>/...` and promotes completed library content into
@@ -47,9 +50,10 @@ Architecture invariants:
 - `raven.naming` is now profile-based by library type, and Moon admin exposes it through `/admin/mediamanagement`
   instead of burying it in the generic settings page.
 - Moon admin library and calendar now expect richer Raven release metadata: the series index is dense and sortable,
-  while the calendar view consumes chapter release dates captured from source scrapes and metadata enrichment.
+  while the calendar view consumes chapter release dates captured from source scrapes, metadata enrichment, and
+  completed-title fallback dates so finished catalog titles remain visible.
 - Moon admin System pages now include Logs, Events, Updates, Tasks, Status, API, and AI as purpose-built Next surfaces.
-  Keep browser traffic same-origin through Moon -> Sage, keep task jobs allowlisted, probe only safe read endpoints in
+  Keep browser traffic same-origin through Moon -> Sage, keep task jobs allowlisted, probe GET/read endpoints in
   Status, and keep Oracle/LocalAI settings under `/admin/system/ai`.
 
 ## Service Index

@@ -23,6 +23,29 @@ export const normalizeString = (value, fallback = "") => {
 const isObject = (value) => value && typeof value === "object" && !Array.isArray(value);
 
 /**
+ * Build a stable request row key.
+ *
+ * @param {Record<string, unknown>} request
+ * @returns {string}
+ */
+export const requestRowKey = (request = {}) => normalizeString(request.id);
+
+/**
+ * Keep a request drawer selection only while the request still exists.
+ *
+ * @param {Array<Record<string, unknown>>} requests
+ * @param {string} selectedId
+ * @returns {string}
+ */
+export const resolveExistingRequestSelection = (requests = [], selectedId = "") => {
+  const normalizedSelectedId = normalizeString(selectedId);
+  if (!normalizedSelectedId) {
+    return "";
+  }
+  return normalizeArray(requests).some((request) => requestRowKey(request) === normalizedSelectedId) ? normalizedSelectedId : "";
+};
+
+/**
  * Resolve whether a request still needs moderator review.
  *
  * @param {Record<string, unknown>} request
@@ -188,7 +211,33 @@ export const requestActionState = (request = {}, {canWrite = false, canRoot = fa
   };
 };
 
+/**
+ * Select requests eligible for bulk source refresh.
+ *
+ * @param {Array<Record<string, unknown>>} requests
+ * @param {{canWrite?: boolean}} grants
+ * @returns {Array<Record<string, unknown>>}
+ */
+export const bulkRefreshCandidates = (requests = [], {canWrite = false} = {}) =>
+  normalizeArray(requests).filter((request) => {
+    const status = normalizeString(request.status).toLowerCase();
+    return !["completed", ...closedStatuses].includes(status)
+      && requestActionState(request, {canWrite}).canRefreshSources;
+  });
+
+/**
+ * Select requests eligible for bulk denial.
+ *
+ * @param {Array<Record<string, unknown>>} requests
+ * @param {{canWrite?: boolean}} grants
+ * @returns {Array<Record<string, unknown>>}
+ */
+export const bulkDenyCandidates = (requests = [], {canWrite = false} = {}) =>
+  normalizeArray(requests).filter((request) => requestActionState(request, {canWrite}).canDeny);
+
 export default {
+  bulkDenyCandidates,
+  bulkRefreshCandidates,
   buildRequestCounts,
   filterRequests,
   hasConcreteDownload,
@@ -196,5 +245,7 @@ export default {
   requestCoverUrl,
   requestMatchesTab,
   requestNeedsReview,
+  requestRowKey,
+  resolveExistingRequestSelection,
   requestTabs
 };

@@ -23,6 +23,7 @@ Its content reset path is content-only, not a factory reset: requests, work lock
 reader bookmarks, Raven catalog rows, Raven tasks, and Raven-owned jobs are cleared, while users, permission groups,
 API keys, sessions, settings, secrets, and durable events remain intact.
 
-It also stores the Raven VPN settings, Raven metadata provider configuration, Oracle provider state, and Oracle
-secrets used by the rest of the stack. Moon branding, uploaded WebP logo variants, and admin toast preferences are
-normal Vault settings and survive content reset with other settings.
+It also stores the Raven VPN settings, Raven metadata provider configuration, Oracle provider state, Portal Discord
+workflow settings including release notification channel id, and Oracle secrets used by the rest of the stack. Moon
+branding, uploaded WebP logo variants, release notification acknowledgments, and admin toast preferences are normal
+Vault settings and survive content reset with other settings.

@@ -65,7 +65,7 @@ class LibraryServiceTest {
                 List.of(),
                 List.of(Map.of("title", "Solo Leveling: Ragnarok", "relation", "Sequel"))
             ),
-            List.of(new LibraryChapter("", "Chapter 1", "1", 1, null, true, archivePath.toString(), "https://weebcentral.com/chapters/solo-1")),
+            List.of(new LibraryChapter("", "Chapter 1", "1", 1, null, true, archivePath.toString(), "https://weebcentral.com/chapters/solo-1", null)),
             workingRoot,
             downloadRoot
         );
@@ -181,7 +181,7 @@ class LibraryServiceTest {
             "https://weebcentral.com/series/blue-box",
             "",
             null,
-            List.of(new LibraryChapter("", "Chapter 1", "1", 3, null, true, archive.toString(), "")),
+            List.of(new LibraryChapter("", "Chapter 1", "1", 3, null, true, archive.toString(), "", null)),
             titleFolder,
             titleFolder
         );
@@ -223,9 +223,10 @@ class LibraryServiceTest {
             "/downloads/downloading/manga/Kenja_no_Mago",
             "/downloads/downloaded/manga/Kenja_no_Mago",
             List.of(
-                new LibraryChapter("kenja-id-c79", "Chapter 79", "79", 55, Instant.parse("2026-04-18T08:00:00Z").toString(), true, "/downloads/downloaded/manga/Kenja_no_Mago/ch79.cbz", null),
-                new LibraryChapter("kenja-id-c94", "Chapter 94", "94", 52, Instant.parse("2026-04-20T08:00:00Z").toString(), true, "/downloads/downloaded/manga/Kenja_no_Mago/ch94.cbz", null)
-            )
+                new LibraryChapter("kenja-id-c79", "Chapter 79", "79", 55, Instant.parse("2026-04-18T08:00:00Z").toString(), true, "/downloads/downloaded/manga/Kenja_no_Mago/ch79.cbz", null, null),
+                new LibraryChapter("kenja-id-c94", "Chapter 94", "94", 52, Instant.parse("2026-04-20T08:00:00Z").toString(), true, "/downloads/downloaded/manga/Kenja_no_Mago/ch94.cbz", null, null)
+            ),
+            null
         ));
 
         ReaderManifest manifest = service.readerManifest("kenja-id");
@@ -270,7 +271,7 @@ class LibraryServiceTest {
                 List.of(),
                 List.of()
             ),
-            List.of(new LibraryChapter("", "Chapter 1", "1", 10, null, true, archivePath.toString(), "")),
+            List.of(new LibraryChapter("", "Chapter 1", "1", 10, null, true, archivePath.toString(), "", null)),
             downloadRoot,
             downloadRoot
         );
@@ -311,7 +312,8 @@ class LibraryServiceTest {
             "",
             "/downloads/downloading/manga/Absolute_Duo",
             "/downloads/downloaded/manga/Absolute_Duo",
-            List.of(new LibraryChapter("older-id-c22", "Chapter 22", "22", 37, null, true, "/downloads/downloaded/manga/Absolute_Duo/Absolute Duo c022 [Scriptarr].cbz", null))
+            List.of(new LibraryChapter("older-id-c22", "Chapter 22", "22", 37, null, true, "/downloads/downloaded/manga/Absolute_Duo/Absolute Duo c022 [Scriptarr].cbz", null, null)),
+            null
         ));
         brokerClient.setLibraryTitle(new LibraryTitle(
             "newer-id",
@@ -336,7 +338,8 @@ class LibraryServiceTest {
             "https://images.example/absolute-duo.jpg",
             "/downloads/downloading/manga/Absolute_Duo",
             "/downloads/downloaded/manga/Absolute_Duo",
-            List.of(new LibraryChapter("newer-id-c22", "Chapter 22", "22", 37, null, true, "/downloads/downloaded/manga/Absolute_Duo/Absolute Duo c022 [Scriptarr].cbz", "https://weebcentral.com/chapters/absolute-duo-22"))
+            List.of(new LibraryChapter("newer-id-c22", "Chapter 22", "22", 37, null, true, "/downloads/downloaded/manga/Absolute_Duo/Absolute Duo c022 [Scriptarr].cbz", "https://weebcentral.com/chapters/absolute-duo-22", null)),
+            null
         ));
 
         List<LibraryTitle> titles = service.listTitles();

@@ -210,7 +210,7 @@ temporarily unavailable.
 - manage reusable permission groups, user-group assignments, protected-owner visibility, and access audit feeds in
   `/admin/users`
 - manage the Discord bot workflow in `/admin/discord`, including guild id, onboarding channel or template, DM
-  superuser id, and per-command role mapping
+  superuser id, release notification channel, and per-command role mapping
 - configure Raven VPN credentials and region for PIA/OpenVPN-backed downloads
 - review Raven metadata providers, with MangaDex enabled by default, Anime-Planet enabled ahead of MangaUpdates, and
   AniList, MyAnimeList, or ComicVine available for wider coverage
@@ -230,8 +230,8 @@ temporarily unavailable.
   are Scriptarr-defined only, runs are non-overlapping, and every manual or scheduled run is brokered through Sage with
   durable job history
 - inspect the grouped endpoint matrix from `/admin/system/status`; Scriptarr lists Moon, Sage, Vault, Raven, Warden,
-  Portal, Oracle, and LocalAI routes, probes only safe read endpoints, and marks mutations or browser-session routes
-  as not probed
+  Portal, Oracle, and LocalAI routes, checks GET/read endpoints, reports auth-gated reads as protected, and marks
+  mutation routes as not probed
 - configure Oracle and optional LocalAI runtime controls from `/admin/system/ai`, including provider, model dropdown,
   temperature, masked OpenAI key state, LocalAI image profile, manual install, start, or remove actions, lifecycle
   progress, completion toasts, and a small test prompt
@@ -314,7 +314,15 @@ stays visible but protected from deletion or demotion.
 `/admin/requests` is the moderation inbox. It opens on requests needing review, lets staff search or filter by status,
 and keeps request details in a drawer with saved metadata, selected source snapshots, duplicate waitlist state,
 timeline, linked Raven ids, and approve, resolve, refresh-source, override, or deny actions. Denying a request requires
-a moderator comment so the durable audit event and requester notification have a useful reason.
+a moderator comment so the durable audit event and requester notification have a useful reason. It also supports safe
+bulk refresh-source and bulk deny actions; approvals remain per request so moderators can inspect each source choice.
+`/admin/wanted/metadata` replaces the old Metadata Gaps page and lets staff search provider matches and apply one to an
+existing library title through Sage and Raven. `/admin/wanted/metadata-gaps` redirects to the new canonical route.
+`/admin/wanted/missing-chapters` shows coverage gaps and uses the existing library repair candidates to queue a safe
+staged replacement download when a better source is selected.
+`/admin/calendar` is a month or agenda release view fed by Sage's calendar payload. Completed titles appear through
+dated chapter entries when available and get one title-level completion marker when Raven only has title or chapter
+update timestamps. Titles with no usable date are counted as undated completed instead of being dropped.
 `/admin/activity/queue` is now a live queue board. It groups Raven work into `Running`, `Queued`, and recovery-only
 `Needs attention`, subscribes to the shared admin SSE stream so it refreshes without a manual page reload, and
 exposes card-level controls for retry, retry-all, cancel, priority changes, and queued-task move up/down actions.
@@ -383,6 +391,9 @@ That owner-only command is intentionally pinned to WeebCentral. If WeebCentral i
 `downloadall` fails instead of falling back to MangaDex or another provider.
 Portal also sends requester DMs when a moderated request is approved, denied, or finishes downloading, and dedupes
 those notifications by request id plus decision state so retries and restarts do not spam Discord.
+If a release channel id is configured in `/admin/discord`, Portal also posts completed Raven downloads to that channel
+with a Moon read or title link. Release channel notifications use stable `release:<taskId>` ids and are only
+acknowledged after Discord accepts the message.
 When a duplicate request is blocked because Scriptarr is already tracking the same concrete work, Sage now attaches the
 user to a hidden notification waitlist instead of creating a second visible request row. Portal DMs those waitlisted
 users when the title is ready. Portal also DMs requesters when an unavailable request later finds a source and moves

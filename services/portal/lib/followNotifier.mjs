@@ -167,6 +167,28 @@ const buildDirectMessagePayload = (notification, kind, publicBaseUrl, requestCom
   return payload;
 };
 
+export const buildReleaseChannelPayload = (notification = {}, publicBaseUrl = "") => {
+  const titleName = normalizeString(notification.titleName || notification.title, "Scriptarr title");
+  const chapterLabel = normalizeString(notification.chapterLabel || notification.latestChapter, "Latest chapter");
+  const linkUrl = normalizeString(notification.linkUrl || notification.readerUrl || notification.titleUrl)
+    || (normalizeString(publicBaseUrl) ? normalizeString(publicBaseUrl).replace(/\/+$/g, "") : "");
+  const coverUrl = normalizeString(notification.coverUrl);
+  const linkLine = linkUrl ? `\nRead it here: ${linkUrl}` : "";
+  const description = `**${titleName}** downloaded ${chapterLabel}.${linkLine}`;
+  return {
+    content: `New Scriptarr release: ${titleName} - ${chapterLabel}${linkLine}`,
+    embeds: [{
+      title: titleName,
+      description,
+      url: linkUrl || undefined,
+      image: coverUrl ? {url: coverUrl} : undefined,
+      fields: [
+        {name: "Chapter", value: chapterLabel}
+      ]
+    }]
+  };
+};
+
 const deliverNotifications = async ({
   list,
   acknowledge,
@@ -209,6 +231,42 @@ const deliverNotifications = async ({
   }
 };
 
+const deliverReleaseChannelNotifications = async ({
+  list,
+  acknowledge,
+  discord,
+  logger,
+  publicBaseUrl
+}) => {
+  if (typeof list !== "function" || typeof acknowledge !== "function") {
+    return;
+  }
+
+  const response = await list();
+  if (!response?.ok) {
+    return;
+  }
+
+  const deliveredIds = new Set();
+  for (const notification of normalizeArray(response.payload?.notifications)) {
+    const notificationId = normalizeString(notification?.id);
+    const channelId = normalizeString(notification?.channelId);
+    if (!notificationId || !channelId || deliveredIds.has(notificationId)) {
+      continue;
+    }
+    try {
+      await discord.sendChannelMessage(
+        channelId,
+        buildReleaseChannelPayload(notification, publicBaseUrl)
+      );
+      deliveredIds.add(notificationId);
+      await acknowledge(notificationId);
+    } catch (error) {
+      logger?.error?.("Portal release channel notification delivery failed.", {notificationId, error});
+    }
+  }
+};
+
 export const createFollowNotifier = ({
   sage,
   discord,
@@ -242,6 +300,13 @@ export const createFollowNotifier = ({
         logger,
         publicBaseUrl,
         requestCommand
+      });
+      await deliverReleaseChannelNotifications({
+        list: () => sage?.listReleaseNotifications?.(),
+        acknowledge: (id) => sage?.acknowledgeReleaseNotification?.(id),
+        discord,
+        logger,
+        publicBaseUrl
       });
       await deliverNotifications({
         list: () => sage?.listSystemNotifications?.(),

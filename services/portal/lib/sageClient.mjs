@@ -188,6 +188,20 @@ export const createSageClient = (config) => {
         }
       );
     },
+    listReleaseNotifications() {
+      return requestJson(config.sageBaseUrl, authHeader, "/api/internal/portal/notifications/releases");
+    },
+    acknowledgeReleaseNotification(notificationId) {
+      return requestJson(
+        config.sageBaseUrl,
+        jsonHeaders,
+        `/api/internal/portal/notifications/releases/${encodeURIComponent(notificationId)}/ack`,
+        {
+          method: "POST",
+          body: {}
+        }
+      );
+    },
     listRequestNotifications() {
       return requestJson(config.sageBaseUrl, authHeader, "/api/internal/portal/notifications/requests");
     },

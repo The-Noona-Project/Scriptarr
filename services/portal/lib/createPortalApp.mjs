@@ -107,6 +107,18 @@ export const createPortalApp = async ({
     }
   });
 
+  app.post("/api/notifications/release/test", async (req, res) => {
+    try {
+      await runtime.refreshSettings().catch(() => {});
+      res.json(await runtime.sendReleaseNotificationTest(req.body || {}));
+    } catch (error) {
+      logger.warn("Portal release notification test failed.", {error});
+      res.status(409).json({
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
+  });
+
   app.post("/api/requests/from-discord", async (req, res) => {
     const discordUserId = normalizeString(req.body?.discordUserId);
     const username = normalizeString(req.body?.username, "Discord Reader");

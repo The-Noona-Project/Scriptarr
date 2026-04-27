@@ -6,12 +6,14 @@
 - The live Discord command set is `/ding`, `/status`, `/chat`, `/search`, `/request`, `/subscribe`, and owner-only DM
   `/downloadall`.
 - Portal should treat the brokered `portal.discord` setting as the source of truth for guild id, onboarding message or
-  channel, DM superuser id, and per-command role gates.
+  channel, DM superuser id, release notification channel id, and per-command role gates.
 - Portal should prefer a minimal Discord runtime over going fully dark when privileged intents are unavailable. Slash
   commands and DMs should remain online, while onboarding should degrade separately and surface the real runtime error
   or command-sync problem back through Moon admin.
 - Portal now also owns requester approval, denial, and completion DMs. Keep those notifications deduped by request id
   plus decision state, and reuse the shared `coverUrl` plus Moon public base URL when they are available.
+- Portal also owns release channel posts for completed Raven downloads. Poll Sage's release-notification queue, send
+  to the configured channel with a Moon read or title link, and acknowledge only after Discord accepts the message.
 - Portal also sends deduped system DMs for LocalAI lifecycle jobs exposed by Sage, including install, start, and
   remove completion or failure notices for the Discord-backed admin who requested the action.
 - Portal-originated async request and Discord-runtime state that matters to operators should now be mirrored into the

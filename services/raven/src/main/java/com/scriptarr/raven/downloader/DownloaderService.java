@@ -1084,7 +1084,8 @@ public class DownloaderService {
                         releaseDate,
                         true,
                         path.toString(),
-                        normalizeString(chapterDetails.get("href"), null)
+                        normalizeString(chapterDetails.get("href"), null),
+                        null
                     );
                 })
                 .toList();

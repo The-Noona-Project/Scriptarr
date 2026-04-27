@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   buildToastFingerprint,
   createToastDedupeState,
+  serializeToastDedupeState,
   shouldShowToast
 } from "../apps/admin-next/lib/toastDedupe.js";
 
@@ -60,3 +61,34 @@ test("toast fingerprints normalize whitespace and case", () => {
   );
 });
 
+test("toast dedupe can be serialized and hydrated across refreshes", () => {
+  const state = createToastDedupeState();
+  assert.equal(shouldShowToast(state, {
+    eventId: "event-refresh-1",
+    category: "event",
+    severity: "info",
+    message: "raven created a task."
+  }, {now: 1000}), true);
+
+  const snapshot = serializeToastDedupeState(state, {now: 2000});
+  const hydrated = createToastDedupeState(snapshot);
+  assert.equal(shouldShowToast(hydrated, {
+    eventId: "event-refresh-1",
+    category: "event",
+    severity: "info",
+    message: "raven created a task."
+  }, {now: 3000}), false);
+});
+
+test("toast dedupe serialization prunes expired event ids", () => {
+  const state = createToastDedupeState({
+    ids: [["expired", 1000], ["fresh", 5000]],
+    fingerprints: []
+  });
+
+  const snapshot = serializeToastDedupeState(state, {
+    now: 7000,
+    eventIdTtlMs: 2500
+  });
+  assert.deepEqual(snapshot.ids, [["fresh", 5000]]);
+});

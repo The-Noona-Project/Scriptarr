@@ -19,6 +19,7 @@ import {appendDurableEvent, appendUserEvent, buildServiceActor, buildUserActor} 
 import {buildIntakeSelection, evaluateSelectionAgainstGuardState} from "./requestSelectionGuards.mjs";
 import {buildRequestWorkConflictPayload, isRequestWorkConflictError} from "./requestConflict.mjs";
 import {buildAdminQueuePayload} from "./buildAdminQueuePayload.mjs";
+import {buildAdminCalendarPayload} from "./adminCalendar.mjs";
 import {buildMoonHomePayload} from "./buildMoonHomePayload.mjs";
 import {buildMoonProfilePayload} from "./buildMoonProfilePayload.mjs";
 import {buildSystemStatusPayload} from "./systemStatusRegistry.mjs";
@@ -38,7 +39,12 @@ import {
   resolveRequestTab,
   selectAutoApproveDownload
 } from "./requestFlow.mjs";
-import {PORTAL_DISCORD_KEY, normalizePortalDiscordSettings} from "./portalDiscordSettings.mjs";
+import {
+  PORTAL_DISCORD_KEY,
+  knownPortalDiscordCommands,
+  normalizePortalDiscordSettings,
+  renderPortalOnboardingTemplate
+} from "./portalDiscordSettings.mjs";
 
 const defaultReaderPreferences = Object.freeze({
   readingMode: "infinite",
@@ -228,7 +234,8 @@ const toChapterSummary = (chapter = {}) => ({
   releaseDate: normalizeString(chapter.releaseDate),
   available: chapter.available !== false,
   archivePath: normalizeString(chapter.archivePath),
-  sourceUrl: normalizeString(chapter.sourceUrl)
+  sourceUrl: normalizeString(chapter.sourceUrl),
+  updatedAt: parseIso(chapter.updatedAt)
 });
 
 const toRequestSummary = (request = {}, userIndex = new Map()) => {
@@ -511,6 +518,55 @@ export const registerMoonV3Routes = (app, {
     return counts;
   };
 
+  const buildMissingChapterPayload = (titles = []) => {
+    const rows = normalizeArray(titles)
+      .map((title) => ({
+        ...title,
+        missingCount: Math.max(0, title.chapterCount - title.chaptersDownloaded)
+      }));
+    const entries = rows.filter((title) => title.missingCount > 0);
+    return {
+      entries,
+      counts: {
+        totalTitles: rows.length,
+        totalMissing: entries.reduce((sum, title) => sum + title.missingCount, 0),
+        completeTitles: Math.max(0, rows.length - entries.length),
+        affectedTitles: entries.length
+      }
+    };
+  };
+
+  const metadataGapsForTitle = (title = {}) => [
+    !normalizeString(title.metadataProvider) ? "provider" : null,
+    !normalizeString(title.metadataMatchedAt) ? "matchedAt" : null,
+    !normalizeString(title.summary) ? "summary" : null,
+    normalizeArray(title.aliases).length === 0 ? "aliases" : null,
+    normalizeArray(title.tags).length === 0 ? "tags" : null,
+    !normalizeString(title.coverUrl) ? "cover" : null
+  ].filter(Boolean);
+
+  const buildMetadataGapPayload = (titles = []) => {
+    const entries = normalizeArray(titles)
+      .map((title) => ({
+        ...title,
+        gaps: metadataGapsForTitle(title)
+      }))
+      .filter((title) => title.gaps.length > 0);
+    return {
+      entries,
+      counts: {
+        total: entries.length,
+        totalTitles: normalizeArray(titles).length,
+        missingProvider: entries.filter((title) => title.gaps.includes("provider")).length,
+        missingMatchedAt: entries.filter((title) => title.gaps.includes("matchedAt")).length,
+        missingSummary: entries.filter((title) => title.gaps.includes("summary")).length,
+        missingAliases: entries.filter((title) => title.gaps.includes("aliases")).length,
+        missingTags: entries.filter((title) => title.gaps.includes("tags")).length,
+        missingCover: entries.filter((title) => title.gaps.includes("cover")).length
+      }
+    };
+  };
+
   const readUserTagPreferences = async (discordUserId) =>
     normalizeTagPreferenceStore(await readUserScopedSetting(vaultClient, "moon.tag-preferences", discordUserId, {}));
 
@@ -702,13 +758,16 @@ export const registerMoonV3Routes = (app, {
     };
   };
 
-  const fetchMetadataSearchResults = async (query) => {
+  const fetchMetadataSearchResults = async (query, {libraryId = ""} = {}) => {
     const normalizedQuery = normalizeString(query);
     if (!normalizedQuery) {
       return {query: "", results: []};
     }
 
-    const payload = await fetchRavenJson(`/v1/metadata/search?name=${encodeURIComponent(normalizedQuery)}`);
+    const normalizedLibraryId = normalizeString(libraryId);
+    const payload = await fetchRavenJson(
+      `/v1/metadata/search?name=${encodeURIComponent(normalizedQuery)}${normalizedLibraryId ? `&libraryId=${encodeURIComponent(normalizedLibraryId)}` : ""}`
+    );
     const rawResults = normalizeArray(payload);
     const hydratedResults = await Promise.all(rawResults.map(async (entry) => {
       const provider = normalizeString(entry.provider);
@@ -934,12 +993,14 @@ export const registerMoonV3Routes = (app, {
     const requireActivityWrite = (handler) => withAdminAccess("activity", "write", handler);
     const requireActivityRoot = (handler) => withAdminAccess("activity", "root", handler);
     const requireWantedRead = (handler) => withAdminAccess("wanted", "read", handler);
+    const requireWantedWrite = (handler) => withAdminAccess("wanted", "write", handler);
   const requireRequestRead = (handler) => withAdminAccess("requests", "read", handler);
   const requireRequestWrite = (handler) => withAdminAccess("requests", "write", handler);
   const requireRequestRoot = (handler) => withAdminAccess("requests", "root", handler);
   const requireUsersRead = (handler) => withAdminAccess("users", "read", handler);
   const requireUsersRoot = (handler) => withAdminAccess("users", "root", handler);
   const requireDiscordRead = (handler) => withAdminAccess("discord", "read", handler);
+  const requireDiscordWrite = (handler) => withAdminAccess("discord", "write", handler);
   const requireMediaManagementRead = (handler) => withAdminAccess("mediamanagement", "read", handler);
   const requireSettingsRead = (handler) => withAdminAccess("settings", "read", handler);
   const requireSettingsWrite = (handler) => withAdminAccess("settings", "write", handler);
@@ -1266,33 +1327,7 @@ export const registerMoonV3Routes = (app, {
 
   app.get("/api/moon-v3/admin/calendar", requireCalendarRead(async (_req, res) => {
     const titles = await loadLibrary();
-    const rawEntries = titles.flatMap((title) =>
-      normalizeArray(title.chapters).map((chapter) => ({
-        titleId: title.id,
-        title: title.title,
-        coverUrl: title.coverUrl || "",
-        libraryTypeLabel: title.libraryTypeLabel || title.mediaType || "Manga",
-        libraryTypeSlug: title.libraryTypeSlug || title.mediaType || "manga",
-        mediaType: title.mediaType,
-        metadataProvider: title.metadataProvider || "",
-        sourceUrl: title.sourceUrl || chapter.sourceUrl || "",
-        chapterId: chapter.id,
-        chapterLabel: chapter.label,
-        chapterNumber: chapter.chapterNumber || "",
-        pageCount: chapter.pageCount || 0,
-        titleStatus: title.status || "active",
-        releaseDate: chapter.releaseDate,
-        available: chapter.available
-      }))
-    );
-    const entries = rawEntries
-      .filter((entry) => Date.parse(entry.releaseDate || ""))
-      .sort((left, right) => Date.parse(left.releaseDate || "") - Date.parse(right.releaseDate || ""));
-
-    res.json({
-      entries,
-      undatedCount: Math.max(0, rawEntries.length - entries.length)
-    });
+    res.json(buildAdminCalendarPayload(titles));
   }));
 
     app.get("/api/moon-v3/admin/activity/queue", requireActivityRead(async (_req, res) => {
@@ -1410,29 +1445,79 @@ export const registerMoonV3Routes = (app, {
 
   app.get("/api/moon-v3/admin/wanted/missing-chapters", requireWantedRead(async (_req, res) => {
     const titles = await loadLibrary();
-    res.json({
-      entries: titles
-        .map((title) => ({
-          ...title,
-          missingCount: Math.max(0, title.chapterCount - title.chaptersDownloaded)
-        }))
-        .filter((title) => title.missingCount > 0)
-    });
+    res.json(buildMissingChapterPayload(titles));
+  }));
+
+  app.get("/api/moon-v3/admin/wanted/metadata", requireWantedRead(async (_req, res) => {
+    const titles = await loadLibrary();
+    res.json(buildMetadataGapPayload(titles));
   }));
 
   app.get("/api/moon-v3/admin/wanted/metadata-gaps", requireWantedRead(async (_req, res) => {
     const titles = await loadLibrary();
+    res.json(buildMetadataGapPayload(titles));
+  }));
+
+  app.get("/api/moon-v3/admin/wanted/metadata/:titleId/search", requireWantedRead(async (req, res) => {
+    const title = await loadLibraryTitle(req.params.titleId);
+    if (!title?.id) {
+      res.status(404).json({error: "Title not found."});
+      return;
+    }
+    res.json(await fetchMetadataSearchResults(normalizeString(req.query.query, title.title), {
+      libraryId: title.id
+    }));
+  }));
+
+  app.post("/api/moon-v3/admin/wanted/metadata/:titleId/identify", requireWantedWrite(async (req, res) => {
+    const title = await loadLibraryTitle(req.params.titleId);
+    if (!title?.id) {
+      res.status(404).json({error: "Title not found."});
+      return;
+    }
+    const selectedMetadata = normalizeObject(req.body?.selectedMetadata, {}) || {};
+    const provider = normalizeString(selectedMetadata.provider);
+    const providerSeriesId = normalizeString(selectedMetadata.providerSeriesId);
+    if (!provider || !providerSeriesId) {
+      res.status(400).json({error: "selectedMetadata with provider and providerSeriesId is required."});
+      return;
+    }
+
+    const result = await serviceJson(config.ravenBaseUrl, "/v1/metadata/identify", {
+      method: "POST",
+      body: {
+        provider,
+        providerSeriesId,
+        libraryId: title.id
+      }
+    });
+    if (!result.ok) {
+      res.status(result.status || 502).json(result.payload || {error: "Moon could not apply that metadata match."});
+      return;
+    }
+    if (result.payload?.ok === false) {
+      res.status(400).json(result.payload);
+      return;
+    }
+
+    const refreshedTitle = await loadLibraryTitle(title.id);
+    await appendEvent({
+      ...buildUserActor(req.user, "admin"),
+      domain: "wanted",
+      eventType: "metadata-match-applied",
+      severity: "info",
+      targetType: "title",
+      targetId: title.id,
+      message: `${req.user.username} applied a metadata match to ${title.title}.`,
+      metadata: {
+        titleId: title.id,
+        provider,
+        providerSeriesId
+      }
+    });
     res.json({
-      entries: titles
-        .map((title) => ({
-          ...title,
-          gaps: [
-            !title.metadataProvider ? "provider" : null,
-            !title.summary ? "summary" : null,
-            title.aliases.length === 0 ? "aliases" : null
-          ].filter(Boolean)
-        }))
-        .filter((title) => title.gaps.length > 0)
+      result: result.payload,
+      title: refreshedTitle || title
     });
   }));
 
@@ -1980,7 +2065,10 @@ export const registerMoonV3Routes = (app, {
       requestWorkflow,
       branding,
       publicBranding: publicMoonBranding(branding),
-      discord,
+      discord: {
+        ...discord,
+        runtime: await loadPortalDiscordRuntime(discord)
+      },
       toastSettings,
       databaseOverview,
       links: {
@@ -1991,8 +2079,223 @@ export const registerMoonV3Routes = (app, {
     };
   };
 
+  const portalInternalHeaders = () => {
+    const sageToken = config.serviceTokens?.["scriptarr-sage"];
+    return sageToken ? {"Authorization": `Bearer ${sageToken}`} : {};
+  };
+
+  const loadPortalDiscordRuntime = async (settings) => {
+    const [health, commands] = await Promise.all([
+      safeJson(serviceJson(config.portalBaseUrl, "/health", {timeoutMs: 2500})),
+      safeJson(serviceJson(config.portalBaseUrl, "/api/commands", {timeoutMs: 2500}))
+    ]);
+    const healthPayload = health?.payload || health;
+    return {
+      authConfigured: Boolean(config.discordClientId && config.discordClientSecret),
+      botTokenConfigured: Boolean(config.discordToken),
+      configuredGuildId: normalizeString(settings?.guildId),
+      connected: Boolean(healthPayload?.runtime?.connected ?? healthPayload?.connected),
+      connectionState: normalizeString(healthPayload?.runtime?.connectionState, normalizeString(healthPayload?.discord, "degraded")),
+      registeredGuildId: normalizeString(healthPayload?.runtime?.registeredGuildId, normalizeString(settings?.guildId)),
+      error: normalizeString(healthPayload?.runtime?.error),
+      syncError: normalizeString(healthPayload?.runtime?.syncError),
+      warning: normalizeString(healthPayload?.runtime?.warning),
+      capabilities: healthPayload?.runtime?.capabilities || {},
+      commandInventory: normalizeArray(commands?.payload?.commands || commands?.commands).length > 0
+        ? normalizeArray(commands?.payload?.commands || commands?.commands)
+        : knownPortalDiscordCommands,
+      portal: healthPayload
+    };
+  };
+
+  const buildDiscordPayload = async () => {
+    const settings = normalizePortalDiscordSettings(await readPortalDiscordSettings());
+    return {
+      settings,
+      runtime: await loadPortalDiscordRuntime(settings),
+      commandCatalog: knownPortalDiscordCommands
+    };
+  };
+
+  const persistDiscordSettings = async (req, body, message) => {
+    const nextSettings = normalizePortalDiscordSettings(body || {});
+    await vaultClient.setSetting(PORTAL_DISCORD_KEY, nextSettings);
+    const reload = await safeJson(serviceJson(config.portalBaseUrl, "/api/runtime/discord/reload", {
+      method: "POST",
+      headers: portalInternalHeaders(),
+      body: {}
+    }));
+    await appendEventForUser({
+      domain: "discord",
+      eventType: "discord-settings-updated",
+      user: req.user,
+      targetType: "setting",
+      targetId: PORTAL_DISCORD_KEY,
+      message,
+      metadata: {
+        guildId: nextSettings.guildId,
+        onboardingChannelId: nextSettings.onboarding.channelId,
+        releaseChannelId: nextSettings.notifications.releaseChannelId
+      }
+    });
+    const payload = await buildDiscordPayload();
+    return {
+      ...payload,
+      runtime: {
+        ...payload.runtime,
+        reload: reload.payload || reload
+      }
+    };
+  };
+
   app.get("/api/moon-v3/admin/settings", requireSettingsRead(async (req, res) => {
     res.json(await buildSettingsPayload(req.user));
+  }));
+
+  app.get("/api/moon-v3/admin/discord", requireDiscordRead(async (_req, res) => {
+    res.json(await buildDiscordPayload());
+  }));
+
+  app.put("/api/moon-v3/admin/discord", requireDiscordWrite(async (req, res) => {
+    res.json(await persistDiscordSettings(req, req.body, `${req.user.username} updated Discord integration settings.`));
+  }));
+
+  app.post("/api/moon-v3/admin/discord/runtime/reload", requireDiscordWrite(async (req, res) => {
+    const settings = normalizePortalDiscordSettings(await readPortalDiscordSettings());
+    const reload = await safeJson(serviceJson(config.portalBaseUrl, "/api/runtime/discord/reload", {
+      method: "POST",
+      headers: portalInternalHeaders(),
+      body: {}
+    }));
+    const runtime = await loadPortalDiscordRuntime(settings);
+    await appendEventForUser({
+      domain: "discord",
+      eventType: "discord-runtime-reloaded",
+      user: req.user,
+      targetType: "runtime",
+      targetId: "portal-discord",
+      message: `${req.user.username} reloaded the Portal Discord runtime.`,
+      metadata: {
+        connected: runtime.connected,
+        reload: reload.payload || reload
+      }
+    });
+    res.json({
+      settings,
+      runtime: {
+        ...runtime,
+        reload: reload.payload || reload
+      },
+      commandCatalog: knownPortalDiscordCommands
+    });
+  }));
+
+  app.post("/api/moon-v3/admin/discord/onboarding/test", requireDiscordWrite(async (req, res) => {
+    const [discordSettings, branding] = await Promise.all([
+      readPortalDiscordSettings(),
+      readMoonBrandingSettings()
+    ]);
+    const body = normalizeObject(req.body, {}) || {};
+    const previewSettings = normalizePortalDiscordSettings({
+      ...discordSettings,
+      ...body,
+      onboarding: {
+        ...discordSettings.onboarding,
+        ...normalizeObject(body.onboarding, {})
+      },
+      notifications: {
+        ...discordSettings.notifications,
+        ...normalizeObject(body.notifications, {})
+      }
+    });
+    const username = normalizeString(body.username, "Discord Reader");
+    const rendered = renderPortalOnboardingTemplate({
+      template: previewSettings.onboarding.template,
+      username,
+      userMention: body.userMention,
+      siteName: branding.siteName,
+      guildName: normalizeString(body.guildName, "Moon Admin Preview"),
+      guildId: previewSettings.guildId,
+      moonUrl: config.publicBaseUrl
+    });
+    const portal = await safeJson(serviceJson(config.portalBaseUrl, "/api/onboarding/test", {
+      method: "POST",
+      headers: portalInternalHeaders(),
+      body: {
+        username,
+        settings: previewSettings,
+        branding,
+        rendered
+      }
+    }));
+
+    if (!portal.ok) {
+      res.status(portal.status || 503).json({
+        error: portal.payload?.error || "Portal could not send the onboarding test.",
+        rendered,
+        preview: {
+          username,
+          siteName: branding.siteName,
+          guildId: previewSettings.guildId,
+          channelId: previewSettings.onboarding.channelId
+        }
+      });
+      return;
+    }
+
+    res.json({
+      rendered,
+      preview: {
+        username,
+        siteName: branding.siteName,
+        guildId: previewSettings.guildId,
+        channelId: previewSettings.onboarding.channelId
+      },
+      portal: portal.payload || portal
+    });
+  }));
+
+  app.post("/api/moon-v3/admin/discord/release-notifications/test", requireDiscordWrite(async (req, res) => {
+    const [discordSettings, branding] = await Promise.all([
+      readPortalDiscordSettings(),
+      readMoonBrandingSettings()
+    ]);
+    const body = normalizeObject(req.body, {}) || {};
+    const previewSettings = normalizePortalDiscordSettings({
+      ...discordSettings,
+      ...body,
+      notifications: {
+        ...discordSettings.notifications,
+        ...normalizeObject(body.notifications, {})
+      }
+    });
+    const releaseChannelId = normalizeString(previewSettings.notifications.releaseChannelId);
+    if (!releaseChannelId) {
+      res.status(400).json({error: "A release notification channel id is required."});
+      return;
+    }
+    const portal = await safeJson(serviceJson(config.portalBaseUrl, "/api/notifications/release/test", {
+      method: "POST",
+      headers: portalInternalHeaders(),
+      body: {
+        settings: previewSettings,
+        branding,
+        notification: {
+          id: `release-test:${Date.now()}`,
+          channelId: releaseChannelId,
+          titleName: normalizeString(body.titleName, `${branding.siteName || "Scriptarr"} test title`),
+          chapterLabel: normalizeString(body.chapterLabel, "Chapter 1"),
+          titleUrl: `${normalizeString(config.publicBaseUrl).replace(/\/+$/g, "")}/admin/discord`
+        }
+      }
+    }));
+    if (!portal.ok) {
+      res.status(portal.status || 503).json({
+        error: portal.payload?.error || "Portal could not send the release notification test."
+      });
+      return;
+    }
+    res.json(portal.payload || portal);
   }));
 
   app.put("/api/moon-v3/admin/settings/branding", requireSettingsWrite(async (req, res) => {
