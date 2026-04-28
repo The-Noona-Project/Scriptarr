@@ -132,8 +132,10 @@
   per request so staff make one source decision at a time.
 - `/admin/wanted/metadata` is the canonical metadata repair surface. Keep `/admin/wanted/metadata-gaps` as a redirect
   only, search provider matches through Sage with the library id, and apply selected matches through Raven identify.
-- `/admin/wanted/missing-chapters` is the coverage repair surface. Keep repair candidates and staged replacement
-  queueing brokered through the existing library repair routes instead of adding browser-direct Raven calls.
+- `/admin/wanted/missing-content` is the coverage and quality repair surface. Keep `/admin/wanted/missing-chapters`
+  as a redirect only, show missing chapters, possible missing pages, damaged chapters, and bad-source summaries, and
+  keep repair candidates plus staged replacement queueing brokered through the existing library repair routes instead
+  of adding browser-direct Raven calls.
 - `/admin/users` now owns the group-based access model. Keep the protected owner visible but read-only, keep one
   required default onboarding group, and treat group assignment as the way to make moderators or other admins instead
   of reviving flat role toggles. Use the domains payload as the source of truth for the grant matrix.
@@ -144,8 +146,9 @@
   that section.
 - Preserve the interaction lock around queue controls so SSE refreshes do not collapse the priority select or destroy
   in-progress edits. Apply one trailing refresh after the control blurs or the action completes.
-- Queue controls belong on the cards. `activity.write` can retry, remove failed or stale queued work, reprioritize,
-  and reorder queued work, while `activity.root` is required to cancel running tasks.
+- Queue controls belong on the cards. `activity.write` can retry, remove failed or stale queued work, cancel all
+  queued work, remove all removable recovery items, reprioritize, and reorder queued work, while `activity.root` is
+  required to cancel running tasks or bulk-cancel all running work.
 - Queued cards should not show ETAs. Running cards can show download speed and active ETA only when Sage or Raven
   supplies credible values. Do not invent fake transfer rates or fake timing in the browser.
 - Moon's shared admin event feeds now come from `/api/moon-v3/admin/events` and `/api/moon-v3/admin/events/stream`.

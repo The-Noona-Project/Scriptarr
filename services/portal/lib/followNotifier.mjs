@@ -71,7 +71,7 @@ const resolveNotificationLink = (notification, kind, publicBaseUrl) => {
 };
 
 const buildDirectMessagePayload = (notification, kind, publicBaseUrl, requestCommand) => {
-  if (kind === "system") {
+  if (kind === "system" || kind === "downloadall") {
     const titleName = normalizeString(notification?.titleName, "Scriptarr system task");
     const message = normalizeString(notification?.message, `${titleName} changed state.`);
     const linkUrl = resolveNotificationLink(notification, kind, publicBaseUrl);
@@ -312,6 +312,14 @@ export const createFollowNotifier = ({
         list: () => sage?.listSystemNotifications?.(),
         acknowledge: (id) => sage?.acknowledgeSystemNotification?.(id),
         kind: "system",
+        discord,
+        logger,
+        publicBaseUrl
+      });
+      await deliverNotifications({
+        list: () => sage?.listDownloadAllNotifications?.(),
+        acknowledge: (id) => sage?.acknowledgeDownloadAllNotification?.(id),
+        kind: "downloadall",
         discord,
         logger,
         publicBaseUrl

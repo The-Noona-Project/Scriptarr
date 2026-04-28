@@ -16,6 +16,10 @@ import java.util.List;
  * @param skippedAdultContentCount number of titles skipped because adult content could not be safely excluded
  * @param skippedNoMetadataCount number of titles skipped because no confident metadata match was found
  * @param skippedAmbiguousMetadataCount number of titles skipped because metadata resolution was ambiguous
+ * @param skippedCompletedCount number of completed catalog titles skipped
+ * @param skippedCurrentCount number of existing catalog titles skipped because no new chapters were found
+ * @param appendedCount number of existing catalog titles queued for append-only chapter downloads
+ * @param invalidSourceCount number of malformed upstream title URLs skipped
  * @param failedCount number of titles that failed to queue
  * @param queuedTaskIds queued Raven task ids
  * @param queuedTitles queued title names
@@ -23,6 +27,10 @@ import java.util.List;
  * @param skippedAdultContentTitles skipped adult or unverified adult title names
  * @param skippedNoMetadataTitles skipped title names without confident metadata
  * @param skippedAmbiguousMetadataTitles skipped title names with ambiguous metadata
+ * @param skippedCompletedTitles completed catalog title names skipped
+ * @param skippedCurrentTitles existing catalog title names skipped with no new chapters
+ * @param appendedTitles existing catalog title names queued for append-only chapter downloads
+ * @param invalidSourceTitles title names skipped for malformed source URLs
  * @param failedTitles failed title names
  */
 public record BulkQueueDownloadResult(
@@ -36,6 +44,10 @@ public record BulkQueueDownloadResult(
     int skippedAdultContentCount,
     int skippedNoMetadataCount,
     int skippedAmbiguousMetadataCount,
+    int skippedCompletedCount,
+    int skippedCurrentCount,
+    int appendedCount,
+    int invalidSourceCount,
     int failedCount,
     List<String> queuedTaskIds,
     List<String> queuedTitles,
@@ -43,6 +55,10 @@ public record BulkQueueDownloadResult(
     List<String> skippedAdultContentTitles,
     List<String> skippedNoMetadataTitles,
     List<String> skippedAmbiguousMetadataTitles,
+    List<String> skippedCompletedTitles,
+    List<String> skippedCurrentTitles,
+    List<String> appendedTitles,
+    List<String> invalidSourceTitles,
     List<String> failedTitles
 ) {
     public static final String STATUS_INVALID_REQUEST = "invalid_request";
@@ -73,6 +89,59 @@ public record BulkQueueDownloadResult(
      * @param skippedAmbiguousMetadataTitles skipped title names with ambiguous metadata
      * @param failedTitles failed title names
      */
+    public BulkQueueDownloadResult(
+        String status,
+        String message,
+        Filters filters,
+        int pagesScanned,
+        int matchedCount,
+        int queuedCount,
+        int skippedActiveCount,
+        int skippedAdultContentCount,
+        int skippedNoMetadataCount,
+        int skippedAmbiguousMetadataCount,
+        int failedCount,
+        List<String> queuedTaskIds,
+        List<String> queuedTitles,
+        List<String> skippedActiveTitles,
+        List<String> skippedAdultContentTitles,
+        List<String> skippedNoMetadataTitles,
+        List<String> skippedAmbiguousMetadataTitles,
+        List<String> failedTitles
+    ) {
+        this(
+            status,
+            message,
+            filters,
+            pagesScanned,
+            matchedCount,
+            queuedCount,
+            skippedActiveCount,
+            skippedAdultContentCount,
+            skippedNoMetadataCount,
+            skippedAmbiguousMetadataCount,
+            0,
+            0,
+            0,
+            0,
+            failedCount,
+            queuedTaskIds,
+            queuedTitles,
+            skippedActiveTitles,
+            skippedAdultContentTitles,
+            skippedNoMetadataTitles,
+            skippedAmbiguousMetadataTitles,
+            List.of(),
+            List.of(),
+            List.of(),
+            List.of(),
+            failedTitles
+        );
+    }
+
+    /**
+     * Normalize numeric counters and list payloads before serialization.
+     */
     public BulkQueueDownloadResult {
         status = status == null || status.isBlank() ? STATUS_INVALID_REQUEST : status;
         message = message == null ? "" : message;
@@ -84,6 +153,10 @@ public record BulkQueueDownloadResult(
         skippedAdultContentCount = Math.max(0, skippedAdultContentCount);
         skippedNoMetadataCount = Math.max(0, skippedNoMetadataCount);
         skippedAmbiguousMetadataCount = Math.max(0, skippedAmbiguousMetadataCount);
+        skippedCompletedCount = Math.max(0, skippedCompletedCount);
+        skippedCurrentCount = Math.max(0, skippedCurrentCount);
+        appendedCount = Math.max(0, appendedCount);
+        invalidSourceCount = Math.max(0, invalidSourceCount);
         failedCount = Math.max(0, failedCount);
         queuedTaskIds = queuedTaskIds == null ? List.of() : List.copyOf(queuedTaskIds);
         queuedTitles = queuedTitles == null ? List.of() : List.copyOf(queuedTitles);
@@ -91,6 +164,10 @@ public record BulkQueueDownloadResult(
         skippedAdultContentTitles = skippedAdultContentTitles == null ? List.of() : List.copyOf(skippedAdultContentTitles);
         skippedNoMetadataTitles = skippedNoMetadataTitles == null ? List.of() : List.copyOf(skippedNoMetadataTitles);
         skippedAmbiguousMetadataTitles = skippedAmbiguousMetadataTitles == null ? List.of() : List.copyOf(skippedAmbiguousMetadataTitles);
+        skippedCompletedTitles = skippedCompletedTitles == null ? List.of() : List.copyOf(skippedCompletedTitles);
+        skippedCurrentTitles = skippedCurrentTitles == null ? List.of() : List.copyOf(skippedCurrentTitles);
+        appendedTitles = appendedTitles == null ? List.of() : List.copyOf(appendedTitles);
+        invalidSourceTitles = invalidSourceTitles == null ? List.of() : List.copyOf(invalidSourceTitles);
         failedTitles = failedTitles == null ? List.of() : List.copyOf(failedTitles);
     }
 

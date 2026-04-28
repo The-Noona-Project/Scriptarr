@@ -40,10 +40,6 @@ const normalizeTitleGroup = (value) => {
   return /^[a-z]$/.test(normalized) ? normalized : "";
 };
 
-const isMegaDownloadAllFilters = (filters = {}) =>
-  normalizeString(filters.type).toLowerCase() === "all"
-  || normalizeString(filters.titlePrefix).toLowerCase() === "all";
-
 const parseDownloadAllTokens = (raw) => {
   const parsed = new Map();
   const invalidSegments = [];
@@ -144,17 +140,24 @@ export const formatBulkQueueSummary = (result = {}) => {
     `Pages scanned: ${Number.parseInt(String(result?.pagesScanned || 0), 10) || 0}`,
     `Matched: ${Number.parseInt(String(result?.matchedCount || 0), 10) || 0}`,
     `Queued: ${Number.parseInt(String(result?.queuedCount || 0), 10) || 0}`,
+    `Append updates: ${Number.parseInt(String(result?.appendedCount || 0), 10) || 0}`,
     `Skipped active: ${Number.parseInt(String(result?.skippedActiveCount || 0), 10) || 0}`,
+    `Skipped completed: ${Number.parseInt(String(result?.skippedCompletedCount || 0), 10) || 0}`,
+    `Skipped already current: ${Number.parseInt(String(result?.skippedCurrentCount || 0), 10) || 0}`,
     `Skipped adult content: ${Number.parseInt(String(result?.skippedAdultContentCount || 0), 10) || 0}`,
     `Skipped no metadata: ${Number.parseInt(String(result?.skippedNoMetadataCount || 0), 10) || 0}`,
     `Skipped ambiguous metadata: ${Number.parseInt(String(result?.skippedAmbiguousMetadataCount || 0), 10) || 0}`,
+    `Invalid source rows: ${Number.parseInt(String(result?.invalidSourceCount || 0), 10) || 0}`,
     `Failed: ${Number.parseInt(String(result?.failedCount || 0), 10) || 0}`
   ];
 
   return [
     lines.join("\n"),
     formatTitleSection("Queued titles (first 10)", result?.queuedTitles),
+    formatTitleSection("Append updates (first 10)", result?.appendedTitles),
     formatTitleSection("Skipped active titles (first 10)", result?.skippedActiveTitles),
+    formatTitleSection("Skipped completed titles (first 10)", result?.skippedCompletedTitles),
+    formatTitleSection("Skipped already-current titles (first 10)", result?.skippedCurrentTitles),
     formatTitleSection("Skipped adult content titles (first 10)", result?.skippedAdultContentTitles),
     formatTitleSection("Skipped no metadata titles (first 10)", result?.skippedNoMetadataTitles),
     formatTitleSection("Skipped ambiguous metadata titles (first 10)", result?.skippedAmbiguousMetadataTitles),
@@ -168,16 +171,18 @@ export const formatBulkRunSummary = (result = {}) => {
   const runId = normalizeString(result?.runId || result?.id);
   const currentBatch = result?.currentBatch && typeof result.currentBatch === "object" ? result.currentBatch : null;
   const lines = [
-    "Scriptarr downloadall mega run updated.",
+    "Scriptarr downloadall run updated.",
     `Run ID: ${runId || "unknown"}`,
     `Status: ${normalizeString(result?.status) || "unknown"}`,
     `Message: ${normalizeString(result?.message) || "No summary returned."}`,
     `Filters: provider=weebcentral, type=${normalizeString(filters.type) || "unknown"}, nsfw=${String(filters.nsfw)}, titlegroup=${normalizeString(filters.titlePrefix || filters.titlegroup) || "unknown"}`,
     `Batches completed: ${Number.parseInt(String(counts.completedBatches ?? result?.completedBatches ?? 0), 10) || 0}`,
     `Batches remaining: ${Number.parseInt(String(counts.remainingBatches ?? result?.remainingBatches ?? 0), 10) || 0}`,
-    `Queued: ${Number.parseInt(String(counts.queued ?? result?.queuedCount ?? 0), 10) || 0}`,
-    `Skipped: ${Number.parseInt(String(counts.skipped ?? result?.skippedCount ?? 0), 10) || 0}`,
-    `Failed: ${Number.parseInt(String(counts.failed ?? result?.failedCount ?? 0), 10) || 0}`
+    `Queued: ${Number.parseInt(String(counts.queuedCount ?? result?.queuedCount ?? 0), 10) || 0}`,
+    `Append updates: ${Number.parseInt(String(counts.appendedCount ?? result?.appendedCount ?? 0), 10) || 0}`,
+    `Skipped completed: ${Number.parseInt(String(counts.skippedCompletedCount ?? result?.skippedCompletedCount ?? 0), 10) || 0}`,
+    `Skipped current: ${Number.parseInt(String(counts.skippedCurrentCount ?? result?.skippedCurrentCount ?? 0), 10) || 0}`,
+    `Failed title tasks: ${Number.parseInt(String(counts.failedTitleTaskCount ?? result?.failedTitleTaskCount ?? 0), 10) || 0}`
   ];
   if (currentBatch) {
     lines.push(
@@ -283,9 +288,7 @@ export const executeDownloadAll = async ({
       ...filters,
       requestedBy: normalizeString(requestedBy)
     };
-    const result = isMegaDownloadAllFilters(filters)
-      ? await sage.createBulkRun(payload)
-      : await sage.bulkQueueDownload(payload);
+    const result = await sage.createBulkRun(payload);
     const failure = resolveBulkQueueFailure(result);
     if (failure) {
       throw new Error(failure);

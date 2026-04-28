@@ -25,15 +25,20 @@
   unavailable DMs aligned with the same request-notification state machine.
 - When Sage later finds a source for an unavailable request, Portal should DM that the request moved back into admin
   review or auto-approved; do not reintroduce requester-side source picking in Discord.
-- DM `/downloadall` now uses a global slash command as the supported path: `/downloadall run ...` and
-  `/downloadall help`. Keep the raw text parser as a legacy best-effort fallback only; it still depends on Discord
-  delivering DM `messageCreate` events.
+- DM `/downloadall` now uses a global slash command as the supported path: `/downloadall run ...`,
+  `/downloadall status ...`, `/downloadall continue ...`, `/downloadall cancel ...`, and `/downloadall help`. Keep
+  the raw text parser as a legacy best-effort fallback only; it still depends on Discord delivering DM `messageCreate`
+  events.
 - That DM bulk path stays owner-only and WeebCentral-only. Even when MangaDex is enabled for normal intake or direct
   requests, Portal should always send `providerId=weebcentral` for `downloadall`, reject non-owner callers before
   touching Sage, and surface a clear error when WeebCentral is disabled.
-- `downloadall` is still provider-browse first, but it must now go through Raven's metadata-safe bulk resolver before
-  queueing anything. Queue only titles with one confident metadata match and surface already-active, adult-content,
-  no-metadata, ambiguous-metadata, and failed outcomes in the DM summary. When the requester uses `nsfw:false`, Raven
-  must require an explicit WeebCentral `Adult Content: No` before queueing.
+- `downloadall` is still provider-browse first, but it must now go through Raven's metadata-safe durable run flow
+  before queueing anything. Queue only titles with one confident metadata match and surface already-active, completed,
+  already-current, appended, adult-content, no-metadata, ambiguous-metadata, invalid-source, and failed outcomes in the
+  DM summary. When the requester uses `nsfw:false`, Raven must require an explicit WeebCentral `Adult Content: No`
+  before queueing.
+- Portal should poll Sage's downloadall notification queue, DM the requester for paused/completed/failed/cancelled
+  run batches with stable `downloadall:<runId>:<batchId>:<status>` ids, and acknowledge only after Discord accepts
+  the DM.
 - Portal runtime state should keep enough DM diagnostics to explain silent failures quickly: requested intents,
   requested partials, last DM receive timestamp, last handled `downloadall`, and last `downloadall` error.

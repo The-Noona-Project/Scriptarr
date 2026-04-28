@@ -22,7 +22,7 @@ const endpointForRoute = (route) => {
     calendar: "/api/moon/v3/admin/calendar",
     "activity-history": "/api/moon/v3/admin/activity/history",
     "activity-blocklist": "/api/moon/v3/admin/activity/blocklist",
-    "wanted-missing": "/api/moon/v3/admin/wanted/missing-chapters",
+    "wanted-missing": "/api/moon/v3/admin/wanted/missing-content",
     "wanted-metadata": "/api/moon/v3/admin/wanted/metadata",
     requests: "/api/moon/v3/admin/requests",
     users: "/api/moon/v3/admin/users",

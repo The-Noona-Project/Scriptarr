@@ -18,5 +18,7 @@ Portal handles Discord onboarding, requests, notifications, subscriptions, and t
   scattering guild, role, or onboarding logic across unrelated env vars.
 - Requester completion DMs should stay deduped by request id and acknowledgment state so restarts or retries do not
   spam Discord users.
+- `downloadall` should always use Sage's durable run path, including legacy raw DM text, and Portal should DM paused,
+  completed, failed, or cancelled run summaries only once after Sage exposes a stable notification id.
 - Reuse the shared `coverUrl` and Moon public base URL in Portal embeds and DMs when they are available instead of
   inventing a second artwork or link source.

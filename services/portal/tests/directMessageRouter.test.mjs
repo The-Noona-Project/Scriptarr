@@ -140,7 +140,7 @@ test("direct message handler starts async mega runs for all filters", async () =
     }
   });
 
-  assert.match(replies[0].content, /async mega downloadall run/i);
+  assert.match(replies[0].content, /async downloadall run/i);
   assert.match(replies[1].content, /Run ID: bulk-run-1/);
   assert.match(replies[1].content, /continue runid:bulk-run-1/);
   assert.deepEqual(forwardedPayloads[0], {
@@ -153,28 +153,30 @@ test("direct message handler starts async mega runs for all filters", async () =
 });
 
 
-test("direct message handler gates by superuser and forwards legacy downloadall filters to Sage", async () => {
+test("direct message handler gates by superuser and forwards legacy downloadall filters to durable Sage runs", async () => {
   const replies = [];
   const forwardedPayloads = [];
   const handler = createDirectMessageHandler({
     getSettings: () => ({superuserId: "253987219969146890"}),
     sage: {
-      bulkQueueDownload: async (payload) => {
+      createBulkRun: async (payload) => {
         forwardedPayloads.push(payload);
         return {
-        ok: true,
-        payload: {
-          status: "queued",
-          message: "Bulk queue submitted.",
-          filters: payload,
-          queuedCount: 1,
-          matchedCount: 1,
-          pagesScanned: 1,
-          skippedActiveCount: 0,
-          failedCount: 0,
-          queuedTitles: ["Dandadan"]
-        }
-      };
+          ok: true,
+          payload: {
+            runId: "bulk-run-2",
+            status: "paused",
+            message: "First batch queued.",
+            filters: payload,
+            counts: {
+              completedBatches: 1,
+              remainingBatches: 0,
+              queued: 1,
+              skipped: 0,
+              failed: 0
+            }
+          }
+        };
       }
     }
   });
@@ -200,8 +202,8 @@ test("direct message handler gates by superuser and forwards legacy downloadall 
     }
   };
   assert.equal(await handler(allowedMessage), true);
-  assert.match(replies[0].content, /Queueing Scriptarr bulk download/);
-  assert.match(replies[1].content, /Bulk queue submitted/);
+  assert.match(replies[0].content, /Starting Scriptarr async downloadall run/);
+  assert.match(replies[1].content, /Run ID: bulk-run-2/);
   assert.deepEqual(forwardedPayloads[0], {
     providerId: "weebcentral",
     type: "Manga",
@@ -221,7 +223,7 @@ test("direct message handler respects the enabled toggle and surfaces Sage failu
       }
     }),
     sage: {
-      bulkQueueDownload: async () => {
+      createBulkRun: async () => {
         throw new Error("should not run");
       }
     }
@@ -242,11 +244,11 @@ test("direct message handler respects the enabled toggle and surfaces Sage failu
   const failingHandler = createDirectMessageHandler({
     getSettings: () => ({superuserId: "253987219969146890"}),
     sage: {
-      bulkQueueDownload: async () => ({
+      createBulkRun: async () => ({
         ok: false,
         status: 503,
         payload: {
-          error: "Raven bulk queue is unavailable."
+          error: "Raven downloadall run is unavailable."
         }
       })
     }
@@ -261,12 +263,12 @@ test("direct message handler respects the enabled toggle and surfaces Sage failu
     }
   });
 
-  assert.match(replies[0].content, /Queueing Scriptarr bulk download/i);
-  assert.match(replies[1].content, /bulk queue failed/i);
-  assert.match(replies[1].content, /Raven bulk queue is unavailable/i);
+  assert.match(replies[0].content, /Starting Scriptarr async downloadall run/i);
+  assert.match(replies[1].content, /downloadall run failed/i);
+  assert.match(replies[1].content, /Raven downloadall run is unavailable/i);
 });
 
-test("direct message handler splits large bulk summaries into multiple replies", async () => {
+test("direct message handler splits large durable run summaries into multiple replies", async () => {
   const replies = [];
   const oversizedTitles = Array.from(
     {length: 80},
@@ -275,22 +277,20 @@ test("direct message handler splits large bulk summaries into multiple replies",
   const handler = createDirectMessageHandler({
     getSettings: () => ({superuserId: "253987219969146890"}),
     sage: {
-      bulkQueueDownload: async () => ({
+      createBulkRun: async (payload) => ({
         ok: true,
         payload: {
-          status: "partial",
-          message: "Bulk queue submitted.",
-          filters: {type: "Manhwa", nsfw: false, titlePrefix: "a"},
-          pagesScanned: 4,
-          matchedCount: oversizedTitles.length,
-          queuedCount: oversizedTitles.length,
-          skippedActiveCount: oversizedTitles.length,
-          skippedAdultContentCount: 0,
-          skippedNoMetadataCount: 0,
-          skippedAmbiguousMetadataCount: 0,
-          failedCount: 0,
-          queuedTitles: oversizedTitles,
-          skippedActiveTitles: oversizedTitles
+          runId: "bulk-run-long",
+          status: "paused",
+          message: oversizedTitles.join(" "),
+          filters: payload,
+          counts: {
+            completedBatches: 1,
+            remainingBatches: 0,
+            queued: oversizedTitles.length,
+            skipped: 0,
+            failed: 0
+          }
         }
       })
     }
@@ -306,7 +306,7 @@ test("direct message handler splits large bulk summaries into multiple replies",
   });
 
   assert.ok(replies.length >= 3);
-  assert.match(replies[0].content, /Queueing Scriptarr bulk download/i);
+  assert.match(replies[0].content, /Starting Scriptarr async downloadall run/i);
   assert.ok(replies.slice(1).every((payload) => payload.content.length <= 1800));
-  assert.match(replies.slice(1).map((payload) => payload.content).join("\n"), /Queued titles/i);
+  assert.match(replies.slice(1).map((payload) => payload.content).join("\n"), /Run ID: bulk-run-long/i);
 });

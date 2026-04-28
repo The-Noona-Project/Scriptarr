@@ -15,6 +15,9 @@
   metadata snapshot into the queued download, and report already-active, adult-content, no-metadata,
   ambiguous-metadata, and failed outcomes separately. For `nsfw:false`, queue only concrete WeebCentral targets whose
   detail page explicitly says `Adult Content: No`; skip adult and unknown adult flags.
+- `/downloadall` should skip already-completed catalog titles, append only missing or new chapters for existing
+  non-completed titles, skip already-current titles, and reject invalid/bare provider URLs before queueing. Append
+  downloads must merge new archives into the existing title without replacing clean chapters.
 - Raven is the canonical tag merge point. Metadata-provider tags plus download-provider tags should be normalized and
   merged case-insensitively once inside Raven, preserved with clean display casing, and forwarded through Sage so Moon
   home, browse, title, and admin review all consume one canonical tag set.
@@ -40,6 +43,9 @@
   Manhwa`, `A Manhua`, `A OEL`, then `B...`), keep each batch on the existing WeebCentral-only `nsfw:false` metadata
   confidence path, store the run-owned Raven title task ids in batch state, and resume by skipping completed batches
   instead of re-queueing them.
+- Every `/downloadall` execution should create a durable run, not only expanded mega runs, so delayed completion,
+  stale-task handling, summary DMs, and continue prompts survive process restarts. Stale run-owned title tasks should
+  count as failed after the timeout/retry budget and must not block the next batch forever.
 - New Raven catalog entries should use opaque durable ids instead of title slugs. Treat title ids as opaque route
   parameters everywhere outside Raven's internals.
 - Download tasks should only reach `100%` after file promotion and brokered catalog persistence both succeed. When a
@@ -47,7 +53,9 @@
 - Raven-originated task, catalog, and request-lifecycle changes that matter to Moon admin should now be forwarded
   through Sage's internal broker routes so Vault can append them into the shared durable event log.
 - Startup recovery should rescan finished `downloaded/<type>/...` content, backfill missing catalog rows, and collapse
-  duplicate restorable tasks so Moon queue views only see one logical download.
+  duplicate restorable tasks so Moon queue views only see one logical download. Keep this recovery after Spring's ready
+  event and keep Sage broker calls explicitly timeout-bound so a large catalog or slow broker write cannot hold Raven
+  below healthy.
 - Raven now runs up to two title downloads globally. Preserve priority ordering across those two active slots and keep
   queued-task move up/down behavior limited to work that has not started yet.
 - Preserve real task telemetry for Moon admin. Active title tasks should carry a true `startedAt` when the attempt
@@ -57,8 +65,12 @@
   unrelated operational or service events should never be reclassified as Raven queue recovery items. Removing a failed
   or stale queued task may delete only its incomplete managed `downloading/<type>` working folder, never promoted
   library content.
-- When upstream image URLs return 404, Raven should refresh the chapter page list before failing the task and should
-  leave true source-image failures with clear chapter/page context for the recovery queue.
+- When upstream image URLs return 404, Raven should refresh the chapter page list first. True page failures should
+  create generated "Possible missing page" placeholders, mark chapters as `possible_missing_page` or
+  `missing_content` by deterministic thresholds, and keep the rest of the title or run moving. If too few chapters are
+  clean, mark the title `bad_source` with a clean/total summary.
+- Title status values persisted to Vault must stay bounded to `active`, `completed`, `hiatus`, `cancelled`,
+  `upcoming`, or `unknown` so oversized upstream status labels cannot break catalog persistence.
 - Raven now also supports staged source replacement for existing library titles. Keep replacement downloads isolated in
   fresh working and downloaded roots, then only swap the live folder and catalog identity after the replacement
   succeeds.

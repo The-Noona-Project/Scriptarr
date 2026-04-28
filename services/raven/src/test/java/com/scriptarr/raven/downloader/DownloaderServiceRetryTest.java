@@ -2,7 +2,9 @@ package com.scriptarr.raven.downloader;
 
 import com.scriptarr.raven.downloader.providers.DownloadProvider;
 import com.scriptarr.raven.downloader.providers.DownloadProviderRegistry;
+import com.scriptarr.raven.library.LibraryChapter;
 import com.scriptarr.raven.library.LibraryService;
+import com.scriptarr.raven.library.LibraryTitle;
 import com.scriptarr.raven.metadata.MetadataService;
 import com.scriptarr.raven.settings.RavenSettingsService;
 import com.scriptarr.raven.support.FakeRavenBrokerClient;
@@ -177,13 +179,13 @@ class DownloaderServiceRetryTest {
     }
 
     /**
-     * Verify admins can remove a failed task without touching promoted library
-     * content.
+     * Verify a chapter with no usable source pages is cataloged as missing
+     * content instead of failing the whole title task.
      *
      * @throws Exception when the local test server cannot be used
      */
     @Test
-    void removeTaskDeletesFailedWorkingFolderAndPersistedTask() throws Exception {
+    void queueDownloadMarksUnusableChapterMissingContent() throws Exception {
         server = HttpServer.create(new InetSocketAddress(0), 0);
         server.createContext("/images/missing.jpg", (exchange) -> respond(exchange, 404, "missing"));
         server.start();
@@ -204,18 +206,20 @@ class DownloaderServiceRetryTest {
             "normal"
         ));
 
-        Map<String, Object> failedTask = awaitTerminalTask(service);
-        Path workingRoot = Path.of(String.valueOf(failedTask.get("workingRoot")));
+        Map<String, Object> task = awaitTerminalTask(service);
 
-        assertEquals("failed", failedTask.get("status"));
-        assertTrue(Files.exists(workingRoot));
-
-        Map<String, Object> result = service.removeTask(String.valueOf(failedTask.get("taskId")));
-
-        assertEquals(true, result.get("removed"));
-        assertEquals(0, service.snapshot().size());
-        assertEquals(0, context.brokerClient().listDownloadTasks().size());
-        assertFalse(Files.exists(workingRoot));
+        assertEquals("completed", task.get("status"));
+        assertEquals(1, context.libraryService().listTitles().size());
+        LibraryTitle title = context.libraryService().listTitles().getFirst();
+        assertEquals("bad_source", title.qualityStatus());
+        assertEquals(1, title.missingContentCount());
+        assertEquals("0/1 clean downloads", title.qualitySummary());
+        LibraryChapter chapter = title.chapters().getFirst();
+        assertEquals("missing_content", chapter.qualityStatus());
+        assertEquals(1, chapter.expectedPageCount());
+        assertEquals(1, chapter.missingPageCount());
+        assertEquals(List.of(1), chapter.missingPages());
+        assertFalse(chapter.available());
     }
 
     /**

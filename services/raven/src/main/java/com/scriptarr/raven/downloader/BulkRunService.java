@@ -39,6 +39,7 @@ public class BulkRunService {
     private static final String STATUS_CANCELLED = "cancelled";
     private static final int MAX_TITLE_ATTEMPTS = 3;
     private static final Duration POLL_DELAY = Duration.ofSeconds(2);
+    private static final Duration TITLE_PROGRESS_TIMEOUT = Duration.ofMinutes(45);
     private static final List<String> BULK_TYPES = List.of("Manga", "Manhwa", "Manhua", "OEL");
     private static final List<String> TITLE_GROUPS = List.of(
         "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M",
@@ -381,6 +382,12 @@ public class BulkRunService {
                     changed = true;
                     continue;
                 }
+                if (STATUS_RUNNING.equals(status) && isTitleTaskStale(task)) {
+                    downloaderService.cancelTask(taskId);
+                    task = titleTasksById().get(taskId);
+                    status = stringValue(task == null ? "" : task.get("status")).toLowerCase(Locale.ROOT);
+                    changed = true;
+                }
                 if (STATUS_COMPLETED.equals(status)) {
                     changed = completedTaskIds.add(taskId) || changed;
                     continue;
@@ -524,6 +531,10 @@ public class BulkRunService {
         payload.put("skippedAdultContentCount", result.skippedAdultContentCount());
         payload.put("skippedNoMetadataCount", result.skippedNoMetadataCount());
         payload.put("skippedAmbiguousMetadataCount", result.skippedAmbiguousMetadataCount());
+        payload.put("skippedCompletedCount", result.skippedCompletedCount());
+        payload.put("skippedCurrentCount", result.skippedCurrentCount());
+        payload.put("appendedCount", result.appendedCount());
+        payload.put("invalidSourceCount", result.invalidSourceCount());
         payload.put("failedCount", result.failedCount());
         payload.put("taskIds", result.queuedTaskIds());
         payload.put("queuedTaskIds", result.queuedTaskIds());
@@ -532,6 +543,10 @@ public class BulkRunService {
         payload.put("skippedAdultContentTitles", result.skippedAdultContentTitles());
         payload.put("skippedNoMetadataTitles", result.skippedNoMetadataTitles());
         payload.put("skippedAmbiguousMetadataTitles", result.skippedAmbiguousMetadataTitles());
+        payload.put("skippedCompletedTitles", result.skippedCompletedTitles());
+        payload.put("skippedCurrentTitles", result.skippedCurrentTitles());
+        payload.put("appendedTitles", result.appendedTitles());
+        payload.put("invalidSourceTitles", result.invalidSourceTitles());
         payload.put("failedTitles", result.failedTitles());
         payload.put("completedTaskIds", List.of());
         payload.put("failedTaskIds", List.of());
@@ -547,6 +562,10 @@ public class BulkRunService {
         result.put("filters", Map.of("type", type, "nsfw", false, "titlePrefix", titleGroup));
         result.put("taskIds", List.of());
         result.put("queuedTaskIds", List.of());
+        result.put("skippedCompletedTitles", List.of());
+        result.put("skippedCurrentTitles", List.of());
+        result.put("appendedTitles", List.of());
+        result.put("invalidSourceTitles", List.of());
         result.put("completedTaskIds", List.of());
         result.put("failedTaskIds", List.of());
         result.put("removedTaskIds", List.of());
@@ -572,6 +591,10 @@ public class BulkRunService {
         summary.put("skippedAdultContentCount", 0);
         summary.put("skippedNoMetadataCount", 0);
         summary.put("skippedAmbiguousMetadataCount", 0);
+        summary.put("skippedCompletedCount", 0);
+        summary.put("skippedCurrentCount", 0);
+        summary.put("appendedCount", 0);
+        summary.put("invalidSourceCount", 0);
         summary.put("failedCount", 0);
         summary.put("completedTitleTaskCount", 0);
         summary.put("failedTitleTaskCount", 0);
@@ -594,6 +617,10 @@ public class BulkRunService {
             increment(summary, "skippedAdultContentCount", toInt(result.get("skippedAdultContentCount"), 0));
             increment(summary, "skippedNoMetadataCount", toInt(result.get("skippedNoMetadataCount"), 0));
             increment(summary, "skippedAmbiguousMetadataCount", toInt(result.get("skippedAmbiguousMetadataCount"), 0));
+            increment(summary, "skippedCompletedCount", toInt(result.get("skippedCompletedCount"), 0));
+            increment(summary, "skippedCurrentCount", toInt(result.get("skippedCurrentCount"), 0));
+            increment(summary, "appendedCount", toInt(result.get("appendedCount"), 0));
+            increment(summary, "invalidSourceCount", toInt(result.get("invalidSourceCount"), 0));
             increment(summary, "failedCount", toInt(result.get("failedCount"), 0));
             increment(summary, "completedTitleTaskCount", stringList(result.get("completedTaskIds")).size());
             increment(summary, "failedTitleTaskCount", stringList(result.get("failedTaskIds")).size());
@@ -684,6 +711,18 @@ public class BulkRunService {
             byId.put(stringValue(task.get("taskId")), task);
         }
         return byId;
+    }
+
+    private boolean isTitleTaskStale(Map<String, Object> task) {
+        String updatedAt = firstNonBlank(stringValue(task.get("updatedAt")), stringValue(task.get("queuedAt")));
+        if (updatedAt.isBlank()) {
+            return false;
+        }
+        try {
+            return Instant.parse(updatedAt).isBefore(Instant.now().minus(TITLE_PROGRESS_TIMEOUT));
+        } catch (Exception ignored) {
+            return false;
+        }
     }
 
     private Map<String, Object> requireRun(String runId) {

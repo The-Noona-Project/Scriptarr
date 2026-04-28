@@ -23,6 +23,10 @@ Moon serves the forward-facing user app at `/` and the admin app at `/admin` fro
   `selectedMetadata`, and nullable `selectedDownload` instead of regressing to free-text-only request payloads.
 - `/admin/requests` should keep showing the saved metadata or download snapshots, linked Raven job state, and the
   resolve path for `unavailable` requests.
+- `/admin/wanted/missing-content` is the canonical Missing Content page for chapter gaps and Raven quality damage; keep
+  `/admin/wanted/missing-chapters` as a redirect/alias only.
+- `/admin/activity/queue` should keep section-safe bulk controls brokered through Moon -> Sage, including cancel all
+  queued, root-only cancel all running, retry all recovery items, and remove all removable recovery items.
 - Keep the trusted public Moon API behind Moon-owned routes. `/api/public/*` and `/admin/system/api` should stay
   browser-safe, same-origin, and Sage-backed instead of reaching into internal services directly.
 - Public request creation must keep using server-issued selection tokens and preserve the NSFW, already-in-library, and

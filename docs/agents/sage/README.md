@@ -36,6 +36,8 @@
 - `/api/moon-v3/admin/activity/queue` now feeds Moon's live queue board. Keep that payload grouped into `running`,
   `queued`, and `needsAttention` sections, and keep the cancel, retry, remove, priority, and move routes as Moon-safe
   wrappers around Raven task-control operations.
+- Keep section bulk queue actions brokered here too: cancel all queued work for `activity.write`, cancel all running
+  work for `activity.root`, and remove all removable recovery items without touching promoted library content.
 - Keep `needsAttention` limited to retriable or stale Raven title-task recovery work, not generic admin events. The
   queue payload should surface removable flags for failed or stale queued tasks, never put ETA on queued cards, and
   only put speed or ETA on running cards when Raven provides credible data. Keep the brokered `retry-all` action for
@@ -48,11 +50,12 @@
   payloads except through the explicit public logo variant routes.
 - Broker Portal's Discord workflow settings through the shared `portal.discord` setting, and keep Portal-facing broker
   routes for intake search, request creation, library search, follow updates, onboarding tests, release channel tests,
-  and Raven bulk queue.
-- Portal's Raven bulk queue broker route now requires an explicit `providerId`. Keep `downloadall` locked to the
+  and Raven durable downloadall runs.
+- Portal's Raven downloadall broker route requires an explicit `providerId`. Keep `downloadall` locked to the
   WeebCentral provider on the Sage side too so Portal cannot accidentally fall through to MangaDex when that owner-only
   DM command is used. Preserve the `nsfw` flag exactly as Portal sends it so Raven can enforce explicit
-  WeebCentral `Adult Content: No` verification for `nsfw:false`.
+  WeebCentral `Adult Content: No` verification for `nsfw:false`, and pass through Raven's skipped-completed,
+  skipped-current, appended, invalid-source, and quality summary counts.
 - Persist and expose `raven.download.providers` through the same brokered settings path as Raven metadata and VPN
   configuration.
 - Persist and expose brokered `raven.naming` settings, including the fallback naming profile plus the per-type naming
@@ -86,9 +89,11 @@
 - Sage owns admin request summary counts and the request deny mutation. Deny requires `requests.write`, rejects blank
   comments, stores the moderator comment and timeline entry, appends a durable request event, and leaves notification
   delivery to the existing requester-notification flow.
-- Sage owns the Wanted metadata and missing-chapter broker routes. Keep `/api/moon-v3/admin/wanted/metadata` canonical,
-  keep `/metadata-gaps` as a legacy alias, pass library ids into Raven metadata search, apply chosen matches through
-  Raven identify, and keep missing-chapter repair on the existing library repair/replace-source flow.
+- Sage owns the Wanted metadata and Missing Content broker routes. Keep `/api/moon-v3/admin/wanted/metadata`
+  canonical, keep `/metadata-gaps` as a legacy alias, pass library ids into Raven metadata search, apply chosen
+  matches through Raven identify, keep `/api/moon-v3/admin/wanted/missing-content` canonical, and keep
+  `/missing-chapters` as an alias. Missing Content should include chapter gaps plus Raven quality counts and damaged
+  page details while still repairing through the existing library repair/replace-source flow.
 - Sage also owns the browser-safe System-page broker contracts. `/api/moon-v3/admin/system/logs` should enforce
   `system.read` and proxy only Warden's redacted log-tail API; `/api/moon-v3/admin/system/events` should forward
   durable event filters to Vault; `/api/moon-v3/admin/system/updates/check` and `/install` should stay `system.root`.
@@ -108,6 +113,8 @@
   requested them without making Portal poll Warden directly.
 - Sage should expose acked release-channel notification queues for Portal from completed Raven download tasks. Use
   stable `release:<taskId>` ids and only mark them acknowledged after Portal confirms the Discord channel send.
+- Sage should expose acked downloadall notification queues for Portal from Raven durable run jobs. Use stable
+  `downloadall:<runId>:<batchId>:<status>` ids and only mark them acknowledged after Portal confirms the requester DM.
 - Service-originated async changes from Raven, Portal, or Warden should append immutable summary events through Sage's
   internal broker routes after the authoritative mutation succeeds so `/admin/users`, `/admin/requests`, and
   `/admin/system/events` all reflect the same truth.

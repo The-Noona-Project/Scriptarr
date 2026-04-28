@@ -605,13 +605,16 @@ test("downloadall slash command is DM-only and owner-only", async () => {
   });
   await handler(runInteraction);
   assert.equal(runInteraction.__calls.deferReply.length, 1);
-  assert.match(runInteraction.__calls.editReply[0].content, /Bulk queue submitted/i);
-  assert.deepEqual(forwardedPayloads[0], {
-    providerId: "weebcentral",
-    type: "Manga",
-    nsfw: false,
-    titlePrefix: "a",
-    requestedBy: "owner-1"
+  assert.match(runInteraction.__calls.editReply[0].content, /Run ID: bulk-run-1/);
+  assert.deepEqual(bulkRunActions[0], {
+    action: "create",
+    payload: {
+      providerId: "weebcentral",
+      type: "Manga",
+      nsfw: false,
+      titlePrefix: "a",
+      requestedBy: "owner-1"
+    }
   });
 
   const megaInteraction = createInteraction({
@@ -627,7 +630,7 @@ test("downloadall slash command is DM-only and owner-only", async () => {
   });
   await handler(megaInteraction);
   assert.match(megaInteraction.__calls.editReply[0].content, /Run ID: bulk-run-1/);
-  assert.deepEqual(bulkRunActions[0], {
+  assert.deepEqual(bulkRunActions[1], {
     action: "create",
     payload: {
       providerId: "weebcentral",
@@ -649,7 +652,7 @@ test("downloadall slash command is DM-only and owner-only", async () => {
   });
   await handler(statusInteraction);
   assert.match(statusInteraction.__calls.editReply[0].content, /Waiting for owner continuation/);
-  assert.deepEqual(bulkRunActions[1], {
+  assert.deepEqual(bulkRunActions[2], {
     action: "status",
     runId: "bulk-run-1"
   });

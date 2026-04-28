@@ -392,6 +392,32 @@ const sortRavenChapters = (chapters) => [...chapters].sort((left, right) => {
   }
   return String(right.chapterNumber || right.label || "").localeCompare(String(left.chapterNumber || left.label || ""));
 });
+const normalizeRavenQualityStatus = (value, fallback = "clean") => {
+  const normalized = normalizeScalarString(value, fallback).toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  return normalized || fallback;
+};
+const normalizeIntegerArray = (value) => Array.isArray(value)
+  ? value.map((entry) => Number.parseInt(String(entry), 10)).filter((entry) => Number.isFinite(entry) && entry > 0)
+  : [];
+const normalizeStringArray = (value) => Array.isArray(value)
+  ? value.map((entry) => normalizeScalarString(entry)).filter(Boolean)
+  : [];
+const normalizeRavenChapter = (chapter = {}) => ({
+  id: chapter.id,
+  label: chapter.label,
+  chapterNumber: chapter.chapterNumber,
+  pageCount: Number.parseInt(String(chapter.pageCount || 0), 10) || 0,
+  releaseDate: chapter.releaseDate || null,
+  available: chapter.available !== false,
+  archivePath: chapter.archivePath || "",
+  sourceUrl: chapter.sourceUrl || "",
+  qualityStatus: normalizeRavenQualityStatus(chapter.qualityStatus),
+  expectedPageCount: Math.max(0, Number.parseInt(String(chapter.expectedPageCount || chapter.pageCount || 0), 10) || 0),
+  missingPageCount: Math.max(0, Number.parseInt(String(chapter.missingPageCount || 0), 10) || 0),
+  missingPages: normalizeIntegerArray(chapter.missingPages),
+  qualityNotes: normalizeStringArray(chapter.qualityNotes),
+  updatedAt: toIsoTimestamp(chapter.updatedAt || chapter.updated_at)
+});
 const normalizeRavenTitle = (title, chapters = []) => ({
   id: title.id,
   title: title.title,
@@ -415,8 +441,13 @@ const normalizeRavenTitle = (title, chapters = []) => ({
   coverUrl: title.coverUrl || "",
   workingRoot: title.workingRoot || "",
   downloadRoot: title.downloadRoot || "",
+  qualityStatus: normalizeRavenQualityStatus(title.qualityStatus),
+  cleanChapterCount: Math.max(0, Number.parseInt(String(title.cleanChapterCount || 0), 10) || 0),
+  partialChapterCount: Math.max(0, Number.parseInt(String(title.partialChapterCount || 0), 10) || 0),
+  missingContentCount: Math.max(0, Number.parseInt(String(title.missingContentCount || 0), 10) || 0),
+  qualitySummary: title.qualitySummary || "",
   updatedAt: toIsoTimestamp(title.updatedAt || title.updated_at),
-  chapters: sortRavenChapters(chapters)
+  chapters: sortRavenChapters(chapters.map(normalizeRavenChapter))
 });
 
 const sortVaultJobs = (jobs) => [...jobs].sort((left, right) =>
@@ -1209,7 +1240,7 @@ const createMemoryStore = () => {
     },
     async replaceRavenChapters(titleId, chapters) {
       state.ravenChapters.set(titleId, new Map(sortRavenChapters(chapters).map((chapter) => [chapter.id, {
-        ...chapter,
+        ...normalizeRavenChapter(chapter),
         updatedAt: nowIso()
       }])));
       return Array.from(state.ravenChapters.get(titleId).values());
@@ -1466,6 +1497,11 @@ const createMysqlStore = (config) => {
         cover_url TEXT NULL,
         working_root TEXT NULL,
         download_root TEXT NULL,
+        quality_status VARCHAR(64) NOT NULL DEFAULT 'clean',
+        clean_chapter_count INT NOT NULL DEFAULT 0,
+        partial_chapter_count INT NOT NULL DEFAULT 0,
+        missing_content_count INT NOT NULL DEFAULT 0,
+        quality_summary TEXT NULL,
         updated_at DATETIME NOT NULL
       )
     `);
@@ -1480,6 +1516,11 @@ const createMysqlStore = (config) => {
         is_available TINYINT(1) NOT NULL DEFAULT 1,
         archive_path TEXT NULL,
         source_url TEXT NULL,
+        quality_status VARCHAR(64) NOT NULL DEFAULT 'clean',
+        expected_page_count INT NOT NULL DEFAULT 0,
+        missing_page_count INT NOT NULL DEFAULT 0,
+        missing_pages_json JSON NULL,
+        quality_notes_json JSON NULL,
         updated_at DATETIME NOT NULL,
         PRIMARY KEY (title_id, chapter_id)
       )
@@ -1574,6 +1615,16 @@ const createMysqlStore = (config) => {
     await ignoreKnownAlterError("ALTER TABLE raven_titles ADD COLUMN library_type_label VARCHAR(255) NULL");
     await ignoreKnownAlterError("ALTER TABLE raven_titles ADD COLUMN library_type_slug VARCHAR(191) NULL");
     await ignoreKnownAlterError("ALTER TABLE raven_titles ADD COLUMN working_root TEXT NULL");
+    await ignoreKnownAlterError("ALTER TABLE raven_titles ADD COLUMN quality_status VARCHAR(64) NOT NULL DEFAULT 'clean'");
+    await ignoreKnownAlterError("ALTER TABLE raven_titles ADD COLUMN clean_chapter_count INT NOT NULL DEFAULT 0");
+    await ignoreKnownAlterError("ALTER TABLE raven_titles ADD COLUMN partial_chapter_count INT NOT NULL DEFAULT 0");
+    await ignoreKnownAlterError("ALTER TABLE raven_titles ADD COLUMN missing_content_count INT NOT NULL DEFAULT 0");
+    await ignoreKnownAlterError("ALTER TABLE raven_titles ADD COLUMN quality_summary TEXT NULL");
+    await ignoreKnownAlterError("ALTER TABLE raven_chapters ADD COLUMN quality_status VARCHAR(64) NOT NULL DEFAULT 'clean'");
+    await ignoreKnownAlterError("ALTER TABLE raven_chapters ADD COLUMN expected_page_count INT NOT NULL DEFAULT 0");
+    await ignoreKnownAlterError("ALTER TABLE raven_chapters ADD COLUMN missing_page_count INT NOT NULL DEFAULT 0");
+    await ignoreKnownAlterError("ALTER TABLE raven_chapters ADD COLUMN missing_pages_json JSON NULL");
+    await ignoreKnownAlterError("ALTER TABLE raven_chapters ADD COLUMN quality_notes_json JSON NULL");
     await ignoreKnownAlterError("ALTER TABLE raven_download_tasks ADD COLUMN provider_id VARCHAR(128) NULL AFTER title_url");
     await ignoreKnownAlterError("ALTER TABLE raven_download_tasks ADD COLUMN request_id BIGINT NULL AFTER provider_id");
     await ignoreKnownAlterError("ALTER TABLE raven_download_tasks ADD COLUMN details_json JSON NULL AFTER percent_value");
@@ -1794,6 +1845,11 @@ const createMysqlStore = (config) => {
     available: row.is_available === 1,
     archivePath: row.archive_path,
     sourceUrl: row.source_url,
+    qualityStatus: row.quality_status,
+    expectedPageCount: row.expected_page_count,
+    missingPageCount: row.missing_page_count,
+    missingPages: parseJsonColumn(row.missing_pages_json, []),
+    qualityNotes: parseJsonColumn(row.quality_notes_json, []),
     updatedAt: row.updated_at.toISOString()
   });
   const toRavenTitle = (row, chapters = []) => normalizeRavenTitle({
@@ -1819,6 +1875,11 @@ const createMysqlStore = (config) => {
     coverUrl: row.cover_url,
     workingRoot: row.working_root,
     downloadRoot: row.download_root,
+    qualityStatus: row.quality_status,
+    cleanChapterCount: row.clean_chapter_count,
+    partialChapterCount: row.partial_chapter_count,
+    missingContentCount: row.missing_content_count,
+    qualitySummary: row.quality_summary,
     updatedAt: row.updated_at ? row.updated_at.toISOString() : null
   }, chapters);
   const toRequest = (row) => {
@@ -2814,9 +2875,10 @@ const createMysqlStore = (config) => {
         INSERT INTO raven_titles (
           title_id, title, media_type, library_type_label, library_type_slug, status_name, latest_chapter, cover_accent, summary, release_label,
           chapter_count, chapters_downloaded, author_name, tags_json, aliases_json, relations_json,
-          metadata_provider, metadata_matched_at, source_url, cover_url, working_root, download_root, updated_at
+          metadata_provider, metadata_matched_at, source_url, cover_url, working_root, download_root,
+          quality_status, clean_chapter_count, partial_chapter_count, missing_content_count, quality_summary, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
         ON DUPLICATE KEY UPDATE
           title = VALUES(title),
           media_type = VALUES(media_type),
@@ -2839,6 +2901,11 @@ const createMysqlStore = (config) => {
           cover_url = VALUES(cover_url),
           working_root = VALUES(working_root),
           download_root = VALUES(download_root),
+          quality_status = VALUES(quality_status),
+          clean_chapter_count = VALUES(clean_chapter_count),
+          partial_chapter_count = VALUES(partial_chapter_count),
+          missing_content_count = VALUES(missing_content_count),
+          quality_summary = VALUES(quality_summary),
           updated_at = NOW()
       `, [
         title.id,
@@ -2862,7 +2929,12 @@ const createMysqlStore = (config) => {
         title.sourceUrl || null,
         title.coverUrl || null,
         title.workingRoot || null,
-        title.downloadRoot || null
+        title.downloadRoot || null,
+        normalizeRavenQualityStatus(title.qualityStatus),
+        Number.parseInt(String(title.cleanChapterCount || 0), 10) || 0,
+        Number.parseInt(String(title.partialChapterCount || 0), 10) || 0,
+        Number.parseInt(String(title.missingContentCount || 0), 10) || 0,
+        title.qualitySummary || null
       ]);
       return this.getRavenTitle(title.id);
     },
@@ -2870,21 +2942,28 @@ const createMysqlStore = (config) => {
       return withTransaction(async (connection) => {
         await connection.query("DELETE FROM raven_chapters WHERE title_id = ?", [titleId]);
         for (const chapter of sortRavenChapters(Array.isArray(chapters) ? chapters : [])) {
+          const normalizedChapter = normalizeRavenChapter(chapter);
           await connection.query(`
             INSERT INTO raven_chapters (
-              title_id, chapter_id, label_name, chapter_number, page_count, release_date, is_available, archive_path, source_url, updated_at
+              title_id, chapter_id, label_name, chapter_number, page_count, release_date, is_available, archive_path, source_url,
+              quality_status, expected_page_count, missing_page_count, missing_pages_json, quality_notes_json, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
           `, [
             titleId,
-            chapter.id,
-            chapter.label || chapter.id,
-            chapter.chapterNumber || null,
-            Number.parseInt(String(chapter.pageCount || 0), 10) || 0,
-            chapter.releaseDate || null,
-            chapter.available === false ? 0 : 1,
-            chapter.archivePath || null,
-            chapter.sourceUrl || null
+            normalizedChapter.id,
+            normalizedChapter.label || normalizedChapter.id,
+            normalizedChapter.chapterNumber || null,
+            Number.parseInt(String(normalizedChapter.pageCount || 0), 10) || 0,
+            normalizedChapter.releaseDate || null,
+            normalizedChapter.available === false ? 0 : 1,
+            normalizedChapter.archivePath || null,
+            normalizedChapter.sourceUrl || null,
+            normalizeRavenQualityStatus(normalizedChapter.qualityStatus),
+            Number.parseInt(String(normalizedChapter.expectedPageCount || 0), 10) || 0,
+            Number.parseInt(String(normalizedChapter.missingPageCount || 0), 10) || 0,
+            JSON.stringify(normalizedChapter.missingPages),
+            JSON.stringify(normalizedChapter.qualityNotes)
           ]);
         }
         const [rows] = await connection.query("SELECT * FROM raven_chapters WHERE title_id = ?", [titleId]);

@@ -250,6 +250,10 @@ export const registerPageRoutes = (app, {adminNextRuntime = null, config = {}, g
     res.redirect("/admin/wanted/metadata");
   });
 
+  app.get("/admin/wanted/missing-chapters", (_req, res) => {
+    res.redirect("/admin/wanted/missing-content");
+  });
+
   app.get("/icon.svg", (_req, res) => {
     res.setHeader("Cache-Control", "no-store");
     res.sendFile(userIconPath);

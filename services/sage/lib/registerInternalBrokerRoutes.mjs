@@ -108,6 +108,7 @@ const FOLLOW_NOTIFICATION_ACK_PREFIX = "portal.followNotifications";
 const REQUEST_NOTIFICATION_ACK_PREFIX = "portal.requestNotifications";
 const RELEASE_NOTIFICATION_ACK_KEY = "portal.releaseNotifications";
 const SYSTEM_NOTIFICATION_ACK_KEY = "portal.systemNotifications.localaiLifecycle";
+const DOWNLOADALL_NOTIFICATION_ACK_KEY = "portal.downloadAllNotifications";
 const LOCALAI_JOB_KIND = "localai-lifecycle";
 
 const normalizeTitleKey = (value) => normalizeString(value)
@@ -250,6 +251,17 @@ const writeAckedSystemNotifications = async (vaultClient, notificationIds) =>
   vaultClient.setSetting(SYSTEM_NOTIFICATION_ACK_KEY, normalizeArray(notificationIds)
     .map((entry) => normalizeString(entry))
     .filter(Boolean));
+
+const readAckedDownloadAllNotifications = async (vaultClient) =>
+  normalizeArray((await vaultClient.getSetting(DOWNLOADALL_NOTIFICATION_ACK_KEY))?.value)
+    .map((entry) => normalizeString(entry))
+    .filter(Boolean);
+
+const writeAckedDownloadAllNotifications = async (vaultClient, notificationIds) =>
+  vaultClient.setSetting(DOWNLOADALL_NOTIFICATION_ACK_KEY, normalizeArray(notificationIds)
+    .map((entry) => normalizeString(entry))
+    .filter(Boolean)
+    .slice(-500));
 
 const readRequestNotificationState = async (vaultClient, requestId) =>
   normalizeObject((await vaultClient.getSetting(`${REQUEST_NOTIFICATION_ACK_PREFIX}.${requestId}`))?.value, {}) || {};
@@ -401,7 +413,7 @@ const validatePortalBulkQueueProvider = (providerId) => {
     return "providerId is required.";
   }
   if (normalizedProviderId !== "weebcentral") {
-    return "Portal bulk queue is locked to the WeebCentral provider.";
+    return "Portal downloadall is locked to the WeebCentral provider.";
   }
   return "";
 };
@@ -986,6 +998,61 @@ const buildSystemNotifications = async ({config, vaultClient}) => {
     })
     .filter((notification) => notification.id && notification.discordUserId && usersByDiscordId.has(notification.discordUserId) && !acked.has(notification.id))
     .slice(0, 50);
+};
+
+const buildDownloadAllNotifications = async ({config, vaultClient}) => {
+  const [jobs, ackedIds] = await Promise.all([
+    vaultClient.listJobs({
+      ownerService: "scriptarr-raven",
+      kind: "raven-bulk-downloadall"
+    }),
+    readAckedDownloadAllNotifications(vaultClient)
+  ]);
+  const acked = new Set(ackedIds);
+  const publicBase = normalizeString(config.publicBaseUrl).replace(/\/+$/g, "");
+  const notifications = [];
+  for (const job of normalizeArray(jobs)) {
+    const status = normalizeString(job?.status).toLowerCase();
+    if (!["paused", "completed", "failed", "cancelled"].includes(status)) {
+      continue;
+    }
+    const runId = normalizeString(job?.jobId);
+    const discordUserId = normalizeScalarString(job?.requestedBy);
+    if (!runId || !discordUserId) {
+      continue;
+    }
+    const batches = normalizeArray(await vaultClient.listJobTasks(runId));
+    const completedBatches = batches
+      .filter((batch) => normalizeString(batch?.status).toLowerCase() === "completed")
+      .sort((left, right) => Number(right.sortOrder || 0) - Number(left.sortOrder || 0));
+    const currentBatch = completedBatches[0] || batches.find((batch) => !["completed", "failed", "cancelled"].includes(normalizeString(batch?.status).toLowerCase())) || {};
+    const batchId = normalizeString(currentBatch.taskId, status);
+    const id = `downloadall:${runId}:${batchId}:${status}`;
+    if (acked.has(id)) {
+      continue;
+    }
+    const result = normalizeObject(job?.result, {}) || {};
+    const queued = Number.parseInt(String(result.queuedCount || 0), 10) || 0;
+    const appended = Number.parseInt(String(result.appendedCount || 0), 10) || 0;
+    const completedTitles = Number.parseInt(String(result.completedTitleTaskCount || 0), 10) || 0;
+    const failedTitles = Number.parseInt(String(result.failedTitleTaskCount || 0), 10) || 0;
+    const skippedCompleted = Number.parseInt(String(result.skippedCompletedCount || 0), 10) || 0;
+    const skippedCurrent = Number.parseInt(String(result.skippedCurrentCount || 0), 10) || 0;
+    const nextStep = status === "paused" ? `\nNext step: /downloadall continue runid:${runId}` : "";
+    notifications.push({
+      id,
+      type: "downloadall",
+      decisionType: status,
+      discordUserId,
+      titleName: "Scriptarr downloadall",
+      status,
+      jobId: runId,
+      linkUrl: publicBase ? `${publicBase}/admin/activity/queue` : "",
+      message: `Downloadall run ${runId} is ${status}. Completed ${completedTitles} title task(s), queued ${queued}, appended ${appended}, skipped ${skippedCompleted} completed and ${skippedCurrent} current title(s), failed ${failedTitles}.${nextStep}`,
+      completedAt: normalizeString(job?.finishedAt, normalizeString(job?.updatedAt))
+    });
+  }
+  return notifications.slice(0, 50);
 };
 
 /**
@@ -2019,6 +2086,28 @@ export const registerInternalBrokerRoutes = (app, {
       await writeAckedSystemNotifications(vaultClient, [...current, notificationId]);
     }
 
+    res.json({
+      ok: true,
+      notificationId
+    });
+  }));
+
+  app.get("/api/internal/portal/notifications/downloadall", withService(requireService, ["scriptarr-portal"], async (_req, res) => {
+    res.json({
+      notifications: await buildDownloadAllNotifications({config, vaultClient})
+    });
+  }));
+
+  app.post("/api/internal/portal/notifications/downloadall/:notificationId/ack", withService(requireService, ["scriptarr-portal"], async (req, res) => {
+    const notificationId = normalizeString(req.params.notificationId);
+    if (!notificationId.startsWith("downloadall:")) {
+      res.status(400).json({error: "A valid downloadall notification id is required."});
+      return;
+    }
+    const current = await readAckedDownloadAllNotifications(vaultClient);
+    if (!current.includes(notificationId)) {
+      await writeAckedDownloadAllNotifications(vaultClient, [...current, notificationId]);
+    }
     res.json({
       ok: true,
       notificationId

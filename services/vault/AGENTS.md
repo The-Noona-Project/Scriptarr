@@ -14,6 +14,8 @@ MySQL.
 - Keep hot shared reads cache-first with the Vault-owned TTL cache, and keep writes authoritative in MySQL with
   immediate cache refresh or invalidation.
 - Keep generic async jobs and job tasks durable here so other services do not invent sidecar state stores.
+- Preserve Raven title/chapter quality fields and durable downloadall job state; Missing Content and Portal DMs depend
+  on those records surviving cache refreshes and MySQL restarts.
 - Preserve service-to-service auth boundaries.
 - Sage is the supported caller for Vault's HTTP surface. Other first-party services should not bypass Sage.
 - Keep public docs concise and operational.

@@ -86,6 +86,20 @@ export const missingChapterCount = (title = {}) => {
 };
 
 /**
+ * Whether a wanted title has chapter/page quality damage.
+ *
+ * @param {Record<string, unknown>} title
+ * @returns {boolean}
+ */
+export const hasMissingContentDamage = (title = {}) => {
+  const quality = normalizeString(title.qualityStatus).toLowerCase();
+  return ["missing_content", "possible_missing_page", "bad_source"].includes(quality)
+    || Number.parseInt(String(title.missingPageCount || 0), 10) > 0
+    || Number.parseInt(String(title.partialChapterCount || 0), 10) > 0
+    || Number.parseInt(String(title.badChapterCount || 0), 10) > 0;
+};
+
+/**
  * Convert metadata gap ids into human labels.
  *
  * @param {Array<string>} gaps
@@ -138,7 +152,7 @@ export const filterMetadataRows = (titles = [], {query = "", gap = "all"} = {}) 
 export const filterMissingChapterRows = (titles = [], {query = ""} = {}) => {
   const normalizedQuery = normalizeString(query).toLowerCase();
   return normalizeArray(titles)
-    .filter((title) => missingChapterCount(title) > 0)
+    .filter((title) => missingChapterCount(title) > 0 || hasMissingContentDamage(title))
     .filter((title) => !normalizedQuery || wantedTitleSearchText(title).includes(normalizedQuery));
 };
 
@@ -146,6 +160,7 @@ export default {
   chapterCoveragePercent,
   filterMetadataRows,
   filterMissingChapterRows,
+  hasMissingContentDamage,
   metadataGapLabels,
   metadataGapText,
   missingChapterCount,

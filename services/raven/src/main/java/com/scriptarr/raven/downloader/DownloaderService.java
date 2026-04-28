@@ -12,10 +12,19 @@ import com.scriptarr.raven.settings.RavenNamingSettings;
 import com.scriptarr.raven.settings.RavenSettingsService;
 import com.scriptarr.raven.support.ScriptarrLogger;
 import com.scriptarr.raven.vpn.VpnService;
-import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 
+import javax.imageio.ImageIO;
+import java.awt.Color;
+import java.awt.Font;
+import java.awt.FontMetrics;
+import java.awt.Graphics2D;
+import java.awt.RenderingHints;
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URI;
@@ -47,6 +56,7 @@ import java.util.concurrent.PriorityBlockingQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
@@ -70,6 +80,10 @@ public class DownloaderService {
     private static final int CHAPTER_DOWNLOAD_RETRY_ATTEMPTS = 3;
     private static final int IMAGE_DOWNLOAD_RETRY_ATTEMPTS = 3;
     private static final int CHAPTER_DOWNLOAD_PROGRESS_CAP = 90;
+    private static final int MAX_PARTIAL_MISSING_PAGES = 2;
+    private static final double MAX_PARTIAL_MISSING_RATIO = 0.05d;
+    private static final int MISSING_CONTENT_PAGE_THRESHOLD = 3;
+    private static final double MISSING_CONTENT_RATIO = 0.10d;
     private static final Duration IMAGE_DOWNLOAD_TIMEOUT = Duration.ofSeconds(30);
     private static final Duration PAGE_DOWNLOAD_TIMEOUT = Duration.ofMinutes(2);
     private static final int RESTORE_RETRY_ATTEMPTS = 6;
@@ -84,10 +98,17 @@ public class DownloaderService {
     private final Map<String, PrioritizedTask> queuedTasks = new ConcurrentHashMap<>();
     private final Map<String, Thread> runningTaskThreads = new ConcurrentHashMap<>();
     private final Set<String> cancellationRequestedTaskIds = ConcurrentHashMap.newKeySet();
+    private final AtomicBoolean persistedTaskRestoreStarted = new AtomicBoolean(false);
     private final AtomicLong queueSortSequence = new AtomicLong();
     private final AtomicLong queueSequence = new AtomicLong();
     private ThreadPoolExecutor queueWorker = createQueueWorker();
     private java.util.concurrent.ExecutorService pageDownloadWorker = createPageDownloadWorker();
+    private final java.util.concurrent.ExecutorService persistedTaskRestoreWorker =
+        Executors.newSingleThreadExecutor((runnable) -> {
+            Thread thread = new Thread(runnable, "raven-task-restore");
+            thread.setDaemon(true);
+            return thread;
+        });
     private final HttpClient httpClient = HttpClient.newBuilder()
         .connectTimeout(Duration.ofSeconds(10))
         .followRedirects(HttpClient.Redirect.NORMAL)
@@ -135,10 +156,21 @@ public class DownloaderService {
     }
 
     /**
+     * Start queued Raven task recovery after the web server is ready so stale
+     * or large recovery scans cannot block container health checks.
+     */
+    @EventListener(ApplicationReadyEvent.class)
+    public void restorePersistedTasksAfterStartup() {
+        if (!persistedTaskRestoreStarted.compareAndSet(false, true)) {
+            return;
+        }
+        persistedTaskRestoreWorker.submit(this::restorePersistedTasks);
+    }
+
+    /**
      * Restore queued Raven download tasks so the serialized worker can resume
      * after a container restart.
      */
-    @PostConstruct
     public void restorePersistedTasks() {
         for (int attempt = 1; attempt <= RESTORE_RETRY_ATTEMPTS; attempt++) {
             try {
@@ -372,7 +404,7 @@ public class DownloaderService {
         if (!WEBCENTRAL_PROVIDER_ID.equals(normalizedProviderId)) {
             return new BulkQueueDownloadResult(
                 BulkQueueDownloadResult.STATUS_INVALID_REQUEST,
-                "The Scriptarr bulk queue command is locked to the WeebCentral provider.",
+                "The Scriptarr downloadall command is locked to the WeebCentral provider.",
                 filters,
                 0,
                 0,
@@ -448,6 +480,10 @@ public class DownloaderService {
         List<String> skippedAdultContentTitles = new ArrayList<>();
         List<String> skippedNoMetadataTitles = new ArrayList<>();
         List<String> skippedAmbiguousMetadataTitles = new ArrayList<>();
+        List<String> skippedCompletedTitles = new ArrayList<>();
+        List<String> skippedCurrentTitles = new ArrayList<>();
+        List<String> appendedTitles = new ArrayList<>();
+        List<String> invalidSourceTitles = new ArrayList<>();
         List<String> failedTitles = new ArrayList<>();
         List<String> queuedTaskIds = new ArrayList<>();
         String actor = normalizeString(requestedBy, "scriptarr-portal");
@@ -461,19 +497,71 @@ public class DownloaderService {
                 "providerId", selectedProvider.get().id(),
                 "titleUrl", titleUrl
             ));
-            if (titleUrl.isBlank()) {
-                failedTitles.add(titleName);
+            if (!isValidProviderTitleUrl(titleUrl)) {
+                invalidSourceTitles.add(titleName);
                 continue;
             }
-            if (isTaskAlreadyActive(activeKey, titleName) || isTitleAlreadyInLibrary(existingLibraryTitles, titleUrl, titleName, requestType)) {
+            if (isTaskAlreadyActive(activeKey, titleName)) {
                 skippedActiveTitles.add(titleName);
                 continue;
             }
 
             try {
+                LibraryTitle existingTitle = findExistingLibraryTitle(existingLibraryTitles, titleUrl, titleName, requestType);
+                if (existingTitle != null && "completed".equalsIgnoreCase(normalizeString(existingTitle.status()))) {
+                    skippedCompletedTitles.add(titleName);
+                    continue;
+                }
+
                 TitleDetails providerDetails = selectedProvider.get().getTitleDetails(titleUrl);
                 if (!Boolean.TRUE.equals(nsfw) && (providerDetails == null || !Boolean.FALSE.equals(providerDetails.adultContent()))) {
                     skippedAdultContentTitles.add(titleName);
+                    continue;
+                }
+
+                if (existingTitle != null) {
+                    List<Map<String, String>> providerChapters = selectedProvider.get().getChapters(titleUrl);
+                    List<Map<String, String>> missingChapters = missingProviderChapters(existingTitle, providerChapters);
+                    if (missingChapters.isEmpty()) {
+                        skippedCurrentTitles.add(titleName);
+                        continue;
+                    }
+                    Map<String, Object> selectedDownload = new LinkedHashMap<>();
+                    selectedDownload.put("providerId", selectedProvider.get().id());
+                    selectedDownload.put("providerName", selectedProvider.get().name());
+                    selectedDownload.put("titleName", titleName);
+                    selectedDownload.put("titleUrl", titleUrl);
+                    selectedDownload.put("requestType", requestType);
+                    selectedDownload.put("libraryTypeLabel", requestType);
+                    selectedDownload.put("libraryTypeSlug", LibraryNaming.normalizeTypeSlug(requestType));
+                    selectedDownload.put("downloadMode", "append");
+                    selectedDownload.put("appendTitleId", existingTitle.id());
+                    selectedDownload.put("chapterNumbers", missingChapters.stream()
+                        .map((chapter) -> normalizeStoredChapterNumber(chapter.getOrDefault("chapter_number", "")))
+                        .filter((chapterNumber) -> !chapterNumber.isBlank())
+                        .toList());
+                    if (providerDetails != null && providerDetails.adultContent() != null) {
+                        selectedDownload.put("adultContent", providerDetails.adultContent());
+                        selectedDownload.put("nsfw", providerDetails.adultContent());
+                    }
+                    Map<String, Object> queuedTask = queueDownload(new DownloadRequest(
+                        titleName,
+                        titleUrl,
+                        requestType,
+                        actor,
+                        selectedProvider.get().id(),
+                        "",
+                        Map.of(),
+                        selectedDownload,
+                        "",
+                        "normal"
+                    ));
+                    String queuedTaskId = normalizeString(queuedTask.get("taskId"));
+                    if (!queuedTaskId.isBlank()) {
+                        queuedTaskIds.add(queuedTaskId);
+                    }
+                    queuedTitles.add(titleName);
+                    appendedTitles.add(titleName);
                     continue;
                 }
 
@@ -536,6 +624,10 @@ public class DownloaderService {
                 skippedAdultContentTitles,
                 skippedNoMetadataTitles,
                 skippedAmbiguousMetadataTitles,
+                skippedCompletedTitles,
+                skippedCurrentTitles,
+                appendedTitles,
+                invalidSourceTitles,
                 failedTitles
             ),
             buildBulkQueueMessage(
@@ -544,6 +636,10 @@ public class DownloaderService {
                 skippedAdultContentTitles,
                 skippedNoMetadataTitles,
                 skippedAmbiguousMetadataTitles,
+                skippedCompletedTitles,
+                skippedCurrentTitles,
+                appendedTitles,
+                invalidSourceTitles,
                 failedTitles,
                 matchedTitles.size()
             ),
@@ -555,6 +651,10 @@ public class DownloaderService {
             skippedAdultContentTitles.size(),
             skippedNoMetadataTitles.size(),
             skippedAmbiguousMetadataTitles.size(),
+            skippedCompletedTitles.size(),
+            skippedCurrentTitles.size(),
+            appendedTitles.size(),
+            invalidSourceTitles.size(),
             failedTitles.size(),
             queuedTaskIds,
             queuedTitles,
@@ -562,6 +662,10 @@ public class DownloaderService {
             skippedAdultContentTitles,
             skippedNoMetadataTitles,
             skippedAmbiguousMetadataTitles,
+            skippedCompletedTitles,
+            skippedCurrentTitles,
+            appendedTitles,
+            invalidSourceTitles,
             failedTitles
         );
     }
@@ -582,10 +686,11 @@ public class DownloaderService {
         }
 
         String taskId = "task_" + UUID.randomUUID().toString().replace("-", "");
+        Map<String, Object> selectedDownload = request.selectedDownload() == null ? Map.of() : request.selectedDownload();
         Map<String, Object> task = new LinkedHashMap<>();
         task.put("taskId", taskId);
         task.put("jobId", taskId);
-        task.put("titleId", "");
+        task.put("titleId", normalizeString(selectedDownload.get("appendTitleId")));
         task.put("titleName", request.titleName());
         task.put("titleUrl", request.titleUrl());
         task.put("requestType", request.requestType());
@@ -601,7 +706,7 @@ public class DownloaderService {
         task.put("libraryTypeLabel", LibraryNaming.normalizeTypeLabel(request.requestType()));
         task.put("libraryTypeSlug", LibraryNaming.normalizeTypeSlug(request.requestType()));
         task.put("selectedMetadata", request.selectedMetadata() == null ? Map.of() : request.selectedMetadata());
-        task.put("selectedDownload", request.selectedDownload() == null ? Map.of() : request.selectedDownload());
+        task.put("selectedDownload", selectedDownload);
         task.put("coverUrl", resolveCoverUrl(request));
         task.put("priority", normalizePriorityLabel(request.priority()));
         task.put("sortOrder", nextQueuedSortOrder());
@@ -870,6 +975,7 @@ public class DownloaderService {
      */
     @PreDestroy
     public void shutdown() {
+        persistedTaskRestoreWorker.shutdownNow();
         queueWorker.shutdownNow();
         pageDownloadWorker.shutdownNow();
     }
@@ -895,9 +1001,15 @@ public class DownloaderService {
             String typeLabel = resolveLibraryTypeLabel(request, details);
             String typeSlug = LibraryNaming.normalizeTypeSlug(typeLabel);
             RavenNamingSettings namingSettings = settingsService.getNamingSettings();
-            Path canonicalFinalRoot = resolveReplacementTargetRoot(request, typeSlug);
+            boolean appendDownload = isAppendDownload(request);
+            Path canonicalFinalRoot = resolveDownloadTargetRoot(request, typeSlug);
             boolean replacementDownload = isReplacementDownload(request);
-            Path workingRoot = replacementDownload
+            List<Map<String, String>> chaptersToDownload = appendDownload ? filterChaptersForAppendRequest(chapters, request) : chapters;
+            if (chaptersToDownload.isEmpty()) {
+                update(taskId, "completed", "No new chapters were found for the existing title.", 100);
+                return;
+            }
+            Path workingRoot = replacementDownload || appendDownload
                 ? resolveStagedTitleRoot(DOWNLOADING_FOLDER_NAME, request.titleName(), typeSlug, taskId)
                 : resolveTitleRoot(DOWNLOADING_FOLDER_NAME, request.titleName(), typeSlug);
             Path finalRoot = replacementDownload
@@ -907,20 +1019,19 @@ public class DownloaderService {
             rememberRoots(taskId, typeLabel, typeSlug, workingRoot, canonicalFinalRoot);
             Files.createDirectories(workingRoot);
 
-            int total = chapters.size();
-            Map<String, Map<String, String>> chapterDetailsByNumber = new LinkedHashMap<>();
-            for (int index = 0; index < chapters.size(); index++) {
+            int total = chaptersToDownload.size();
+            Map<String, ChapterDownloadResult> chapterDetailsByNumber = new LinkedHashMap<>();
+            for (int index = 0; index < chaptersToDownload.size(); index++) {
                 throwIfCancelled(taskId);
-                Map<String, String> chapter = chapters.get(index);
+                Map<String, String> chapter = chaptersToDownload.get(index);
                 Instant chapterStartedAt = Instant.now();
-                Path archivePath = downloadChapterWithRetries(provider, workingRoot, request, typeLabel, chapter, namingSettings);
-                rememberDownloadSpeed(taskId, archivePath, chapterStartedAt, Instant.now());
-                String chapterNumber = normalizeStoredChapterNumber(chapter.getOrDefault("chapter_number", String.valueOf(index + 1)));
-                Map<String, String> storedChapter = new LinkedHashMap<>(chapter);
-                storedChapter.put("archive_path", archivePath.toString());
-                chapterDetailsByNumber.put(chapterNumber, storedChapter);
+                ChapterDownloadResult chapterResult = downloadChapterWithRetries(provider, workingRoot, request, typeLabel, chapter, namingSettings);
+                if (chapterResult.archivePath() != null) {
+                    rememberDownloadSpeed(taskId, chapterResult.archivePath(), chapterStartedAt, Instant.now());
+                }
+                chapterDetailsByNumber.put(chapterResult.chapterNumber(), chapterResult);
                 int percent = Math.max(10, (int) (((index + 1) / (double) total) * CHAPTER_DOWNLOAD_PROGRESS_CAP));
-                update(taskId, "running", "Downloaded chapter " + chapterNumber + ".", percent);
+                update(taskId, "running", chapterResult.message(), percent);
             }
 
             throwIfCancelled(taskId);
@@ -1000,7 +1111,7 @@ public class DownloaderService {
         return refreshed == null ? title : refreshed;
     }
 
-    private Path downloadChapterWithRetries(
+    private ChapterDownloadResult downloadChapterWithRetries(
         DownloadProvider provider,
         Path titleRoot,
         DownloadRequest request,
@@ -1029,7 +1140,18 @@ public class DownloaderService {
             }
 
             try {
-                return writeChapterArchive(titleRoot, request, typeLabel, chapter, namingSettings, chapterNumber, images);
+                ChapterDownloadResult result = writeChapterArchive(titleRoot, request, typeLabel, chapter, namingSettings, chapterNumber, images);
+                if (hasSourceImageNotFoundNote(result.qualityNotes()) && attempt < CHAPTER_DOWNLOAD_RETRY_ATTEMPTS) {
+                    if (result.archivePath() != null) {
+                        Files.deleteIfExists(result.archivePath());
+                    }
+                    lastFailureMessage = "Source image returned 404; refreshing chapter pages.";
+                    if (!sleepBeforeRetry("chapter page refresh", request.titleName(), chapterNumber, attempt, null)) {
+                        return result;
+                    }
+                    continue;
+                }
+                return result;
             } catch (IOException error) {
                 lastIoFailure = error;
                 lastFailureMessage = normalizeString(error.getMessage(), "Raven could not save chapter " + chapterNumber + ".");
@@ -1046,50 +1168,48 @@ public class DownloaderService {
         }
 
         if (lastIoFailure != null) {
-            if (isSourceImageNotFound(lastIoFailure)) {
-                throw new IOException(
-                    "Source image returned 404 after Raven refreshed chapter pages for " + chapter.get("href") + ". "
-                        + lastFailureMessage,
-                    lastIoFailure
-                );
-            }
-            throw new IOException(lastFailureMessage, lastIoFailure);
+            return ChapterDownloadResult.missing(
+                chapter,
+                chapterNumber,
+                0,
+                lastFailureMessage
+            );
         }
-        throw new IllegalStateException(lastFailureMessage);
+        return ChapterDownloadResult.missing(chapter, chapterNumber, 0, lastFailureMessage);
     }
 
     private List<LibraryChapter> buildLibraryChapters(
         Path finalRoot,
-        Map<String, Map<String, String>> chapterDetailsByNumber,
+        Map<String, ChapterDownloadResult> chapterDetailsByNumber,
         String typeLabel,
         RavenNamingSettings namingSettings
     ) throws IOException {
-        try (var archives = Files.list(finalRoot)) {
-            return archives
-                .filter(Files::isRegularFile)
-                .filter((path) -> path.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".cbz"))
-                .sorted()
-                .map((path) -> {
-                    String chapterNumber = LibraryNaming.extractChapterNumber(path.getFileName().toString(), namingSettings, typeLabel);
-                    Map<String, String> chapterDetails = chapterDetailsByNumber.getOrDefault(chapterNumber, Map.of());
-                    String releaseDate = firstNonBlank(
-                        normalizeString(chapterDetails.get("release_date")),
-                        resolveArchiveTimestamp(path)
-                    );
-                    return new LibraryChapter(
-                        "",
-                        normalizeString(chapterDetails.get("chapter_title"), "Chapter " + chapterNumber),
-                        chapterNumber,
-                        countArchiveEntries(path),
-                        releaseDate,
-                        true,
-                        path.toString(),
-                        normalizeString(chapterDetails.get("href"), null),
-                        null
-                    );
-                })
-                .toList();
+        List<LibraryChapter> chapters = new ArrayList<>();
+        for (ChapterDownloadResult result : chapterDetailsByNumber.values()) {
+            Path finalArchive = result.archivePath() == null ? null : finalRoot.resolve(result.archivePath().getFileName());
+            String releaseDate = firstNonBlank(
+                normalizeString(result.chapter().get("release_date")),
+                finalArchive == null ? "" : resolveArchiveTimestamp(finalArchive)
+            );
+            int pageCount = finalArchive == null ? 0 : countArchiveEntries(finalArchive);
+            chapters.add(new LibraryChapter(
+                "",
+                normalizeString(result.chapter().get("chapter_title"), "Chapter " + result.chapterNumber()),
+                result.chapterNumber(),
+                pageCount,
+                releaseDate,
+                finalArchive != null && Files.exists(finalArchive),
+                finalArchive == null ? "" : finalArchive.toString(),
+                normalizeString(result.chapter().get("href"), null),
+                result.qualityStatus(),
+                result.expectedPageCount(),
+                result.missingPageCount(),
+                result.missingPages(),
+                result.qualityNotes(),
+                null
+            ));
         }
+        return chapters;
     }
 
     private String resolveArchiveTimestamp(Path archivePath) {
@@ -1104,7 +1224,7 @@ public class DownloaderService {
         }
     }
 
-    private Path writeChapterArchive(
+    private ChapterDownloadResult writeChapterArchive(
         Path titleRoot,
         DownloadRequest request,
         String typeLabel,
@@ -1126,12 +1246,12 @@ public class DownloaderService {
         Path archivePath = titleRoot.resolve(archiveName);
         if (Files.exists(archivePath) && Files.size(archivePath) > 0) {
             logger.info("DOWNLOAD", "Skipping chapter archive that already exists.", "file=" + archivePath.getFileName());
-            return archivePath;
+            return ChapterDownloadResult.clean(chapter, chapterNumber, archivePath, images.size(), "Downloaded chapter " + chapterNumber + ".");
         }
 
         Path stagedPagesRoot = resolveChapterStageRoot(titleRoot, archiveName);
         Files.createDirectories(stagedPagesRoot);
-        List<Future<Path>> pageDownloads = new ArrayList<>();
+        List<Future<PageDownloadResult>> pageDownloads = new ArrayList<>();
         for (int index = 0; index < images.size(); index++) {
             final int pageNumber = index + 1;
             final String imageUrl = images.get(index);
@@ -1147,21 +1267,49 @@ public class DownloaderService {
             );
             final Path stagedPage = stagedPagesRoot.resolve(pageFileName);
             if (Files.exists(stagedPage) && Files.size(stagedPage) > 0) {
-                pageDownloads.add(CompletableFuture.completedFuture(stagedPage));
+                pageDownloads.add(CompletableFuture.completedFuture(PageDownloadResult.success(pageNumber, stagedPage, imageUrl)));
                 continue;
             }
 
             pageDownloads.add(pageDownloadWorker.submit(() -> {
-                Files.createDirectories(stagedPage.getParent());
-                Files.write(stagedPage, downloadImageWithRetries(imageUrl, chapter.get("href"), request.titleName(), chapterNumber));
-                return stagedPage;
+                try {
+                    Files.createDirectories(stagedPage.getParent());
+                    Files.write(stagedPage, downloadImageWithRetries(imageUrl, chapter.get("href"), request.titleName(), chapterNumber));
+                    return PageDownloadResult.success(pageNumber, stagedPage, imageUrl);
+                } catch (IOException error) {
+                    return PageDownloadResult.failure(pageNumber, stagedPage, imageUrl, normalizeString(error.getMessage(), "Image download failed."));
+                }
             }));
+        }
+
+        List<PageDownloadResult> pages = new ArrayList<>();
+        for (Future<PageDownloadResult> pageDownload : pageDownloads) {
+            pages.add(awaitDownloadedPage(pageDownload));
+        }
+        List<PageDownloadResult> missingPages = pages.stream().filter((page) -> !page.success()).toList();
+        List<PageDownloadResult> downloadedPages = pages.stream().filter(PageDownloadResult::success).toList();
+        String qualityStatus = chapterQualityStatus(images.size(), missingPages.size(), downloadedPages.size());
+        if (downloadedPages.isEmpty()) {
+            Files.deleteIfExists(archivePath);
+            deleteDirectoryQuietly(stagedPagesRoot);
+            logger.warn("DOWNLOAD", "Chapter had no usable pages and was marked as missing content.", "title=" + request.titleName() + " chapter=" + chapterNumber);
+            return ChapterDownloadResult.missing(
+                chapter,
+                chapterNumber,
+                images.size(),
+                "No usable pages were downloaded for chapter " + chapterNumber + ".",
+                missingPages.stream().map(PageDownloadResult::pageNumber).toList(),
+                missingPages.stream().map(PageDownloadResult::failureReason).filter((reason) -> !reason.isBlank()).distinct().toList()
+            );
+        }
+        for (PageDownloadResult missingPage : missingPages) {
+            Files.write(missingPage.path(), placeholderImageBytes(request.titleName(), chapterNumber, missingPage.pageNumber(), resolveExtension(missingPage.imageUrl(), ".jpg")));
         }
 
         boolean archiveCompleted = false;
         try (ZipOutputStream zip = new ZipOutputStream(Files.newOutputStream(archivePath))) {
-            for (Future<Path> pageDownload : pageDownloads) {
-                Path stagedPage = awaitDownloadedPage(pageDownload);
+            for (PageDownloadResult page : pages) {
+                Path stagedPage = page.path();
                 try (InputStream stream = Files.newInputStream(stagedPage)) {
                     ZipEntry entry = new ZipEntry(stagedPage.getFileName().toString());
                     zip.putNextEntry(entry);
@@ -1170,7 +1318,7 @@ public class DownloaderService {
                 }
             }
             archiveCompleted = true;
-        } catch (IOException | InterruptedException error) {
+        } catch (IOException error) {
             Files.deleteIfExists(archivePath);
             throw error;
         } finally {
@@ -1180,7 +1328,26 @@ public class DownloaderService {
         }
 
         logger.info("DOWNLOAD", "Saved chapter archive.", "file=" + archivePath.getFileName());
-        return archivePath;
+        if (!"clean".equals(qualityStatus)) {
+            logger.warn(
+                "DOWNLOAD",
+                "Saved chapter archive with generated missing-page placeholders.",
+                "title=" + request.titleName() + " chapter=" + chapterNumber + " missingPages=" + missingPages.size()
+            );
+        }
+        return new ChapterDownloadResult(
+            chapterNumber,
+            new LinkedHashMap<>(chapter),
+            archivePath,
+            images.size(),
+            missingPages.size(),
+            missingPages.stream().map(PageDownloadResult::pageNumber).toList(),
+            missingPages.stream().map(PageDownloadResult::failureReason).filter((reason) -> !reason.isBlank()).distinct().toList(),
+            qualityStatus,
+            "clean".equals(qualityStatus)
+                ? "Downloaded chapter " + chapterNumber + "."
+                : "Downloaded chapter " + chapterNumber + " with " + missingPages.size() + " possible missing page(s)."
+        );
     }
 
     private List<String> findChapterPagesWithRetries(
@@ -1282,6 +1449,19 @@ public class DownloaderService {
                 return true;
             }
             current = current.getCause();
+        }
+        return false;
+    }
+
+    private boolean hasSourceImageNotFoundNote(List<String> notes) {
+        if (notes == null || notes.isEmpty()) {
+            return false;
+        }
+        for (String note : notes) {
+            String normalized = normalizeString(note).toLowerCase(Locale.ROOT);
+            if (normalized.contains("source image returned 404")) {
+                return true;
+            }
         }
         return false;
     }
@@ -1544,6 +1724,46 @@ public class DownloaderService {
 
     private boolean isReplacementDownload(DownloadRequest request) {
         return request != null && request.replacementTitleId() != null && !request.replacementTitleId().isBlank();
+    }
+
+    private boolean isAppendDownload(DownloadRequest request) {
+        Map<String, Object> selectedDownload = normalizeMap(request == null ? null : request.selectedDownload());
+        return "append".equalsIgnoreCase(normalizeString(selectedDownload.get("downloadMode")))
+            || !normalizeString(selectedDownload.get("appendTitleId")).isBlank();
+    }
+
+    private Path resolveDownloadTargetRoot(DownloadRequest request, String typeSlug) {
+        if (isAppendDownload(request)) {
+            Map<String, Object> selectedDownload = normalizeMap(request.selectedDownload());
+            LibraryTitle existing = libraryService.findTitle(normalizeString(selectedDownload.get("appendTitleId")));
+            if (existing != null && existing.downloadRoot() != null && !existing.downloadRoot().isBlank()) {
+                return Path.of(existing.downloadRoot());
+            }
+        }
+        return resolveReplacementTargetRoot(request, typeSlug);
+    }
+
+    private List<Map<String, String>> filterChaptersForAppendRequest(List<Map<String, String>> chapters, DownloadRequest request) {
+        Set<String> wanted = new LinkedHashSet<>();
+        Object requestedNumbers = normalizeMap(request.selectedDownload()).get("chapterNumbers");
+        if (requestedNumbers instanceof List<?> values) {
+            for (Object value : values) {
+                String chapterNumber = normalizeStoredChapterNumber(String.valueOf(value));
+                if (!chapterNumber.isBlank()) {
+                    wanted.add(chapterNumber);
+                }
+            }
+        }
+        if (wanted.isEmpty()) {
+            return List.of();
+        }
+        return Optional.ofNullable(chapters).orElse(List.of()).stream()
+            .filter((chapter) -> wanted.contains(normalizeStoredChapterNumber(chapter.getOrDefault("chapter_number", ""))))
+            .map((chapter) -> {
+                Map<String, String> copy = new LinkedHashMap<>(chapter);
+                return copy;
+            })
+            .toList();
     }
 
     private Path resolveReplacementTargetRoot(DownloadRequest request, String typeSlug) {
@@ -2148,7 +2368,7 @@ public class DownloaderService {
         return titleRoot.resolve(".scriptarr-stage").resolve(stageFolder);
     }
 
-    private Path awaitDownloadedPage(Future<Path> download) throws IOException, InterruptedException {
+    private PageDownloadResult awaitDownloadedPage(Future<PageDownloadResult> download) throws IOException, InterruptedException {
         try {
             return download.get(PAGE_DOWNLOAD_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
         } catch (TimeoutException error) {
@@ -2164,6 +2384,54 @@ public class DownloaderService {
             }
             throw new IOException(cause == null ? error.getMessage() : cause.getMessage(), cause == null ? error : cause);
         }
+    }
+
+    private String chapterQualityStatus(int expectedPages, int missingPages, int downloadedPages) {
+        if (downloadedPages <= 0) {
+            return "missing_content";
+        }
+        if (missingPages <= 0) {
+            return "clean";
+        }
+        double missingRatio = expectedPages <= 0 ? 1.0d : missingPages / (double) expectedPages;
+        if (missingPages >= MISSING_CONTENT_PAGE_THRESHOLD || missingRatio >= MISSING_CONTENT_RATIO) {
+            return "missing_content";
+        }
+        if (missingPages <= MAX_PARTIAL_MISSING_PAGES && missingRatio <= MAX_PARTIAL_MISSING_RATIO) {
+            return "possible_missing_page";
+        }
+        return "missing_content";
+    }
+
+    private byte[] placeholderImageBytes(String titleName, String chapterNumber, int pageNumber, String extension) throws IOException {
+        BufferedImage image = new BufferedImage(1200, 1800, BufferedImage.TYPE_INT_RGB);
+        Graphics2D graphics = image.createGraphics();
+        try {
+            graphics.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+            graphics.setColor(new Color(13, 17, 19));
+            graphics.fillRect(0, 0, image.getWidth(), image.getHeight());
+            graphics.setColor(new Color(255, 165, 54));
+            graphics.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 58));
+            drawCenteredText(graphics, "Possible missing page", image.getWidth(), 700);
+            graphics.setColor(new Color(235, 244, 246));
+            graphics.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 34));
+            drawCenteredText(graphics, "Generated by Scriptarr", image.getWidth(), 780);
+            drawCenteredText(graphics, normalizeString(titleName, "Untitled"), image.getWidth(), 900);
+            drawCenteredText(graphics, "Chapter " + chapterNumber + " - page " + Math.max(1, pageNumber), image.getWidth(), 960);
+        } finally {
+            graphics.dispose();
+        }
+        String format = normalizeString(extension).equalsIgnoreCase(".png") ? "png" : "jpeg";
+        try (ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            ImageIO.write(image, format, output);
+            return output.toByteArray();
+        }
+    }
+
+    private void drawCenteredText(Graphics2D graphics, String text, int width, int y) {
+        FontMetrics metrics = graphics.getFontMetrics();
+        int x = Math.max(40, (width - metrics.stringWidth(text)) / 2);
+        graphics.drawString(text, x, y);
     }
 
     private void deleteDirectoryQuietly(Path folder) {
@@ -2365,11 +2633,14 @@ public class DownloaderService {
         });
     }
 
-    private boolean isTitleAlreadyInLibrary(List<LibraryTitle> titles, String titleUrl, String titleName, String requestType) {
+    private LibraryTitle findExistingLibraryTitle(List<LibraryTitle> titles, String titleUrl, String titleName, String requestType) {
         String normalizedUrl = normalizeString(titleUrl);
         String normalizedTitle = normalizeString(titleName).toLowerCase(Locale.ROOT);
         String normalizedType = LibraryNaming.normalizeTypeSlug(requestType);
-        return titles != null && titles.stream().anyMatch((title) -> {
+        if (titles == null) {
+            return null;
+        }
+        return titles.stream().filter((title) -> {
             String existingUrl = normalizeString(title.sourceUrl());
             if (!normalizedUrl.isBlank() && normalizedUrl.equals(existingUrl)) {
                 return true;
@@ -2377,7 +2648,49 @@ public class DownloaderService {
             return !normalizedTitle.isBlank()
                 && normalizedTitle.equals(normalizeString(title.title()).toLowerCase(Locale.ROOT))
                 && normalizedType.equals(LibraryNaming.normalizeTypeSlug(normalizeString(title.libraryTypeSlug(), title.mediaType())));
-        });
+        }).findFirst().orElse(null);
+    }
+
+    private boolean isValidProviderTitleUrl(String titleUrl) {
+        String normalized = normalizeString(titleUrl);
+        if (normalized.isBlank()) {
+            return false;
+        }
+        try {
+            URI uri = URI.create(normalized);
+            String host = normalizeString(uri.getHost()).toLowerCase(Locale.ROOT);
+            String path = normalizeString(uri.getPath());
+            if (!host.contains("weebcentral")) {
+                return true;
+            }
+            String[] parts = path.split("/");
+            for (int index = 0; index < parts.length; index++) {
+                if ("series".equals(parts[index]) && index + 1 < parts.length && !parts[index + 1].isBlank()) {
+                    return true;
+                }
+            }
+            return false;
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    private List<Map<String, String>> missingProviderChapters(LibraryTitle existingTitle, List<Map<String, String>> providerChapters) {
+        Set<String> existingChapterNumbers = new LinkedHashSet<>();
+        for (LibraryChapter chapter : Optional.ofNullable(existingTitle == null ? null : existingTitle.chapters()).orElse(List.of())) {
+            String chapterNumber = normalizeStoredChapterNumber(chapter.chapterNumber());
+            if (!chapterNumber.isBlank()) {
+                existingChapterNumbers.add(chapterNumber);
+            }
+        }
+        List<Map<String, String>> missing = new ArrayList<>();
+        for (Map<String, String> chapter : Optional.ofNullable(providerChapters).orElse(List.of())) {
+            String chapterNumber = normalizeStoredChapterNumber(chapter.getOrDefault("chapter_number", ""));
+            if (!chapterNumber.isBlank() && !existingChapterNumbers.contains(chapterNumber)) {
+                missing.add(new LinkedHashMap<>(chapter));
+            }
+        }
+        return missing;
     }
 
     private String activeBulkTaskKey(Map<String, ?> task) {
@@ -2395,6 +2708,10 @@ public class DownloaderService {
         List<String> skippedAdultContentTitles,
         List<String> skippedNoMetadataTitles,
         List<String> skippedAmbiguousMetadataTitles,
+        List<String> skippedCompletedTitles,
+        List<String> skippedCurrentTitles,
+        List<String> appendedTitles,
+        List<String> invalidSourceTitles,
         List<String> failedTitles
     ) {
         boolean hasQueued = queuedTitles != null && !queuedTitles.isEmpty();
@@ -2402,12 +2719,18 @@ public class DownloaderService {
         boolean hasSkippedAdultContent = skippedAdultContentTitles != null && !skippedAdultContentTitles.isEmpty();
         boolean hasSkippedNoMetadata = skippedNoMetadataTitles != null && !skippedNoMetadataTitles.isEmpty();
         boolean hasSkippedAmbiguous = skippedAmbiguousMetadataTitles != null && !skippedAmbiguousMetadataTitles.isEmpty();
+        boolean hasSkippedCompleted = skippedCompletedTitles != null && !skippedCompletedTitles.isEmpty();
+        boolean hasSkippedCurrent = skippedCurrentTitles != null && !skippedCurrentTitles.isEmpty();
+        boolean hasAppended = appendedTitles != null && !appendedTitles.isEmpty();
+        boolean hasInvalidSource = invalidSourceTitles != null && !invalidSourceTitles.isEmpty();
         boolean hasFailed = failedTitles != null && !failedTitles.isEmpty();
 
-        if (hasQueued && !hasSkippedActive && !hasSkippedAdultContent && !hasSkippedNoMetadata && !hasSkippedAmbiguous && !hasFailed) {
+        if (hasQueued && !hasSkippedActive && !hasSkippedAdultContent && !hasSkippedNoMetadata && !hasSkippedAmbiguous && !hasSkippedCompleted
+            && !hasSkippedCurrent && !hasInvalidSource && !hasFailed) {
             return BulkQueueDownloadResult.STATUS_QUEUED;
         }
-        if (!hasQueued && hasSkippedActive && !hasSkippedAdultContent && !hasSkippedNoMetadata && !hasSkippedAmbiguous && !hasFailed) {
+        if (!hasQueued && (hasSkippedActive || hasSkippedCompleted || hasSkippedCurrent) && !hasSkippedAdultContent && !hasSkippedNoMetadata
+            && !hasSkippedAmbiguous && !hasAppended && !hasInvalidSource && !hasFailed) {
             return BulkQueueDownloadResult.STATUS_ALREADY_ACTIVE;
         }
         return BulkQueueDownloadResult.STATUS_PARTIAL;
@@ -2419,6 +2742,10 @@ public class DownloaderService {
         List<String> skippedAdultContentTitles,
         List<String> skippedNoMetadataTitles,
         List<String> skippedAmbiguousMetadataTitles,
+        List<String> skippedCompletedTitles,
+        List<String> skippedCurrentTitles,
+        List<String> appendedTitles,
+        List<String> invalidSourceTitles,
         List<String> failedTitles,
         int matchedCount
     ) {
@@ -2427,26 +2754,34 @@ public class DownloaderService {
         int skippedAdultContentCount = skippedAdultContentTitles == null ? 0 : skippedAdultContentTitles.size();
         int skippedNoMetadataCount = skippedNoMetadataTitles == null ? 0 : skippedNoMetadataTitles.size();
         int skippedAmbiguousCount = skippedAmbiguousMetadataTitles == null ? 0 : skippedAmbiguousMetadataTitles.size();
+        int skippedCompletedCount = skippedCompletedTitles == null ? 0 : skippedCompletedTitles.size();
+        int skippedCurrentCount = skippedCurrentTitles == null ? 0 : skippedCurrentTitles.size();
+        int appendedCount = appendedTitles == null ? 0 : appendedTitles.size();
+        int invalidSourceCount = invalidSourceTitles == null ? 0 : invalidSourceTitles.size();
         int failedCount = failedTitles == null ? 0 : failedTitles.size();
 
         if (matchedCount <= 0) {
             return "No titles matched the supplied filters.";
         }
         if (queuedCount > 0 && skippedActiveCount == 0 && skippedAdultContentCount == 0 && skippedNoMetadataCount == 0
-            && skippedAmbiguousCount == 0 && failedCount == 0) {
-            return "Queued " + queuedCount + " title(s) for download.";
+            && skippedAmbiguousCount == 0 && skippedCompletedCount == 0 && skippedCurrentCount == 0 && invalidSourceCount == 0 && failedCount == 0) {
+            return appendedCount > 0
+                ? "Queued " + queuedCount + " title(s), including " + appendedCount + " append-only update(s)."
+                : "Queued " + queuedCount + " title(s) for download.";
         }
         if (queuedCount == 0 && skippedActiveCount > 0 && skippedAdultContentCount == 0 && skippedNoMetadataCount == 0
-            && skippedAmbiguousCount == 0 && failedCount == 0) {
+            && skippedAmbiguousCount == 0 && skippedCompletedCount == 0 && skippedCurrentCount == 0 && invalidSourceCount == 0 && failedCount == 0) {
             return skippedActiveCount == 1
                 ? "Download already in progress for: " + skippedActiveTitles.getFirst()
                 : "Downloads already in progress for: " + String.join(", ", skippedActiveTitles);
         }
 
         return "Queued " + queuedCount + " title(s). Skipped " + skippedActiveCount
-            + " already-active title(s), " + skippedAdultContentCount + " adult or unverified adult title(s), "
+            + " already-active title(s), " + skippedCompletedCount + " completed title(s), " + skippedCurrentCount
+            + " already-current title(s), " + skippedAdultContentCount + " adult or unverified adult title(s), "
             + skippedNoMetadataCount + " without confident metadata, " + skippedAmbiguousCount
-            + " with ambiguous metadata. Failed " + failedCount + " title(s).";
+            + " with ambiguous metadata, " + invalidSourceCount + " invalid source title(s). Appending "
+            + appendedCount + " existing title(s). Failed " + failedCount + " title(s).";
     }
 
     private String normalizePrefixComparableTitle(String rawTitle) {
@@ -2466,5 +2801,68 @@ public class DownloaderService {
         }
 
         return trimmed.substring(Math.min(index, trimmed.length())).trim();
+    }
+
+    private record PageDownloadResult(
+        int pageNumber,
+        Path path,
+        String imageUrl,
+        boolean success,
+        String failureReason
+    ) {
+        private static PageDownloadResult success(int pageNumber, Path path, String imageUrl) {
+            return new PageDownloadResult(pageNumber, path, imageUrl, true, "");
+        }
+
+        private static PageDownloadResult failure(int pageNumber, Path path, String imageUrl, String reason) {
+            return new PageDownloadResult(pageNumber, path, imageUrl, false, reason == null ? "" : reason);
+        }
+    }
+
+    private record ChapterDownloadResult(
+        String chapterNumber,
+        Map<String, String> chapter,
+        Path archivePath,
+        int expectedPageCount,
+        int missingPageCount,
+        List<Integer> missingPages,
+        List<String> qualityNotes,
+        String qualityStatus,
+        String message
+    ) {
+        private static ChapterDownloadResult clean(
+            Map<String, String> chapter,
+            String chapterNumber,
+            Path archivePath,
+            int expectedPageCount,
+            String message
+        ) {
+            return new ChapterDownloadResult(chapterNumber, new LinkedHashMap<>(chapter), archivePath, expectedPageCount, 0, List.of(), List.of(), "clean", message);
+        }
+
+        private static ChapterDownloadResult missing(Map<String, String> chapter, String chapterNumber, int expectedPageCount, String note) {
+            return missing(chapter, chapterNumber, expectedPageCount, note, List.of(), List.of(note));
+        }
+
+        private static ChapterDownloadResult missing(
+            Map<String, String> chapter,
+            String chapterNumber,
+            int expectedPageCount,
+            String note,
+            List<Integer> missingPages,
+            List<String> qualityNotes
+        ) {
+            return new ChapterDownloadResult(
+                chapterNumber,
+                new LinkedHashMap<>(chapter),
+                null,
+                expectedPageCount,
+                Math.max(missingPages == null ? 0 : missingPages.size(), expectedPageCount),
+                missingPages == null ? List.of() : List.copyOf(missingPages),
+                qualityNotes == null ? List.of() : List.copyOf(qualityNotes),
+                "missing_content",
+                "Marked chapter " + chapterNumber + " as missing content."
+            );
+        }
     }
 }

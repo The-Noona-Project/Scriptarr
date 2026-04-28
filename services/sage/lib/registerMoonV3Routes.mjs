@@ -522,14 +522,35 @@ export const registerMoonV3Routes = (app, {
     const rows = normalizeArray(titles)
       .map((title) => ({
         ...title,
-        missingCount: Math.max(0, title.chapterCount - title.chaptersDownloaded)
+        missingCount: Math.max(0, title.chapterCount - title.chaptersDownloaded),
+        missingPageCount: normalizeArray(title.chapters).reduce((sum, chapter) =>
+          sum + (Number.parseInt(String(chapter?.missingPageCount || 0), 10) || 0), 0),
+        partialChapterCount: Number.parseInt(String(title.partialChapterCount || 0), 10) || normalizeArray(title.chapters)
+          .filter((chapter) => normalizeString(chapter?.qualityStatus) === "possible_missing_page").length,
+        badChapterCount: Number.parseInt(String(title.missingContentCount || 0), 10) || normalizeArray(title.chapters)
+          .filter((chapter) => ["missing_content", "bad_source"].includes(normalizeString(chapter?.qualityStatus))).length,
+        cleanChapterCount: Number.parseInt(String(title.cleanChapterCount || 0), 10) || normalizeArray(title.chapters)
+          .filter((chapter) => !normalizeString(chapter?.qualityStatus) || normalizeString(chapter?.qualityStatus) === "clean").length,
+        damagedChapters: normalizeArray(title.chapters).filter((chapter) =>
+          Number.parseInt(String(chapter?.missingPageCount || 0), 10) > 0
+          || ["missing_content", "possible_missing_page", "bad_source"].includes(normalizeString(chapter?.qualityStatus))
+        )
       }));
-    const entries = rows.filter((title) => title.missingCount > 0);
+    const entries = rows.filter((title) =>
+      title.missingCount > 0
+      || title.missingPageCount > 0
+      || title.partialChapterCount > 0
+      || title.badChapterCount > 0
+      || ["missing_content", "possible_missing_page", "bad_source"].includes(normalizeString(title.qualityStatus))
+    );
     return {
       entries,
       counts: {
         totalTitles: rows.length,
         totalMissing: entries.reduce((sum, title) => sum + title.missingCount, 0),
+        totalMissingPages: entries.reduce((sum, title) => sum + title.missingPageCount, 0),
+        partialChapters: entries.reduce((sum, title) => sum + title.partialChapterCount, 0),
+        badChapters: entries.reduce((sum, title) => sum + title.badChapterCount, 0),
         completeTitles: Math.max(0, rows.length - entries.length),
         affectedTitles: entries.length
       }
@@ -1407,6 +1428,95 @@ export const registerMoonV3Routes = (app, {
       });
     }));
 
+    app.post("/api/moon-v3/admin/activity/queue/remove-all", requireActivityWrite(async (_req, res) => {
+      const tasks = await loadLiveRavenTasks();
+      const queuePayload = buildAdminQueuePayload(tasks);
+      const removableTasks = normalizeArray(queuePayload.needsAttention)
+        .filter((task) => task.removable === true && normalizeString(task.taskId));
+      const results = [];
+      for (const task of removableTasks) {
+        const response = await fetchRavenJson(`/v1/downloads/tasks/${encodeURIComponent(task.taskId)}/remove`, {
+          method: "POST"
+        });
+        results.push({
+          taskId: task.taskId,
+          titleName: normalizeString(task.titleName, "Untitled"),
+          ok: response.ok,
+          status: response.status,
+          error: response.ok ? "" : normalizeString(response.payload?.error, response.statusText)
+        });
+      }
+      const removed = results.filter((entry) => entry.ok);
+      res.json({
+        removedCount: removed.length,
+        failedCount: results.length - removed.length,
+        message: removed.length
+          ? `Removed ${removed.length} Raven recovery task${removed.length === 1 ? "" : "s"}.`
+          : "No removable Raven recovery tasks were waiting in Needs attention.",
+        results
+      });
+    }));
+
+    app.post("/api/moon-v3/admin/activity/queue/cancel-queued", requireActivityWrite(async (_req, res) => {
+      const tasks = await loadLiveRavenTasks();
+      const queuePayload = buildAdminQueuePayload(tasks);
+      const queuedTasks = normalizeArray(queuePayload.queued).filter((task) => normalizeString(task.taskId));
+      const results = [];
+      for (const task of queuedTasks) {
+        const response = await fetchRavenJson(`/v1/downloads/tasks/${encodeURIComponent(task.taskId)}/cancel`, {
+          method: "POST"
+        });
+        results.push({
+          taskId: task.taskId,
+          titleName: normalizeString(task.titleName, "Untitled"),
+          ok: response.ok,
+          status: response.status,
+          error: response.ok ? "" : normalizeString(response.payload?.error, response.statusText)
+        });
+      }
+      const cancelled = results.filter((entry) => entry.ok);
+      res.json({
+        cancelledCount: cancelled.length,
+        failedCount: results.length - cancelled.length,
+        message: cancelled.length
+          ? `Cancelled ${cancelled.length} queued Raven task${cancelled.length === 1 ? "" : "s"}.`
+          : "No queued Raven tasks were waiting.",
+        results
+      });
+    }));
+
+    app.post("/api/moon-v3/admin/activity/queue/cancel-running", requireActivityWrite(async (req, res) => {
+      if (!hasDomainAccess(req.user, "activity", "root")) {
+        res.status(403).json({error: "Canceling running tasks requires activity.root."});
+        return;
+      }
+      const tasks = await loadLiveRavenTasks();
+      const queuePayload = buildAdminQueuePayload(tasks);
+      const runningTasks = normalizeArray(queuePayload.running).filter((task) => normalizeString(task.taskId));
+      const results = [];
+      for (const task of runningTasks) {
+        const response = await fetchRavenJson(`/v1/downloads/tasks/${encodeURIComponent(task.taskId)}/cancel`, {
+          method: "POST"
+        });
+        results.push({
+          taskId: task.taskId,
+          titleName: normalizeString(task.titleName, "Untitled"),
+          ok: response.ok,
+          status: response.status,
+          error: response.ok ? "" : normalizeString(response.payload?.error, response.statusText)
+        });
+      }
+      const cancelled = results.filter((entry) => entry.ok);
+      res.json({
+        cancelledCount: cancelled.length,
+        failedCount: results.length - cancelled.length,
+        message: cancelled.length
+          ? `Cancelled ${cancelled.length} running Raven task${cancelled.length === 1 ? "" : "s"}.`
+          : "No running Raven tasks were active.",
+        results
+      });
+    }));
+
     app.post("/api/moon-v3/admin/activity/queue/:taskId/priority", requireActivityWrite(async (req, res) => {
       const priority = normalizeString(req.body?.priority).toLowerCase();
       if (!["high", "normal", "low"].includes(priority)) {
@@ -1444,6 +1554,11 @@ export const registerMoonV3Routes = (app, {
   }));
 
   app.get("/api/moon-v3/admin/wanted/missing-chapters", requireWantedRead(async (_req, res) => {
+    const titles = await loadLibrary();
+    res.json(buildMissingChapterPayload(titles));
+  }));
+
+  app.get("/api/moon-v3/admin/wanted/missing-content", requireWantedRead(async (_req, res) => {
     const titles = await loadLibrary();
     res.json(buildMissingChapterPayload(titles));
   }));

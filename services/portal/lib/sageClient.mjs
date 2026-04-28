@@ -230,6 +230,20 @@ export const createSageClient = (config) => {
         }
       );
     },
+    listDownloadAllNotifications() {
+      return requestJson(config.sageBaseUrl, authHeader, "/api/internal/portal/notifications/downloadall");
+    },
+    acknowledgeDownloadAllNotification(notificationId) {
+      return requestJson(
+        config.sageBaseUrl,
+        jsonHeaders,
+        `/api/internal/portal/notifications/downloadall/${encodeURIComponent(notificationId)}/ack`,
+        {
+          method: "POST",
+          body: {}
+        }
+      );
+    },
     chat(payload) {
       return requestJson(config.sageBaseUrl, jsonHeaders, "/api/internal/oracle/chat", {
         method: "POST",

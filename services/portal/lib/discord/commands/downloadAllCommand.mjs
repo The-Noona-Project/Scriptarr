@@ -49,10 +49,10 @@ export const createDownloadAllCommand = ({
 }) => ({
   definition: {
     name: "downloadall",
-    description: "Owner-only DM bulk queue for WeebCentral titles.",
+    description: "Owner-only DM downloadall runs for WeebCentral titles.",
     dm_permission: true,
     options: [
-      subcommand("run", "Queue a WeebCentral bulk download for one title prefix.", [
+      subcommand("run", "Start a durable WeebCentral downloadall run.", [
         stringOption("type", "Library type to browse.", true, TYPE_CHOICES),
         booleanOption("nsfw", "Whether adult titles are allowed.", true),
         stringOption("titlegroup", "Enter a single letter a-z, or all.", true)
@@ -148,7 +148,7 @@ export const createDownloadAllCommand = ({
       });
     } catch (error) {
       await sendInteractionReply(interaction, {
-        content: `Scriptarr bulk queue failed: ${error?.message || String(error)}`,
+        content: `Scriptarr downloadall run failed: ${error?.message || String(error)}`,
         ephemeral: true
       });
     }

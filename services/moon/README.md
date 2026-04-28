@@ -89,8 +89,9 @@ refresh-source, override, and deny routes without resetting active edits during 
 refresh-source and bulk deny actions, but keeps approval and source resolution per request.
 `/admin/wanted/metadata` is the dedicated metadata repair page. The old `/admin/wanted/metadata-gaps` path redirects
 there, and staff can search provider matches and apply one to the selected library title through Sage.
-`/admin/wanted/missing-chapters` is the dedicated coverage repair page, showing missing counts and Raven repair
-candidates that queue safe staged replacement downloads through the existing library repair route.
+`/admin/wanted/missing-content` is the dedicated coverage and quality repair page, showing missing counts, damaged
+chapters, possible missing pages, bad-source summaries, and Raven repair candidates that queue safe staged replacement
+downloads through the existing library repair route. `/admin/wanted/missing-chapters` redirects there.
 `/admin/library` now uses a denser Sonarr-inspired series index with live filtering, coverage bars, latest chapter,
 last release date, metadata state, and direct open or source actions.
 Each library row now opens a Sonarr-style admin title detail page at `/admin/library/<type>/<titleId>` with a
@@ -110,7 +111,8 @@ summary count.
 exposes card-level controls for retry, retry-all, cancel, priority changes, and queued-task reordering. Live refresh
 now defers while queue controls are being edited, running cards show live download speed plus an active ETA when Sage
 can estimate one credibly, and recovery cards can remove failed or stale queued tasks with their incomplete working
-folders.
+folders. Section bulk controls can cancel all queued work, cancel all running work for root admins, retry all recovery
+items, or remove all removable recovery items.
 
 Fresh installs intentionally show empty library states until Raven has real imported titles to surface, and the admin
 program now ships in a dark-only theme by default.

@@ -8,7 +8,9 @@ import com.scriptarr.raven.settings.RavenBrokerClient;
 import com.scriptarr.raven.settings.RavenNamingSettings;
 import com.scriptarr.raven.settings.RavenSettingsService;
 import com.scriptarr.raven.support.ScriptarrLogger;
-import jakarta.annotation.PostConstruct;
+import jakarta.annotation.PreDestroy;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
@@ -20,12 +22,19 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
@@ -47,6 +56,8 @@ public final class LibraryService {
     private final RavenSettingsService settingsService;
     private final ScriptarrLogger logger;
     private final ObjectMapper objectMapper = new ObjectMapper();
+    private final AtomicBoolean startupCatalogScanStarted = new AtomicBoolean(false);
+    private final ExecutorService startupCatalogScanExecutor = Executors.newSingleThreadExecutor(new StartupScanThreadFactory());
 
     /**
      * Create the shared Raven library service.
@@ -62,15 +73,31 @@ public final class LibraryService {
     }
 
     /**
-     * Scan the downloads root during startup so previously imported or
-     * downloaded archives repopulate Raven's durable catalog.
+     * Start the catalog scan after Raven is ready so large libraries cannot
+     * block the web server from exposing health checks during container startup.
+     *
+     * @param event Spring application-ready event
      */
-    @PostConstruct
-    public void initializeCatalog() {
+    @EventListener(ApplicationReadyEvent.class)
+    public void initializeCatalog(ApplicationReadyEvent event) {
+        if (!startupCatalogScanStarted.compareAndSet(false, true)) {
+            return;
+        }
+        startupCatalogScanExecutor.submit(this::runInitialCatalogScan);
+    }
+
+    /**
+     * Stop the startup catalog scan worker during Raven shutdown.
+     */
+    @PreDestroy
+    public void shutdownCatalogScanExecutor() {
+        startupCatalogScanExecutor.shutdownNow();
         try {
-            rescanDownloadedFiles();
-        } catch (Exception error) {
-            logger.warn("LIBRARY", "Initial Raven library scan failed.", error.getMessage());
+            if (!startupCatalogScanExecutor.awaitTermination(2, TimeUnit.SECONDS)) {
+                logger.warn("LIBRARY", "Initial Raven library scan worker did not stop cleanly.");
+            }
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
         }
     }
 
@@ -194,6 +221,7 @@ public final class LibraryService {
             : UUID.randomUUID().toString();
 
         List<LibraryChapter> normalizedChapters = enrichAndNormalizeChapters(titleId, existing, chapters);
+        TitleQuality titleQuality = summarizeTitleQuality(normalizedChapters);
         LibraryTitle nextTitle = new LibraryTitle(
             titleId,
             firstNonBlank(titleName, existing != null ? existing.title() : "Untitled"),
@@ -223,6 +251,11 @@ public final class LibraryService {
             workingRoot != null ? workingRoot.toString() : (existing != null ? existing.workingRoot() : ""),
             downloadRoot != null ? downloadRoot.toString() : (existing != null ? existing.downloadRoot() : ""),
             List.copyOf(normalizedChapters),
+            titleQuality.status(),
+            titleQuality.cleanChapterCount(),
+            titleQuality.partialChapterCount(),
+            titleQuality.missingContentCount(),
+            titleQuality.summary(),
             existing != null ? existing.updatedAt() : null
         );
 
@@ -254,6 +287,11 @@ public final class LibraryService {
             persisted.workingRoot(),
             persisted.downloadRoot(),
             List.copyOf(persistedChapters),
+            persisted.qualityStatus(),
+            persisted.cleanChapterCount(),
+            persisted.partialChapterCount(),
+            persisted.missingContentCount(),
+            persisted.qualitySummary(),
             persisted.updatedAt()
         );
     }
@@ -335,6 +373,11 @@ public final class LibraryService {
             existing.workingRoot(),
             existing.downloadRoot(),
             Optional.ofNullable(existing.chapters()).orElse(List.of()),
+            existing.qualityStatus(),
+            existing.cleanChapterCount(),
+            existing.partialChapterCount(),
+            existing.missingContentCount(),
+            existing.qualitySummary(),
             existing.updatedAt()
         );
         upsertTitle(updated);
@@ -670,6 +713,7 @@ public final class LibraryService {
             Optional.ofNullable(preferred.chapters()).orElse(List.of()),
             Optional.ofNullable(secondary.chapters()).orElse(List.of())
         );
+        TitleQuality titleQuality = summarizeTitleQuality(mergedChapters);
 
         return new LibraryTitle(
             preferred.id(),
@@ -698,6 +742,11 @@ public final class LibraryService {
             firstNonBlank(preferred.workingRoot(), secondary.workingRoot()),
             firstNonBlank(preferred.downloadRoot(), secondary.downloadRoot()),
             List.copyOf(mergedChapters),
+            titleQuality.status(),
+            titleQuality.cleanChapterCount(),
+            titleQuality.partialChapterCount(),
+            titleQuality.missingContentCount(),
+            titleQuality.summary(),
             firstNonBlank(preferred.updatedAt(), secondary.updatedAt())
         );
     }
@@ -731,6 +780,11 @@ public final class LibraryService {
             title.workingRoot(),
             title.downloadRoot(),
             title.chapters(),
+            title.qualityStatus(),
+            title.cleanChapterCount(),
+            title.partialChapterCount(),
+            title.missingContentCount(),
+            title.qualitySummary(),
             title.updatedAt()
         );
     }
@@ -798,6 +852,11 @@ public final class LibraryService {
             preferred.available() || secondary.available(),
             firstNonBlank(preferred.archivePath(), secondary.archivePath()),
             firstNonBlank(preferred.sourceUrl(), secondary.sourceUrl()),
+            worstChapterQuality(preferred.qualityStatus(), secondary.qualityStatus()),
+            maxInt(preferred.expectedPageCount(), secondary.expectedPageCount()),
+            maxInt(preferred.missingPageCount(), secondary.missingPageCount()),
+            mergeMissingPages(preferred.missingPages(), secondary.missingPages()),
+            mergeQualityNotes(preferred.qualityNotes(), secondary.qualityNotes()),
             firstNonBlank(preferred.updatedAt(), secondary.updatedAt())
         );
     }
@@ -893,11 +952,16 @@ public final class LibraryService {
                 firstNonBlank(chapter.id(), chapterId(titleId, chapterNumber)),
                 firstNonBlank(chapter.label(), "Chapter " + chapterNumber),
                 chapterNumber,
-                Math.max(1, chapter.pageCount()),
+                Math.max(0, chapter.pageCount()),
                 chapter.releaseDate(),
                 chapter.available(),
                 chapter.archivePath(),
                 chapter.sourceUrl(),
+                normalizeChapterQuality(chapter.qualityStatus()),
+                Math.max(0, chapter.expectedPageCount()),
+                Math.max(0, chapter.missingPageCount()),
+                Optional.ofNullable(chapter.missingPages()).orElse(List.of()),
+                Optional.ofNullable(chapter.qualityNotes()).orElse(List.of()),
                 chapter.updatedAt()
             ));
         }
@@ -934,6 +998,11 @@ public final class LibraryService {
                 chapter.available() || (persisted != null && persisted.available()),
                 firstNonBlank(chapter.archivePath(), persisted != null ? persisted.archivePath() : ""),
                 firstNonBlank(chapter.sourceUrl(), persisted != null ? persisted.sourceUrl() : ""),
+                worstChapterQuality(chapter.qualityStatus(), persisted != null ? persisted.qualityStatus() : ""),
+                Math.max(chapter.expectedPageCount(), persisted != null ? persisted.expectedPageCount() : 0),
+                Math.max(chapter.missingPageCount(), persisted != null ? persisted.missingPageCount() : 0),
+                mergeMissingPages(chapter.missingPages(), persisted != null ? persisted.missingPages() : List.of()),
+                mergeQualityNotes(chapter.qualityNotes(), persisted != null ? persisted.qualityNotes() : List.of()),
                 firstNonBlank(chapter.updatedAt(), persisted != null ? persisted.updatedAt() : "")
             ));
         }
@@ -964,7 +1033,7 @@ public final class LibraryService {
             } catch (Exception ignored) {
             }
         }
-        return Math.max(1, chapter.pageCount());
+        return Math.max(0, chapter.pageCount());
     }
 
     private int countArchivePages(Path archivePath) {
@@ -1013,6 +1082,86 @@ public final class LibraryService {
         }
 
         return "image/jpeg";
+    }
+
+    private TitleQuality summarizeTitleQuality(List<LibraryChapter> chapters) {
+        int total = Optional.ofNullable(chapters).orElse(List.of()).size();
+        int clean = 0;
+        int partial = 0;
+        int missing = 0;
+        for (LibraryChapter chapter : Optional.ofNullable(chapters).orElse(List.of())) {
+            String quality = normalizeChapterQuality(chapter == null ? "" : chapter.qualityStatus());
+            if (chapter == null || !chapter.available() || "missing_content".equals(quality)) {
+                missing++;
+            } else if ("possible_missing_page".equals(quality)) {
+                partial++;
+            } else {
+                clean++;
+            }
+        }
+        String status;
+        if (total > 0 && clean / (double) total < 0.80d) {
+            status = "bad_source";
+        } else if (missing > 0) {
+            status = "missing_content";
+        } else if (partial > 0) {
+            status = "possible_missing_page";
+        } else {
+            status = "clean";
+        }
+        String summary = total > 0 ? clean + "/" + total + " clean downloads" : "";
+        return new TitleQuality(status, clean, partial, missing, summary);
+    }
+
+    private String normalizeChapterQuality(String value) {
+        String normalized = Optional.ofNullable(value).orElse("").trim().toLowerCase(Locale.ROOT).replace('-', '_');
+        return switch (normalized) {
+            case "missing_content", "bad_source" -> "missing_content";
+            case "possible_missing_page", "partial" -> "possible_missing_page";
+            default -> "clean";
+        };
+    }
+
+    private String worstChapterQuality(String first, String second) {
+        String left = normalizeChapterQuality(first);
+        String right = normalizeChapterQuality(second);
+        if ("missing_content".equals(left) || "missing_content".equals(right)) {
+            return "missing_content";
+        }
+        if ("possible_missing_page".equals(left) || "possible_missing_page".equals(right)) {
+            return "possible_missing_page";
+        }
+        return "clean";
+    }
+
+    private List<Integer> mergeMissingPages(List<Integer> first, List<Integer> second) {
+        Set<Integer> values = new LinkedHashSet<>();
+        for (Integer value : Optional.ofNullable(first).orElse(List.of())) {
+            if (value != null && value > 0) {
+                values.add(value);
+            }
+        }
+        for (Integer value : Optional.ofNullable(second).orElse(List.of())) {
+            if (value != null && value > 0) {
+                values.add(value);
+            }
+        }
+        return List.copyOf(values);
+    }
+
+    private List<String> mergeQualityNotes(List<String> first, List<String> second) {
+        Set<String> values = new LinkedHashSet<>();
+        for (String value : Optional.ofNullable(first).orElse(List.of())) {
+            if (value != null && !value.isBlank()) {
+                values.add(value.trim());
+            }
+        }
+        for (String value : Optional.ofNullable(second).orElse(List.of())) {
+            if (value != null && !value.isBlank()) {
+                values.add(value.trim());
+            }
+        }
+        return List.copyOf(values);
     }
 
     private String resolveLatestChapter(List<LibraryChapter> chapters) {
@@ -1100,6 +1249,16 @@ public final class LibraryService {
             .replace("\"", "&quot;");
     }
 
+    private void runInitialCatalogScan() {
+        try {
+            logger.info("LIBRARY", "Initial Raven library scan started.");
+            rescanDownloadedFiles();
+            logger.info("LIBRARY", "Initial Raven library scan finished.");
+        } catch (Exception error) {
+            logger.warn("LIBRARY", "Initial Raven library scan failed.", error.getMessage());
+        }
+    }
+
     private void persistRescanJob(String status, String message, Instant startedAt, Instant finishedAt, Map<String, Object> result) {
         try {
             Map<String, Object> payload = new LinkedHashMap<>();
@@ -1152,5 +1311,23 @@ public final class LibraryService {
                     .thenComparing(ZipEntry::getName)
             )
             .toList();
+    }
+
+    private record TitleQuality(
+        String status,
+        int cleanChapterCount,
+        int partialChapterCount,
+        int missingContentCount,
+        String summary
+    ) {
+    }
+
+    private static final class StartupScanThreadFactory implements ThreadFactory {
+        @Override
+        public Thread newThread(Runnable runnable) {
+            Thread thread = new Thread(runnable, "raven-library-startup-scan");
+            thread.setDaemon(true);
+            return thread;
+        }
     }
 }

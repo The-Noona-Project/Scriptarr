@@ -158,13 +158,9 @@ export const createDirectMessageHandler = ({getSettings, sage, logger, onRuntime
     return true;
   }
 
-  const isMega = String(parsed.filters.type).toLowerCase() === "all"
-    || String(parsed.filters.titlePrefix).toLowerCase() === "all";
   await sendReplySequence(
     message,
-    isMega
-      ? `Starting Scriptarr async mega downloadall run for type=${parsed.filters.type}, nsfw=${parsed.filters.nsfw}, titlegroup=${parsed.filters.titlePrefix}. It will pause after each batch for owner continuation.`
-      : `Queueing Scriptarr bulk download for type=${parsed.filters.type}, nsfw=${parsed.filters.nsfw}, titlegroup=${parsed.filters.titlePrefix}...`
+    `Starting Scriptarr async downloadall run for type=${parsed.filters.type}, nsfw=${parsed.filters.nsfw}, titlegroup=${parsed.filters.titlePrefix}. It will DM a summary when the batch finishes.`
   );
 
   try {
@@ -179,12 +175,10 @@ export const createDirectMessageHandler = ({getSettings, sage, logger, onRuntime
     });
     await sendReplySequence(
       message,
-      isMega
-        ? formatBulkRunSummary(result.payload || result)
-        : formatBulkQueueSummary(result.payload || result)
+      formatBulkRunSummary(result.payload || result)
     );
   } catch (error) {
-    await sendReplySequence(message, `Scriptarr bulk queue failed: ${error?.message || String(error)}`);
+    await sendReplySequence(message, `Scriptarr downloadall run failed: ${error?.message || String(error)}`);
   }
 
   return true;

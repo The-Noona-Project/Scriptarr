@@ -7,7 +7,9 @@ When Discord rejects privileged intents, Portal now falls back to a minimal slas
 taking the whole bot offline. In that mode `/ding`, the rest of the slash-command catalog, and DM-only commands can
 stay online while guild-member onboarding is marked degraded until the Server Members intent is available.
 
-Portal does not call other first-party services directly. Discord request creation, library search, follow updates, bulk download queueing, onboarding settings, and Oracle chat traffic are brokered through Sage's internal service routes.
+Portal does not call other first-party services directly. Discord request creation, library search, follow updates,
+durable downloadall runs, onboarding settings, and Oracle chat traffic are brokered through Sage's internal service
+routes.
 
 Portal's supported Discord command set is:
 
@@ -31,13 +33,13 @@ finds a source it DMs the requester that the title is back in admin review or wa
 fallback, but that path depends on Discord delivering `messageCreate` events and should not be treated as the primary
 interface anymore. The command stays owner-only and intentionally pinned to WeebCentral, so it fails if that provider
 is disabled instead of browsing MangaDex.
-Single type plus single `titlegroup` runs still use Raven's one-shot queue path. Selecting `type:all` or
-`titlegroup:all` starts an async mega run through Sage; Raven pauses the run after each batch until the owner explicitly
-continues it from DM slash commands.
+Every `downloadall` request now creates a durable Raven run. Selecting `type:all` or `titlegroup:all` creates multiple
+batches; Raven pauses the run after each batch until the owner explicitly continues it from DM slash commands.
 Bulk queueing is still provider-browse first, but it now asks Raven to metadata-resolve each matched bulk title before
-queueing it. Portal only queues titles with one confident metadata match and reports already-active, adult-content,
-no-metadata, ambiguous-metadata, and failed skips in the DM summary. For `nsfw:false`, Raven only queues titles whose
-WeebCentral detail page explicitly says `Adult Content: No`; adult or unverified titles are skipped.
+queueing it. Portal only queues titles with one confident metadata match and reports already-active, completed,
+already-current, appended, adult-content, no-metadata, ambiguous-metadata, invalid-source, and failed outcomes in the
+DM summary. For `nsfw:false`, Raven only queues titles whose WeebCentral detail page explicitly says
+`Adult Content: No`; adult or unverified titles are skipped.
 
 Guild id, onboarding settings, release notification channel id, DM superuser id, and per-command role gates are
 managed from Moon admin at `/admin/discord`. Discord bot credentials remain env-managed.
@@ -56,3 +58,5 @@ after the send succeeds.
 Portal now also DMs blocked duplicate requesters when they are attached to the hidden ready-notify waitlist, DMs
 waitlisted users again when the title becomes ready, DMs unavailable requesters when a source appears and the request
 moves back into admin review, and DMs them again if that unavailable request expires after 90 days.
+Portal also polls Sage for durable downloadall run notifications and DMs the requester paused, completed, failed, or
+cancelled summaries once per stable notification id.

@@ -11,7 +11,7 @@ export const knownPortalDiscordCommands = Object.freeze([
   {id: "search", name: "search", description: "Search the current Scriptarr library.", mode: "slash"},
   {id: "request", name: "request", description: "Create a moderated Scriptarr request from Discord.", mode: "slash"},
   {id: "subscribe", name: "subscribe", description: "Follow a title for release notifications.", mode: "slash"},
-  {id: "downloadall", name: "downloadall", description: "Owner-only DM-only WeebCentral bulk queue command.", mode: "dm"}
+  {id: "downloadall", name: "downloadall", description: "Owner-only DM-only WeebCentral downloadall run command.", mode: "dm"}
 ]);
 
 const normalizeString = (value, fallback = "") => {

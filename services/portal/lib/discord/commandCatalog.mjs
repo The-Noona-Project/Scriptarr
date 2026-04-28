@@ -12,7 +12,7 @@ export const portalCommandCatalog = Object.freeze([
   {
     name: "downloadall",
     label: "/downloadall",
-    description: "Owner-only DM-only WeebCentral bulk queue command.",
+    description: "Owner-only DM-only WeebCentral downloadall run command.",
     scope: "Global DM slash command",
     mode: "slash",
     roleManaged: false,

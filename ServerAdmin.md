@@ -318,14 +318,17 @@ a moderator comment so the durable audit event and requester notification have a
 bulk refresh-source and bulk deny actions; approvals remain per request so moderators can inspect each source choice.
 `/admin/wanted/metadata` replaces the old Metadata Gaps page and lets staff search provider matches and apply one to an
 existing library title through Sage and Raven. `/admin/wanted/metadata-gaps` redirects to the new canonical route.
-`/admin/wanted/missing-chapters` shows coverage gaps and uses the existing library repair candidates to queue a safe
-staged replacement download when a better source is selected.
+`/admin/wanted/missing-content` shows coverage gaps, bad chapters, possible missing pages, and bad-source quality
+summaries. It uses the existing library repair candidates to queue a safe staged replacement download when a better
+source is selected. `/admin/wanted/missing-chapters` redirects to this canonical page.
 `/admin/calendar` is a month or agenda release view fed by Sage's calendar payload. Completed titles appear through
 dated chapter entries when available and get one title-level completion marker when Raven only has title or chapter
 update timestamps. Titles with no usable date are counted as undated completed instead of being dropped.
 `/admin/activity/queue` is now a live queue board. It groups Raven work into `Running`, `Queued`, and recovery-only
 `Needs attention`, subscribes to the shared admin SSE stream so it refreshes without a manual page reload, and
 exposes card-level controls for retry, retry-all, cancel, priority changes, and queued-task move up/down actions.
+Section bulk buttons can cancel all queued work, cancel all running work for `activity.root` admins, retry all
+recovery items, or remove all removable recovery items.
 Queued cards intentionally do not show ETA values. Running cards show live transfer speed and active ETA only when
 Raven and Sage have credible progress data, and `Needs attention` cards can remove failed or stale queued tasks while
 deleting only the incomplete managed working folder. Service update and restart jobs stay out of `Needs attention`;
@@ -373,8 +376,9 @@ The current Discord command set is:
 Blank role ids mean any member in the configured guild can use that slash command. `downloadall` ignores guild roles,
 is only supported in bot DMs, and only checks the configured DM superuser id.
 Use `/downloadall run type:<type> nsfw:<true|false> titlegroup:<prefix>` in a DM with Noona as the supported bulk path.
-Concrete single type plus single `titlegroup` requests use the one-shot queue path. `type:all` or `titlegroup:all`
-starts an async mega run that pauses after each batch until the owner uses `/downloadall continue runid:<id>`;
+Every `downloadall` request creates a durable Raven run now, including single concrete type plus single `titlegroup`
+requests, so Portal can deliver delayed summaries even if the batch takes hours. `type:all` or `titlegroup:all`
+starts a multi-batch run that pauses after each batch until the owner uses `/downloadall continue runid:<id>`;
 `/downloadall status runid:<id>` and `/downloadall cancel runid:<id>` inspect or stop it.
 `/downloadall help` returns the usage guide in DMs. Portal still keeps the old raw DM text form
 (`downloadall type:... nsfw:... titlegroup:...`) as a legacy best-effort fallback, but that path depends on Discord
@@ -385,8 +389,10 @@ that from `/admin/requests`.
 `downloadall` now bulk-browses the provider first, then metadata-resolves each matched title before queueing it. Only
 titles with one confident metadata match are queued. For `nsfw:false`, Raven also verifies the concrete WeebCentral
 detail page and only queues titles with an explicit `Adult Content: No`; adult or unverified titles are skipped.
-Portal's DM summary now breaks skipped titles out as already active, adult-content, no-metadata, ambiguous-metadata,
-or failed instead of silently queueing metadata-less library entries.
+Portal's DM summary now breaks skipped titles out as already active, completed, already current, adult-content,
+no-metadata, ambiguous-metadata, invalid source, appended, or failed instead of silently queueing metadata-less library
+entries. Raven skips completed catalog titles, appends only missing or new chapters for non-completed existing titles,
+and ignores malformed bare source URLs such as a provider `/series` root.
 That owner-only command is intentionally pinned to WeebCentral. If WeebCentral is disabled in Raven settings,
 `downloadall` fails instead of falling back to MangaDex or another provider.
 Portal also sends requester DMs when a moderated request is approved, denied, or finishes downloading, and dedupes
@@ -473,8 +479,13 @@ permission groups, sessions, settings, secrets, and durable events.
 Raven now also runs up to two title downloads at once globally. Higher-priority work still starts first, queued-task
 reordering only affects work that has not started yet, and the live Moon queue reflects the two available running
 slots. Raven also persists real task start times and, when it can measure them credibly, live download speeds that
-Moon reuses in the running queue cards. Source-image 404 failures trigger a chapter page-list refresh before Raven
-leaves the task in recovery, which helps distinguish stale source URLs from true upstream missing-page failures.
+Moon reuses in the running queue cards. Source-image 404 failures trigger a chapter page-list refresh first; if pages
+are still missing, Raven writes generated "Possible missing page" placeholders, marks chapter/title quality, and keeps
+the batch moving instead of failing the whole title for one bad image. If no usable pages remain, Raven records Missing
+Content rather than blocking the run.
+Vault stores title-level `qualityStatus`, clean/partial/missing counts, and summary text plus chapter-level expected
+page counts, missing page numbers, and quality notes. Moon uses those fields in Missing Content to show partial
+chapters, bad chapters, missing pages, and bad-source summaries such as `3/256 clean downloads`.
 
 Moon admin library and calendar are now denser operational views:
 

@@ -31,7 +31,7 @@ export const adminRoutes = [
   {id: "activity-queue", path: "/admin/activity/queue", title: "Queue", description: "Current Raven download work in flight.", navLabel: "Queue", group: "Activity", domain: "activity", ported: true},
   {id: "activity-history", path: "/admin/activity/history", title: "History", description: "Completed and failed Raven task history.", navLabel: "History", group: "Activity", domain: "activity", ported: true},
   {id: "activity-blocklist", path: "/admin/activity/blocklist", title: "Blocklist", description: "Denied and blocked requests that Raven should not retry.", navLabel: "Blocklist", group: "Activity", domain: "activity", ported: true},
-  {id: "wanted-missing", path: "/admin/wanted/missing-chapters", title: "Missing Chapters", description: "Tracked titles that still have chapter gaps.", navLabel: "Missing Chapters", group: "Wanted", domain: "wanted", ported: true},
+  {id: "wanted-missing", path: "/admin/wanted/missing-content", title: "Missing Content", description: "Tracked titles with chapter gaps, damaged pages, or bad source quality.", navLabel: "Missing Content", group: "Wanted", domain: "wanted", ported: true},
   {id: "wanted-metadata", path: "/admin/wanted/metadata", title: "Metadata", description: "Titles that still need better provider coverage, summaries, aliases, tags, or covers.", navLabel: "Metadata", group: "Wanted", domain: "wanted", ported: true},
   {id: "requests", path: "/admin/requests", title: "Requests", description: "Moderate Moon and Discord requests from one queue.", navLabel: "Requests", group: "Community", domain: "requests", ported: true},
   {id: "users", path: "/admin/users", title: "Users", description: "Groups, permissions, and Discord-linked members.", navLabel: "Users", group: "Community", domain: "users", ported: true},
@@ -90,6 +90,9 @@ export const matchAdminRoute = (pathname) => {
   const normalizedPathname = String(pathname || "/admin").replace(/\/+$/, "") || "/admin";
   if (normalizedPathname === "/admin/wanted/metadata-gaps") {
     return adminRoutes.find((route) => route.id === "wanted-metadata");
+  }
+  if (normalizedPathname === "/admin/wanted/missing-chapters") {
+    return adminRoutes.find((route) => route.id === "wanted-missing");
   }
   const staticRoute = adminRoutes.find((route) => route.path === normalizedPathname);
   if (staticRoute) {

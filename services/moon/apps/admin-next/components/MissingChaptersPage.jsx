@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * @file Dedicated missing-chapter repair page for Moon admin wanted workflows.
+ * @file Dedicated missing-content repair page for Moon admin wanted workflows.
  */
 
 import {useEffect, useMemo, useState} from "react";
@@ -88,7 +88,7 @@ const RepairCandidateCard = ({entry, selected = false, onPick}) => (
 );
 
 /**
- * Render the dedicated missing chapters workflow.
+ * Render the dedicated missing content workflow.
  *
  * @param {{user: any}} props
  * @returns {import("react").ReactNode}
@@ -103,7 +103,7 @@ export const MissingChaptersPage = ({user}) => {
   const [busy, setBusy] = useState("");
   const [flash, setFlash] = useState(null);
   const {notify} = useAdminToast();
-  const {loading, refreshing, error, data, refresh} = useAdminJson("/api/moon/v3/admin/wanted/missing-chapters", {
+  const {loading, refreshing, error, data, refresh} = useAdminJson("/api/moon/v3/admin/wanted/missing-content", {
     fallback: emptyPayload
   });
   useAdminEventStaleness({
@@ -177,8 +177,8 @@ export const MissingChaptersPage = ({user}) => {
     return (
       <section className="admin-panel admin-state-panel">
         <div className="admin-kicker">Wanted</div>
-        <h2>Loading Missing Chapters</h2>
-        <p>Moon is loading title coverage through Sage.</p>
+        <h2>Loading Missing Content</h2>
+        <p>Moon is loading title quality and coverage through Sage.</p>
       </section>
     );
   }
@@ -191,16 +191,16 @@ export const MissingChaptersPage = ({user}) => {
         <div className="admin-section-heading">
           <div>
             <div className="admin-kicker">Wanted</div>
-            <h2>Missing Chapters</h2>
-            <p className="admin-muted">Find incomplete titles and queue safe staged replacement downloads from better sources.</p>
+            <h2>Missing Content</h2>
+            <p className="admin-muted">Find incomplete or damaged titles and queue safe staged replacement downloads from better sources.</p>
           </div>
           <AdminStatusBadge tone={refreshing ? "warning" : "good"}>{refreshing ? "Refreshing" : "Live"}</AdminStatusBadge>
         </div>
         <div className="admin-metric-grid">
           <article className="admin-metric-card"><span>Affected titles</span><strong>{counts.affectedTitles || 0}</strong></article>
           <article className="admin-metric-card"><span>Missing chapters</span><strong>{counts.totalMissing || 0}</strong></article>
-          <article className="admin-metric-card"><span>Complete titles</span><strong>{counts.completeTitles || 0}</strong></article>
-          <article className="admin-metric-card"><span>Total titles</span><strong>{counts.totalTitles || 0}</strong></article>
+          <article className="admin-metric-card"><span>Bad chapters</span><strong>{counts.badChapters || 0}</strong></article>
+          <article className="admin-metric-card"><span>Missing pages</span><strong>{counts.totalMissingPages || 0}</strong></article>
         </div>
         <AdminFilterBar>
           <label className="admin-filter-grow">
@@ -239,16 +239,17 @@ export const MissingChaptersPage = ({user}) => {
               </div>
             )},
             {key: "missing", label: "Missing", render: (row) => missingChapterCount(row)},
+            {key: "quality", label: "Quality", render: (row) => formatDisplayValue(row.qualitySummary || row.qualityStatus, "clean")},
             {key: "latest", label: "Latest", render: (row) => formatDisplayValue(row.latestChapter, "unknown")},
             {key: "source", label: "Source", render: (row) => formatDisplayValue(row.sourceUrl, "none")}
           ]}
-          empty="No missing chapter rows match this view."
+          empty="No missing content rows match this view."
         />
       </section>
 
       <AdminDrawer
         open={Boolean(selectedTitle)}
-        title={normalizeString(selectedTitle?.title, "Missing chapters")}
+        title={normalizeString(selectedTitle?.title, "Missing content")}
         kicker="Coverage"
         onClose={() => setSelectedId("")}
       >
@@ -265,6 +266,10 @@ export const MissingChaptersPage = ({user}) => {
             <div className="admin-detail-grid">
               <span><strong>Downloaded</strong>{selectedTitle.chaptersDownloaded || 0}</span>
               <span><strong>Total</strong>{selectedTitle.chapterCount || 0}</span>
+              <span><strong>Clean</strong>{selectedTitle.cleanChapterCount || 0}</span>
+              <span><strong>Damaged</strong>{(selectedTitle.partialChapterCount || 0) + (selectedTitle.badChapterCount || 0)}</span>
+              <span><strong>Missing pages</strong>{selectedTitle.missingPageCount || 0}</span>
+              <span><strong>Quality</strong>{formatDisplayValue(selectedTitle.qualityStatus, "clean")}</span>
               <span><strong>Latest</strong>{formatDisplayValue(selectedTitle.latestChapter, "unknown")}</span>
               <span><strong>Type</strong>{formatDisplayValue(selectedTitle.libraryTypeLabel, selectedTitle.mediaType || "manga")}</span>
               <span><strong>Provider</strong>{formatDisplayValue(selectedTitle.metadataProvider, "missing")}</span>
@@ -272,6 +277,26 @@ export const MissingChaptersPage = ({user}) => {
               <span><strong>Source</strong>{formatDisplayValue(selectedTitle.sourceUrl, "none")}</span>
               <span><strong>Status</strong>{formatDisplayValue(selectedTitle.status, "unknown")}</span>
             </div>
+
+            {normalizeArray(selectedTitle.damagedChapters).length ? (
+              <section className="admin-subsection">
+                <div className="admin-section-heading">
+                  <div>
+                    <div className="admin-kicker">Quality</div>
+                    <h3>Damaged chapters</h3>
+                  </div>
+                </div>
+                <div className="admin-log-list compact">
+                  {normalizeArray(selectedTitle.damagedChapters).slice(0, 12).map((chapter) => (
+                    <article className="admin-log-row" key={`${chapter.id || chapter.chapterNumber}`}>
+                      <strong>{formatDisplayValue(chapter.label, `Chapter ${chapter.chapterNumber || "?"}`)}</strong>
+                      <span>{formatDisplayValue(chapter.qualityStatus, "possible missing page")}</span>
+                      <span>{chapter.missingPageCount || 0} missing page{Number(chapter.missingPageCount || 0) === 1 ? "" : "s"}</span>
+                    </article>
+                  ))}
+                </div>
+              </section>
+            ) : null}
 
             <section className="admin-subsection">
               <div className="admin-section-heading">

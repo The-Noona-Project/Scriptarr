@@ -15,6 +15,9 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Map;
 import java.util.StringJoiner;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 /**
  * Minimal Sage HTTP client used by Raven for shared settings and durable state.
@@ -131,51 +134,75 @@ public class RavenSageClient implements RavenBrokerClient {
     }
 
     private JsonNode get(String path) throws IOException, InterruptedException {
+        Duration timeout = Duration.ofSeconds(5);
         HttpRequest request = HttpRequest.newBuilder()
             .uri(URI.create(trimBaseUrl() + path))
-            .timeout(Duration.ofSeconds(5))
+            .timeout(timeout)
             .header("Authorization", "Bearer " + serviceToken)
             .header("Content-Type", "application/json")
             .GET()
             .build();
-        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+        HttpResponse<String> response = send(path, request, timeout);
         return parseResponse(path, response);
     }
 
     private JsonNode put(String path, Map<String, Object> payload) throws IOException, InterruptedException {
+        Duration timeout = Duration.ofSeconds(10);
         HttpRequest request = HttpRequest.newBuilder()
             .uri(URI.create(trimBaseUrl() + path))
-            .timeout(Duration.ofSeconds(10))
+            .timeout(timeout)
             .header("Authorization", "Bearer " + serviceToken)
             .header("Content-Type", "application/json")
             .PUT(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(payload)))
             .build();
-        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+        HttpResponse<String> response = send(path, request, timeout);
         return parseResponse(path, response);
     }
 
     private JsonNode patch(String path, Map<String, Object> payload) throws IOException, InterruptedException {
+        Duration timeout = Duration.ofSeconds(10);
         HttpRequest request = HttpRequest.newBuilder()
             .uri(URI.create(trimBaseUrl() + path))
-            .timeout(Duration.ofSeconds(10))
+            .timeout(timeout)
             .header("Authorization", "Bearer " + serviceToken)
             .header("Content-Type", "application/json")
             .method("PATCH", HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(payload)))
             .build();
-        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+        HttpResponse<String> response = send(path, request, timeout);
         return parseResponse(path, response);
     }
 
     private JsonNode delete(String path) throws IOException, InterruptedException {
+        Duration timeout = Duration.ofSeconds(10);
         HttpRequest request = HttpRequest.newBuilder()
             .uri(URI.create(trimBaseUrl() + path))
-            .timeout(Duration.ofSeconds(10))
+            .timeout(timeout)
             .header("Authorization", "Bearer " + serviceToken)
             .header("Content-Type", "application/json")
             .DELETE()
             .build();
-        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+        HttpResponse<String> response = send(path, request, timeout);
         return parseResponse(path, response);
+    }
+
+    private HttpResponse<String> send(String path, HttpRequest request, Duration timeout) throws IOException, InterruptedException {
+        var future = httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString());
+        try {
+            return future.get(timeout.plusSeconds(1).toMillis(), TimeUnit.MILLISECONDS);
+        } catch (TimeoutException error) {
+            future.cancel(true);
+            throw new IOException("Sage request timed out for " + path + ".", error);
+        } catch (ExecutionException error) {
+            Throwable cause = error.getCause();
+            if (cause instanceof IOException ioException) {
+                throw ioException;
+            }
+            if (cause instanceof InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                throw interrupted;
+            }
+            throw new IOException("Sage request failed for " + path + ".", cause);
+        }
     }
 
     private JsonNode parseResponse(String path, HttpResponse<String> response) throws IOException {

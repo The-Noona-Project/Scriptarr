@@ -33,16 +33,18 @@ browser calls.
 Sage now also carries a sanitized Moon `returnTo` path through Discord OAuth `state` so Moon can return the browser to
 the page where login started instead of always landing in admin or one fixed callback destination.
 For Moon admin, Sage now brokers `/api/moon-v3/admin/activity/queue` as a live queue-board payload plus task action
-routes for cancel, retry, reprioritize, and move up/down. Those routes stay Moon-safe, same-origin, and event-backed
-so the admin queue can re-fetch on SSE updates instead of polling blindly.
+routes for cancel, retry, reprioritize, move up/down, cancel-all queued, cancel-all running, and remove-all removable.
+Those routes stay Moon-safe, same-origin, and event-backed so the admin queue can re-fetch on SSE updates instead of
+polling blindly.
 That queue payload now stays recovery-focused: `needsAttention` only contains Raven recovery work with a remove
 affordance when a task is safe to clear, queued cards do not carry ETA, and running cards carry live download speed
 plus an active ETA when Raven gives Sage credible progress data. Sage also exposes `retry-all` and per-task remove
 actions for the recovery set. Warden service update or restart jobs are excluded from this recovery payload and remain
 under System/Updates/Events; Sage does not yet expose a Moon queue cleanup action for non-Raven broker jobs.
-Sage also brokers Portal's owner-only DM-only WeebCentral `/downloadall` workflow. Single concrete type plus title
-group requests still proxy to Raven's one-shot bulk queue path, while `all` selections proxy to Raven's async bulk-run
-create, status, continue/resume, and cancel paths so each batch can pause for owner approval.
+Sage also brokers Portal's owner-only DM-only WeebCentral `/downloadall` workflow. All requests now proxy to Raven's
+durable bulk-run create path, while status, continue/resume, and cancel paths let each batch pause for owner approval.
+Sage exposes a Portal notification queue for paused, completed, failed, or cancelled run batches and acknowledges those
+notifications only after Portal confirms the requester DM.
 Sage also owns the root-only content reset preview plus execute flow for Moon admin. It previews Vault plus Raven reset
 scope, requires an explicit confirmation string, appends durable reset events, clears Vault's content-side state, and
 then tells Raven to wipe its managed catalog, tasks, and managed download folders.

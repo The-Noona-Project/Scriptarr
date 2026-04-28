@@ -181,11 +181,31 @@ const QueueTaskCard = ({task, permissions, onAction, onDirtyChange}) => {
  *   onAction: (action: string, task: Record<string, any>, body?: any) => Promise<void>,
  *   onDirtyChange: (dirty: boolean) => void,
  *   retryAll?: boolean,
- *   onRetryAll?: () => Promise<void>
+ *   removeAll?: boolean,
+ *   cancelAll?: boolean,
+ *   cancelAllLabel?: string,
+ *   onRetryAll?: () => Promise<void>,
+ *   onRemoveAll?: () => Promise<void>,
+ *   onCancelAll?: () => Promise<void>
  * }} props
  * @returns {import("react").ReactNode}
  */
-const QueueSection = ({title, kicker, tasks, empty, permissions, onAction, onDirtyChange, retryAll = false, onRetryAll}) => (
+const QueueSection = ({
+  title,
+  kicker,
+  tasks,
+  empty,
+  permissions,
+  onAction,
+  onDirtyChange,
+  retryAll = false,
+  removeAll = false,
+  cancelAll = false,
+  cancelAllLabel = "Cancel all",
+  onRetryAll,
+  onRemoveAll,
+  onCancelAll
+}) => (
   <section className="admin-panel">
     <div className="admin-section-heading">
       <div>
@@ -193,7 +213,9 @@ const QueueSection = ({title, kicker, tasks, empty, permissions, onAction, onDir
         <h2>{title}</h2>
       </div>
       <div className="admin-action-row">
+        {cancelAll && permissions.canWrite && tasks.length ? <button className="admin-button ghost small" type="button" onClick={onCancelAll}>{cancelAllLabel}</button> : null}
         {retryAll && permissions.canWrite && tasks.length ? <button className="admin-button ghost small" type="button" onClick={onRetryAll}>Retry all</button> : null}
+        {removeAll && permissions.canWrite && tasks.length ? <button className="admin-button ghost small" type="button" onClick={onRemoveAll}>Remove all removable</button> : null}
         <span className="admin-muted">{tasks.length} task{tasks.length === 1 ? "" : "s"}</span>
       </div>
     </div>
@@ -289,6 +311,47 @@ export const QueuePage = ({user}) => {
     await refresh();
   };
 
+  const handleBulkQueueAction = async (url, successFallback, failureFallback, confirmMessage) => {
+    if (confirmMessage && typeof window !== "undefined" && !window.confirm(confirmMessage)) {
+      return;
+    }
+    const result = await requestJson(url, {method: "POST"});
+    const message = result.ok
+      ? result.payload?.message || successFallback
+      : result.payload?.error || failureFallback;
+    setFlash({
+      tone: result.ok ? "good" : "bad",
+      text: message
+    });
+    notify({
+      message,
+      tone: result.ok ? "good" : "bad",
+      category: "job"
+    });
+    await refresh();
+  };
+
+  const handleRemoveAll = () => handleBulkQueueAction(
+    "/api/moon/v3/admin/activity/queue/remove-all",
+    "Removed Raven recovery tasks.",
+    "Unable to remove recovery tasks.",
+    "Remove all removable Raven recovery tasks?"
+  );
+
+  const handleCancelQueued = () => handleBulkQueueAction(
+    "/api/moon/v3/admin/activity/queue/cancel-queued",
+    "Cancelled queued Raven tasks.",
+    "Unable to cancel queued tasks.",
+    "Cancel all queued Raven tasks?"
+  );
+
+  const handleCancelRunning = () => handleBulkQueueAction(
+    "/api/moon/v3/admin/activity/queue/cancel-running",
+    "Cancelled running Raven tasks.",
+    "Unable to cancel running tasks.",
+    "Cancel all running Raven tasks?"
+  );
+
   if (loading) {
     return (
       <section className="admin-panel admin-state-panel">
@@ -350,9 +413,12 @@ export const QueuePage = ({user}) => {
         kicker="Live work"
         tasks={normalizeArray(payload.running)}
         empty="Raven is idle right now."
-        permissions={permissions}
+        permissions={{...permissions, canWrite: permissions.canRoot}}
         onAction={handleAction}
         onDirtyChange={setEditorDirty}
+        cancelAll
+        cancelAllLabel="Cancel all"
+        onCancelAll={handleCancelRunning}
       />
       <QueueSection
         title="Queued"
@@ -362,6 +428,9 @@ export const QueuePage = ({user}) => {
         permissions={permissions}
         onAction={handleAction}
         onDirtyChange={setEditorDirty}
+        cancelAll
+        cancelAllLabel="Cancel all queued"
+        onCancelAll={handleCancelQueued}
       />
       <QueueSection
         title="Needs attention"
@@ -372,7 +441,9 @@ export const QueuePage = ({user}) => {
         onAction={handleAction}
         onDirtyChange={setEditorDirty}
         retryAll
+        removeAll
         onRetryAll={handleRetryAll}
+        onRemoveAll={handleRemoveAll}
       />
     </div>
   );

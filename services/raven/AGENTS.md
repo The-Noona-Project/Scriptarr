@@ -26,8 +26,14 @@ Raven is Scriptarr's Java download, library, metadata, and VPN-aware download en
 - Keep VPN-backed downloads fail-closed when Raven VPN is enabled and Raven cannot safely confirm or establish the tunnel.
 - Raven download tasks must not hit `100%` until file promotion and brokered catalog persistence both succeed. If
   persistence fails, fail the task with the real error instead of leaving it hanging at `90%`.
+- `/downloadall` must skip completed catalog titles, append only missing/new chapters for existing non-completed
+  titles, reject invalid provider URLs, and create durable runs that cannot stall forever on a stale title task.
+- Page-level source damage should become catalog quality data, not a whole-title dead end: refresh page lists after
+  image 404s, generate Scriptarr missing-page placeholders when needed, and mark partial, missing-content, or
+  bad-source quality states deterministically.
 - Startup recovery should reconcile finished `downloaded/<type>/...` archives back into the catalog and collapse
-  duplicate restorable tasks for the same logical request or title.
+  duplicate restorable tasks for the same logical request or title, but it must run after Raven exposes health so a
+  large catalog or slow broker write cannot keep the container unhealthy.
 - Old Noona Raven and Komf code are reference material only. Port behavior intentionally, but do not restore Selenium
   or browser-driven scraping.
 - Manual metadata overrides are admin-visible contracts and should stay documented.

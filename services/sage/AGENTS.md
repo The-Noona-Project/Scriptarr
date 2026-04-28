@@ -17,6 +17,10 @@ HTTP broker.
 - Keep request intake centralized here. Sage should broker Raven intake search, persist the selected metadata or
   download snapshots in Vault, and queue the exact saved Raven target during moderation or admin immediate-add flows.
 - Broker `raven.download.providers` through the same settings path as Raven metadata and VPN configuration.
+- Keep Raven durable `/downloadall` runs, Missing Content aliases, and queue bulk actions brokered through Sage so Moon
+  and Portal never call Raven directly from browsers or Discord runtime code.
+- Portal-facing downloadall notifications should use stable ack ids and only acknowledge after Portal confirms the
+  requester DM was sent.
 - Keep Moon's trusted public API brokered here. Sage should hash stored API keys, issue short-lived selection tokens,
   and enforce NSFW plus duplicate guards before queueing external requests at the lowest priority.
 - Keep Warden aggregation split by contract: `/health` for service health, `/api/bootstrap` for the static plan, and

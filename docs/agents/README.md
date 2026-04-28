@@ -31,19 +31,22 @@ Architecture invariants:
 - Active requests now use a durable Vault work key so duplicate submissions across Moon, Discord, admin, and the
   public API collapse cleanly under concurrency.
 - Request-linked moderation and Raven completion events can now trigger one Portal DM per request state when a Discord
-  id is available. Completed Raven tasks can also queue one release-channel post with a durable `release:<taskId>` ack.
+  id is available. Completed Raven tasks can also queue one release-channel post with a durable `release:<taskId>` ack,
+  and durable `/downloadall` batches can queue requester DMs with `downloadall:<runId>:<batchId>:<status>` acks.
 - Moon web request creation now lives in `/myrequests`, Discord `/request` now uses the same metadata-only requester
   flow, admins choose download sources during approval from `/admin/requests`, and unavailable requests are Sage-owned
   records that recheck every 4 hours and expire after 90 days.
 - Moon admin Wanted uses dedicated repair pages: `/admin/wanted/metadata` for provider metadata apply, and
-  `/admin/wanted/missing-chapters` for coverage repair via staged replacement downloads. The old metadata-gaps path is
-  legacy-only and should redirect.
+  `/admin/wanted/missing-content` for coverage repair, damaged-page review, and bad-source summaries via staged
+  replacement downloads. The old metadata-gaps and missing-chapters paths are legacy-only and should redirect.
 - Raven now exposes merged metadata-provider and download-provider tags as one canonical tag set for library and
   moderation surfaces, while keeping source attribution internally for debugging.
 - Raven stores in-flight downloads under `downloading/<type>/...` and promotes completed library content into
   `downloaded/<type>/...`.
 - Raven should only report `100%` after the promoted files persist into the brokered catalog, and startup recovery now
   rescans finished `downloaded/<type>/...` content to heal missing library rows.
+- Raven should skip completed titles during `/downloadall`, append only missing/new chapters for existing active
+  titles, and convert source-image damage into Missing Content quality fields instead of wedging a whole batch.
 - Oracle is now a FastAPI Python service that keeps the same Sage-facing wire contract.
 - Warden-managed LocalAI presets use the LocalAI AIO images and must wait for readiness before surfacing success.
 - Raven VPN fails closed when enabled, and the internal `raven.naming` setting now controls chapter and page naming.

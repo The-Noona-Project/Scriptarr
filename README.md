@@ -139,9 +139,10 @@ For end-to-end Docker verification, use:
   provider target cannot create parallel active requests.
 - Vault now also persists reusable permission groups, user-group assignments, and the shared durable event log that
   powers `/admin/users`, `/admin/requests`, `/admin/system/events`, and other live admin timelines.
-- Moon admin Wanted now has dedicated Missing Chapters and Metadata pages. `/admin/wanted/metadata` is the canonical
+- Moon admin Wanted now has dedicated Missing Content and Metadata pages. `/admin/wanted/metadata` is the canonical
   metadata repair route, while the old `/admin/wanted/metadata-gaps` path redirects there. Metadata applies through
-  Sage into Raven's identify flow, and missing chapter repair queues Raven's safe staged replacement downloads.
+  Sage into Raven's identify flow. `/admin/wanted/missing-content` is canonical for chapter gaps, damaged pages,
+  partial chapters, and bad-source summaries; the old `/admin/wanted/missing-chapters` path redirects there.
 - The admin permission model includes a `database` domain. Owners bypass it, while non-owner admins need database
   grants before they can open the redacted DB explorer under `/admin/settings/database`.
 - Duplicate request attempts now attach the requester to a hidden waitlist instead of creating a second visible row.
@@ -152,14 +153,15 @@ For end-to-end Docker verification, use:
   superuser.
 - The DM-only `downloadall` flow now stays provider-browse first but resolves metadata before queueing each title. It
   now uses a global DM slash command as the supported path: `/downloadall run ...`, `/downloadall status ...`,
-  `/downloadall continue ...`, `/downloadall cancel ...`, and `/downloadall help`. Single concrete type plus single
-  `titlegroup` requests keep the one-shot path; `all` selections start an async mega run that pauses after each batch.
-  Portal still keeps the old raw DM text form as a legacy best-effort fallback, but that path depends on Discord
-  delivering normal DM message events.
-- The bulk flow only queues titles with one confident metadata match and reports already-active, adult-content,
-  no-metadata, ambiguous-metadata, and failed skips back in the Discord DM summary instead of silently creating
-  metadata-less library entries. When `nsfw:false` is used, Raven requires an explicit WeebCentral `Adult Content: No`.
-  That owner-only command is intentionally locked to WeebCentral and will fail fast if WeebCentral is disabled.
+  `/downloadall continue ...`, `/downloadall cancel ...`, and `/downloadall help`. Every run is durable now, including
+  single concrete type plus single `titlegroup` requests, so Portal can DM delayed summaries and continuation prompts.
+  Multi-batch selections pause after each batch. Portal still keeps the old raw DM text form as a legacy best-effort
+  fallback, but that path also creates a durable run.
+- The bulk flow only queues titles with one confident metadata match and reports already-active, completed,
+  already-current, adult-content, no-metadata, ambiguous-metadata, invalid-source, appended, and failed outcomes back
+  in the Discord DM summary. Completed library titles are skipped, in-progress titles append only missing or new
+  chapters, and `nsfw:false` still requires explicit WeebCentral `Adult Content: No`. That owner-only command is
+  intentionally locked to WeebCentral and will fail fast if WeebCentral is disabled.
 - Portal now prefers a minimal Discord runtime over going fully dark when privileged intents are unavailable, so slash
   commands and DMs can stay online while onboarding is shown as degraded in Moon admin.
 - Discord `/subscribe` reuses Moon's shared follow store, so Moon and Discord notifications stay aligned instead of
@@ -210,7 +212,8 @@ For end-to-end Docker verification, use:
   `downloaded/<type>/...` tree on boot to recover missing catalog records from finished files.
 - Moon admin's live queue keeps ETA on active downloads only, shows recovery actions for failed or stale Raven title
   tasks, excludes service update/restart jobs from Needs attention, and can remove incomplete working folders without
-  deleting promoted library content.
+  deleting promoted library content. Section bulk actions can cancel all queued work, cancel all running work for root
+  admins, retry all recovery items, or remove all removable recovery items.
 - Moon admin System Tasks are allowlisted maintenance jobs only, not arbitrary shell execution. Sage persists their
   cron schedules in Vault, prevents overlapping runs, and emits durable job or event history for scheduled and manual
   runs.

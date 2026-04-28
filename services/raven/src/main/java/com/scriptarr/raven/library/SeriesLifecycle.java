@@ -34,7 +34,7 @@ public final class SeriesLifecycle {
             case "hiatus", "on hiatus", "on hold", "paused" -> "hiatus";
             case "cancelled", "canceled", "discontinued" -> "cancelled";
             case "not yet released", "upcoming", "unreleased", "tba" -> "upcoming";
-            default -> normalized.isBlank() ? "" : normalized.replace(' ', '-');
+            default -> "unknown";
         };
     }
 }
