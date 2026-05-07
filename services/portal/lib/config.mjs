@@ -41,6 +41,7 @@ export const PORTAL_COMMAND_NAMES = Object.freeze([
   "search",
   "request",
   "subscribe",
+  "trivia",
   "downloadall"
 ]);
 
@@ -73,6 +74,28 @@ export const resolvePortalConfig = (env = process.env) => ({
     },
     notifications: {
       releaseChannelId: normalizeOptionalString(env.SCRIPTARR_DISCORD_RELEASE_CHANNEL_ID)
+    },
+    trivia: {
+      enabled: false,
+      channelId: normalizeOptionalString(env.SCRIPTARR_DISCORD_TRIVIA_CHANNEL_ID),
+      leaderboardChannelId: normalizeOptionalString(env.SCRIPTARR_DISCORD_TRIVIA_LEADERBOARD_CHANNEL_ID),
+      roundDurationMinutes: 20,
+      cooldownMinMinutes: 30,
+      cooldownMaxMinutes: 180,
+      baseXp: 10,
+      speedBonusMax: 5,
+      streakBonusPerWin: 2,
+      streakBonusMax: 10,
+      hintsEnabled: true,
+      hintMinutes: [7, 14],
+      aiMatchingEnabled: true,
+      leaderboardAfterRound: true,
+      leaderboardSchedules: {
+        daily: true,
+        weekly: true,
+        monthly: true,
+        hour: 20
+      }
     },
     commands: resolveCommandDefaults(env)
   }

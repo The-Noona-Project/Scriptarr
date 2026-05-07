@@ -44,7 +44,11 @@ under System/Updates/Events; Sage does not yet expose a Moon queue cleanup actio
 Sage also brokers Portal's owner-only DM-only WeebCentral `/downloadall` workflow. All requests now proxy to Raven's
 durable bulk-run create path, while status, continue/resume, and cancel paths let each batch pause for owner approval.
 Sage exposes a Portal notification queue for paused, completed, failed, or cancelled run batches and acknowledges those
-notifications only after Portal confirms the requester DM.
+notifications only after Portal confirms the requester DM. Paused downloadall DMs can persist reaction decision
+prompts through Sage so the owner can continue with a check reaction or cancel with a cross reaction; duplicate or
+expired prompt decisions are idempotent.
+Sage also brokers compact paginated Moon library card reads from Raven's card projection. Browse and shelf clients
+should use that route and reserve full title payloads for title detail and reader APIs.
 Sage also owns the root-only content reset preview plus execute flow for Moon admin. It previews Vault plus Raven reset
 scope, requires an explicit confirmation string, appends durable reset events, clears Vault's content-side state, and
 then tells Raven to wipe its managed catalog, tasks, and managed download folders.
@@ -59,6 +63,9 @@ Sage also brokers the Moon Settings hub. Branding site name, uploaded WebP logo 
 personal toast overrides, Raven VPN, provider settings, request workflow, and Discord essentials all stay Vault-backed
 and browser-safe. The DB explorer routes under `/api/moon-v3/admin/settings/database` require the `database` admin
 domain, read only through Vault's allowlisted explorer contract, and only write validated settings JSON.
+The Settings payload also carries Raven health's VPN runtime details so Moon can display runtime capability and
+settings freshness without polling Raven directly. Sage also brokers the admin VPN test action to Raven and returns
+only sanitized runtime state, never PIA credentials.
 The v3 Settings save surface includes explicit Raven metadata-provider, Raven download-provider, and Portal Discord
 basics routes so Moon no longer has to rely on generic legacy settings mutations for those sections. Sage also exposes
 the dedicated Discord settings routes for the full `/admin/discord` page, including release notification channel tests.

@@ -38,8 +38,11 @@ public class BulkRunService {
     private static final String STATUS_FAILED = "failed";
     private static final String STATUS_CANCELLED = "cancelled";
     private static final int MAX_TITLE_ATTEMPTS = 3;
+    private static final int DEFAULT_BATCHES_PER_APPROVAL = 1;
+    private static final int MAX_BATCHES_PER_APPROVAL = 25;
     private static final Duration POLL_DELAY = Duration.ofSeconds(2);
     private static final Duration TITLE_PROGRESS_TIMEOUT = Duration.ofMinutes(45);
+    private static final Duration BATCH_PROGRESS_TIMEOUT = Duration.ofMinutes(90);
     private static final List<String> BULK_TYPES = List.of("Manga", "Manhwa", "Manhua", "OEL");
     private static final List<String> TITLE_GROUPS = List.of(
         "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M",
@@ -89,6 +92,7 @@ public class BulkRunService {
         );
         List<String> types = resolveTypes(typeFilter);
         List<String> groups = resolveTitleGroups(groupFilter);
+        boolean nsfw = booleanValue(request.get("nsfw"));
         String runId = "bulkrun_" + UUID.randomUUID().toString().replace("-", "");
         String now = Instant.now().toString();
 
@@ -96,8 +100,9 @@ public class BulkRunService {
         runPayload.put("providerId", PROVIDER_ID);
         runPayload.put("type", normalizeRunTypeFilter(typeFilter));
         runPayload.put("titlegroup", normalizeRunGroupFilter(groupFilter));
-        runPayload.put("nsfw", false);
+        runPayload.put("nsfw", nsfw);
         runPayload.put("batchCount", groups.size() * types.size());
+        runPayload.put("batchesPerApproval", resolveBatchesPerApproval(request.get("batchesPerApproval"), request.get("groupsize")));
 
         Map<String, Object> job = new LinkedHashMap<>();
         job.put("jobId", runId);
@@ -117,7 +122,7 @@ public class BulkRunService {
         int sortOrder = 0;
         for (String group : groups) {
             for (String type : types) {
-                putBatchTask(runId, buildBatchTask(runId, requestedBy, type, group, sortOrder, now));
+                putBatchTask(runId, buildBatchTask(runId, requestedBy, type, group, nsfw, sortOrder, now));
                 sortOrder++;
             }
         }
@@ -260,14 +265,19 @@ public class BulkRunService {
         try {
             Map<String, Object> job = requireRun(runId);
             updateRunStatus(job, STATUS_RUNNING, "Raven mega downloadall is running.", buildRunSummary(loadBatchTasks(runId)));
-            Map<String, Object> batch = nextRunnableBatch(runId);
-            if (batch == null) {
-                Map<String, Object> completedJob = requireRun(runId);
-                updateRunStatus(completedJob, STATUS_COMPLETED, "Raven mega downloadall completed.", buildRunSummary(loadBatchTasks(runId)));
-                return;
+            int batchesPerApproval = resolveBatchesPerApproval(normalizeMap(job.get("payload")).get("batchesPerApproval"));
+            int processedBatches = 0;
+            while (processedBatches < batchesPerApproval) {
+                Map<String, Object> batch = nextRunnableBatch(runId);
+                if (batch == null) {
+                    Map<String, Object> completedJob = requireRun(runId);
+                    updateRunStatus(completedJob, STATUS_COMPLETED, "Raven mega downloadall completed.", buildRunSummary(loadBatchTasks(runId)));
+                    return;
+                }
+                throwIfRunCancelled(runId);
+                processBatch(runId, batch);
+                processedBatches++;
             }
-            throwIfRunCancelled(runId);
-            processBatch(runId, batch);
             Map<String, Object> refreshedJob = requireRun(runId);
             if (nextRunnableBatch(runId) == null) {
                 updateRunStatus(refreshedJob, STATUS_COMPLETED, "Raven mega downloadall completed.", buildRunSummary(loadBatchTasks(runId)));
@@ -321,13 +331,14 @@ public class BulkRunService {
         Map<String, Object> payload = normalizeMap(batch.get("payload"));
         String type = stringValue(payload.get("type"));
         String titleGroup = stringValue(payload.get("titleGroup"));
+        boolean nsfw = booleanValue(payload.get("nsfw"));
         batch = withBatchStatus(batch, STATUS_RUNNING, "Queueing " + titleGroup + " " + type + ".", 5);
         putBatchTask(runId, batch);
 
         BulkQueueDownloadResult bulkResult = downloaderService.bulkQueueDownload(
             PROVIDER_ID,
             type,
-            false,
+            nsfw,
             titleGroup,
             stringValue(payload.get("requestedBy"))
         );
@@ -363,12 +374,15 @@ public class BulkRunService {
             throwIfRunCancelled(runId);
             Map<String, Object> result = new LinkedHashMap<>(normalizeMap(mutableBatch.get("result")));
             Map<String, Object> attempts = new LinkedHashMap<>(normalizeMap(result.get("attempts")));
+            Map<String, Object> observedStatuses = new LinkedHashMap<>();
             Set<String> completedTaskIds = new LinkedHashSet<>(stringList(result.get("completedTaskIds")));
             Set<String> failedTaskIds = new LinkedHashSet<>(stringList(result.get("failedTaskIds")));
             Set<String> removedTaskIds = new LinkedHashSet<>(stringList(result.get("removedTaskIds")));
             Set<String> missingTaskIds = new LinkedHashSet<>(stringList(result.get("missingTaskIds")));
+            Set<String> staleTaskIds = new LinkedHashSet<>(stringList(result.get("staleTaskIds")));
             boolean allDone = true;
             boolean changed = false;
+            boolean anyRunning = false;
             Map<String, Map<String, Object>> snapshotsByTaskId = titleTasksById();
 
             for (String taskId : taskIds) {
@@ -377,49 +391,104 @@ public class BulkRunService {
                 }
                 Map<String, Object> task = snapshotsByTaskId.get(taskId);
                 String status = stringValue(task == null ? "" : task.get("status")).toLowerCase(Locale.ROOT);
+                observedStatuses.put(taskId, status.isBlank() ? "missing" : status);
                 if (task == null) {
                     missingTaskIds.add(taskId);
                     changed = true;
                     continue;
                 }
+                if (STATUS_RUNNING.equals(status)) {
+                    anyRunning = true;
+                }
                 if (STATUS_RUNNING.equals(status) && isTitleTaskStale(task)) {
-                    downloaderService.cancelTask(taskId);
+                    safeCancelTask(taskId);
                     task = titleTasksById().get(taskId);
                     status = stringValue(task == null ? "" : task.get("status")).toLowerCase(Locale.ROOT);
+                    staleTaskIds.add(taskId);
                     changed = true;
                 }
                 if (STATUS_COMPLETED.equals(status)) {
                     changed = completedTaskIds.add(taskId) || changed;
                     continue;
                 }
+                if (STATUS_CANCELLED.equals(status)) {
+                    safeRemoveTask(taskId);
+                    removedTaskIds.add(taskId);
+                    failedTaskIds.add(taskId);
+                    staleTaskIds.add(taskId);
+                    changed = true;
+                    continue;
+                }
                 if (STATUS_FAILED.equals(status)) {
                     int attemptsUsed = Math.max(1, toInt(attempts.get(taskId), 1));
                     if (attemptsUsed < MAX_TITLE_ATTEMPTS) {
-                        downloaderService.retryTask(taskId);
+                        safeRetryTask(taskId);
                         attempts.put(taskId, attemptsUsed + 1);
                         allDone = false;
                         changed = true;
                     } else {
-                        downloaderService.removeTask(taskId);
+                        safeRemoveTask(taskId);
                         removedTaskIds.add(taskId);
                         failedTaskIds.add(taskId);
                         changed = true;
                     }
                     continue;
                 }
+                if (isNonProgressingQueuedTask(status) && isTitleTaskStale(task)) {
+                    safeRemoveTask(taskId);
+                    removedTaskIds.add(taskId);
+                    failedTaskIds.add(taskId);
+                    staleTaskIds.add(taskId);
+                    changed = true;
+                    continue;
+                }
                 allDone = false;
             }
 
+            int finishedCount = completedTaskIds.size() + removedTaskIds.size() + missingTaskIds.size();
+            int previousFinishedCount = toInt(result.get("lastFinishedCount"), 0);
+            if (changed || finishedCount > previousFinishedCount || stringValue(result.get("lastProgressAt")).isBlank()) {
+                result.put("lastProgressAt", Instant.now().toString());
+            }
             result.put("attempts", attempts);
+            result.put("observedStatuses", observedStatuses);
             result.put("completedTaskIds", List.copyOf(completedTaskIds));
             result.put("failedTaskIds", List.copyOf(failedTaskIds));
             result.put("removedTaskIds", List.copyOf(removedTaskIds));
             result.put("missingTaskIds", List.copyOf(missingTaskIds));
+            result.put("staleTaskIds", List.copyOf(staleTaskIds));
+            result.put("lastFinishedCount", finishedCount);
+            result.put("terminalCounts", Map.of(
+                "completed", completedTaskIds.size(),
+                "failed", failedTaskIds.size(),
+                "removed", removedTaskIds.size(),
+                "missing", missingTaskIds.size(),
+                "stale", staleTaskIds.size()
+            ));
             mutableBatch.put("result", result);
-            int finishedCount = completedTaskIds.size() + removedTaskIds.size() + missingTaskIds.size();
             int percent = taskIds.isEmpty() ? 100 : Math.min(99, 25 + (int) Math.floor((finishedCount / (double) taskIds.size()) * 70));
             if (allDone) {
                 mutableBatch = withBatchStatus(mutableBatch, STATUS_COMPLETED, "Batch completed.", 100);
+                putBatchTask(runId, mutableBatch);
+                return;
+            }
+            if (!anyRunning && isBatchProgressStale(result)) {
+                for (String taskId : taskIds) {
+                    if (completedTaskIds.contains(taskId) || removedTaskIds.contains(taskId) || missingTaskIds.contains(taskId)) {
+                        continue;
+                    }
+                    safeRemoveTask(taskId);
+                    removedTaskIds.add(taskId);
+                    failedTaskIds.add(taskId);
+                    staleTaskIds.add(taskId);
+                }
+                result.put("failedTaskIds", List.copyOf(failedTaskIds));
+                result.put("removedTaskIds", List.copyOf(removedTaskIds));
+                result.put("staleTaskIds", List.copyOf(staleTaskIds));
+                result.put("lastFinishedCount", completedTaskIds.size() + removedTaskIds.size() + missingTaskIds.size());
+                result.put("lastProgressAt", Instant.now().toString());
+                mutableBatch.put("result", result);
+                mutableBatch = withBatchStatus(mutableBatch, STATUS_COMPLETED, "Batch completed with stale title task failures.", 100);
                 putBatchTask(runId, mutableBatch);
                 return;
             }
@@ -434,13 +503,13 @@ public class BulkRunService {
         }
     }
 
-    private Map<String, Object> buildBatchTask(String runId, String requestedBy, String type, String titleGroup, int sortOrder, String now) {
+    private Map<String, Object> buildBatchTask(String runId, String requestedBy, String type, String titleGroup, boolean nsfw, int sortOrder, String now) {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("providerId", PROVIDER_ID);
         payload.put("type", type);
         payload.put("titleGroup", titleGroup);
         payload.put("titlePrefix", titleGroup);
-        payload.put("nsfw", false);
+        payload.put("nsfw", nsfw);
         payload.put("requestedBy", requestedBy);
 
         Map<String, Object> task = new LinkedHashMap<>();
@@ -453,7 +522,7 @@ public class BulkRunService {
         task.put("percent", 0);
         task.put("sortOrder", sortOrder);
         task.put("payload", payload);
-        task.put("result", emptyBatchResult(type, titleGroup));
+        task.put("result", emptyBatchResult(type, titleGroup, nsfw));
         task.put("createdAt", now);
         task.put("startedAt", null);
         task.put("finishedAt", null);
@@ -552,14 +621,18 @@ public class BulkRunService {
         payload.put("failedTaskIds", List.of());
         payload.put("removedTaskIds", List.of());
         payload.put("missingTaskIds", List.of());
+        payload.put("staleTaskIds", List.of());
+        payload.put("lastProgressAt", "");
+        payload.put("lastFinishedCount", 0);
+        payload.put("observedStatuses", Map.of());
         return payload;
     }
 
-    private Map<String, Object> emptyBatchResult(String type, String titleGroup) {
+    private Map<String, Object> emptyBatchResult(String type, String titleGroup, boolean nsfw) {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("status", STATUS_QUEUED);
         result.put("message", "");
-        result.put("filters", Map.of("type", type, "nsfw", false, "titlePrefix", titleGroup));
+        result.put("filters", Map.of("type", type, "nsfw", nsfw, "titlePrefix", titleGroup));
         result.put("taskIds", List.of());
         result.put("queuedTaskIds", List.of());
         result.put("skippedCompletedTitles", List.of());
@@ -570,6 +643,10 @@ public class BulkRunService {
         result.put("failedTaskIds", List.of());
         result.put("removedTaskIds", List.of());
         result.put("missingTaskIds", List.of());
+        result.put("staleTaskIds", List.of());
+        result.put("lastProgressAt", "");
+        result.put("lastFinishedCount", 0);
+        result.put("observedStatuses", Map.of());
         result.put("attempts", Map.of());
         return result;
     }
@@ -599,6 +676,9 @@ public class BulkRunService {
         summary.put("completedTitleTaskCount", 0);
         summary.put("failedTitleTaskCount", 0);
         summary.put("removedFailedTaskCount", 0);
+        summary.put("staleTitleTaskCount", 0);
+        summary.put("lastCompletedBatch", Map.of());
+        summary.put("nextBatch", Map.of());
         summary.put("queuedTaskIds", List.of());
         return summary;
     }
@@ -606,9 +686,16 @@ public class BulkRunService {
     private Map<String, Object> buildRunSummary(List<Map<String, Object>> batches) {
         Map<String, Object> summary = emptyRunSummary(batches.size());
         List<String> queuedTaskIds = new ArrayList<>();
+        Map<String, Object> lastCompletedBatch = Map.of();
+        Map<String, Object> nextBatch = Map.of();
         for (Map<String, Object> batch : batches) {
             String status = stringValue(batch.get("status")).toLowerCase(Locale.ROOT);
             increment(summary, status + "Batches", 1);
+            if (STATUS_COMPLETED.equals(status)) {
+                lastCompletedBatch = compactBatchWindow(batch);
+            } else if (nextBatch.isEmpty() && !isBatchTerminal(status)) {
+                nextBatch = compactBatchWindow(batch);
+            }
             Map<String, Object> result = normalizeMap(batch.get("result"));
             increment(summary, "pagesScanned", toInt(result.get("pagesScanned"), 0));
             increment(summary, "matchedCount", toInt(result.get("matchedCount"), 0));
@@ -625,12 +712,27 @@ public class BulkRunService {
             increment(summary, "completedTitleTaskCount", stringList(result.get("completedTaskIds")).size());
             increment(summary, "failedTitleTaskCount", stringList(result.get("failedTaskIds")).size());
             increment(summary, "removedFailedTaskCount", stringList(result.get("removedTaskIds")).size());
+            increment(summary, "staleTitleTaskCount", stringList(result.get("staleTaskIds")).size());
             queuedTaskIds.addAll(stringList(result.get("taskIds")));
         }
         int completedBatches = toInt(summary.get("completedBatches"), 0);
         summary.put("remainingBatches", Math.max(0, batches.size() - completedBatches));
+        summary.put("lastCompletedBatch", lastCompletedBatch);
+        summary.put("nextBatch", nextBatch);
         summary.put("queuedTaskIds", List.copyOf(queuedTaskIds));
         return summary;
+    }
+
+    private Map<String, Object> compactBatchWindow(Map<String, Object> batch) {
+        Map<String, Object> filters = normalizeMap(batch.get("payload"));
+        return Map.of(
+            "batchId", stringValue(batch.get("taskId")),
+            "label", stringValue(batch.get("label")),
+            "status", stringValue(batch.get("status")),
+            "type", stringValue(filters.get("type")),
+            "titlegroup", stringValue(filters.get("titleGroup")),
+            "sortOrder", toInt(batch.get("sortOrder"), 0)
+        );
     }
 
     private void increment(Map<String, Object> values, String key, int amount) {
@@ -723,6 +825,56 @@ public class BulkRunService {
         } catch (Exception ignored) {
             return false;
         }
+    }
+
+    private boolean isBatchProgressStale(Map<String, Object> result) {
+        String lastProgressAt = stringValue(result.get("lastProgressAt"));
+        if (lastProgressAt.isBlank()) {
+            return false;
+        }
+        try {
+            return Instant.parse(lastProgressAt).isBefore(Instant.now().minus(BATCH_PROGRESS_TIMEOUT));
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    private boolean isNonProgressingQueuedTask(String status) {
+        return STATUS_QUEUED.equals(status) || status.isBlank() || "pending".equals(status);
+    }
+
+    private void safeCancelTask(String taskId) {
+        try {
+            downloaderService.cancelTask(taskId);
+        } catch (Exception error) {
+            logger.warn("DOWNLOAD", "Bulk run could not cancel a stale title task.", "taskId=" + taskId + " error=" + error.getMessage());
+        }
+    }
+
+    private void safeRetryTask(String taskId) {
+        try {
+            downloaderService.retryTask(taskId);
+        } catch (Exception error) {
+            logger.warn("DOWNLOAD", "Bulk run could not retry a failed title task.", "taskId=" + taskId + " error=" + error.getMessage());
+        }
+    }
+
+    private void safeRemoveTask(String taskId) {
+        try {
+            downloaderService.removeTask(taskId);
+        } catch (Exception error) {
+            logger.warn("DOWNLOAD", "Bulk run could not remove a failed title task.", "taskId=" + taskId + " error=" + error.getMessage());
+        }
+    }
+
+    private int resolveBatchesPerApproval(Object... values) {
+        for (Object value : values) {
+            int parsed = toInt(value, 0);
+            if (parsed > 0) {
+                return Math.min(MAX_BATCHES_PER_APPROVAL, Math.max(DEFAULT_BATCHES_PER_APPROVAL, parsed));
+            }
+        }
+        return DEFAULT_BATCHES_PER_APPROVAL;
     }
 
     private Map<String, Object> requireRun(String runId) {
@@ -871,6 +1023,14 @@ public class BulkRunService {
         } catch (NumberFormatException ignored) {
             return fallback;
         }
+    }
+
+    private boolean booleanValue(Object value) {
+        if (value instanceof Boolean bool) {
+            return bool;
+        }
+        String normalized = stringValue(value).toLowerCase(Locale.ROOT);
+        return "true".equals(normalized) || "yes".equals(normalized) || "1".equals(normalized);
     }
 
     private String stringValue(Object value) {

@@ -7,7 +7,48 @@ import {formatDisplayValue, normalizeString} from "./format.js";
 const normalizeArray = (value) => Array.isArray(value) ? value : [];
 const normalizeObject = (value, fallback = {}) => value && typeof value === "object" && !Array.isArray(value) ? value : fallback;
 
-export const DEFAULT_COMMANDS = ["ding", "status", "chat", "search", "request", "subscribe", "downloadall"];
+export const DEFAULT_COMMANDS = ["ding", "status", "chat", "search", "request", "subscribe", "trivia", "downloadall"];
+
+const normalizeBoolean = (value, fallback = false) => typeof value === "boolean" ? value : fallback;
+const normalizeInteger = (value, fallback, min = 0, max = Number.MAX_SAFE_INTEGER) => {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+  if (!Number.isInteger(parsed)) {
+    return fallback;
+  }
+  return Math.min(max, Math.max(min, parsed));
+};
+
+export const normalizeTriviaSettings = (value = {}) => {
+  const source = normalizeObject(value);
+  const schedules = normalizeObject(source.leaderboardSchedules);
+  const cooldownMin = normalizeInteger(source.cooldownMinMinutes, 30, 1, 1440);
+  const cooldownMax = Math.max(cooldownMin, normalizeInteger(source.cooldownMaxMinutes, 180, cooldownMin, 1440));
+  return {
+    enabled: normalizeBoolean(source.enabled, false),
+    channelId: normalizeString(source.channelId),
+    leaderboardChannelId: normalizeString(source.leaderboardChannelId),
+    roundDurationMinutes: normalizeInteger(source.roundDurationMinutes, 20, 1, 240),
+    cooldownMinMinutes: cooldownMin,
+    cooldownMaxMinutes: cooldownMax,
+    baseXp: normalizeInteger(source.baseXp, 10, 1, 10000),
+    speedBonusMax: normalizeInteger(source.speedBonusMax, 5, 0, 10000),
+    streakBonusPerWin: normalizeInteger(source.streakBonusPerWin, 2, 0, 10000),
+    streakBonusMax: normalizeInteger(source.streakBonusMax, 10, 0, 10000),
+    hintsEnabled: normalizeBoolean(source.hintsEnabled, true),
+    hintMinutes: (normalizeArray(source.hintMinutes).length ? normalizeArray(source.hintMinutes) : [7, 14])
+      .map((entry) => normalizeInteger(entry, 0, 1, 240))
+      .filter(Boolean)
+      .slice(0, 4),
+    aiMatchingEnabled: normalizeBoolean(source.aiMatchingEnabled, true),
+    leaderboardAfterRound: normalizeBoolean(source.leaderboardAfterRound, true),
+    leaderboardSchedules: {
+      daily: normalizeBoolean(schedules.daily, true),
+      weekly: normalizeBoolean(schedules.weekly, true),
+      monthly: normalizeBoolean(schedules.monthly, true),
+      hour: normalizeInteger(schedules.hour, 20, 0, 23)
+    }
+  };
+};
 
 /**
  * Normalize the Portal Discord settings draft.
@@ -32,6 +73,7 @@ export const normalizeDiscordSettings = (value = {}) => {
     notifications: {
       releaseChannelId: normalizeString(notifications.releaseChannelId)
     },
+    trivia: normalizeTriviaSettings(source.trivia),
     commands: Object.fromEntries(Array.from(commandIds).map((id) => {
       const command = normalizeObject(commands[id]);
       return [id, {

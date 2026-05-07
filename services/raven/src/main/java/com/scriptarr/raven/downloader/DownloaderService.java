@@ -986,9 +986,7 @@ public class DownloaderService {
         try {
             throwIfCancelled(taskId);
             update(taskId, "running", "Preparing Raven download.", 5);
-            if (vpnService != null) {
-                vpnService.ensureConnectedIfEnabled();
-            }
+            ensureVpnProtectedIfEnabled();
 
             DownloadProvider provider = resolveProvider(request);
             throwIfCancelled(taskId);
@@ -1111,6 +1109,12 @@ public class DownloaderService {
         return refreshed == null ? title : refreshed;
     }
 
+    private void ensureVpnProtectedIfEnabled() {
+        if (vpnService != null) {
+            vpnService.ensureConnectedIfEnabled();
+        }
+    }
+
     private ChapterDownloadResult downloadChapterWithRetries(
         DownloadProvider provider,
         Path titleRoot,
@@ -1124,6 +1128,7 @@ public class DownloaderService {
         IOException lastIoFailure = null;
 
         for (int attempt = 1; attempt <= CHAPTER_DOWNLOAD_RETRY_ATTEMPTS; attempt++) {
+            ensureVpnProtectedIfEnabled();
             List<String> images = findChapterPagesWithRetries(
                 provider,
                 request.titleName(),
@@ -1400,6 +1405,7 @@ public class DownloaderService {
         IOException lastFailure = null;
         for (int attempt = 1; attempt <= IMAGE_DOWNLOAD_RETRY_ATTEMPTS; attempt++) {
             try {
+                ensureVpnProtectedIfEnabled();
                 return downloadImage(imageUrl, chapterUrl);
             } catch (IOException error) {
                 lastFailure = error;

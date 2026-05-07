@@ -185,6 +185,7 @@ export const buildScriptarrStorageLayout = (rootPath) => {
         logs: buildFolderEntry(path.join(root, "sage", "logs"), "/var/log/scriptarr")
       },
       "scriptarr-moon": {
+        coverCache: buildFolderEntry(path.join(root, "moon", "cover-cache"), "/app/cover-cache"),
         logs: buildFolderEntry(path.join(root, "moon", "logs"), "/var/log/scriptarr")
       },
       "scriptarr-raven": {

@@ -119,6 +119,42 @@ export const createPortalApp = async ({
     }
   });
 
+  app.post("/api/trivia/start", async (req, res) => {
+    try {
+      await runtime.refreshSettings().catch(() => {});
+      res.json(await runtime.startTriviaRound(req.body || {}));
+    } catch (error) {
+      logger.warn("Portal trivia start failed.", {error});
+      res.status(409).json({
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
+  });
+
+  app.post("/api/trivia/stop", async (req, res) => {
+    try {
+      await runtime.refreshSettings().catch(() => {});
+      res.json(await runtime.stopTriviaRound(req.body || {}));
+    } catch (error) {
+      logger.warn("Portal trivia stop failed.", {error});
+      res.status(409).json({
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
+  });
+
+  app.post("/api/trivia/leaderboard/test", async (req, res) => {
+    try {
+      await runtime.refreshSettings().catch(() => {});
+      res.json(await runtime.postTriviaLeaderboard(req.body || {}));
+    } catch (error) {
+      logger.warn("Portal trivia leaderboard test failed.", {error});
+      res.status(409).json({
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
+  });
+
   app.post("/api/requests/from-discord", async (req, res) => {
     const discordUserId = normalizeString(req.body?.discordUserId);
     const username = normalizeString(req.body?.username, "Discord Reader");

@@ -39,8 +39,12 @@ for manga, manhwa, manhua, webtoon, comic, and OEL downloads while Raven keeps o
 
 When Raven VPN is enabled through Moon admin, downloads now fail closed if Raven cannot safely load the settings,
 resolve the requested PIA profile, or complete the OpenVPN handshake. Raven still uses the existing simplified
-enable/region/credentials admin contract, but the runtime now refreshes stale PIA profiles, reconnects on region
-changes, and uses short-lived credential files with `--auth-nocache`.
+enable/region/credentials admin contract, but the runtime now refreshes stale PIA profiles, validates downloaded
+profile archives before replacing the cache, reconnects on region changes or a dead tunnel, and uses short-lived
+credential files with `--auth-nocache`. Raven health includes `runtimeCapable`, `settingsFresh`, `protected`, and
+`lastError` so Moon can show whether direct downloads are intentionally blocked. An enabled idle VPN reports `armed`
+until a download or admin test starts OpenVPN; the brokered `/v1/vpn/test` path uses the same fail-closed guard and
+leaves a successful enabled tunnel connected.
 
 Raven's request intake is now provider-based on the download side. Enabled metadata providers run first, Raven expands
 aliases from those results, then the enabled download-provider registry checks site-specific scrapers for a concrete
@@ -59,8 +63,11 @@ Raven also exposes durable async bulk-run orchestration under `/v1/downloads/bul
 mega `downloadall` runs. A run can target one type/group or expand `type:all` and `titlegroup:all` into A-Z batches
 ordered group-first, then type. Run and batch state persist through Sage's generic job broker, batch status includes
 the Raven title task ids queued by that batch, and resume skips completed batches after a restart. Each batch still
-uses the same WeebCentral-only, `nsfw:false`, metadata-confident bulk queue path and retries failed run-owned title
-tasks up to three total attempts before removing the failed task through Raven's existing safe task removal.
+uses the same WeebCentral-only metadata-confident bulk queue path while preserving the owner's `nsfw` filter. The
+`groupsize`/`batchesPerApproval` setting controls how many batch tasks run before Raven pauses, and failed or stale
+run-owned title tasks retry up to three total attempts before safe removal lets the rest of the run continue.
+`/v1/library?view=card` returns the compact Moon shelf projection without chapter arrays or filesystem roots; full
+title and reader routes remain the detail paths.
 Raven now also treats cover art as first-class title metadata, carries it through intake, queue state, and library
 records, and exposes the same imagery Moon and Portal reuse in their UIs and embeds.
 Raven now also preserves chapter release dates from provider chapter scrapes and blends in richer title-level release

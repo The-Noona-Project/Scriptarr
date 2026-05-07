@@ -1,9 +1,11 @@
 # Oracle AI Notes
 
-- Oracle is read-only in v1.
+- Oracle is still non-mutating: it can chat, report status, and provide bounded structured assistance, but Sage owns
+  all tool execution and confirmations.
 - It starts disabled and OpenAI-first.
 - Oracle now runs as a FastAPI Python service while preserving the existing `/health`, `/api/status`, and `/api/chat`
-  contract for the rest of Scriptarr.
+  contract for the rest of Scriptarr, plus `/api/assist` for Sage-brokered planning, trivia matching advice, and
+  concise message assistance.
 - It still uses OpenAI-compatible wiring so LocalAI can be swapped in later.
 - It should gracefully return disabled or degraded responses when OpenAI or LocalAI is unavailable.
 - Keep degraded replies provider-specific so OpenAI failures are not reported as LocalAI outages, and keep the
@@ -18,3 +20,5 @@
 - Moon admin now manages Oracle from `/admin/system/ai` through Sage. Keep `/api/status` and `/api/chat` suitable for
   health display and the admin test prompt, and keep disabled or degraded responses friendly rather than making the
   broader stack unhealthy.
+- `/api/assist` must degrade to empty advisory output when Oracle is disabled, slow, or unhealthy. Do not let assist
+  failures block Portal notifications, trivia rounds, or admin pages.

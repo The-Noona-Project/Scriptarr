@@ -8,6 +8,60 @@ Audience split:
 - server admins: [../../ServerAdmin.md](../../ServerAdmin.md)
 - AI contributors: this folder and the service `AGENTS.md` files
 
+## Working Map For New Agents
+
+Start a task like this:
+
+1. Run `git status --short` and preserve unrelated dirty work.
+2. Read root [../../AGENTS.md](../../AGENTS.md), then the closest service `AGENTS.md` before editing under
+   `services/`.
+3. Use `rg` or `rg --files` to find the owning route, component, controller, or test.
+4. Sketch the request path before changing code so Moon, Sage, Vault, Portal, Raven, Oracle, and Warden keep their
+   ownership boundaries.
+
+Service ownership:
+
+- Moon owns browser-facing user/admin pages, same-origin proxies, public API docs, and Next builds.
+- Sage owns auth, access grants, Moon v3 admin/user APIs, internal service brokerage, AI tool enforcement, and workflow
+  coordination.
+- Vault owns durable records and is the only first-party service allowed to talk to MySQL.
+- Portal owns Discord gateway events, slash commands, DMs, reactions, trivia runtime, and notification delivery, but
+  persists and decides state through Sage.
+- Raven owns source scraping, downloader queues, `/downloadall`, library file promotion, media quality, naming, and VPN
+  protection.
+- Oracle owns AI chat/assist responses only; it may advise, but it must not execute Scriptarr mutations directly.
+- Warden owns container plans, Docker lifecycle, updates, health checks, and production service convergence.
+
+Common code paths:
+
+- Admin pages: `services/moon/apps/admin-next/components`.
+- User app pages: `services/moon/apps/user-next/components`.
+- Moon v3 proxy and public routes: `services/moon/lib`.
+- Sage Moon v3 and internal broker routes: `services/sage/lib/registerMoonV3Routes.mjs` and
+  `services/sage/lib/registerInternalBrokerRoutes.mjs`.
+- Portal Discord commands/runtime: `services/portal/lib/discord`.
+- Raven API/downloader/VPN: `services/raven/src/main/java/com/scriptarr/raven`.
+- Warden service plan/runtime: `services/warden/config` and `services/warden/core`.
+
+Testing ladder:
+
+- Cross-service smoke: `npm run docker:healthcheck`.
+- Deep stack flow: `npm run docker:test`, then `npm run docker:test:teardown` if the stack is left running.
+- Repo JS tests: `npm run test:js`.
+- Raven Java tests: `npm run test:raven`.
+- Service tests: `npm --workspace scriptarr-sage test`, `npm --workspace scriptarr-moon test`,
+  `npm --workspace scriptarr-portal test`, `npm --workspace scriptarr-vault test`, and
+  `npm --workspace scriptarr-warden test`.
+- Moon builds: `npm --workspace services/moon run build:admin` and
+  `npm --workspace services/moon run build:user`.
+
+Production rollout rules:
+
+- Prefer targeted image publishes for affected services instead of rebuilding unrelated containers.
+- Before restarting Raven, check active downloads and `/downloadall` state so long-running work is not interrupted.
+- Use Warden for prod updates and verify both stack health and the exact browser or Discord workflow that changed.
+- Keep secrets out of terminal summaries, docs, commits, and final messages.
+
 Verification defaults:
 
 - `npm run docker:healthcheck` is the first Docker-backed smoke path for AI contributors. It rebuilds current workspace
@@ -24,7 +78,7 @@ Architecture invariants:
 - Raven intake is now grouped by concrete provider target and edition-aware, so plain vs colored variants only stay
   separate when they truly resolve to different provider URLs.
 - Portal's Discord runtime is now live again, and the brokered `portal.discord` settings object is the source of truth
-  for guild id, onboarding, per-command role gates, release channel posts, and DM superuser rules.
+  for guild id, onboarding, per-command role gates, release channel posts, Noona trivia, and DM superuser rules.
 - Moon now serves trusted API-key surfaces and plain same-origin Swagger docs. Search is public, protected calls use
   `X-Scriptarr-Api-Key`, system keys inherit assigned permission groups, user keys stay scoped to the owning reader,
   and accepted external requests must stay at the lowest queue priority.
@@ -33,6 +87,8 @@ Architecture invariants:
 - Request-linked moderation and Raven completion events can now trigger one Portal DM per request state when a Discord
   id is available. Completed Raven tasks can also queue one release-channel post with a durable `release:<taskId>` ack,
   and durable `/downloadall` batches can queue requester DMs with `downloadall:<runId>:<batchId>:<status>` acks.
+- Portal's `/trivia` command and guild message handler are Sage-backed. Trivia rounds, guesses, score events,
+  leaderboard acks, and runtime state persist through Vault settings; Oracle may only advise borderline matches.
 - Moon web request creation now lives in `/myrequests`, Discord `/request` now uses the same metadata-only requester
   flow, admins choose download sources during approval from `/admin/requests`, and unavailable requests are Sage-owned
   records that recheck every 4 hours and expire after 90 days.
@@ -47,7 +103,8 @@ Architecture invariants:
   rescans finished `downloaded/<type>/...` content to heal missing library rows.
 - Raven should skip completed titles during `/downloadall`, append only missing/new chapters for existing active
   titles, and convert source-image damage into Missing Content quality fields instead of wedging a whole batch.
-- Oracle is now a FastAPI Python service that keeps the same Sage-facing wire contract.
+- Oracle is now a FastAPI Python service that keeps the same Sage-facing wire contract plus `/api/assist` for bounded
+  structured assistance. It never executes mutations directly.
 - Warden-managed LocalAI presets use the LocalAI AIO images and must wait for readiness before surfacing success.
 - Raven VPN fails closed when enabled, and the internal `raven.naming` setting now controls chapter and page naming.
 - `raven.naming` is now profile-based by library type, and Moon admin exposes it through `/admin/mediamanagement`
@@ -57,7 +114,7 @@ Architecture invariants:
   completed-title fallback dates so finished catalog titles remain visible.
 - Moon admin System pages now include Logs, Events, Updates, Tasks, Status, API, and AI as purpose-built Next surfaces.
   Keep browser traffic same-origin through Moon -> Sage, keep task jobs allowlisted, probe GET/read endpoints in
-  Status, and keep Oracle/LocalAI settings under `/admin/system/ai`.
+  Status, and keep Oracle/LocalAI settings plus Sage-governed AI tool proposals under `/admin/system/ai`.
 
 ## Service Index
 

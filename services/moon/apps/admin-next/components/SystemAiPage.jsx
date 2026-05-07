@@ -8,7 +8,7 @@ import {useEffect, useRef, useState} from "react";
 import {hasAdminGrant} from "../lib/access.js";
 import {requestJson, useAdminEventStaleness, useAdminJson} from "../lib/api.js";
 import {formatDate, formatDisplayValue, normalizeString} from "../lib/format.js";
-import {AdminActionBanner, AdminStatusBadge} from "./AdminUi.jsx";
+import {AdminActionBanner, AdminDenseTable, AdminStatusBadge} from "./AdminUi.jsx";
 import {useAdminToast} from "./AdminToasts.jsx";
 
 const normalizeArray = (value) => Array.isArray(value) ? value : [];
@@ -277,13 +277,17 @@ const fallbackModelOptions = (provider, currentModel, error) => {
  * @returns {import("react").ReactNode}
  */
 export const SystemAiPage = ({user}) => {
-  const canSaveOracle = hasAdminGrant(user, "settings", "write");
-  const canManageLocalAi = hasAdminGrant(user, "system", "root");
+  const canSaveOracle = hasAdminGrant(user, "ai", "write");
+  const canManageLocalAi = hasAdminGrant(user, "ai", "root");
+  const canToggleTools = hasAdminGrant(user, "ai", "root");
   const [draft, setDraft] = useState(null);
   const [flash, setFlash] = useState("");
   const [flashTone, setFlashTone] = useState("");
   const [testPrompt, setTestPrompt] = useState("Give me a two sentence Scriptarr health summary.");
   const [testReply, setTestReply] = useState("");
+  const [assistPrompt, setAssistPrompt] = useState("Check Scriptarr status and tell me what needs attention.");
+  const [assistReply, setAssistReply] = useState("");
+  const [assistToolId, setAssistToolId] = useState("");
   const [actionBusy, setActionBusy] = useState("");
   const [modelOptions, setModelOptions] = useState(null);
   const [modelLoading, setModelLoading] = useState(false);
@@ -300,7 +304,7 @@ export const SystemAiPage = ({user}) => {
   const localAiActionActive = ["installing", "starting", "removing"].includes(normalizeString(data?.localAi?.phase).toLowerCase())
     || localAiJobStatus === "running";
   useAdminEventStaleness({
-    domains: ["system"],
+    domains: ["system", "ai"],
     enabled: true,
     locked: refreshing,
     onStale: () => {},
@@ -473,6 +477,77 @@ export const SystemAiPage = ({user}) => {
     setTestReply(normalizeString(result.payload?.reply, JSON.stringify(result.payload || {}, null, 2)));
   };
 
+  const saveToolToggle = async (toolId, enabled) => {
+    setActionBusy(`tool:${toolId}`);
+    const currentToggles = data?.tools?.settings?.toggles || {};
+    const result = await requestJson("/api/moon/v3/admin/system/ai/tools", {
+      method: "PUT",
+      json: {
+        ...data?.tools?.settings,
+        toggles: {
+          ...currentToggles,
+          [toolId]: enabled
+        }
+      }
+    });
+    setActionBusy("");
+    if (!result.ok) {
+      setFlash(formatDisplayValue(result.payload?.error, "Moon could not save AI tool settings."));
+      setFlashTone("bad");
+      return;
+    }
+    setData((current) => ({...current, tools: result.payload}));
+    setFlash("AI tool settings saved.");
+    setFlashTone("good");
+  };
+
+  const runAssist = async () => {
+    setAssistReply("");
+    setActionBusy("assist");
+    const result = await requestJson("/api/moon/v3/admin/system/ai/assist", {
+      method: "POST",
+      json: {
+        prompt: assistPrompt,
+        toolId: assistToolId || undefined
+      }
+    });
+    setActionBusy("");
+    if (!result.ok || result.payload?.ok === false) {
+      setFlash(formatDisplayValue(result.payload?.error, "AI assist failed."));
+      setFlashTone("bad");
+      return;
+    }
+    setAssistReply(result.payload?.message || JSON.stringify(result.payload || {}, null, 2));
+    if (result.payload?.proposal) {
+      setData((current) => ({
+        ...current,
+        proposals: [result.payload.proposal, ...normalizeArray(current?.proposals)]
+      }));
+    }
+  };
+
+  const updateProposal = async (proposalId, action) => {
+    setActionBusy(`${action}:${proposalId}`);
+    const result = await requestJson(`/api/moon/v3/admin/system/ai/proposals/${encodeURIComponent(proposalId)}/${action}`, {
+      method: "POST",
+      json: {}
+    });
+    setActionBusy("");
+    if (!result.ok) {
+      setFlash(formatDisplayValue(result.payload?.error, `Moon could not ${action} the AI proposal.`));
+      setFlashTone("bad");
+      return;
+    }
+    const proposal = result.payload?.proposal || result.payload;
+    setData((current) => ({
+      ...current,
+      proposals: normalizeArray(current?.proposals).map((entry) => entry.id === proposal.id ? proposal : entry)
+    }));
+    setFlash(action === "confirm" ? "AI proposal confirmed." : "AI proposal cancelled.");
+    setFlashTone("good");
+    void refresh();
+  };
+
   if (loading || !draft) {
     return (
       <section className="admin-panel admin-state-panel">
@@ -508,6 +583,8 @@ export const SystemAiPage = ({user}) => {
   );
   const localAiActionDisabled = !canManageLocalAi || Boolean(actionBusy) || localAiActionActive;
   const oracleSaveDisabled = !canSaveOracle || actionBusy === "oracle" || modelLoading || !modelChoices.length;
+  const aiTools = normalizeArray(data?.tools?.tools);
+  const proposals = normalizeArray(data?.proposals);
 
   return (
     <>
@@ -677,6 +754,85 @@ export const SystemAiPage = ({user}) => {
           <button className="admin-button solid" type="button" onClick={() => void runTest()}>Send test</button>
         </div>
         {testReply ? <pre className="admin-ai-reply">{testReply}</pre> : <div className="admin-empty">No test response yet.</div>}
+      </section>
+      <section className="admin-panel">
+        <div className="admin-section-heading">
+          <div>
+            <div className="admin-kicker">Sage tools</div>
+            <h2>{aiTools.length} governed tool{aiTools.length === 1 ? "" : "s"}</h2>
+            <p className="admin-muted">Read tools can run immediately. Operational tools create proposals and require admin confirmation.</p>
+          </div>
+        </div>
+        <AdminDenseTable
+          rows={aiTools}
+          getKey={(row) => row.id}
+          columns={[
+            {key: "enabled", label: "Enabled", render: (row) => (
+              <input
+                aria-label={`${row.label} enabled`}
+                checked={row.enabled !== false}
+                disabled={!canToggleTools || actionBusy === `tool:${row.id}`}
+                type="checkbox"
+                onChange={(event) => void saveToolToggle(row.id, event.target.checked)}
+              />
+            )},
+            {key: "tool", label: "Tool", render: (row) => (
+              <span>
+                <strong>{row.label}</strong>
+                <br />
+                <span className="admin-muted">{row.description}</span>
+              </span>
+            )},
+            {key: "kind", label: "Kind", render: (row) => <AdminStatusBadge tone={row.kind === "read" ? "good" : "warning"}>{row.kind}</AdminStatusBadge>},
+            {key: "risk", label: "Risk", render: (row) => formatDisplayValue(row.risk, "safe")},
+            {key: "grant", label: "Grant", render: (row) => `${row.grant?.domain || "ai"}:${row.grant?.level || "read"}`},
+            {key: "lastUsed", label: "Last used", render: (row) => formatDate(row.lastUsedAt)}
+          ]}
+        />
+      </section>
+      <section className="admin-panel">
+        <div className="admin-section-heading">
+          <div>
+            <div className="admin-kicker">Assistant</div>
+            <h2>Operational prompt</h2>
+            <p className="admin-muted">Ask Noona to inspect state or draft an allowlisted action proposal.</p>
+          </div>
+        </div>
+        <div className="admin-filter-bar">
+          <label>
+            <span>Tool</span>
+            <select value={assistToolId} onChange={(event) => setAssistToolId(event.target.value)}>
+              <option value="">Auto</option>
+              {aiTools.map((tool) => <option key={tool.id} value={tool.id}>{tool.label}</option>)}
+            </select>
+          </label>
+          <label className="admin-filter-grow">
+            <span>Prompt</span>
+            <input value={assistPrompt} onChange={(event) => setAssistPrompt(event.target.value)} />
+          </label>
+          <button className="admin-button solid" type="button" disabled={actionBusy === "assist"} onClick={() => void runAssist()}>
+            {actionBusy === "assist" ? "Thinking..." : "Ask AI"}
+          </button>
+        </div>
+        {assistReply ? <pre className="admin-ai-reply">{assistReply}</pre> : null}
+        {proposals.length ? (
+          <AdminDenseTable
+            rows={proposals}
+            getKey={(row) => row.id}
+            columns={[
+              {key: "status", label: "Status", render: (row) => <AdminStatusBadge tone={row.status === "pending" ? "warning" : row.status === "confirmed" ? "good" : "queued"}>{row.status}</AdminStatusBadge>},
+              {key: "tool", label: "Tool", render: (row) => formatDisplayValue(row.toolId, "tool")},
+              {key: "prompt", label: "Prompt", render: (row) => formatDisplayValue(row.prompt, "none")},
+              {key: "expires", label: "Expires", render: (row) => formatDate(row.expiresAt)},
+              {key: "actions", label: "Actions", render: (row) => row.status === "pending" ? (
+                <span className="admin-action-row">
+                  <button className="admin-button solid" type="button" disabled={Boolean(actionBusy)} onClick={() => void updateProposal(row.id, "confirm")}>Confirm</button>
+                  <button className="admin-button ghost" type="button" disabled={Boolean(actionBusy)} onClick={() => void updateProposal(row.id, "cancel")}>Cancel</button>
+                </span>
+              ) : formatDate(row.updatedAt)}
+            ]}
+          />
+        ) : <div className="admin-empty">No AI proposals yet.</div>}
       </section>
     </>
   );

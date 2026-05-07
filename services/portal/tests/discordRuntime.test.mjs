@@ -6,6 +6,7 @@ const {createPortalRuntime} = await import("../lib/portalRuntime.mjs");
 const {createPortalCommands} = await import("../lib/discord/commands/index.mjs");
 const {createRoleManager} = await import("../lib/discord/roleManager.mjs");
 const {createInteractionHandler} = await import("../lib/discord/interactionRouter.mjs");
+const {createTriviaRuntime} = await import("../lib/discord/triviaRuntime.mjs");
 
 class FakeDiscordClient extends EventEmitter {
   constructor() {
@@ -77,6 +78,7 @@ const createInteraction = ({commandName, guildId = "guild-1", roleIds = [], stri
     options: {
       getString: (name) => strings[name] || null,
       getBoolean: (name) => Object.hasOwn(strings, name) ? strings[name] : null,
+      getInteger: (name) => Object.hasOwn(strings, name) ? strings[name] : null,
       getSubcommand: () => strings.__subcommand || null
     },
     isChatInputCommand: () => true,
@@ -191,6 +193,7 @@ test("portal runtime syncs enabled commands and exposes Discord runtime state", 
     assert.equal(state.capabilities.commandSync.status, "available");
     assert.equal(state.capabilities.directMessages.status, "available");
     assert.equal(state.capabilities.onboarding.status, "disabled");
+    assert.equal(fakeClient.options.intents.includes("GuildMessages"), true);
     assert.equal(fakeClient.options.intents.includes("DirectMessages"), true);
     assert.equal(fakeClient.options.intents.includes("MessageContent"), true);
     assert.equal(state.commands.find((command) => command.name === "subscribe").enabled, false);
@@ -207,8 +210,272 @@ test("portal runtime syncs enabled commands and exposes Discord runtime state", 
       "status",
       "chat",
       "search",
-      "request"
+      "request",
+      "trivia"
     ]);
+  } finally {
+    await runtime.stop();
+  }
+});
+
+test("portal runtime queues forced trivia leaderboards without waiting on Discord send", async () => {
+  const fakeClient = new FakeDiscordClient();
+  fakeClient.channels.fetch = async (channelId) => ({
+    send: async (payload) => {
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      fakeClient.sentChannelMessages.push({channelId, payload});
+      return {id: "leaderboard-message-1"};
+    }
+  });
+  const acknowledged = [];
+  const sage = {
+    async getDiscordSettings() {
+      return {
+        ok: true,
+        payload: {
+          guildId: "guild-1",
+          trivia: {
+            enabled: true,
+            channelId: "trivia-channel"
+          }
+        }
+      };
+    },
+    async listFollowNotifications() {
+      return {ok: true, payload: {notifications: []}};
+    },
+    async getTriviaLeaderboard(windowName) {
+      return {
+        ok: true,
+        payload: {
+          window: windowName,
+          rows: [{discordUserId: "user-1", username: "CaptainPax", xp: 12, wins: 1}]
+        }
+      };
+    },
+    async acknowledgeTriviaLeaderboard(postId) {
+      acknowledged.push(postId);
+      return {ok: true};
+    }
+  };
+
+  const runtime = createPortalRuntime({
+    config: baseConfig,
+    sage,
+    logger: createLogger(),
+    clientFactory: async () => fakeClient
+  });
+
+  try {
+    await runtime.start();
+    const result = await runtime.postTriviaLeaderboard({window: "all", defer: true});
+    assert.equal(result.queued, true);
+    assert.equal(result.channelId, "trivia-channel");
+    assert.equal(fakeClient.sentChannelMessages.length, 0);
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    assert.equal(fakeClient.sentChannelMessages.length, 1);
+    assert.match(fakeClient.sentChannelMessages[0].payload.content, /CaptainPax/);
+    assert.deepEqual(acknowledged, ["trivia-leaderboard:all:leaderboard-message-1"]);
+  } finally {
+    await runtime.stop();
+  }
+});
+
+test("trivia runtime reacts with eyes before final guess verdict", async () => {
+  const reactions = [];
+  const sentMessages = [];
+  const calls = {state: 0, guess: 0};
+  const runtime = createTriviaRuntime({
+    getSettings: () => ({
+      trivia: {
+        enabled: true,
+        channelId: "trivia-channel",
+        leaderboardAfterRound: false
+      }
+    }),
+    logger: createLogger(),
+    discord: {
+      async sendChannelMessage(channelId, payload) {
+        sentMessages.push({channelId, payload});
+        return {id: "message-1"};
+      }
+    },
+    sage: {
+      async getTriviaState() {
+        calls.state += 1;
+        return {
+          ok: true,
+          payload: {
+            activeRound: {id: "round-1", prompt: "clue", status: "open"}
+          }
+        };
+      },
+      async submitTriviaGuess(_roundId, payload) {
+        calls.guess += 1;
+        assert.deepEqual(reactions, ["👀"]);
+        return {
+          ok: true,
+          payload: {
+            ok: true,
+            correct: true,
+            round: {title: "Ancient Bakery"},
+            guess: {discordUserId: payload.discordUserId},
+            scoreEvent: {xp: 15}
+          }
+        };
+      }
+    }
+  });
+
+  try {
+    await runtime.handleGuildMessage({
+      id: "guess-message-1",
+      channelId: "trivia-channel",
+      content: "Ancient Bakery",
+      author: {id: "user-1", username: "Reader", bot: false},
+      react: async (reaction) => {
+        reactions.push(reaction);
+      }
+    });
+
+    assert.deepEqual(reactions, ["👀", "✅"]);
+    assert.equal(calls.state, 1);
+    assert.equal(calls.guess, 1);
+    assert.match(sentMessages[0].payload.content, /Correct/);
+  } finally {
+    runtime.stop();
+  }
+});
+
+test("trivia runtime caches active round state and ignores duplicate messages", async () => {
+  const reactions = [];
+  const calls = {state: 0, guess: 0};
+  const runtime = createTriviaRuntime({
+    getSettings: () => ({
+      trivia: {
+        enabled: true,
+        channelId: "trivia-channel",
+        leaderboardAfterRound: false
+      }
+    }),
+    logger: createLogger(),
+    discord: {
+      async sendChannelMessage() {
+        return {id: "message-1"};
+      }
+    },
+    sage: {
+      async getTriviaState() {
+        calls.state += 1;
+        return {
+          ok: true,
+          payload: {
+            activeRound: {id: "round-1", prompt: "clue", status: "open"}
+          }
+        };
+      },
+      async submitTriviaGuess() {
+        calls.guess += 1;
+        return {
+          ok: true,
+          payload: {ok: true, correct: false, close: false}
+        };
+      }
+    }
+  });
+  const message = (id) => ({
+    id,
+    channelId: "trivia-channel",
+    content: "wrong",
+    author: {id: "user-1", username: "Reader", bot: false},
+    react: async (reaction) => {
+      reactions.push(`${id}:${reaction}`);
+    }
+  });
+
+  try {
+    await runtime.handleGuildMessage(message("guess-message-1"));
+    await runtime.handleGuildMessage(message("guess-message-1"));
+    await runtime.handleGuildMessage(message("guess-message-2"));
+
+    assert.equal(calls.state, 1);
+    assert.equal(calls.guess, 2);
+    assert.deepEqual(reactions, [
+      "guess-message-1:👀",
+      "guess-message-1:❌",
+      "guess-message-2:👀",
+      "guess-message-2:❌"
+    ]);
+  } finally {
+    runtime.stop();
+  }
+});
+
+test("portal runtime forwards configured guild messages into trivia handling", async () => {
+  const fakeClient = new FakeDiscordClient();
+  const reactions = [];
+  const calls = {guess: 0};
+  const sage = {
+    async getDiscordSettings() {
+      return {
+        ok: true,
+        payload: {
+          guildId: "guild-1",
+          trivia: {
+            enabled: true,
+            channelId: "trivia-channel",
+            leaderboardAfterRound: false
+          }
+        }
+      };
+    },
+    async listFollowNotifications() {
+      return {ok: true, payload: {notifications: []}};
+    },
+    async getTriviaState() {
+      return {
+        ok: true,
+        payload: {
+          activeRound: {id: "round-1", prompt: "clue", status: "open"}
+        }
+      };
+    },
+    async submitTriviaGuess() {
+      calls.guess += 1;
+      return {
+        ok: true,
+        payload: {ok: true, correct: false, close: false}
+      };
+    }
+  };
+
+  const runtime = createPortalRuntime({
+    config: baseConfig,
+    sage,
+    logger: createLogger(),
+    clientFactory: async (options = {}) => {
+      fakeClient.options = options;
+      return fakeClient;
+    }
+  });
+
+  try {
+    await runtime.start();
+    assert.equal(fakeClient.options.intents.includes("GuildMessages"), true);
+    fakeClient.emit("messageCreate", {
+      id: "guild-message-1",
+      guildId: "guild-1",
+      channelId: "trivia-channel",
+      content: "wrong",
+      author: {id: "user-1", username: "Reader", bot: false},
+      react: async (reaction) => {
+        reactions.push(reaction);
+      }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    assert.equal(calls.guess, 1);
+    assert.deepEqual(reactions, ["\u{1F440}", "\u274C"]);
   } finally {
     await runtime.stop();
   }
@@ -262,6 +529,7 @@ test("portal runtime falls back to minimal intents when guild member intent is d
     assert.equal(createdClients.length, 2);
     assert.equal(createdClients[0].options.intents.includes("GuildMembers"), true);
     assert.equal(createdClients[1].options.intents.includes("GuildMembers"), false);
+    assert.equal(createdClients[1].options.intents.includes("GuildMessages"), true);
     assert.equal(createdClients[1].options.intents.includes("MessageContent"), true);
     assert.equal(createdClients[0].destroyed, true);
     assert.equal(state.mode, "ready");
@@ -600,7 +868,8 @@ test("downloadall slash command is DM-only and owner-only", async () => {
       __subcommand: "run",
       type: "Manga",
       nsfw: false,
-      titlegroup: "a"
+      titlegroup: "a",
+      groupsize: 5
     }
   });
   await handler(runInteraction);
@@ -613,6 +882,8 @@ test("downloadall slash command is DM-only and owner-only", async () => {
       type: "Manga",
       nsfw: false,
       titlePrefix: "a",
+      batchesPerApproval: 5,
+      groupsize: 5,
       requestedBy: "owner-1"
     }
   });
@@ -637,6 +908,8 @@ test("downloadall slash command is DM-only and owner-only", async () => {
       type: "all",
       nsfw: false,
       titlePrefix: "all",
+      batchesPerApproval: 1,
+      groupsize: 1,
       requestedBy: "owner-1"
     }
   });

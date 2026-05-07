@@ -3,8 +3,8 @@
 - Portal owns Discord-facing request creation, moderation messaging, subscriptions, onboarding, and Oracle chat entry.
 - It no longer bridges Kavita or Komf.
 - Portal is not allowed to call Vault or Oracle directly. First-party internal traffic must go through Sage's token-authenticated broker routes.
-- The live Discord command set is `/ding`, `/status`, `/chat`, `/search`, `/request`, `/subscribe`, and owner-only DM
-  `/downloadall`.
+- The live Discord command set is `/ding`, `/status`, `/chat`, `/search`, `/request`, `/subscribe`, `/trivia`, and
+  owner-only DM `/downloadall`.
 - Portal should treat the brokered `portal.discord` setting as the source of truth for guild id, onboarding message or
   channel, DM superuser id, release notification channel id, and per-command role gates.
 - Portal should prefer a minimal Discord runtime over going fully dark when privileged intents are unavailable. Slash
@@ -14,6 +14,11 @@
   plus decision state, and reuse the shared `coverUrl` plus Moon public base URL when they are available.
 - Portal also owns release channel posts for completed Raven downloads. Poll Sage's release-notification queue, send
   to the configured channel with a Moon read or title link, and acknowledge only after Discord accepts the message.
+- Portal owns Noona trivia runtime delivery. It should start/stop rounds through Sage, treat normal messages in the
+  configured trivia channel as guesses, post quiet reactions for wrong guesses, announce the first correct winner, and
+  acknowledge leaderboard posts only after Discord accepts the message.
+- Portal may ask Sage -> Oracle for bounded message assistance, but deterministic notification templates stay
+  authoritative and acknowledgments still happen only after a Discord send succeeds.
 - Portal also sends deduped system DMs for LocalAI lifecycle jobs exposed by Sage, including install, start, and
   remove completion or failure notices for the Discord-backed admin who requested the action.
 - Portal-originated async request and Discord-runtime state that matters to operators should now be mirrored into the
@@ -40,5 +45,10 @@
 - Portal should poll Sage's downloadall notification queue, DM the requester for paused/completed/failed/cancelled
   run batches with stable `downloadall:<runId>:<batchId>:<status>` ids, and acknowledge only after Discord accepts
   the DM.
+- Paused downloadall DMs should add check/cross decision reactions and persist the DM message mapping through Sage
+  before acknowledging the notification. Only the configured owner can decide; check continues the run and cross
+  cancels remaining work. Completed, failed, and cancelled summaries are informational and should not create decision
+  prompts.
+- Preserve `groupsize` across slash-command and legacy DM parsing as `batchesPerApproval` with bounds `1-25`.
 - Portal runtime state should keep enough DM diagnostics to explain silent failures quickly: requested intents,
   requested partials, last DM receive timestamp, last handled `downloadall`, and last `downloadall` error.

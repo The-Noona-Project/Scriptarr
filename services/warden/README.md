@@ -62,6 +62,14 @@ Moon's `/admin/system/ai` page reaches these LocalAI endpoints only through Sage
 profile reads safe for the System Status matrix while keeping install, start, and remove service-authenticated and
 reported through durable job or event state.
 
+## Raven VPN Runtime
+
+Warden starts the managed Raven container with `--cap-add NET_ADMIN` and `--device /dev/net/tun` by default so Raven can
+run OpenVPN when admins enable the PIA-backed VPN setting. Drift detection compares those capability and device bindings
+against Docker inspect output and recreates Raven when they disappear. Hosts without TUN support should keep Raven VPN
+disabled or set `SCRIPTARR_RAVEN_VPN_RUNTIME_DISABLED=true`; Raven will still boot, but its VPN status reports the
+runtime as unsupported and enabled VPN downloads fail closed.
+
 ## LocalAI
 
 Warden ships four LocalAI AIO presets:

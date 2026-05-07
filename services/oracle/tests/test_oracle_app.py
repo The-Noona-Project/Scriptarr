@@ -347,6 +347,53 @@ def test_successful_chat_returns_llm_reply():
     assert payload["status"]["ok"] is True
 
 
+def test_structured_assist_returns_bounded_text_without_status_lookup():
+    sage = FakeSageClient(
+        settings={
+            "enabled": True,
+            "provider": "openai",
+            "model": "gpt-4.1-mini",
+            "temperature": 0.2
+        },
+        secret="sk-test"
+    )
+    seen = {}
+
+    async def fake_invoke(_runtime, _persona_name, message):
+        seen["message"] = message
+        return "A tiny helpful appendix."
+
+    app = create_app(config=build_config(), sage_client=sage, invoke_oracle_fn=fake_invoke)
+
+    with TestClient(app) as client:
+        response = client.post("/api/assist", json={
+            "task": "message",
+            "deterministicContent": "Download completed.",
+            "context": {"titleName": "Test Title"}
+        })
+
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["task"] == "message"
+    assert payload["text"] == "A tiny helpful appendix."
+    assert "Do not change facts" in seen["message"]
+    assert ("bootstrap", "bootstrap") not in sage.requests
+
+
+def test_structured_assist_degrades_when_oracle_is_disabled():
+    sage = FakeSageClient()
+    app = create_app(config=build_config(), sage_client=sage)
+
+    with TestClient(app) as client:
+        response = client.post("/api/assist", json={"task": "match-title", "prompt": "guess"})
+
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["disabled"] is True
+    assert payload["text"] == ""
+    assert payload["decision"] is None
+
+
 def test_generation_error_returns_degraded_fallback():
     sage = FakeSageClient(
         settings={

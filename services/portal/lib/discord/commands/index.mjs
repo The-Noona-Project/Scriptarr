@@ -5,8 +5,18 @@ import {createSearchCommand} from "./searchCommand.mjs";
 import {createRequestCommand} from "./requestCommand.mjs";
 import {createSubscribeCommand} from "./subscribeCommand.mjs";
 import {createDownloadAllCommand} from "./downloadAllCommand.mjs";
+import {createTriviaCommand} from "./triviaCommand.mjs";
 
-export const createPortalCommands = ({sage, publicBaseUrl, getSettings, logger, onRuntimeEvent}) => {
+export const createPortalCommands = ({
+  sage,
+  publicBaseUrl,
+  getSettings,
+  logger,
+  onRuntimeEvent,
+  onTriviaStart,
+  onTriviaStop,
+  onTriviaLeaderboard
+}) => {
   const commands = new Map();
   commands.set("ding", createDingCommand());
   commands.set("status", createStatusCommand({sage}));
@@ -19,6 +29,12 @@ export const createPortalCommands = ({sage, publicBaseUrl, getSettings, logger, 
     getSettings,
     logger,
     onRuntimeEvent
+  }));
+  commands.set("trivia", createTriviaCommand({
+    sage,
+    onTriviaStart,
+    onTriviaStop,
+    onTriviaLeaderboard
   }));
   return commands;
 };

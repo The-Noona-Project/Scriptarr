@@ -25,5 +25,5 @@ API keys, sessions, settings, secrets, and durable events remain intact.
 
 It also stores the Raven VPN settings, Raven metadata provider configuration, Oracle provider state, Portal Discord
 workflow settings including release notification channel id, and Oracle secrets used by the rest of the stack. Moon
-branding, uploaded WebP logo variants, release notification acknowledgments, and admin toast preferences are normal
-Vault settings and survive content reset with other settings.
+branding, uploaded WebP logo variants, release/downloadall notification acknowledgments, downloadall reaction prompt
+state, and admin toast preferences are normal Vault settings and survive content reset with other settings.

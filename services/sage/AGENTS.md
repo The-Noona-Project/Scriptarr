@@ -19,6 +19,10 @@ HTTP broker.
 - Broker `raven.download.providers` through the same settings path as Raven metadata and VPN configuration.
 - Keep Raven durable `/downloadall` runs, Missing Content aliases, and queue bulk actions brokered through Sage so Moon
   and Portal never call Raven directly from browsers or Discord runtime code.
+- Keep Portal trivia brokered through Sage. Sage owns Vault-backed trivia rounds, guesses, score events, leaderboard
+  acknowledgments, and optional Oracle borderline matching.
+- Keep AI tool execution Sage-governed. Oracle can assist planning, but Sage must enforce the `ai` domain, enabled
+  toggles, grant checks, proposal confirmation, expiry, and durable events.
 - Portal-facing downloadall notifications should use stable ack ids and only acknowledge after Portal confirms the
   requester DM was sent.
 - Keep Moon's trusted public API brokered here. Sage should hash stored API keys, issue short-lived selection tokens,

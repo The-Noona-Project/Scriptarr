@@ -20,15 +20,17 @@ test("parseDownloadAllCommand preserves the legacy syntax and validation", () =>
   assert.deepEqual(parsed.filters, {
     type: "Manga",
     nsfw: false,
-    titlePrefix: "a"
+    titlePrefix: "a",
+    batchesPerApproval: 1
   });
 
-  const mega = parseDownloadAllCommand("downloadall type:all nsfw:false titlegroup:all");
+  const mega = parseDownloadAllCommand("downloadall type:all nsfw:false titlegroup:all groupsize:5");
   assert.equal(mega.valid, true);
   assert.deepEqual(mega.filters, {
     type: "all",
     nsfw: false,
-    titlePrefix: "all"
+    titlePrefix: "all",
+    batchesPerApproval: 5
   });
 
   const invalid = parseDownloadAllCommand("downloadall type:bad nsfw:maybe titlegroup:aa");
@@ -42,7 +44,8 @@ test("parseDownloadAllCommand preserves the legacy syntax and validation", () =>
   assert.deepEqual(bangPrefixed.filters, {
     type: "Manga",
     nsfw: false,
-    titlePrefix: "b"
+    titlePrefix: "b",
+    batchesPerApproval: 1
   });
 });
 
@@ -148,6 +151,8 @@ test("direct message handler starts async mega runs for all filters", async () =
     type: "all",
     nsfw: false,
     titlePrefix: "all",
+    batchesPerApproval: 1,
+    groupsize: 1,
     requestedBy: "253987219969146890"
   });
 });
@@ -209,6 +214,8 @@ test("direct message handler gates by superuser and forwards legacy downloadall 
     type: "Manga",
     nsfw: false,
     titlePrefix: "a",
+    batchesPerApproval: 1,
+    groupsize: 1,
     requestedBy: "253987219969146890"
   });
 });

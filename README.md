@@ -5,7 +5,7 @@ persona while the product, services, storage, images, and docs all use Scriptarr
 
 Warden bootstraps the stack, Moon is the user and admin surface, Sage is the browser-safe and first-party internal
 broker, Vault owns shared MySQL-backed state plus cache or job brokerage, Raven handles downloads plus metadata, Portal
-handles Discord, and Oracle provides optional read-only AI chat.
+handles Discord, and Oracle provides optional AI chat plus bounded Sage-governed assistance.
 
 ## Service Map
 
@@ -16,7 +16,7 @@ handles Discord, and Oracle provides optional read-only AI chat.
 - `scriptarr-sage`: Moon-facing auth plus the only supported first-party internal HTTP broker
 - `scriptarr-moon`: same-origin installable user app at `/`, type-scoped native reader routes under `/reader/<type>/<title>/<chapter>`, and Arr-style admin app at `/admin`
 - `scriptarr-raven`: Spring Boot Java 24 downloader, library, metadata, and PIA/OpenVPN-aware download engine
-- `scriptarr-portal`: Discord onboarding, requests, notifications, subscriptions, and Oracle bridge
+- `scriptarr-portal`: Discord onboarding, requests, notifications, subscriptions, Noona trivia, and Oracle bridge
 - `scriptarr-oracle`: FastAPI Python service that starts disabled, defaults to OpenAI config, and can optionally use
   LocalAI later
 
@@ -72,8 +72,8 @@ editor instead of a generic records view.
 Raven now keeps WeebCentral first by default, exposes MangaDex as a second normal download-provider option, and enables
 Anime-Planet ahead of MangaUpdates as a scrape-based metadata source for aliases, summaries, and lifecycle hints.
 Moon admin also exposes a dedicated Discord page at `/admin/discord` for guild workflow settings, onboarding template
-or channel management, per-command role gates, release-channel posts, and Portal runtime visibility without exposing
-Discord credentials.
+or channel management, per-command role gates, release-channel posts, Noona trivia settings, and Portal runtime
+visibility without exposing Discord credentials.
 Moon's user app now runs as an embedded Next.js App Router frontend with Once UI shells, a megamenu header, avatar
 profile controls, a simple footer, and an immersive full-page reader.
 That reader now defaults to seamless infinite chapter scroll while keeping a secondary fit-width paged mode, and it
@@ -93,8 +93,8 @@ Moon v3 settings routes, preserve dirty section drafts during background refresh
 `/admin/system/ai`.
 Moon admin's System area now has purpose-built Next pages for operational automation too: `/admin/system/tasks`
 manages allowlisted cron schedules and manual runs, `/admin/system/status` shows the grouped endpoint matrix with safe
-read probes, and `/admin/system/ai` owns Oracle plus optional LocalAI settings, long-running LocalAI progress, and test
-prompts.
+read probes, and `/admin/system/ai` owns Oracle plus optional LocalAI settings, long-running LocalAI progress, test
+prompts, and Sage-governed AI tools that require admin confirmation before operational actions run.
 
 Scriptarr is maintained by [The Noona Project](https://github.com/The-Noona-Project/Scriptarr), with community support
 available on [Discord](https://discord.gg/HMYHT8KD5v).
@@ -149,19 +149,23 @@ For end-to-end Docker verification, use:
   If the title is already in the library, Scriptarr links directly to the title page. If the title is already queued,
   Scriptarr blocks the duplicate row and sends a Discord DM when the title becomes ready.
 - Portal now owns a real Discord command runtime again. The supported command set is `/ding`, `/status`, `/chat`,
-  `/search`, `/request`, `/subscribe`, plus the owner-only DM `/downloadall` command for the configured Discord
+  `/search`, `/request`, `/subscribe`, `/trivia`, plus the owner-only DM `/downloadall` command for the configured Discord
   superuser.
 - The DM-only `downloadall` flow now stays provider-browse first but resolves metadata before queueing each title. It
   now uses a global DM slash command as the supported path: `/downloadall run ...`, `/downloadall status ...`,
   `/downloadall continue ...`, `/downloadall cancel ...`, and `/downloadall help`. Every run is durable now, including
   single concrete type plus single `titlegroup` requests, so Portal can DM delayed summaries and continuation prompts.
-  Multi-batch selections pause after each batch. Portal still keeps the old raw DM text form as a legacy best-effort
-  fallback, but that path also creates a durable run.
+  Multi-batch selections pause after the configured `groupsize` batch count; paused summary DMs get check/cross
+  reactions so the owner can continue or cancel without typing the command. Portal still keeps the old raw DM text
+  form as a legacy best-effort fallback, but that path also creates a durable run.
 - The bulk flow only queues titles with one confident metadata match and reports already-active, completed,
   already-current, adult-content, no-metadata, ambiguous-metadata, invalid-source, appended, and failed outcomes back
   in the Discord DM summary. Completed library titles are skipped, in-progress titles append only missing or new
   chapters, and `nsfw:false` still requires explicit WeebCentral `Adult Content: No`. That owner-only command is
   intentionally locked to WeebCentral and will fail fast if WeebCentral is disabled.
+- Moon browse and library shelves use compact paginated title-card APIs instead of loading every chapter row. Cover art
+  is converted into a derived Moon WebP cache on demand, and `/admin/system/tasks` includes a rerunnable cover
+  optimization action to prebuild missing or stale cached covers.
 - Portal now prefers a minimal Discord runtime over going fully dark when privileged intents are unavailable, so slash
   commands and DMs can stay online while onboarding is shown as degraded in Moon admin.
 - Discord `/subscribe` reuses Moon's shared follow store, so Moon and Discord notifications stay aligned instead of
@@ -171,6 +175,10 @@ For end-to-end Docker verification, use:
 - Portal can also post completed Raven downloads to the configured Discord release channel from `/admin/discord`.
   Those release posts use stable `release:<taskId>` notification ids and are acknowledged only after Discord accepts
   the channel message, so restarts do not repost successful releases.
+- Noona trivia is configured from `/admin/discord`. Portal posts sanitized title-summary clues in the configured
+  channel, accepts public guesses, awards XP for exact, alias, URL, and tolerant fuzzy matches, and posts leaderboards
+  after rounds plus scheduled daily, weekly, and monthly windows. Oracle can advise only borderline guesses when AI
+  matching is enabled; deterministic matching keeps rounds moving when AI is offline.
 - Portal also sends DMs when duplicate blockers attach a user to the ready-notify waitlist, when an unavailable
   request later finds a source, and when an unavailable request expires after 90 days.
 - Sage and Moon now treat admin events as a first-class brokered contract. Browsers read event history and SSE updates
@@ -205,9 +213,16 @@ For end-to-end Docker verification, use:
   degraded replies and waits longer for brokered admin test prompts before treating the selected AI provider as down.
 - Moon's AI page now discovers provider models through Moon -> Sage -> Oracle and constrains the Oracle model field to
   a dropdown for the selected provider instead of letting browsers or admins type arbitrary model ids.
+- Sage owns the AI tool registry. Safe read tools can inspect stack status, events, queue, requests, library, Missing
+  Content, Discord, trivia, and LocalAI state; mutation or message-affecting tools stay disabled until an admin enables
+  them and always create a proposal that must be confirmed before execution.
 - LocalAI install, start, and remove actions are asynchronous Warden lifecycle jobs. Moon shows Docker pull, container,
   and model-readiness progress, and Portal DMs the requesting admin when the job completes or fails.
-- Raven VPN should fail closed when VPN-backed downloads are enabled and the tunnel cannot be established.
+- Raven VPN should fail closed when VPN-backed downloads are enabled and the tunnel cannot be established. Warden now
+  launches Raven with `NET_ADMIN` and `/dev/net/tun` by default so OpenVPN can run on Linux hosts with TUN support, and
+  Raven health reports runtime capability, settings freshness, and whether the tunnel is `armed` idle or actively
+  `protected`. The Settings page can run a brokered VPN test that starts OpenVPN and leaves the tunnel connected when
+  VPN remains enabled.
 - Raven should only report download completion after promote plus catalog persistence succeed, and it now rescans the
   `downloaded/<type>/...` tree on boot to recover missing catalog records from finished files.
 - Moon admin's live queue keeps ETA on active downloads only, shows recovery actions for failed or stale Raven title

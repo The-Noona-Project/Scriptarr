@@ -119,7 +119,8 @@ const LEGACY_PERMISSION_DOMAIN_MAP = Object.freeze({
     {domain: "discord", level: "write"},
     {domain: "mediamanagement", level: "write"},
     {domain: "system", level: "write"},
-    {domain: "publicapi", level: "write"}
+    {domain: "publicapi", level: "write"},
+    {domain: "ai", level: "write"}
   ],
   moderate_requests: [{domain: "requests", level: "write"}],
   read_requests: [{domain: "requests", level: "read"}],

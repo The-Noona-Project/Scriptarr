@@ -244,11 +244,100 @@ export const createSageClient = (config) => {
         }
       );
     },
+    recordDownloadAllDecisionPrompt(notificationId, payload = {}) {
+      return requestJson(
+        config.sageBaseUrl,
+        jsonHeaders,
+        `/api/internal/portal/notifications/downloadall/${encodeURIComponent(notificationId)}/prompt`,
+        {
+          method: "POST",
+          body: payload
+        }
+      );
+    },
+    decideDownloadAllPrompt(payload = {}) {
+      return requestJson(config.sageBaseUrl, jsonHeaders, "/api/internal/portal/downloads/bulk-runs/decision", {
+        method: "POST",
+        body: payload
+      });
+    },
     chat(payload) {
       return requestJson(config.sageBaseUrl, jsonHeaders, "/api/internal/oracle/chat", {
         method: "POST",
         body: payload
       });
+    },
+    assistOracle(payload) {
+      return requestJson(config.sageBaseUrl, jsonHeaders, "/api/internal/oracle/assist", {
+        method: "POST",
+        body: payload,
+        timeoutMs: 15000
+      });
+    },
+    getTriviaState() {
+      return requestJson(config.sageBaseUrl, authHeader, "/api/internal/portal/trivia/state");
+    },
+    startTriviaRound(payload = {}) {
+      return requestJson(config.sageBaseUrl, jsonHeaders, "/api/internal/portal/trivia/rounds/start", {
+        method: "POST",
+        body: payload
+      });
+    },
+    stopTriviaRound(payload = {}) {
+      return requestJson(config.sageBaseUrl, jsonHeaders, "/api/internal/portal/trivia/rounds/stop", {
+        method: "POST",
+        body: payload
+      });
+    },
+    submitTriviaGuess(roundId, payload = {}) {
+      return requestJson(
+        config.sageBaseUrl,
+        jsonHeaders,
+        `/api/internal/portal/trivia/rounds/${encodeURIComponent(String(roundId || "").trim())}/guess`,
+        {
+          method: "POST",
+          body: payload
+        }
+      );
+    },
+    timeoutTriviaRound(roundId) {
+      return requestJson(
+        config.sageBaseUrl,
+        jsonHeaders,
+        `/api/internal/portal/trivia/rounds/${encodeURIComponent(String(roundId || "").trim())}/timeout`,
+        {
+          method: "POST",
+          body: {}
+        }
+      );
+    },
+    postTriviaHint(roundId, hintMinute) {
+      return requestJson(
+        config.sageBaseUrl,
+        jsonHeaders,
+        `/api/internal/portal/trivia/rounds/${encodeURIComponent(String(roundId || "").trim())}/hint`,
+        {
+          method: "POST",
+          body: {hintMinute}
+        }
+      );
+    },
+    getTriviaLeaderboard(windowName = "all", limit = 10) {
+      return requestJson(config.sageBaseUrl, authHeader, withQuery("/api/internal/portal/trivia/leaderboard", {
+        window: windowName,
+        limit
+      }));
+    },
+    acknowledgeTriviaLeaderboard(postId) {
+      return requestJson(
+        config.sageBaseUrl,
+        jsonHeaders,
+        `/api/internal/portal/trivia/leaderboard/${encodeURIComponent(postId)}/ack`,
+        {
+          method: "POST",
+          body: {}
+        }
+      );
     },
     upsertDiscordUser(payload) {
       return requestJson(config.sageBaseUrl, jsonHeaders, "/api/internal/vault/users/upsert-discord", {

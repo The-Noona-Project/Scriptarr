@@ -5,7 +5,7 @@ export const FOLLOW_NOTIFICATION_POLL_MS = 30 * 1000;
 
 export const DOWNLOAD_ALL_PATTERN = /^(?:\/|!)?downloadall\b/i;
 export const DOWNLOAD_ALL_TOKEN_PATTERN = /([a-z]+):(?:"([^"]*)"|'([^']*)'|(\S+))/gi;
-export const DOWNLOAD_ALL_ALLOWED_KEYS = new Set(["type", "nsfw", "titlegroup"]);
+export const DOWNLOAD_ALL_ALLOWED_KEYS = new Set(["type", "nsfw", "titlegroup", "groupsize"]);
 export const DOWNLOAD_ALL_TYPE_ALIASES = Object.freeze(new Map([
   ["all", "all"],
   ["manga", "Manga"],

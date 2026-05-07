@@ -132,16 +132,30 @@ test("bulk run helpers call the Sage async downloadall broker routes", async () 
     await sage.getBulkRunStatus("bulk-run-1");
     await sage.continueBulkRun("bulk-run-1", {requestedBy: "owner-1"});
     await sage.cancelBulkRun("bulk-run-1", {requestedBy: "owner-1"});
+    await sage.recordDownloadAllDecisionPrompt("downloadall:bulk-run-1:batch-1:paused", {
+      messageId: "dm-1",
+      runId: "bulk-run-1",
+      ownerDiscordUserId: "owner-1"
+    });
+    await sage.decideDownloadAllPrompt({
+      messageId: "dm-1",
+      userId: "owner-1",
+      emoji: "✅"
+    });
 
     assert.deepEqual(seen.map((entry) => [entry.method, entry.url]), [
       ["POST", "/api/internal/portal/downloads/bulk-runs"],
       ["GET", "/api/internal/portal/downloads/bulk-runs/bulk-run-1"],
       ["POST", "/api/internal/portal/downloads/bulk-runs/bulk-run-1/continue"],
-      ["POST", "/api/internal/portal/downloads/bulk-runs/bulk-run-1/cancel"]
+      ["POST", "/api/internal/portal/downloads/bulk-runs/bulk-run-1/cancel"],
+      ["POST", "/api/internal/portal/notifications/downloadall/downloadall%3Abulk-run-1%3Abatch-1%3Apaused/prompt"],
+      ["POST", "/api/internal/portal/downloads/bulk-runs/decision"]
     ]);
     assert.equal(seen[0].body.providerId, "weebcentral");
     assert.deepEqual(seen[2].body, {requestedBy: "owner-1"});
     assert.deepEqual(seen[3].body, {requestedBy: "owner-1"});
+    assert.equal(seen[4].body.messageId, "dm-1");
+    assert.deepEqual(seen[5].body, {messageId: "dm-1", userId: "owner-1", emoji: "✅"});
   } finally {
     await new Promise((resolve, reject) => {
       server.close((error) => error ? reject(error) : resolve());

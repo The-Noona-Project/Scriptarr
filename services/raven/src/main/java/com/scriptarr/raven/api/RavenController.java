@@ -23,6 +23,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -87,6 +88,27 @@ public class RavenController {
     }
 
     /**
+     * Test Raven's configured VPN path through the same guard used by download
+     * tasks. A successful enabled test leaves the tunnel connected.
+     *
+     * @return VPN test payload
+     */
+    @PostMapping("/v1/vpn/test")
+    public ResponseEntity<Map<String, Object>> testVpn() {
+        Map<String, Object> vpn = vpnService.testConnection();
+        boolean ok = Boolean.TRUE.equals(vpn.get("ok"))
+            || Boolean.TRUE.equals(vpn.get("protected"))
+            || "disabled".equals(String.valueOf(vpn.getOrDefault("state", "")));
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("ok", ok);
+        payload.put("vpn", vpn);
+        if (!ok) {
+            payload.put("error", String.valueOf(vpn.getOrDefault("lastError", "Raven VPN test failed.")));
+        }
+        return ResponseEntity.status(ok ? HttpStatus.OK : HttpStatus.SERVICE_UNAVAILABLE).body(payload);
+    }
+
+    /**
      * Search enabled metadata providers and resolve download availability.
      *
      * @param query intake search query
@@ -130,7 +152,10 @@ public class RavenController {
      * @return library payload
      */
     @GetMapping("/v1/library")
-    public Map<String, Object> library() {
+    public Map<String, Object> library(@RequestParam(name = "view", required = false) String view) {
+        if ("card".equalsIgnoreCase(view == null ? "" : view.trim())) {
+            return Map.of("titles", libraryService.listTitleCards());
+        }
         return Map.of("titles", libraryService.listTitles());
     }
 

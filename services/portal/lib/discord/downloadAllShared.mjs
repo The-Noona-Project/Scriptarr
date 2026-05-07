@@ -6,6 +6,10 @@ import {
 } from "./constants.mjs";
 
 const normalizeString = (value) => typeof value === "string" ? value.trim() : "";
+const toCount = (value, fallback = 0) => {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+  return Number.isFinite(parsed) ? parsed : fallback;
+};
 
 export const isDownloadAllHelpRequest = (content) => {
   const trimmed = normalizeString(content);
@@ -38,6 +42,14 @@ const normalizeTitleGroup = (value) => {
     return "all";
   }
   return /^[a-z]$/.test(normalized) ? normalized : "";
+};
+
+const normalizeGroupSize = (value) => {
+  const normalized = Number.parseInt(normalizeString(value), 10);
+  if (!Number.isFinite(normalized)) {
+    return 1;
+  }
+  return Math.min(25, Math.max(1, normalized));
 };
 
 const parseDownloadAllTokens = (raw) => {
@@ -94,11 +106,15 @@ export const parseDownloadAllCommand = (content) => {
   if (!titlePrefix) {
     errors.push("titlegroup must be one letter a-z or all.");
   }
+  const groupsize = normalizeGroupSize(parsed.get("groupsize"));
+  if (parsed.has("groupsize") && String(groupsize) !== normalizeString(parsed.get("groupsize"))) {
+    errors.push("groupsize must be a whole number from 1 to 25.");
+  }
 
   return {
     matched: true,
     valid: errors.length === 0,
-    filters: type && nsfw != null && titlePrefix ? {type, nsfw, titlePrefix} : undefined,
+    filters: type && nsfw != null && titlePrefix ? {type, nsfw, titlePrefix, batchesPerApproval: groupsize} : undefined,
     errors
   };
 };
@@ -108,6 +124,7 @@ export const formatDownloadAllUsage = (errors = []) => {
     "Use `/downloadall run type:manga nsfw:false titlegroup:a` in a DM with Noona.",
     "Use `type:all` or `titlegroup:all` for an async mega run that pauses after each batch.",
     "Manage mega runs with `/downloadall status runid:<id>`, `/downloadall continue runid:<id>`, or `/downloadall cancel runid:<id>`.",
+    "Add `groupsize:5` to run five batch groups one at a time before Scriptarr pauses for approval.",
     "Use `/downloadall help` to show this guide again.",
     "Legacy fallback: `downloadall type:manga nsfw:false titlegroup:a`.",
     "Supported `type` values: manga, manhwa, manhua, oel, all.",
@@ -170,27 +187,52 @@ export const formatBulkRunSummary = (result = {}) => {
   const counts = result?.counts && typeof result.counts === "object" ? result.counts : {};
   const runId = normalizeString(result?.runId || result?.id);
   const currentBatch = result?.currentBatch && typeof result.currentBatch === "object" ? result.currentBatch : null;
+  const status = normalizeString(result?.status) || "unknown";
+  const batchesPerApproval = toCount(filters.batchesPerApproval || result?.batchesPerApproval, 1);
+  const completedBatches = toCount(counts.completedBatches ?? result?.completedBatches, 0);
+  const remainingBatches = toCount(counts.remainingBatches ?? result?.remainingBatches, 0);
+  const queued = toCount(counts.queuedCount ?? result?.queuedCount, 0);
+  const appended = toCount(counts.appendedCount ?? result?.appendedCount, 0);
+  const skippedCompleted = toCount(counts.skippedCompletedCount ?? result?.skippedCompletedCount, 0);
+  const skippedCurrent = toCount(counts.skippedCurrentCount ?? result?.skippedCurrentCount, 0);
+  const failedTitles = toCount(counts.failedTitleTaskCount ?? result?.failedTitleTaskCount, 0);
+  const staleTitles = toCount(counts.staleTitleTaskCount ?? result?.staleTitleTaskCount, 0);
   const lines = [
-    "Scriptarr downloadall run updated.",
+    `Scriptarr downloadall ${status}.`,
     `Run ID: ${runId || "unknown"}`,
-    `Status: ${normalizeString(result?.status) || "unknown"}`,
     `Message: ${normalizeString(result?.message) || "No summary returned."}`,
-    `Filters: provider=weebcentral, type=${normalizeString(filters.type) || "unknown"}, nsfw=${String(filters.nsfw)}, titlegroup=${normalizeString(filters.titlePrefix || filters.titlegroup) || "unknown"}`,
-    `Batches completed: ${Number.parseInt(String(counts.completedBatches ?? result?.completedBatches ?? 0), 10) || 0}`,
-    `Batches remaining: ${Number.parseInt(String(counts.remainingBatches ?? result?.remainingBatches ?? 0), 10) || 0}`,
-    `Queued: ${Number.parseInt(String(counts.queuedCount ?? result?.queuedCount ?? 0), 10) || 0}`,
-    `Append updates: ${Number.parseInt(String(counts.appendedCount ?? result?.appendedCount ?? 0), 10) || 0}`,
-    `Skipped completed: ${Number.parseInt(String(counts.skippedCompletedCount ?? result?.skippedCompletedCount ?? 0), 10) || 0}`,
-    `Skipped current: ${Number.parseInt(String(counts.skippedCurrentCount ?? result?.skippedCurrentCount ?? 0), 10) || 0}`,
-    `Failed title tasks: ${Number.parseInt(String(counts.failedTitleTaskCount ?? result?.failedTitleTaskCount ?? 0), 10) || 0}`
+    "",
+    "Scope",
+    "- Provider: weebcentral",
+    `- Type: ${normalizeString(filters.type) || "unknown"}`,
+    `- NSFW: ${String(filters.nsfw)}`,
+    `- Title group: ${normalizeString(filters.titlePrefix || filters.titlegroup) || "unknown"}`,
+    `- Batch window: ${batchesPerApproval}`,
+    "",
+    "Progress",
+    `- Batches: ${completedBatches} done / ${remainingBatches} remaining`,
+    `- Queued titles: ${queued}`,
+    `- Append updates: ${appended}`,
+    "",
+    "Skipped",
+    `- Completed titles: ${skippedCompleted}`,
+    `- Already current: ${skippedCurrent}`,
+    "",
+    "Needs attention",
+    `- Failed title tasks: ${failedTitles}`,
+    `- Stale title tasks: ${staleTitles}`
   ];
   if (currentBatch) {
     lines.push(
+      "",
       `Current batch: type=${normalizeString(currentBatch.type) || "unknown"}, titlegroup=${normalizeString(currentBatch.titlePrefix || currentBatch.titlegroup) || "unknown"}`
     );
   }
-  if (normalizeString(result?.status).toLowerCase() === "paused") {
-    lines.push(`Next step: use /downloadall continue runid:${runId || "<id>"} when you want the next batch.`);
+  if (status.toLowerCase() === "paused") {
+    lines.push(
+      "",
+      `Next: react ✅ to continue the next ${batchesPerApproval} batch(es), react ❌ to cancel, or use /downloadall continue runid:${runId || "<id>"}.`
+    );
   }
   return lines.join("\n");
 };
@@ -286,6 +328,7 @@ export const executeDownloadAll = async ({
     const payload = {
       providerId: "weebcentral",
       ...filters,
+      groupsize: filters?.batchesPerApproval,
       requestedBy: normalizeString(requestedBy)
     };
     const result = await sage.createBulkRun(payload);

@@ -14,6 +14,7 @@ export const ADMIN_ACCESS_DOMAINS = Object.freeze([
   {id: "requests", label: "Requests"},
   {id: "users", label: "Users"},
   {id: "discord", label: "Discord"},
+  {id: "ai", label: "AI"},
   {id: "settings", label: "Settings"},
   {id: "database", label: "Database"},
   {id: "system", label: "System"},
@@ -44,6 +45,7 @@ const LEGACY_PERMISSION_DOMAIN_MAP = Object.freeze({
   manage_settings: [
     {domain: "settings", level: "write"},
     {domain: "discord", level: "write"},
+    {domain: "ai", level: "write"},
     {domain: "mediamanagement", level: "write"},
     {domain: "system", level: "write"},
     {domain: "publicapi", level: "write"}

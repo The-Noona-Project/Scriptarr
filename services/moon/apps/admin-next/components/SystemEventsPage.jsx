@@ -9,7 +9,7 @@ import {useAdminEventStaleness, useAdminJson} from "../lib/api.js";
 import {formatDate, normalizeString} from "../lib/format.js";
 import {AdminDenseTable, AdminDrawer, AdminFilterBar, AdminStatusBadge} from "./AdminUi.jsx";
 
-const COMMON_DOMAINS = ["", "auth", "users", "access", "requests", "library", "activity", "system", "settings", "discord"];
+const COMMON_DOMAINS = ["", "auth", "users", "access", "requests", "library", "activity", "system", "settings", "discord", "ai"];
 const SEVERITIES = ["", "info", "warning", "warn", "error"];
 const LIMITS = [50, 100, 250, 500];
 

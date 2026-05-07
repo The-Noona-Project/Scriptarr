@@ -32,6 +32,11 @@
   through Sage. Keep those APIs service-auth only, readiness-gated where applicable, and safe to surface in the System
   Status matrix as read probes where applicable.
 - Warden should inject Sage broker settings into Portal, Oracle, and Raven instead of direct first-party base URLs.
+- Warden should launch Raven with the VPN runtime device/capability contract (`NET_ADMIN` and `/dev/net/tun`) when not
+  explicitly disabled, and drift detection should recreate Raven when those flags disappear.
+- Warden should mount Moon's derived cover-cache folder at `/app/cover-cache` and set
+  `SCRIPTARR_MOON_COVER_CACHE_DIR` for the Moon container. The cache is rebuildable and separate from Vault/Raven
+  authoritative catalog state.
 - Update jobs should be mirrored into the shared broker as durable jobs and job tasks, not left as Warden-only memory.
 - Warden-originated runtime or update transitions that matter to operators should be reported through Sage's internal
   broker routes so Vault's shared durable event log stays authoritative for Moon admin timelines.

@@ -42,10 +42,25 @@ export const DiscordPage = ({user}) => {
     onRefresh: refresh
   });
   const canWrite = hasAdminGrant(user, "discord", "write");
+  const canRevealTriviaAnswer = hasAdminGrant(user, "discord", "root");
+  const [answerCopied, setAnswerCopied] = useState(false);
 
   useEffect(() => {
     setDraft(normalizeDiscordSettings(data?.settings));
   }, [data?.settings]);
+
+  const persistDraft = async () => {
+    const result = await requestJson("/api/moon/v3/admin/discord", {
+      method: "PUT",
+      json: draft
+    });
+    if (!result.ok) {
+      return result;
+    }
+    setData(result.payload);
+    setDraft(normalizeDiscordSettings(result.payload?.settings));
+    return result;
+  };
 
   const commandRows = useMemo(() => buildDiscordCommandRows(
     draft,
@@ -56,6 +71,7 @@ export const DiscordPage = ({user}) => {
   const setField = (patch) => setDraft((current) => ({...current, ...patch}));
   const setOnboarding = (patch) => setDraft((current) => patchNested(current, "onboarding", patch));
   const setNotifications = (patch) => setDraft((current) => patchNested(current, "notifications", patch));
+  const setTrivia = (patch) => setDraft((current) => patchNested(current, "trivia", patch));
   const setCommand = (id, patch) => setDraft((current) => ({
     ...current,
     commands: {
@@ -78,7 +94,27 @@ export const DiscordPage = ({user}) => {
       return;
     }
     onSuccess?.(result.payload);
-    setNotice(`${label} completed.`);
+    setNotice(result.payload?.queued ? `${label} queued.` : `${label} completed.`);
+  };
+
+  const saveThenRunAction = async (label, url, options = {}, onSuccess = null) => {
+    setBusy(label);
+    setNotice("");
+    setFailure("");
+    const saved = await persistDraft();
+    if (!saved.ok) {
+      setBusy("");
+      setFailure(saved.payload?.error || "Discord settings could not be saved before that action.");
+      return;
+    }
+    const result = await requestJson(url, options);
+    setBusy("");
+    if (!result.ok) {
+      setFailure(result.payload?.error || `${label} failed.`);
+      return;
+    }
+    onSuccess?.(result.payload);
+    setNotice(result.payload?.queued ? `${label} queued.` : `${label} completed.`);
   };
 
   const save = () => runAction(
@@ -110,6 +146,52 @@ export const DiscordPage = ({user}) => {
     {method: "POST", json: draft}
   );
 
+  const startTrivia = () => {
+    if (!draft.trivia.enabled) {
+      setFailure("Enable trivia before starting a round.");
+      return;
+    }
+    if (!draft.trivia.channelId) {
+      setFailure("Set a trivia channel id before starting a round.");
+      return;
+    }
+    saveThenRunAction(
+      "Start trivia",
+      "/api/moon/v3/admin/discord/trivia/start",
+      {method: "POST", json: {force: true}},
+      () => void refresh()
+    );
+  };
+
+  const stopTrivia = () => runAction(
+    "Stop trivia",
+    "/api/moon/v3/admin/discord/trivia/stop",
+    {method: "POST", json: {}},
+    () => void refresh()
+  );
+
+  const testLeaderboard = () => {
+    if (!draft.trivia.channelId && !draft.trivia.leaderboardChannelId) {
+      setFailure("Set a trivia or leaderboard channel id before posting a leaderboard.");
+      return;
+    }
+    saveThenRunAction(
+      "Post trivia leaderboard",
+      "/api/moon/v3/admin/discord/trivia/leaderboard/test",
+      {method: "POST", json: {window: "all", defer: true}}
+    );
+  };
+
+  const copyTriviaAnswer = async (answer) => {
+    const normalized = normalizeString(answer);
+    if (!normalized) {
+      return;
+    }
+    await navigator.clipboard?.writeText(normalized);
+    setAnswerCopied(true);
+    window.setTimeout(() => setAnswerCopied(false), 2000);
+  };
+
   if (loading) {
     return (
       <section className="admin-panel admin-state-panel">
@@ -131,6 +213,12 @@ export const DiscordPage = ({user}) => {
   }
 
   const runtime = data?.runtime || {};
+  const triviaRuntime = data?.triviaRuntime || {};
+  const activeTriviaRound = triviaRuntime.activeRound || null;
+  const latestTriviaRound = triviaRuntime.latestRound || activeTriviaRound || null;
+  const triviaAnswer = normalizeString(activeTriviaRound?.answer || latestTriviaRound?.answer);
+  const triviaAnswerUrl = normalizeString(latestTriviaRound?.moonTitleUrl || latestTriviaRound?.sourceUrl);
+  const triviaGuesses = normalizeArray(triviaRuntime.recentGuesses);
   const commandCount = normalizeArray(runtime.commandInventory).length;
 
   return (
@@ -188,6 +276,115 @@ export const DiscordPage = ({user}) => {
             <button className="admin-button ghost" type="button" disabled={!canWrite || busy !== ""} onClick={reload}>Reload runtime</button>
             <button className="admin-button ghost" type="button" disabled={!canWrite || busy !== "" || !draft.notifications.releaseChannelId} onClick={testRelease}>Test release post</button>
           </div>
+        </article>
+
+        <article className="admin-panel">
+          <div className="admin-section-heading">
+            <div>
+              <div className="admin-kicker">Trivia</div>
+              <h2>Noona title game</h2>
+              <p className="admin-muted">Noona posts a sanitized summary clue, accepts public guesses, and awards XP to the first correct answer.</p>
+            </div>
+            <AdminStatusBadge tone={draft.trivia.enabled ? "good" : "queued"}>
+              {draft.trivia.enabled ? "enabled" : "disabled"}
+            </AdminStatusBadge>
+          </div>
+          <div className="admin-task-form">
+            <label>
+              <span>Enabled</span>
+              <select disabled={!canWrite} value={draft.trivia.enabled ? "true" : "false"} onChange={(event) => setTrivia({enabled: event.target.value === "true"})}>
+                <option value="true">Enabled</option>
+                <option value="false">Disabled</option>
+              </select>
+            </label>
+            <label>
+              <span>Trivia channel id</span>
+              <input disabled={!canWrite} value={draft.trivia.channelId} onChange={(event) => setTrivia({channelId: event.target.value})} />
+            </label>
+            <label>
+              <span>Leaderboard channel id</span>
+              <input disabled={!canWrite} value={draft.trivia.leaderboardChannelId} onChange={(event) => setTrivia({leaderboardChannelId: event.target.value})} placeholder="Defaults to trivia channel" />
+            </label>
+            <label>
+              <span>Round minutes</span>
+              <input disabled={!canWrite} type="number" min="1" max="240" value={draft.trivia.roundDurationMinutes} onChange={(event) => setTrivia({roundDurationMinutes: event.target.value})} />
+            </label>
+            <label>
+              <span>Cooldown min</span>
+              <input disabled={!canWrite} type="number" min="1" max="1440" value={draft.trivia.cooldownMinMinutes} onChange={(event) => setTrivia({cooldownMinMinutes: event.target.value})} />
+            </label>
+            <label>
+              <span>Cooldown max</span>
+              <input disabled={!canWrite} type="number" min="1" max="1440" value={draft.trivia.cooldownMaxMinutes} onChange={(event) => setTrivia({cooldownMaxMinutes: event.target.value})} />
+            </label>
+            <label>
+              <span>Base XP</span>
+              <input disabled={!canWrite} type="number" min="1" value={draft.trivia.baseXp} onChange={(event) => setTrivia({baseXp: event.target.value})} />
+            </label>
+            <label>
+              <span>Speed bonus max</span>
+              <input disabled={!canWrite} type="number" min="0" value={draft.trivia.speedBonusMax} onChange={(event) => setTrivia({speedBonusMax: event.target.value})} />
+            </label>
+            <label>
+              <span>Streak bonus</span>
+              <input disabled={!canWrite} type="number" min="0" value={draft.trivia.streakBonusPerWin} onChange={(event) => setTrivia({streakBonusPerWin: event.target.value})} />
+            </label>
+            <label>
+              <span>Streak cap</span>
+              <input disabled={!canWrite} type="number" min="0" value={draft.trivia.streakBonusMax} onChange={(event) => setTrivia({streakBonusMax: event.target.value})} />
+            </label>
+          </div>
+          <div className="admin-checkbox-grid">
+            <label><input disabled={!canWrite} type="checkbox" checked={draft.trivia.hintsEnabled} onChange={(event) => setTrivia({hintsEnabled: event.target.checked})} /> Timed hints</label>
+            <label><input disabled={!canWrite} type="checkbox" checked={draft.trivia.aiMatchingEnabled} onChange={(event) => setTrivia({aiMatchingEnabled: event.target.checked})} /> AI borderline matching</label>
+            <label><input disabled={!canWrite} type="checkbox" checked={draft.trivia.leaderboardAfterRound} onChange={(event) => setTrivia({leaderboardAfterRound: event.target.checked})} /> Post leaderboard after rounds</label>
+          </div>
+          <div className="admin-detail-grid">
+            <span><strong>Current round</strong>{activeTriviaRound?.id ? formatDisplayValue(activeTriviaRound.status, "open") : "none"}</span>
+            <span><strong>Answer</strong>{activeTriviaRound?.answerHidden ? "hidden" : formatDisplayValue(triviaAnswer, "unknown")}</span>
+            <span><strong>Ends</strong>{activeTriviaRound?.expiresAt ? formatDate(activeTriviaRound.expiresAt) : "Unknown"}</span>
+            <span><strong>Daily leader</strong>{formatDisplayValue(triviaRuntime.leaderboard?.rows?.[0]?.username, "none")}</span>
+          </div>
+          {latestTriviaRound?.prompt ? (
+            <div className="admin-log-box">
+              <div className="admin-kicker">Current clue</div>
+              <p>{latestTriviaRound.prompt}</p>
+            </div>
+          ) : null}
+          {canRevealTriviaAnswer && triviaAnswer ? (
+            <div className="admin-action-row">
+              {triviaAnswerUrl ? <a className="admin-button ghost" href={triviaAnswerUrl} target="_blank" rel="noreferrer">Open answer</a> : null}
+              <button className="admin-button ghost" type="button" onClick={() => copyTriviaAnswer(triviaAnswer)}>
+                {answerCopied ? "Copied" : "Copy answer"}
+              </button>
+            </div>
+          ) : null}
+          {activeTriviaRound?.answerHidden ? (
+            <p className="admin-muted">Active answers are only revealed to owner or discord root admins.</p>
+          ) : null}
+          <AdminDenseTable
+            rows={triviaGuesses}
+            getKey={(row) => row.id}
+            empty="No guesses recorded for the latest round."
+            columns={[
+              {key: "createdAt", label: "Time", render: (row) => formatDate(row.createdAt)},
+              {key: "user", label: "User", render: (row) => formatDisplayValue(row.username, row.discordUserId)},
+              {key: "guess", label: "Guess", render: (row) => row.redacted ? "hidden during active round" : formatDisplayValue(row.content, "blank")},
+              {key: "result", label: "Result", render: (row) => (
+                <AdminStatusBadge tone={row.correct ? "good" : row.close ? "warning" : ""}>
+                  {row.correct ? "correct" : row.close ? "close" : "wrong"}
+                </AdminStatusBadge>
+              )},
+              {key: "matchedBy", label: "Matched by", render: (row) => formatDisplayValue(row.matchedBy, "deterministic")}
+            ]}
+          />
+          <div className="admin-action-row">
+            <button className="admin-button solid" type="button" disabled={!canWrite || busy !== ""} onClick={save}>Save settings</button>
+            <button className="admin-button ghost" type="button" disabled={!canWrite || busy !== "" || !draft.trivia.enabled || !draft.trivia.channelId} onClick={startTrivia}>Start round</button>
+            <button className="admin-button ghost" type="button" disabled={!canWrite || busy !== ""} onClick={stopTrivia}>Stop round</button>
+            <button className="admin-button ghost" type="button" disabled={!canWrite || busy !== "" || (!draft.trivia.channelId && !draft.trivia.leaderboardChannelId)} onClick={testLeaderboard}>Post leaderboard</button>
+          </div>
+          <p className="admin-muted">Schedules post at server time: daily 8 PM, weekly Sunday 8 PM, monthly first day 8 PM.</p>
         </article>
 
         <article className="admin-panel">

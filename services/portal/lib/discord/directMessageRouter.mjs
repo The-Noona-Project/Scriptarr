@@ -160,7 +160,7 @@ export const createDirectMessageHandler = ({getSettings, sage, logger, onRuntime
 
   await sendReplySequence(
     message,
-    `Starting Scriptarr async downloadall run for type=${parsed.filters.type}, nsfw=${parsed.filters.nsfw}, titlegroup=${parsed.filters.titlePrefix}. It will DM a summary when the batch finishes.`
+    `Starting Scriptarr async downloadall run for type=${parsed.filters.type}, nsfw=${parsed.filters.nsfw}, titlegroup=${parsed.filters.titlePrefix}, groupsize=${parsed.filters.batchesPerApproval}. It will DM a summary when the batch finishes.`
   );
 
   try {

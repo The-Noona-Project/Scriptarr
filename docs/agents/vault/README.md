@@ -31,6 +31,12 @@
   must preserve them with other settings.
 - Brokered Portal Discord settings now include the release notification channel id, and durable release notification
   acknowledgments are normal settings-backed state that content reset should preserve.
+- Downloadall notification acknowledgments and reaction decision prompts are also operational settings-backed state.
+  Content reset should preserve them so an owner cannot accidentally lose a paused-run decision path during unrelated
+  catalog cleanup.
+- Brokered Portal Discord settings now also include Noona trivia configuration. Trivia rounds, guesses, score events,
+  leaderboard acknowledgments, AI tool settings, and AI proposals are Vault-backed settings and should survive content
+  reset with other operational settings.
 - Raven catalog rows now carry title-level and chapter-level media quality fields. Preserve `qualityStatus`,
   clean/partial/missing counts, quality summaries, expected page counts, missing page numbers, and quality notes
   through both memory and MySQL stores so Moon can surface Missing Content without scraping task logs.

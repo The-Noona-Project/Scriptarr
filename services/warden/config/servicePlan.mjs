@@ -295,9 +295,10 @@ export const resolveServicePlan = ({env = process.env, containerNamePrefix = ""}
     image: resolveServiceImage("scriptarr-moon", {env}),
     env: {
       SCRIPTARR_SAGE_BASE_URL: `http://scriptarr-sage:${sagePort}`,
-      SCRIPTARR_MOON_PORT: String(moonPort)
+      SCRIPTARR_MOON_PORT: String(moonPort),
+      SCRIPTARR_MOON_COVER_CACHE_DIR: "/app/cover-cache"
     },
-    mounts: resolveFolderMounts(storageLayout, "scriptarr-moon", ["logs"]),
+    mounts: resolveFolderMounts(storageLayout, "scriptarr-moon", ["coverCache", "logs"]),
     networkAliases: ["scriptarr-moon"],
     publishedPorts: [{hostPort: moonPublicPort, containerPort: moonPort}],
     healthCheck: buildNodeHttpHealthCheck(moonPort),
@@ -317,6 +318,9 @@ export const resolveServicePlan = ({env = process.env, containerNamePrefix = ""}
     mounts: resolveFolderMounts(storageLayout, "scriptarr-raven", ["downloads", "logs"]),
     networkAliases: ["scriptarr-raven"],
     publishedPorts: [],
+    extraArgs: normalizeString(env.SCRIPTARR_RAVEN_VPN_RUNTIME_DISABLED).toLowerCase() === "true"
+      ? []
+      : ["--cap-add", "NET_ADMIN", "--device", normalizeString(env.SCRIPTARR_RAVEN_TUN_DEVICE) || "/dev/net/tun"],
     healthCheck: buildCurlHttpHealthCheck(ravenPort, {startPeriod: "25s"}),
     containerPort: ravenPort
   });

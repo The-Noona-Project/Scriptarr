@@ -122,6 +122,18 @@ public final class LibraryService {
     }
 
     /**
+     * List compact title-card projections for Moon browse and shelf surfaces.
+     *
+     * @return immutable list with chapter and filesystem details omitted
+     */
+    public List<Map<String, Object>> listTitleCards() {
+        return listTitles().stream()
+            .filter(Objects::nonNull)
+            .map(this::toTitleCard)
+            .toList();
+    }
+
+    /**
      * Find a single title by its stable Scriptarr id.
      *
      * @param id title id to resolve
@@ -787,6 +799,64 @@ public final class LibraryService {
             title.qualitySummary(),
             title.updatedAt()
         );
+    }
+
+    private Map<String, Object> toTitleCard(LibraryTitle title) {
+        Map<String, Object> card = new LinkedHashMap<>();
+        card.put("id", firstNonBlank(title.id(), ""));
+        card.put("title", firstNonBlank(title.title(), "Untitled"));
+        card.put("mediaType", firstNonBlank(title.mediaType(), "manga"));
+        card.put("libraryTypeLabel", firstNonBlank(title.libraryTypeLabel(), firstNonBlank(title.mediaType(), "Manga")));
+        card.put("libraryTypeSlug", firstNonBlank(title.libraryTypeSlug(), LibraryNaming.normalizeTypeSlug(title.mediaType())));
+        card.put("status", SeriesLifecycle.normalizeStatus(title.status()));
+        card.put("latestChapter", firstNonBlank(title.latestChapter(), "Unknown"));
+        card.put("coverAccent", firstNonBlank(title.coverAccent(), "#4f8f88"));
+        card.put("coverUrl", firstNonBlank(title.coverUrl(), ""));
+        card.put("coverThumbUrl", "");
+        card.put("summary", compactText(title.summary(), 280));
+        card.put("releaseLabel", firstNonBlank(title.releaseLabel(), ""));
+        card.put("chapterCount", Math.max(0, title.chapterCount()));
+        card.put("chaptersDownloaded", Math.max(0, title.chaptersDownloaded()));
+        card.put("author", firstNonBlank(title.author(), ""));
+        card.put("tags", compactStrings(title.tags(), 8));
+        card.put("aliases", compactStrings(title.aliases(), 8));
+        card.put("metadataProvider", firstNonBlank(title.metadataProvider(), ""));
+        card.put("metadataMatchedAt", firstNonBlank(title.metadataMatchedAt(), ""));
+        card.put("updatedAt", firstNonBlank(title.updatedAt(), ""));
+        card.put("qualityStatus", firstNonBlank(title.qualityStatus(), "clean"));
+        card.put("cleanChapterCount", Math.max(0, title.cleanChapterCount()));
+        card.put("partialChapterCount", Math.max(0, title.partialChapterCount()));
+        card.put("missingContentCount", Math.max(0, title.missingContentCount()));
+        card.put("qualitySummary", compactText(title.qualitySummary(), 180));
+        return Map.copyOf(card);
+    }
+
+    private List<String> compactStrings(List<String> values, int max) {
+        List<String> normalized = new ArrayList<>();
+        Set<String> seen = new LinkedHashSet<>();
+        for (String value : Optional.ofNullable(values).orElse(List.of())) {
+            String entry = firstNonBlank(value, "");
+            if (entry.isBlank()) {
+                continue;
+            }
+            String key = entry.toLowerCase(Locale.ROOT);
+            if (seen.add(key)) {
+                normalized.add(entry);
+            }
+            if (normalized.size() >= Math.max(0, max)) {
+                break;
+            }
+        }
+        return List.copyOf(normalized);
+    }
+
+    private String compactText(String value, int maxLength) {
+        String normalized = firstNonBlank(value, "");
+        int limit = Math.max(0, maxLength);
+        if (limit == 0 || normalized.length() <= limit) {
+            return normalized;
+        }
+        return normalized.substring(0, Math.max(0, limit - 3)).trim() + "...";
     }
 
     private int titleRichnessScore(LibraryTitle title) {

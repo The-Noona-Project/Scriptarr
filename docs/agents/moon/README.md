@@ -67,6 +67,12 @@
 - The user home route should stay cover-led and shelf-based, not hero-heavy. Favor a personalized "Your Bookshelf"
   continue-reading scroller first, then recent-by-type shelves and tag-driven shelves built from explicit tag
   likes/dislikes plus inferred taste from read history, follows, and the active bookshelf.
+- Browse and library shelves should use `/api/moon-v3/user/library?view=card` with server-side filtering and pagination
+  instead of pulling full title details. Full title detail and reader routes are still the only places that should load
+  chapter arrays.
+- Cover cards should prefer Moon's derived `coverThumbUrl` WebP cache when Sage provides one. The cache is derived
+  storage only: Moon fetches Sage-approved cover URLs, converts them with `sharp`, stores WebP files under the Moon
+  cover-cache folder, and exposes a rerunnable `Optimize cover images` admin task.
 - Bookshelf membership is no longer derived from `media_progress` alone. Moon should treat title/chapter read state as
   the source of truth for started vs completed bookshelf behavior while still keeping progress rows for the active
   reading position.
@@ -94,22 +100,25 @@
 - `/admin/settings` is the general Settings hub. Keep branding, logo upload or remove, database summary, credits,
   support links, toast notification preferences, Raven VPN, metadata providers, download providers, request workflow,
   and Discord basics there. Do not drift AI controls back into this page. Keep section drafts protected from background
-  refreshes while dirty, and use the explicit Moon v3 settings save routes for Settings-owned forms.
+  refreshes while dirty, and use the explicit Moon v3 settings save routes for Settings-owned forms. Show Raven VPN
+  runtime capability, settings freshness, `armed / idle`, and protected state from the brokered health payload. The
+  Settings VPN test button must call Moon -> Sage -> Raven rather than reaching around the browser-safe broker path.
 - `/admin/settings/database` is a hidden-from-nav full page opened only from Settings. Keep it Moon -> Sage -> Vault,
   require database grants through the route model, show redacted/paginated rows, and allow editing only the validated
   settings JSON path the broker exposes.
 - Use the shared `AdminToastProvider` for admin action results, async jobs, and live SSE events. Page-local toast
   stacks should only be introduced for isolated surfaces that cannot sit under the admin provider.
-- `/admin/system/ai` is the dedicated Oracle and LocalAI control page. Keep provider, provider-specific model dropdown,
-  temperature, masked key state, LocalAI profile/image controls, manual install/start/remove actions, lifecycle
-  progress, health/status, completion toasts, and the test prompt here instead of drifting those controls back into the
-  main Settings page. Model options must come through Moon -> Sage -> Oracle, not browser-direct provider calls.
+- `/admin/system/ai` is the dedicated Oracle, LocalAI, and AI tooling page. Keep provider, provider-specific model
+  dropdown, temperature, masked key state, LocalAI profile/image controls, manual install/start/remove actions,
+  lifecycle progress, health/status, completion toasts, test prompt, tool toggles, assistant prompts, and confirmable
+  proposals here instead of drifting those controls back into the main Settings page. Model options must come through
+  Moon -> Sage -> Oracle, not browser-direct provider calls.
 - `/admin/system` also owns the root-only content reset maintenance flow. Keep it two-step, confirmation-gated,
   same-origin, and honest about what will be deleted: content-side requests, progress, read state, follows, bookmarks,
   Raven catalog state, Raven task state, and managed Raven download folders only.
 - `/admin/discord` should surface Portal capability state honestly: command runtime, command sync, onboarding
-  availability, release notification channel id, and the last meaningful runtime error should all be visible without
-  forcing the admin to read logs.
+  availability, release notification channel id, Noona trivia channel/scoring/schedule settings, and the last
+  meaningful runtime error should all be visible without forcing the admin to read logs.
 - `/admin/library` should stay dense and operational, closer to Sonarr's series index than to a marketing gallery.
   Favor sortable status, release, coverage, and path information over oversized cards.
 - `/admin/library/:type/:titleId` is the admin drill-down companion to that dense index. Keep it operational and

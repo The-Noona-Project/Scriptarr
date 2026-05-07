@@ -34,6 +34,7 @@ const eventDomainsByGrant = Object.freeze({
   requests: ["requests"],
   users: ["users", "auth", "access"],
   discord: ["discord"],
+  ai: ["ai"],
   settings: ["settings"],
   database: ["database"],
   system: ["system"],

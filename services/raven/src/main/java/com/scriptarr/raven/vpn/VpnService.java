@@ -11,6 +11,7 @@ import java.io.BufferedWriter;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.math.BigInteger;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -31,6 +32,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
@@ -43,7 +45,12 @@ public class VpnService {
     private static final String PIA_OPENVPN_ZIP_URL = "https://www.privateinternetaccess.com/openvpn/openvpn-ip.zip";
     private static final Duration PROFILE_ARCHIVE_STALE_AFTER = Duration.ofDays(7);
     private static final Duration OPENVPN_START_TIMEOUT = Duration.ofSeconds(90);
+    private static final Duration SETTINGS_REFRESH_INTERVAL = Duration.ofSeconds(15);
+    private static final Duration STATUS_REFRESH_INTERVAL = Duration.ofSeconds(30);
+    private static final Duration DISABLED_SETTINGS_GRACE = Duration.ofMinutes(5);
+    private static final Duration RUNTIME_CHECK_INTERVAL = Duration.ofMinutes(1);
     private static final int MAX_RECENT_LOG_LINES = 20;
+    private static final int CONNECT_ATTEMPTS = 3;
 
     private final RavenSettingsService settingsService;
     private final ScriptarrLogger logger;
@@ -57,8 +64,19 @@ public class VpnService {
     private volatile boolean connected;
     private volatile String activeRegion = "";
     private volatile String lastError = "";
+    private volatile String lastSettingsError = "";
+    private volatile String lastRuntimeError = "";
     private volatile RavenVpnSettings lastKnownSettings = new RavenVpnSettings(false, "us_california", "", "");
     private volatile boolean hasLastKnownSettings;
+    private volatile Instant lastSettingsLoadedAt = Instant.EPOCH;
+    private volatile Instant lastSettingsRefreshAttemptAt = Instant.EPOCH;
+    private volatile Instant lastRuntimeCheckedAt = Instant.EPOCH;
+    private volatile boolean lastRuntimeCapable;
+    private volatile boolean connecting;
+    private volatile Instant lastConnectionAttemptAt = Instant.EPOCH;
+    private volatile Instant lastConnectedAt = Instant.EPOCH;
+    private volatile Instant lastDisconnectedAt = Instant.EPOCH;
+    private volatile String lastDisconnectReason = "";
     private Path activeCredentialsFile;
 
     /**
@@ -84,7 +102,13 @@ public class VpnService {
             return;
         }
         if (settings.piaUsername().isBlank() || settings.piaPassword().isBlank()) {
-            throw new IllegalStateException("PIA username and password are required before Raven can use VPN-backed downloads.");
+            lastError = "PIA username and password are required before Raven can use VPN-backed downloads.";
+            throw new IllegalStateException(lastError);
+        }
+        String runtimeProblem = vpnRuntimeProblem();
+        if (!runtimeProblem.isBlank()) {
+            lastError = runtimeProblem;
+            throw new IllegalStateException(runtimeProblem);
         }
 
         String requestedRegion = normalizeRegionKey(settings.region());
@@ -92,25 +116,64 @@ public class VpnService {
             return;
         }
 
-        destroyActiveProcess("Preparing a fresh OpenVPN session.");
+        IllegalStateException lastFailure = null;
+        connecting = true;
         try {
-            Path profile = ensureProfile(requestedRegion);
-            Path credentialsFile = writeCredentials(settings);
-            openVpnProcess = startOpenVpnProcess(profile, credentialsFile);
-            activeCredentialsFile = credentialsFile;
-            consumeOutput(openVpnProcess.getInputStream());
-            waitForInitialization(requestedRegion);
-            connected = true;
-            activeRegion = requestedRegion;
-            lastError = "";
-            logger.info("VPN", "PIA/OpenVPN connection ready.", "region=" + activeRegion);
+            for (int attempt = 1; attempt <= CONNECT_ATTEMPTS; attempt++) {
+                lastConnectionAttemptAt = now();
+                destroyActiveProcess(attempt == 1 ? "Preparing a fresh OpenVPN session." : "Retrying Raven VPN connection.");
+                try {
+                    Path profile = ensureProfile(requestedRegion);
+                    Path credentialsFile = writeCredentials(settings);
+                    openVpnProcess = startOpenVpnProcess(profile, credentialsFile);
+                    activeCredentialsFile = credentialsFile;
+                    consumeOutput(openVpnProcess.getInputStream());
+                    waitForInitialization(requestedRegion);
+                    connected = true;
+                    activeRegion = requestedRegion;
+                    lastConnectedAt = now();
+                    lastDisconnectReason = "";
+                    lastError = "";
+                    logger.info("VPN", "PIA/OpenVPN connection ready.", "region=" + activeRegion);
+                    return;
+                } catch (Exception error) {
+                    destroyActiveProcess("Cleaning up after VPN failure.");
+                    connected = false;
+                    activeRegion = "";
+                    lastError = sanitizeError(error.getMessage() == null ? "Unknown VPN error." : error.getMessage());
+                    lastFailure = new IllegalStateException(lastError, error);
+                    logger.error("VPN", "Failed to establish PIA/OpenVPN session.", error);
+                    if (isAuthenticationFailure(lastError.toLowerCase(Locale.ROOT)) || attempt == CONNECT_ATTEMPTS) {
+                        break;
+                    }
+                    sleepBeforeReconnect();
+                }
+            }
+        } finally {
+            connecting = false;
+        }
+        throw lastFailure == null ? new IllegalStateException("Raven could not establish the VPN tunnel.") : lastFailure;
+    }
+
+    /**
+     * Test the configured VPN path through the same fail-closed guard used by
+     * downloads. If VPN is enabled, a successful test leaves OpenVPN connected
+     * for later protected work.
+     *
+     * @return VPN test result with a refreshed status payload
+     */
+    public synchronized Map<String, Object> testConnection() {
+        try {
+            ensureConnectedIfEnabled();
+            Map<String, Object> payload = status();
+            payload.put("ok", true);
+            return payload;
         } catch (Exception error) {
-            destroyActiveProcess("Cleaning up after VPN failure.");
-            connected = false;
-            activeRegion = "";
-            lastError = error.getMessage() == null ? "Unknown VPN error." : error.getMessage();
-            logger.error("VPN", "Failed to establish PIA/OpenVPN session.", error);
-            throw new IllegalStateException(lastError, error);
+            lastError = sanitizeError(error.getMessage() == null ? "Raven VPN test failed." : error.getMessage());
+            Map<String, Object> payload = status();
+            payload.put("ok", false);
+            payload.put("error", lastError);
+            return payload;
         }
     }
 
@@ -120,26 +183,42 @@ public class VpnService {
      * @return VPN status snapshot
      */
     public synchronized Map<String, Object> status() {
-        boolean enabled = false;
+        refreshSettingsForStatus();
+        boolean enabled = hasLastKnownSettings && lastKnownSettings.enabled();
         String region = activeRegion;
-        try {
-            RavenVpnSettings settings = settingsService.getVpnSettings();
-            enabled = settings.enabled();
-            if (region.isBlank()) {
-                region = normalizeRegionKey(settings.region());
-            }
-        } catch (Exception ignored) {
+        if (region.isBlank()) {
+            region = normalizeRegionKey(lastKnownSettings.region());
         }
 
         if (openVpnProcess != null && !openVpnProcess.isAlive()) {
-            connected = false;
+            destroyActiveProcess("OpenVPN process exited before status check.");
+            lastError = "OpenVPN process exited.";
         }
 
+        String runtimeProblem = vpnRuntimeProblem();
+        boolean runtimeCapable = runtimeProblem.isBlank();
+        boolean connectedNow = connected && openVpnProcess != null && openVpnProcess.isAlive();
+        boolean settingsFresh = settingsFresh(now());
+        String displayedError = enabled
+            ? firstNonBlank(lastError, lastSettingsError, lastRuntimeError)
+            : firstNonBlank(lastError, lastSettingsError);
+        displayedError = sanitizeError(displayedError);
+        String state = resolveState(enabled, connectedNow, runtimeCapable, settingsFresh, displayedError);
         Map<String, Object> payload = new HashMap<>();
+        payload.put("state", state);
         payload.put("enabled", enabled);
-        payload.put("connected", connected && openVpnProcess != null && openVpnProcess.isAlive());
+        payload.put("connected", connectedNow);
+        payload.put("protected", enabled && connectedNow && runtimeCapable);
+        payload.put("settingsFresh", settingsFresh);
+        payload.put("runtimeCapable", runtimeCapable);
         payload.put("region", region.isBlank() ? "us_california" : region);
-        payload.put("lastError", lastError);
+        payload.put("lastCheckedAt", now().toString());
+        payload.put("settingsLastLoadedAt", hasLastKnownSettings ? lastSettingsLoadedAt.toString() : "");
+        payload.put("lastConnectionAttemptAt", instantOrBlank(lastConnectionAttemptAt));
+        payload.put("lastConnectedAt", instantOrBlank(lastConnectedAt));
+        payload.put("lastDisconnectedAt", instantOrBlank(lastDisconnectedAt));
+        payload.put("lastDisconnectReason", sanitizeError(lastDisconnectReason));
+        payload.put("lastError", displayedError);
         return payload;
     }
 
@@ -227,27 +306,52 @@ public class VpnService {
      */
     protected void downloadArchive(Path archivePath) throws IOException, InterruptedException {
         Files.createDirectories(archivePath.getParent());
+        Path tempArchive = Files.createTempFile(archivePath.getParent(), "openvpn-ip-", ".zip.tmp");
         HttpRequest request = HttpRequest.newBuilder()
-            .uri(URI.create(PIA_OPENVPN_ZIP_URL))
+            .uri(profileArchiveUri())
             .timeout(Duration.ofSeconds(60))
             .GET()
             .build();
-        HttpResponse<InputStream> response = httpClient.send(request, HttpResponse.BodyHandlers.ofInputStream());
-        if (response.statusCode() < 200 || response.statusCode() >= 300) {
-            throw new IOException("PIA OpenVPN profile download failed with status " + response.statusCode());
+        try {
+            HttpResponse<InputStream> response = httpClient.send(request, HttpResponse.BodyHandlers.ofInputStream());
+            if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                throw new IOException("PIA OpenVPN profile download failed with status " + response.statusCode());
+            }
+            Files.copy(response.body(), tempArchive, StandardCopyOption.REPLACE_EXISTING);
+            validateProfileArchive(tempArchive);
+            moveArchiveIntoPlace(tempArchive, archivePath);
+        } finally {
+            Files.deleteIfExists(tempArchive);
         }
-        Files.copy(response.body(), archivePath, StandardCopyOption.REPLACE_EXISTING);
+    }
+
+    /**
+     * Resolve the PIA OpenVPN archive URI, overridable for download tests.
+     *
+     * @return PIA profile archive URI
+     */
+    protected URI profileArchiveUri() {
+        return URI.create(PIA_OPENVPN_ZIP_URL);
     }
 
     private RavenVpnSettings loadRequiredSettings() {
+        Instant now = now();
+        if (hasLastKnownSettings && Duration.between(lastSettingsLoadedAt, now).compareTo(SETTINGS_REFRESH_INTERVAL) <= 0) {
+            return lastKnownSettings;
+        }
         try {
             RavenVpnSettings settings = settingsService.requireVpnSettings();
             lastKnownSettings = settings;
             hasLastKnownSettings = true;
+            lastSettingsLoadedAt = now();
+            lastSettingsRefreshAttemptAt = lastSettingsLoadedAt;
+            lastSettingsError = "";
             return settings;
         } catch (Exception error) {
-            if (hasLastKnownSettings && !lastKnownSettings.enabled()) {
-                logger.warn("VPN", "Raven could not refresh VPN settings and will keep the last known disabled state.", error.getMessage());
+            lastSettingsRefreshAttemptAt = now();
+            lastSettingsError = error.getMessage() == null ? "Failed to load Raven VPN settings." : error.getMessage();
+            if (hasFreshDisabledSettingsCache()) {
+                logger.warn("VPN", "Raven could not refresh VPN settings and will keep the fresh last-known disabled state.", lastSettingsError);
                 return lastKnownSettings;
             }
             String message = hasLastKnownSettings && lastKnownSettings.enabled()
@@ -257,11 +361,135 @@ public class VpnService {
         }
     }
 
+    private void refreshSettingsForStatus() {
+        Instant now = now();
+        if (Duration.between(lastSettingsRefreshAttemptAt, now).compareTo(STATUS_REFRESH_INTERVAL) < 0) {
+            return;
+        }
+        try {
+            RavenVpnSettings settings = settingsService.requireVpnSettings();
+            lastKnownSettings = settings;
+            hasLastKnownSettings = true;
+            lastSettingsLoadedAt = now;
+            lastSettingsRefreshAttemptAt = now;
+            lastSettingsError = "";
+        } catch (Exception error) {
+            lastSettingsRefreshAttemptAt = now;
+            lastSettingsError = error.getMessage() == null ? "Failed to load Raven VPN settings." : error.getMessage();
+            logger.warn("VPN", "Raven could not refresh VPN settings for status.", lastSettingsError);
+        }
+    }
+
+    private boolean hasFreshDisabledSettingsCache() {
+        return hasLastKnownSettings
+            && !lastKnownSettings.enabled()
+            && settingsFresh(now());
+    }
+
+    private boolean settingsFresh(Instant now) {
+        return hasLastKnownSettings
+            && Duration.between(lastSettingsLoadedAt, now).compareTo(DISABLED_SETTINGS_GRACE) <= 0;
+    }
+
     private boolean canReuseActiveConnection(String requestedRegion) {
         if (!connected || openVpnProcess == null || !openVpnProcess.isAlive()) {
             return false;
         }
         return normalizeRegionKey(activeRegion).equals(requestedRegion);
+    }
+
+    private String resolveState(boolean enabled, boolean connectedNow, boolean runtimeCapable, boolean settingsFresh, String displayedError) {
+        if (!enabled) {
+            return "disabled";
+        }
+        if (!runtimeCapable) {
+            return "runtime_unsupported";
+        }
+        if (!settingsFresh) {
+            return "settings_stale";
+        }
+        if (connectedNow) {
+            return "protected";
+        }
+        if (connecting || (openVpnProcess != null && openVpnProcess.isAlive())) {
+            return "connecting";
+        }
+        if (!displayedError.isBlank()) {
+            return "failed";
+        }
+        return "armed";
+    }
+
+    private String vpnRuntimeProblem() {
+        Instant now = now();
+        if (Duration.between(lastRuntimeCheckedAt, now).compareTo(RUNTIME_CHECK_INTERVAL) < 0) {
+            return lastRuntimeCapable ? "" : lastRuntimeError;
+        }
+        lastRuntimeCheckedAt = now;
+        lastRuntimeError = detectVpnRuntimeProblem();
+        lastRuntimeCapable = lastRuntimeError.isBlank();
+        return lastRuntimeError;
+    }
+
+    /**
+     * Detect whether the current container can run OpenVPN with a TUN device.
+     *
+     * @return blank when supported, otherwise a human-readable runtime problem
+     */
+    protected String detectVpnRuntimeProblem() {
+        if (!Files.exists(Path.of("/dev/net/tun"))) {
+            return "Raven VPN runtime is missing /dev/net/tun in the container.";
+        }
+        if (!hasNetAdminCapability()) {
+            return "Raven VPN runtime is missing NET_ADMIN.";
+        }
+        if (!openVpnBinaryAvailable()) {
+            return "Raven VPN runtime is missing openvpn.";
+        }
+        return "";
+    }
+
+    /**
+     * Resolve the current timestamp, overridable by deterministic tests.
+     *
+     * @return current instant
+     */
+    protected Instant now() {
+        return Instant.now();
+    }
+
+    private boolean hasNetAdminCapability() {
+        Path statusPath = Path.of("/proc/self/status");
+        if (!Files.exists(statusPath)) {
+            return false;
+        }
+        try (Stream<String> lines = Files.lines(statusPath, StandardCharsets.UTF_8)) {
+            return lines
+                .filter((line) -> line.startsWith("CapEff:"))
+                .findFirst()
+                .map((line) -> line.replace("CapEff:", "").trim())
+                .filter((hex) -> !hex.isBlank())
+                .map((hex) -> new BigInteger(hex, 16).testBit(12))
+                .orElse(false);
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    private boolean openVpnBinaryAvailable() {
+        try {
+            Process process = new ProcessBuilder("openvpn", "--version")
+                .redirectErrorStream(true)
+                .start();
+            boolean finished = process.waitFor(2, TimeUnit.SECONDS);
+            if (!finished) {
+                process.destroyForcibly();
+                return false;
+            }
+            return process.exitValue() == 0;
+        } catch (Exception ignored) {
+            return false;
+        }
     }
 
     private boolean profilesAreMissing(Path profilesRoot) throws IOException {
@@ -276,7 +504,7 @@ public class VpnService {
         }
         try {
             Instant lastModified = Files.getLastModifiedTime(archivePath).toInstant();
-            return lastModified.isBefore(Instant.now().minus(PROFILE_ARCHIVE_STALE_AFTER));
+            return lastModified.isBefore(now().minus(PROFILE_ARCHIVE_STALE_AFTER));
         } catch (IOException ignored) {
             return true;
         }
@@ -297,6 +525,7 @@ public class VpnService {
         if (!Files.exists(archivePath)) {
             throw new IOException("PIA profile archive is missing.");
         }
+        validateProfileArchive(archivePath);
 
         if (replaceExisting) {
             try (Stream<Path> files = Files.list(profilesRoot)) {
@@ -315,6 +544,31 @@ public class VpnService {
                 Path output = profilesRoot.resolve(Path.of(entry.getName()).getFileName().toString());
                 Files.copy(zip, output, StandardCopyOption.REPLACE_EXISTING);
             }
+        }
+    }
+
+    private void validateProfileArchive(Path archivePath) throws IOException {
+        int profiles = 0;
+        try (ZipInputStream zip = new ZipInputStream(Files.newInputStream(archivePath))) {
+            ZipEntry entry;
+            while ((entry = zip.getNextEntry()) != null) {
+                if (!entry.isDirectory() && entry.getName().toLowerCase(Locale.ROOT).endsWith(".ovpn")) {
+                    profiles += 1;
+                }
+            }
+        } catch (IOException error) {
+            throw new IOException("PIA profile archive is corrupt or incomplete.", error);
+        }
+        if (profiles == 0) {
+            throw new IOException("PIA profile archive did not contain any OpenVPN profiles.");
+        }
+    }
+
+    private void moveArchiveIntoPlace(Path tempArchive, Path archivePath) throws IOException {
+        try {
+            Files.move(tempArchive, archivePath, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+        } catch (IOException atomicMoveError) {
+            Files.move(tempArchive, archivePath, StandardCopyOption.REPLACE_EXISTING);
         }
     }
 
@@ -413,6 +667,10 @@ public class VpnService {
         if (!reason.isBlank()) {
             logger.debug("VPN", reason);
         }
+        if (openVpnProcess != null || connected) {
+            lastDisconnectedAt = now();
+            lastDisconnectReason = sanitizeError(reason);
+        }
         connected = false;
         lastError = "";
         activeRegion = "";
@@ -430,6 +688,54 @@ public class VpnService {
             }
             activeCredentialsFile = null;
         }
+        deleteCredentialFiles();
+    }
+
+    private void deleteCredentialFiles() {
+        Path credentialsRoot = logger.getDownloadsRoot().resolve("vpn").resolve("pia");
+        if (!Files.exists(credentialsRoot)) {
+            return;
+        }
+        try (Stream<Path> files = Files.list(credentialsRoot)) {
+            for (Path path : files.filter((entry) -> entry.getFileName().toString().startsWith("credentials-")).toList()) {
+                Files.deleteIfExists(path);
+            }
+        } catch (IOException ignored) {
+        }
+    }
+
+    private void sleepBeforeReconnect() {
+        try {
+            Thread.sleep(1000L);
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Interrupted while retrying the Raven VPN connection.", interrupted);
+        }
+    }
+
+    private String firstNonBlank(String... values) {
+        for (String value : values) {
+            String normalized = Optional.ofNullable(value).orElse("").trim();
+            if (!normalized.isBlank()) {
+                return normalized;
+            }
+        }
+        return "";
+    }
+
+    private String instantOrBlank(Instant instant) {
+        return instant == null || Instant.EPOCH.equals(instant) ? "" : instant.toString();
+    }
+
+    private String sanitizeError(String value) {
+        String normalized = Optional.ofNullable(value).orElse("")
+            .replaceAll("[\\r\\n\\t]+", " ")
+            .replaceAll("\\s+", " ")
+            .trim();
+        if (normalized.length() > 500) {
+            return normalized.substring(0, 500) + "...";
+        }
+        return normalized;
     }
 
     private String normalizeRegionKey(String region) {

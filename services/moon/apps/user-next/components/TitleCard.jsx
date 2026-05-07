@@ -15,6 +15,7 @@ import {formatCoverage} from "../lib/date.js";
  *     title?: string,
  *     summary?: string,
  *     coverUrl?: string,
+ *     coverThumbUrl?: string,
  *     libraryTypeLabel?: string,
  *     libraryTypeSlug?: string,
  *     mediaType?: string,
@@ -33,8 +34,8 @@ export const TitleCard = ({title, compact = false, variant = "default"}) => (
     className={`moon-title-card ${compact ? "is-compact" : ""} ${variant === "browse" ? "is-browse" : ""}`.trim()}
   >
     <div className="moon-title-card-media">
-      {title?.coverUrl ? (
-        <img src={title.coverUrl} alt={`${title?.title || "Untitled"} cover`} loading="lazy" referrerPolicy="no-referrer" />
+      {title?.coverThumbUrl || title?.coverUrl ? (
+        <img src={title.coverThumbUrl || title.coverUrl} alt={`${title?.title || "Untitled"} cover`} loading="lazy" referrerPolicy="no-referrer" />
       ) : (
         <div className="moon-title-card-fallback">
           <span>{String(title?.title || "U").trim().charAt(0).toUpperCase()}</span>

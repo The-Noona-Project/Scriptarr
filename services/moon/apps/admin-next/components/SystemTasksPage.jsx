@@ -118,6 +118,7 @@ export const SystemTasksPage = ({user}) => {
   const [drafts, setDrafts] = useState({});
   const [flash, setFlash] = useState("");
   const [flashTone, setFlashTone] = useState("");
+  const [coverBusy, setCoverBusy] = useState(false);
   const {notify} = useAdminToast();
   const {loading, refreshing, error, data, refresh} = useAdminJson("/api/moon/v3/admin/system/tasks", {
     fallback: {
@@ -204,6 +205,25 @@ export const SystemTasksPage = ({user}) => {
     void refresh();
   };
 
+  const optimizeCoverCache = async () => {
+    setCoverBusy(true);
+    setFlash("");
+    const result = await requestJson("/api/moon/v3/admin/system/tasks/cover-cache/optimize", {method: "POST"});
+    setCoverBusy(false);
+    if (!result.ok) {
+      const message = result.payload?.error || "Moon could not optimize cover images.";
+      setFlash(message);
+      setFlashTone("bad");
+      notify({message, tone: "bad", category: "job"});
+      return;
+    }
+    const payload = result.payload || {};
+    const message = `Cover optimization scanned ${payload.scanned || 0}, converted ${payload.converted || 0}, skipped ${payload.skipped || 0}, failed ${payload.failed || 0}.`;
+    setFlash(message);
+    setFlashTone(payload.failed ? "warning" : "good");
+    notify({message, tone: payload.failed ? "warning" : "good", category: "job"});
+  };
+
   if (loading) {
     return (
       <section className="admin-panel admin-state-panel">
@@ -236,6 +256,18 @@ export const SystemTasksPage = ({user}) => {
           <article className="admin-metric-card"><span>Timezone</span><strong>{data?.timezone || "server"}</strong></article>
         </div>
         {!canMutate ? <p className="admin-muted">Viewing is allowed with system.read. Schedule edits and manual runs require system.root.</p> : null}
+      </section>
+      <section className="admin-panel">
+        <div className="admin-section-heading">
+          <div>
+            <div className="admin-kicker">Moon</div>
+            <h2>Cover image cache</h2>
+            <p className="admin-muted">Convert Sage-approved library cover URLs into Moon WebP cache files. Safe to rerun.</p>
+          </div>
+          <button className="admin-button solid" type="button" disabled={!canMutate || coverBusy} onClick={() => void optimizeCoverCache()}>
+            {coverBusy ? "Optimizing..." : "Optimize cover images"}
+          </button>
+        </div>
       </section>
       <section className="admin-task-grid">
         {tasks.map((task) => (

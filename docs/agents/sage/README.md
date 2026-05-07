@@ -51,6 +51,8 @@
 - Broker Portal's Discord workflow settings through the shared `portal.discord` setting, and keep Portal-facing broker
   routes for intake search, request creation, library search, follow updates, onboarding tests, release channel tests,
   and Raven durable downloadall runs.
+- `portal.discord.trivia` is the source of truth for Noona trivia channels, scoring, hints, schedules, and AI
+  borderline matching. Sage owns trivia round, guess, score, leaderboard, and ack state through Vault-backed settings.
 - Portal's Raven downloadall broker route requires an explicit `providerId`. Keep `downloadall` locked to the
   WeebCentral provider on the Sage side too so Portal cannot accidentally fall through to MangaDex when that owner-only
   DM command is used. Preserve the `nsfw` flag exactly as Portal sends it so Raven can enforce explicit
@@ -86,6 +88,9 @@
   to the signed-in admin's Discord user id.
 - Sage owns the explicit v3 Settings save routes for Raven metadata providers, Raven download providers, and Portal
   Discord basics. Preserve legacy routes during migration, but keep new Moon Settings forms on the v3 save surface.
+- Sage's Settings aggregate should carry Raven health's VPN runtime fields (`runtimeCapable`, `settingsFresh`,
+  `state`, `protected`, and `lastError`) so Moon can show fail-closed VPN state without direct browser calls to Raven.
+  Broker the admin VPN test through the v3 Settings surface and never expose PIA secrets in the response.
 - Sage owns admin request summary counts and the request deny mutation. Deny requires `requests.write`, rejects blank
   comments, stores the moderator comment and timeline entry, appends a durable request event, and leaves notification
   delivery to the existing requester-notification flow.
@@ -103,18 +108,25 @@
 - Sage owns the System Status endpoint registry. Keep `/api/moon-v3/admin/system/status` grouped by service, probe
   GET/read endpoints, classify auth-gated reads as `protected`, keep mutation routes visible as `not_probed`, and
   avoid adding browser-direct status calls around Moon.
-- Sage owns the dedicated AI admin broker at `/api/moon-v3/admin/system/ai`. Oracle settings saves require
-  `settings.write`, LocalAI lifecycle actions require `system.root`, install/start/remove requests should pass the
-  Moon admin requester context to Warden, and admin test prompts should degrade safely when Oracle or LocalAI is
-  unavailable. Keep the admin test timeout long enough for CPU-only LocalAI prompts instead of assuming readiness
-  means fast generation. Model discovery must stay brokered through Oracle; Moon should never call OpenAI or LocalAI
-  directly from the browser.
+- Sage owns the dedicated AI admin broker at `/api/moon-v3/admin/system/ai` and the `ai` admin domain. Oracle settings
+  saves require `ai.write`; LocalAI lifecycle actions require `ai.root`; install/start/remove requests should pass the
+  Moon admin requester context to Warden. Admin test prompts and structured assist calls should degrade safely when
+  Oracle or LocalAI is unavailable. Keep the admin test timeout long enough for CPU-only LocalAI prompts instead of
+  assuming readiness means fast generation. Model discovery must stay brokered through Oracle; Moon should never call
+  OpenAI or LocalAI directly from the browser.
+- Sage owns the AI tool registry. Read tools can execute immediately when enabled and permitted; operational tools
+  create expiring proposals and require an authorized admin confirmation before Sage executes the allowlisted action.
 - Sage should expose acked system-notification queues for Portal so Warden LocalAI lifecycle jobs can DM the admin who
   requested them without making Portal poll Warden directly.
 - Sage should expose acked release-channel notification queues for Portal from completed Raven download tasks. Use
   stable `release:<taskId>` ids and only mark them acknowledged after Portal confirms the Discord channel send.
 - Sage should expose acked downloadall notification queues for Portal from Raven durable run jobs. Use stable
   `downloadall:<runId>:<batchId>:<status>` ids and only mark them acknowledged after Portal confirms the requester DM.
+- Sage also owns downloadall reaction decision prompts. Store the paused-notification DM message id, owner id, run id,
+  batch id, and decision status durably; check reactions continue the run, cross reactions cancel the remaining run,
+  duplicate decisions are idempotent, and expired prompts do not repeat actions.
+- Moon's user library card route should broker Raven's compact card view and paginate/filter in Sage so browsers never
+  need full chapter arrays for `/browse`, `/library`, or shelf cards.
 - Service-originated async changes from Raven, Portal, or Warden should append immutable summary events through Sage's
   internal broker routes after the authoritative mutation succeeds so `/admin/users`, `/admin/requests`, and
   `/admin/system/events` all reflect the same truth.

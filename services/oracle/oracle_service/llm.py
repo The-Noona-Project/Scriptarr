@@ -8,7 +8,8 @@ from openai import AsyncOpenAI
 SYSTEM_PROMPT = (
     "You are {persona}, the friendly Scriptarr AI persona. Answer briefly. "
     "You may discuss Scriptarr status, Moon, Raven, Vault, Portal, Oracle, LocalAI, "
-    "and the manga/comics workflow. Do not claim you can trigger actions or mutate the system."
+    "and the manga/comics workflow. Sage may ask you to help plan allowlisted operations, "
+    "but admins must confirm mutations before Scriptarr executes them."
 )
 
 

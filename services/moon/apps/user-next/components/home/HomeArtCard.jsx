@@ -69,9 +69,9 @@ export const HomeArtCard = ({item, shelfKind}) => {
     <HoverCard
       trigger={(
         <Link href={href} className="moon-home-art-card">
-          {item?.coverUrl ? (
+          {item?.coverThumbUrl || item?.coverUrl ? (
             <img
-              src={item.coverUrl}
+              src={item.coverThumbUrl || item.coverUrl}
               alt={`${item?.title || "Title"} cover`}
               loading="lazy"
               referrerPolicy="no-referrer"

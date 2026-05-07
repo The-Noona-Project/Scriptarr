@@ -11,6 +11,7 @@ export const knownPortalDiscordCommands = Object.freeze([
   {id: "search", name: "search", description: "Search the current Scriptarr library.", mode: "slash"},
   {id: "request", name: "request", description: "Create a moderated Scriptarr request from Discord.", mode: "slash"},
   {id: "subscribe", name: "subscribe", description: "Follow a title for release notifications.", mode: "slash"},
+  {id: "trivia", name: "trivia", description: "Play and manage Scriptarr title trivia.", mode: "slash"},
   {id: "downloadall", name: "downloadall", description: "Owner-only DM-only WeebCentral downloadall run command.", mode: "dm"}
 ]);
 
@@ -20,6 +21,105 @@ const normalizeString = (value, fallback = "") => {
 };
 
 const normalizeObject = (value, fallback = null) => value && typeof value === "object" && !Array.isArray(value) ? value : fallback;
+const normalizeBoolean = (value, fallback = false) => {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "number") {
+    return value !== 0;
+  }
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (["1", "true", "yes", "on"].includes(normalized)) {
+      return true;
+    }
+    if (["0", "false", "no", "off"].includes(normalized)) {
+      return false;
+    }
+  }
+  return fallback;
+};
+
+const normalizeInteger = (value, fallback, {min = 0, max = Number.MAX_SAFE_INTEGER} = {}) => {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+  if (!Number.isInteger(parsed)) {
+    return fallback;
+  }
+  return Math.min(max, Math.max(min, parsed));
+};
+
+/**
+ * Build default Discord trivia settings.
+ *
+ * @returns {Record<string, unknown>}
+ */
+export const defaultPortalTriviaSettings = () => ({
+  enabled: false,
+  channelId: "",
+  leaderboardChannelId: "",
+  roundDurationMinutes: 20,
+  cooldownMinMinutes: 30,
+  cooldownMaxMinutes: 180,
+  baseXp: 10,
+  speedBonusMax: 5,
+  streakBonusPerWin: 2,
+  streakBonusMax: 10,
+  hintsEnabled: true,
+  hintMinutes: [7, 14],
+  aiMatchingEnabled: true,
+  leaderboardAfterRound: true,
+  leaderboardSchedules: {
+    daily: true,
+    weekly: true,
+    monthly: true,
+    hour: 20
+  }
+});
+
+/**
+ * Normalize persisted Discord trivia settings for Portal.
+ *
+ * @param {Record<string, unknown>} value
+ * @returns {ReturnType<typeof defaultPortalTriviaSettings>}
+ */
+export const normalizePortalTriviaSettings = (value = {}) => {
+  const defaults = defaultPortalTriviaSettings();
+  const source = normalizeObject(value, {}) || {};
+  const cooldownMin = normalizeInteger(source.cooldownMinMinutes, defaults.cooldownMinMinutes, {min: 1, max: 1440});
+  const cooldownMax = Math.max(
+    cooldownMin,
+    normalizeInteger(source.cooldownMaxMinutes, defaults.cooldownMaxMinutes, {min: cooldownMin, max: 1440})
+  );
+  const schedules = normalizeObject(source.leaderboardSchedules, {}) || {};
+  const hintMinutes = Array.isArray(source.hintMinutes)
+    ? source.hintMinutes
+      .map((entry) => normalizeInteger(entry, 0, {min: 1, max: 240}))
+      .filter(Boolean)
+      .slice(0, 4)
+    : defaults.hintMinutes;
+  return {
+    enabled: normalizeBoolean(source.enabled, defaults.enabled),
+    channelId: normalizeString(source.channelId),
+    leaderboardChannelId: normalizeString(source.leaderboardChannelId),
+    roundDurationMinutes: normalizeInteger(source.roundDurationMinutes, defaults.roundDurationMinutes, {min: 1, max: 240}),
+    cooldownMinMinutes: cooldownMin,
+    cooldownMaxMinutes: cooldownMax,
+    baseXp: normalizeInteger(source.baseXp, defaults.baseXp, {min: 1, max: 10000}),
+    speedBonusMax: normalizeInteger(source.speedBonusMax, defaults.speedBonusMax, {min: 0, max: 10000}),
+    streakBonusPerWin: normalizeInteger(source.streakBonusPerWin, defaults.streakBonusPerWin, {min: 0, max: 10000}),
+    streakBonusMax: normalizeInteger(source.streakBonusMax, defaults.streakBonusMax, {min: 0, max: 10000}),
+    hintsEnabled: normalizeBoolean(source.hintsEnabled, defaults.hintsEnabled),
+    hintMinutes,
+    aiMatchingEnabled: normalizeBoolean(source.aiMatchingEnabled, defaults.aiMatchingEnabled),
+    leaderboardAfterRound: normalizeBoolean(source.leaderboardAfterRound, defaults.leaderboardAfterRound),
+    leaderboardSchedules: {
+      daily: normalizeBoolean(schedules.daily, defaults.leaderboardSchedules.daily),
+      weekly: normalizeBoolean(schedules.weekly, defaults.leaderboardSchedules.weekly),
+      monthly: normalizeBoolean(schedules.monthly, defaults.leaderboardSchedules.monthly),
+      hour: normalizeInteger(schedules.hour, defaults.leaderboardSchedules.hour, {min: 0, max: 23})
+    }
+  };
+};
 
 /**
  * Build the default brokered Discord settings used by Portal and Moon admin.
@@ -35,6 +135,7 @@ const normalizeObject = (value, fallback = null) => value && typeof value === "o
  *   notifications: {
  *     releaseChannelId: string
  *   },
+ *   trivia: ReturnType<typeof defaultPortalTriviaSettings>,
  *   commands: Record<string, {enabled: boolean, roleId: string}>
  * }}
  */
@@ -49,6 +150,7 @@ export const defaultPortalDiscordSettings = () => ({
   notifications: {
     releaseChannelId: ""
   },
+  trivia: defaultPortalTriviaSettings(),
   commands: Object.fromEntries(knownPortalDiscordCommands.map((command) => [
     command.id,
     {
@@ -83,6 +185,7 @@ export const normalizePortalDiscordSettings = (value) => {
     notifications: {
       releaseChannelId: normalizeString(notifications.releaseChannelId)
     },
+    trivia: normalizePortalTriviaSettings(source.trivia),
     commands: Object.fromEntries(knownPortalDiscordCommands.map((command) => {
       const requested = normalizeObject(requestedCommands[command.id], {}) || {};
       return [command.id, {

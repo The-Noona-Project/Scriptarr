@@ -29,6 +29,10 @@ Moon serves the forward-facing user app at `/` and the admin app at `/admin` fro
   queued, root-only cancel all running, retry all recovery items, and remove all removable recovery items.
 - Keep the trusted public Moon API behind Moon-owned routes. `/api/public/*` and `/admin/system/api` should stay
   browser-safe, same-origin, and Sage-backed instead of reaching into internal services directly.
+- Keep `/admin/discord` as the browser-safe owner of Portal Discord settings, including Noona trivia configuration and
+  manual trivia runtime actions.
+- Keep `/admin/system/ai` as the browser-safe owner of Oracle, LocalAI, and Sage-governed AI tool proposals. Browser
+  code must never call Oracle, Warden, OpenAI, or LocalAI directly.
 - Public request creation must keep using server-issued selection tokens and preserve the NSFW, already-in-library, and
   already-active guardrails before low-priority queueing.
 - Keep cover art visible across add-title, requests, queue/history, and library/title surfaces when Raven provides a

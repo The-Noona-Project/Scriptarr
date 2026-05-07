@@ -26,8 +26,11 @@
 - Raven library storage now uses dynamic source-backed type labels and the managed folder lifecycle:
   - `/downloads/downloading/<type-slug>/<title-folder>`
   - `/downloads/downloaded/<type-slug>/<title-folder>`
-- Raven VPN should fail closed when enabled, and reconnect logic must honor the configured region instead of assuming
-  an existing tunnel is still valid.
+- Raven VPN should fail closed when enabled. Settings reads use only a short fresh-disabled cache grace, runtime checks
+  must verify TUN/NET_ADMIN/OpenVPN support, and reconnect logic must re-check the tunnel before chapter/page-heavy
+  phases instead of assuming an existing process is still valid. Enabled idle VPN state should be reported as `armed`
+  rather than failed; the admin test route must reuse the same connection guard and leave a successful enabled tunnel
+  connected for later protected downloads.
 - Raven chapter and page filenames now come from the brokered `raven.naming` template settings while title-folder
   naming stays stable for rescan compatibility.
 - `raven.naming` is now profile-based by library type. Preserve the fallback profile plus the per-type profiles for
@@ -40,12 +43,15 @@
   pinned to WeebCentral and fail fast if WeebCentral is disabled instead of browsing MangaDex.
 - Durable mega `/downloadall` runs live under Raven's `/v1/downloads/bulk-runs` API and must persist parent run plus
   batch state through Sage's generic job broker. Preserve group-first ordering for expanded runs (`A Manga`, `A
-  Manhwa`, `A Manhua`, `A OEL`, then `B...`), keep each batch on the existing WeebCentral-only `nsfw:false` metadata
-  confidence path, store the run-owned Raven title task ids in batch state, and resume by skipping completed batches
-  instead of re-queueing them.
+  Manhwa`, `A Manhua`, `A OEL`, then `B...`), preserve the caller's `nsfw` filter, keep each batch on the
+  WeebCentral-only metadata confidence path, store the run-owned Raven title task ids in batch state, and resume by
+  skipping completed batches instead of re-queueing them.
 - Every `/downloadall` execution should create a durable run, not only expanded mega runs, so delayed completion,
-  stale-task handling, summary DMs, and continue prompts survive process restarts. Stale run-owned title tasks should
-  count as failed after the timeout/retry budget and must not block the next batch forever.
+  stale-task handling, summary DMs, reaction approvals, and continue prompts survive process restarts. `groupsize`
+  maps to `batchesPerApproval`, so Raven should process that many batch tasks before pausing. Stale run-owned title
+  tasks should count as failed after the timeout/retry budget and must not block the next batch forever.
+- `/v1/library?view=card` is the compact Moon shelf projection. Keep chapter arrays, archive paths, working roots, and
+  download roots out of that response; full title and reader routes remain the detail paths.
 - New Raven catalog entries should use opaque durable ids instead of title slugs. Treat title ids as opaque route
   parameters everywhere outside Raven's internals.
 - Download tasks should only reach `100%` after file promotion and brokered catalog persistence both succeed. When a

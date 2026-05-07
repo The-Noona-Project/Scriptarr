@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
+import fs from "node:fs/promises";
 import {fileURLToPath} from "node:url";
 import path from "node:path";
 
@@ -56,6 +57,16 @@ const createSageStub = ({requests = []} = {}) => Promise.resolve(http.createServ
     return;
   }
 
+  if (requestUrl.pathname === "/api/moon-v3/user/library/cover/dan-da-dan/source") {
+    response.writeHead(200, {"Content-Type": "application/json"});
+    response.end(JSON.stringify({
+      titleId: "dan-da-dan",
+      coverRevision: "rev-1",
+      coverUrl: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+    }));
+    return;
+  }
+
   if (requestUrl.pathname === "/api/moon-v3/admin/system/api") {
     response.writeHead(200, {"Content-Type": "application/json"});
     response.end(JSON.stringify({
@@ -101,6 +112,23 @@ const createSageStub = ({requests = []} = {}) => Promise.resolve(http.createServ
       totalBytes: 128,
       generatedAt: "2026-04-26T12:00:00.000Z",
       tables: [{name: "settings", rowCount: 1, editable: true, totalBytes: 128}]
+    }));
+    return;
+  }
+
+  if (requestUrl.pathname === "/api/moon-v3/admin/settings/raven/vpn/test" && request.method === "POST") {
+    response.writeHead(200, {"Content-Type": "application/json"});
+    response.end(JSON.stringify({
+      ok: true,
+      vpn: {
+        state: "armed",
+        enabled: true,
+        connected: false,
+        protected: false,
+        runtimeCapable: true,
+        settingsFresh: true,
+        region: "us_california"
+      }
     }));
     return;
   }
@@ -481,6 +509,9 @@ const createSageStub = ({requests = []} = {}) => Promise.resolve(http.createServ
 test("moon serves branded split entry documents, typed routes, PWA assets, and Moon v3 proxy payloads", async () => {
   const cwd = process.cwd();
   process.chdir(path.join(path.dirname(fileURLToPath(import.meta.url)), ".."));
+  const previousCoverCacheDir = process.env.SCRIPTARR_MOON_COVER_CACHE_DIR;
+  const coverCacheDir = path.join(process.cwd(), ".tmp-cover-cache-test");
+  process.env.SCRIPTARR_MOON_COVER_CACHE_DIR = coverCacheDir;
 
   const requests = [];
   const sageStub = await createSageStub({requests});
@@ -676,6 +707,10 @@ test("moon serves branded split entry documents, typed routes, PWA assets, and M
     titles: [{id: "dan-da-dan", title: "Dandadan", libraryTypeSlug: "webtoon", libraryTypeLabel: "Webtoon"}]
   });
 
+  const coverResponse = await fetch(`${baseUrl}/api/moon/v3/user/covers/dan-da-dan.webp?rev=rev-1`);
+  assert.equal(coverResponse.status, 200);
+  assert.equal(coverResponse.headers.get("content-type"), "image/webp");
+
   const apiAdminResponse = await fetch(`${baseUrl}/api/moon/v3/admin/system/api`, {
     headers: {"X-Scriptarr-Api-Key": "system-secret"}
   });
@@ -685,6 +720,12 @@ test("moon serves branded split entry documents, typed routes, PWA assets, and M
   const settingsResponse = await fetch(`${baseUrl}/api/moon/v3/admin/settings`);
   assert.equal(settingsResponse.status, 200);
   assert.equal((await settingsResponse.json()).databaseOverview.tables[0].name, "settings");
+
+  const vpnTestResponse = await fetch(`${baseUrl}/api/moon/v3/admin/settings/raven/vpn/test`, {
+    method: "POST"
+  });
+  assert.equal(vpnTestResponse.status, 200);
+  assert.equal((await vpnTestResponse.json()).vpn.state, "armed");
 
   const databaseExplorerResponse = await fetch(`${baseUrl}/api/moon/v3/admin/settings/database`);
   assert.equal(databaseExplorerResponse.status, 200);
@@ -811,6 +852,7 @@ test("moon serves branded split entry documents, typed routes, PWA assets, and M
   assert.ok(requests.some((entry) => entry.method === "GET" && entry.url === "/api/moon-v3/admin/system/api" && entry.apiKey === "system-secret"));
   assert.ok(requests.some((entry) => entry.method === "GET" && entry.url === "/api/moon-v3/admin/settings"));
   assert.ok(requests.some((entry) => entry.method === "GET" && entry.url === "/api/moon-v3/admin/settings/database"));
+  assert.ok(requests.some((entry) => entry.method === "POST" && entry.url === "/api/moon-v3/admin/settings/raven/vpn/test"));
   assert.ok(requests.some((entry) => entry.method === "GET" && entry.url === "/api/moon-v3/admin/calendar"));
   assert.ok(requests.some((entry) => entry.method === "GET" && entry.url === "/api/moon-v3/admin/discord"));
   assert.ok(requests.some((entry) => entry.method === "PUT" && entry.url === "/api/moon-v3/admin/discord"));
@@ -826,6 +868,12 @@ test("moon serves branded split entry documents, typed routes, PWA assets, and M
 
   await closeServer(server);
   await closeServer(sageStub);
+  if (previousCoverCacheDir == null) {
+    delete process.env.SCRIPTARR_MOON_COVER_CACHE_DIR;
+  } else {
+    process.env.SCRIPTARR_MOON_COVER_CACHE_DIR = previousCoverCacheDir;
+  }
+  await fs.rm(coverCacheDir, {recursive: true, force: true});
   process.chdir(cwd);
 });
 

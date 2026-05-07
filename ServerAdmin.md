@@ -191,6 +191,9 @@ temporarily unavailable.
 - Oracle defaults to provider `openai`.
 - Oracle now runs as a FastAPI Python service while keeping the same internal HTTP contract for Sage, Moon, and Portal.
 - The OpenAI API key can be entered in Moon admin before Oracle is enabled.
+- Oracle also exposes a structured assist endpoint through Sage for bounded helper text, trivia borderline matching,
+  and AI tool planning. It never executes mutations directly; Sage turns operational prompts into confirmable admin
+  proposals.
 - Admins can later switch Oracle to LocalAI from Moon admin and then manually install, start, or remove LocalAI through
   Warden.
 - When the provider is `localai` and no model is set explicitly, Scriptarr falls back to the LocalAI-friendly `gpt-4`
@@ -199,6 +202,18 @@ temporarily unavailable.
   provider-specific dropdown. Browsers never call OpenAI or LocalAI directly for model discovery.
 - `SCRIPTARR_ORACLE_LLM_TIMEOUT_SECONDS` can tune Oracle's provider call timeout. The default is `60` seconds so slow
   CPU LocalAI responses have room to complete.
+
+## AI Tooling
+
+Sage owns the AI tool registry and the `ai` admin access domain. Owners bypass as usual, and the seeded Admin group is
+repaired with `ai:root`. Read tools are enabled by default for stack status, events, queue, requests, library search,
+Missing Content, Discord runtime, trivia status, and LocalAI status. Operational tools such as status checks, request
+source refreshes, queue retries, LocalAI lifecycle actions, maintenance jobs, and trivia start/stop are disabled by
+default until an AI root admin enables them.
+
+Operational prompts in `/admin/system/ai` create proposals first. A permitted admin must confirm a proposal before Sage
+executes the allowlisted action. Oracle may help summarize or plan the request, but Oracle never performs mutations or
+sends arbitrary Discord broadcasts.
 
 ## Core Admin Tasks In Moon
 
@@ -210,7 +225,7 @@ temporarily unavailable.
 - manage reusable permission groups, user-group assignments, protected-owner visibility, and access audit feeds in
   `/admin/users`
 - manage the Discord bot workflow in `/admin/discord`, including guild id, onboarding channel or template, DM
-  superuser id, release notification channel, and per-command role mapping
+  superuser id, release notification channel, trivia channel and scoring, and per-command role mapping
 - configure Raven VPN credentials and region for PIA/OpenVPN-backed downloads
 - review Raven metadata providers, with MangaDex enabled by default, Anime-Planet enabled ahead of MangaUpdates, and
   AniList, MyAnimeList, or ComicVine available for wider coverage
@@ -234,7 +249,7 @@ temporarily unavailable.
   mutation routes as not probed
 - configure Oracle and optional LocalAI runtime controls from `/admin/system/ai`, including provider, model dropdown,
   temperature, masked OpenAI key state, LocalAI image profile, manual install, start, or remove actions, lifecycle
-  progress, completion toasts, and a small test prompt
+  progress, completion toasts, Sage-governed AI tool toggles, confirmed action proposals, and prompt tests
 - preview or execute the root-only content reset flow from `/admin/system` when you need to wipe content-side state
   and managed files without deleting users, settings, or durable events
 - manage users, roles, and permissions
@@ -361,6 +376,7 @@ Moon admin now owns the Discord workflow settings that Portal uses at runtime:
 - guild id for slash-command scoping
 - DM superuser id for the private `downloadall` command
 - onboarding channel id and message template
+- trivia channel id, optional leaderboard channel id, scoring, cooldowns, hints, and AI borderline matching
 - per-command enable toggles and required Discord role ids
 
 The current Discord command set is:
@@ -371,15 +387,22 @@ The current Discord command set is:
 - `/search`
 - `/request`
 - `/subscribe`
+- `/trivia`
 - owner-only DM `/downloadall`
 
 Blank role ids mean any member in the configured guild can use that slash command. `downloadall` ignores guild roles,
 is only supported in bot DMs, and only checks the configured DM superuser id.
-Use `/downloadall run type:<type> nsfw:<true|false> titlegroup:<prefix>` in a DM with Noona as the supported bulk path.
+`/trivia` controls Noona's title-summary guessing game. Normal channel messages are the guesses; exact titles, aliases,
+source links, Moon title links, and tolerant fuzzy matches count. Winners get XP with speed and streak bonuses, and
+leaderboards can be posted after each round plus daily, weekly, and monthly at the configured server-time hour.
+Use `/downloadall run type:<type> nsfw:<true|false> titlegroup:<prefix> groupsize:<count>` in a DM with Noona as the supported bulk path.
 Every `downloadall` request creates a durable Raven run now, including single concrete type plus single `titlegroup`
 requests, so Portal can deliver delayed summaries even if the batch takes hours. `type:all` or `titlegroup:all`
-starts a multi-batch run that pauses after each batch until the owner uses `/downloadall continue runid:<id>`;
-`/downloadall status runid:<id>` and `/downloadall cancel runid:<id>` inspect or stop it.
+starts a multi-batch run that pauses after the configured group size. `groupsize` defaults to `1`, accepts `1-25`,
+and means Raven will complete that many batch tasks one at a time before pausing for approval. Paused summary DMs get
+check/cross reactions; the configured owner can react with the check mark to continue the next group or the cross to
+cancel the remaining run. `/downloadall continue runid:<id>`, `/downloadall status runid:<id>`, and
+`/downloadall cancel runid:<id>` remain the manual fallback.
 `/downloadall help` returns the usage guide in DMs. Portal still keeps the old raw DM text form
 (`downloadall type:... nsfw:... titlegroup:...`) as a legacy best-effort fallback, but that path depends on Discord
 delivering normal DM message events and should not be treated as the primary interface.
@@ -395,6 +418,10 @@ entries. Raven skips completed catalog titles, appends only missing or new chapt
 and ignores malformed bare source URLs such as a provider `/series` root.
 That owner-only command is intentionally pinned to WeebCentral. If WeebCentral is disabled in Raven settings,
 `downloadall` fails instead of falling back to MangaDex or another provider.
+Moon user browse/library pages use compact paginated title-card reads so large libraries do not send chapter arrays to
+the browser. Cover images are cached by Moon as derived WebP files under the Moon cover-cache storage folder. The
+Tasks page has an `Optimize cover images` action that scans Sage-approved cover URLs, converts missing or stale cache
+entries, and is safe to rerun.
 Portal also sends requester DMs when a moderated request is approved, denied, or finishes downloading, and dedupes
 those notifications by request id plus decision state so retries and restarts do not spam Discord.
 If a release channel id is configured in `/admin/discord`, Portal also posts completed Raven downloads to that channel
@@ -521,7 +548,12 @@ The test stack uses:
 - If LocalAI actions are slow, let the Moon admin job continue instead of retrying immediately; the initial pull and
   startup are intentionally long-running. The progress card tracks the Docker image, container, and readiness phases,
   and Portal DMs the requesting admin when the action completes or fails.
-- If Raven VPN is enabled, failed settings reads or failed tunnel startup now block downloads instead of silently
-  falling back to direct traffic. Fix the VPN settings first, then retry the job.
+- If Raven VPN is enabled, failed settings reads, stale settings, missing `/dev/net/tun`, missing `NET_ADMIN`, or
+  failed tunnel startup block downloads instead of silently falling back to direct traffic. Warden recreates Raven when
+  its VPN device/capability flags drift; if your host cannot support TUN, leave VPN disabled or opt out of the runtime
+  device flags with `SCRIPTARR_RAVEN_VPN_RUNTIME_DISABLED=true`.
+- `Armed / idle` in Settings means the VPN is enabled and ready but OpenVPN is not currently running because Raven
+  connects lazily before protected download traffic. Use `Test VPN` to force a brokered connection check; a successful
+  enabled test leaves the tunnel connected.
 - If the Docker test stack is already running, tear it down with `npm run docker:test:teardown` before starting a new
   isolated run with the same stack id.

@@ -24,6 +24,7 @@ test("service plan exposes the fixed Scriptarr network and selfhost mysql by def
   assert.equal(plan.services.find((service) => service.name === "scriptarr-vault").env.SUPERUSER_ID, "owner-1");
   assert.equal(plan.services.find((service) => service.name === "scriptarr-raven").env.SCRIPTARR_RAVEN_LOG_DIR, "/app/logs");
   assert.equal(plan.services.find((service) => service.name === "scriptarr-raven").env.SCRIPTARR_SAGE_BASE_URL, "http://scriptarr-sage:3004");
+  assert.deepEqual(plan.services.find((service) => service.name === "scriptarr-raven").extraArgs, ["--cap-add", "NET_ADMIN", "--device", "/dev/net/tun"]);
   assert.equal(plan.services.find((service) => service.name === "scriptarr-portal").env.SCRIPTARR_SAGE_BASE_URL, "http://scriptarr-sage:3004");
   assert.equal(plan.services.find((service) => service.name === "scriptarr-oracle").env.SCRIPTARR_SAGE_BASE_URL, "http://scriptarr-sage:3004");
   assert.match(plan.services.find((service) => service.name === "scriptarr-mysql").healthCheck.command, /mysqladmin ping/);
@@ -31,6 +32,32 @@ test("service plan exposes the fixed Scriptarr network and selfhost mysql by def
   assert.match(plan.services.find((service) => service.name === "scriptarr-raven").healthCheck.command, /curl -fsS http:\/\/127\.0\.0\.1:8080\/health/);
   assert.match(plan.services.find((service) => service.name === "scriptarr-oracle").healthCheck.command, /python -c/);
   assert.match(plan.services.find((service) => service.name === "scriptarr-oracle").healthCheck.command, /127\.0\.0\.1:3001\/health/);
+});
+
+test("service plan can explicitly disable Raven VPN runtime devices", () => {
+  const plan = resolveServicePlan({
+    env: {
+      SCRIPTARR_MYSQL_URL: "SELFHOST",
+      SCRIPTARR_MYSQL_USER: "scriptarr",
+      SCRIPTARR_MYSQL_PASSWORD: "secret",
+      SCRIPTARR_RAVEN_VPN_RUNTIME_DISABLED: "true"
+    }
+  });
+
+  assert.deepEqual(plan.services.find((service) => service.name === "scriptarr-raven").extraArgs, []);
+});
+
+test("service plan can override Raven VPN tun device path", () => {
+  const plan = resolveServicePlan({
+    env: {
+      SCRIPTARR_MYSQL_URL: "SELFHOST",
+      SCRIPTARR_MYSQL_USER: "scriptarr",
+      SCRIPTARR_MYSQL_PASSWORD: "secret",
+      SCRIPTARR_RAVEN_TUN_DEVICE: "/custom/tun"
+    }
+  });
+
+  assert.deepEqual(plan.services.find((service) => service.name === "scriptarr-raven").extraArgs, ["--cap-add", "NET_ADMIN", "--device", "/custom/tun"]);
 });
 
 test("service plan omits managed mysql for external mysql urls", () => {

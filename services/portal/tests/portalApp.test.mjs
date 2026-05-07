@@ -111,7 +111,7 @@ test("portal HTTP surface covers command inventory, request routing, chat routin
       assert.equal(runtime.connected, false);
       assert.deepEqual(
         runtime.commands.map((command) => command.name),
-        ["ding", "status", "chat", "search", "request", "subscribe", "downloadall"]
+        ["ding", "status", "chat", "search", "request", "subscribe", "trivia", "downloadall"]
       );
     } finally {
       await portal.close();

@@ -9,6 +9,7 @@ export const portalCommandCatalog = Object.freeze([
   {name: "search", label: "/search", description: "Search the current Scriptarr library.", scope: "Guild slash command", mode: "slash", roleManaged: true, registrationScope: "guild"},
   {name: "request", label: "/request", description: "Search intake matches and file a moderated request.", scope: "Guild slash command", mode: "slash", roleManaged: true, registrationScope: "guild"},
   {name: "subscribe", label: "/subscribe", description: "Follow a library title for Discord notifications.", scope: "Guild slash command", mode: "slash", roleManaged: true, registrationScope: "guild"},
+  {name: "trivia", label: "/trivia", description: "Play and manage Scriptarr title trivia.", scope: "Guild slash command", mode: "slash", roleManaged: true, registrationScope: "guild"},
   {
     name: "downloadall",
     label: "/downloadall",

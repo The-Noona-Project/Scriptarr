@@ -6,6 +6,7 @@ const DEFAULT_EVENT_NAMES = Object.freeze({
   ready: "ready",
   interactionCreate: "interactionCreate",
   messageCreate: "messageCreate",
+  messageReactionAdd: "messageReactionAdd",
   guildMemberAdd: "guildMemberAdd",
   shardDisconnect: "shardDisconnect",
   shardError: "shardError",
@@ -14,6 +15,8 @@ const DEFAULT_EVENT_NAMES = Object.freeze({
 
 const DEFAULT_GATEWAY_INTENTS = Object.freeze({
   Guilds: "Guilds",
+  GuildMessages: "GuildMessages",
+  DirectMessageReactions: "DirectMessageReactions",
   GuildMembers: "GuildMembers",
   DirectMessages: "DirectMessages",
   MessageContent: "MessageContent"
@@ -21,6 +24,8 @@ const DEFAULT_GATEWAY_INTENTS = Object.freeze({
 
 const DEFAULT_PARTIALS = Object.freeze({
   Channel: "Channel",
+  Message: "Message",
+  Reaction: "Reaction",
   GuildMember: "GuildMember",
   User: "User"
 });
@@ -71,6 +76,7 @@ const resolveDiscordBindings = (discordModule) => {
       ready: discordModule.Events?.ClientReady || DEFAULT_EVENT_NAMES.ready,
       interactionCreate: discordModule.Events?.InteractionCreate || DEFAULT_EVENT_NAMES.interactionCreate,
       messageCreate: discordModule.Events?.MessageCreate || DEFAULT_EVENT_NAMES.messageCreate,
+      messageReactionAdd: discordModule.Events?.MessageReactionAdd || DEFAULT_EVENT_NAMES.messageReactionAdd,
       guildMemberAdd: discordModule.Events?.GuildMemberAdd || DEFAULT_EVENT_NAMES.guildMemberAdd,
       shardDisconnect: discordModule.Events?.ShardDisconnect || DEFAULT_EVENT_NAMES.shardDisconnect,
       shardError: discordModule.Events?.ShardError || DEFAULT_EVENT_NAMES.shardError,
@@ -78,12 +84,16 @@ const resolveDiscordBindings = (discordModule) => {
     },
     intents: {
       Guilds: discordModule.GatewayIntentBits?.Guilds ?? DEFAULT_GATEWAY_INTENTS.Guilds,
+      GuildMessages: discordModule.GatewayIntentBits?.GuildMessages ?? DEFAULT_GATEWAY_INTENTS.GuildMessages,
+      DirectMessageReactions: discordModule.GatewayIntentBits?.DirectMessageReactions ?? DEFAULT_GATEWAY_INTENTS.DirectMessageReactions,
       GuildMembers: discordModule.GatewayIntentBits?.GuildMembers ?? DEFAULT_GATEWAY_INTENTS.GuildMembers,
       DirectMessages: discordModule.GatewayIntentBits?.DirectMessages ?? DEFAULT_GATEWAY_INTENTS.DirectMessages,
       MessageContent: discordModule.GatewayIntentBits?.MessageContent ?? DEFAULT_GATEWAY_INTENTS.MessageContent
     },
     partials: {
       Channel: discordModule.Partials?.Channel ?? DEFAULT_PARTIALS.Channel,
+      Message: discordModule.Partials?.Message ?? DEFAULT_PARTIALS.Message,
+      Reaction: discordModule.Partials?.Reaction ?? DEFAULT_PARTIALS.Reaction,
       GuildMember: discordModule.Partials?.GuildMember ?? DEFAULT_PARTIALS.GuildMember,
       User: discordModule.Partials?.User ?? DEFAULT_PARTIALS.User
     }
@@ -97,6 +107,8 @@ export const createDiscordClient = async ({
   roleManager,
   getSettings,
   directMessageHandler,
+  guildMessageHandler,
+  reactionHandler,
   guildMemberAddHandler,
   enableGuildMemberEvents = false,
   onRuntimeEvent,
@@ -122,12 +134,16 @@ export const createDiscordClient = async ({
   const {events, intents, partials} = resolveDiscordBindings(discordModule);
   const requestedIntents = [
     intents.Guilds,
+    intents.GuildMessages,
     intents.DirectMessages,
+    intents.DirectMessageReactions,
     intents.MessageContent,
     ...(enableGuildMemberEvents ? [intents.GuildMembers] : [])
   ];
   const requestedPartials = [
     partials.Channel,
+    partials.Message,
+    partials.Reaction,
     partials.User,
     ...(enableGuildMemberEvents ? [partials.GuildMember] : [])
   ];
@@ -222,6 +238,32 @@ export const createDiscordClient = async ({
       Promise.resolve(directMessageHandler(message)).catch((error) => {
         logger?.error?.("Portal DM handler failed.", {error});
       });
+    });
+  }
+
+  if (typeof guildMessageHandler === "function") {
+    client.on(events.messageCreate, (message) => {
+      if (message?.guildId || message?.inGuild?.()) {
+        Promise.resolve(guildMessageHandler(message)).catch((error) => {
+          logger?.error?.("Portal guild message handler failed.", {error});
+        });
+      }
+    });
+  }
+
+  if (typeof reactionHandler === "function") {
+    client.on(events.messageReactionAdd, async (reaction, user) => {
+      try {
+        const resolvedReaction = reaction?.partial && typeof reaction.fetch === "function"
+          ? await reaction.fetch()
+          : reaction;
+        const resolvedUser = user?.partial && typeof user.fetch === "function"
+          ? await user.fetch()
+          : user;
+        await reactionHandler(resolvedReaction, resolvedUser);
+      } catch (error) {
+        logger?.error?.("Portal reaction handler failed.", {error});
+      }
     });
   }
 

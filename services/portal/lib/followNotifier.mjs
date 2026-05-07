@@ -5,6 +5,29 @@ const normalizeString = (value, fallback = "") => {
   const normalized = typeof value === "string" ? value.trim() : "";
   return normalized || fallback;
 };
+const truncate = (value, max = 1900) => {
+  const normalized = normalizeString(value);
+  return normalized.length > max ? `${normalized.slice(0, Math.max(0, max - 3))}...` : normalized;
+};
+const normalizeObject = (value) => value && typeof value === "object" && !Array.isArray(value) ? value : {};
+const toCount = (value, fallback = 0) => {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+  return Number.isFinite(parsed) ? parsed : fallback;
+};
+const DOWNLOADALL_APPROVE_REACTION = "✅";
+const DOWNLOADALL_DENY_REACTION = "❌";
+
+const addDownloadAllDecisionReactions = async (message, logger) => {
+  if (!message || typeof message.react !== "function") {
+    return;
+  }
+  try {
+    await message.react(DOWNLOADALL_APPROVE_REACTION);
+    await message.react(DOWNLOADALL_DENY_REACTION);
+  } catch (error) {
+    logger?.warn?.("Portal could not add downloadall decision reactions.", {error});
+  }
+};
 
 const resolveRequestEventType = (notification = {}) => {
   const normalized = normalizeString(
@@ -70,8 +93,147 @@ const resolveNotificationLink = (notification, kind, publicBaseUrl) => {
     : `${baseUrl}/myrequests`;
 };
 
+const titleCase = (value) => {
+  const normalized = normalizeString(value, "updated").replace(/[_-]+/g, " ").toLowerCase();
+  return normalized.replace(/\b\w/g, (letter) => letter.toUpperCase());
+};
+
+const resolveDownloadAllColor = (status) => {
+  switch (status) {
+    case "completed":
+      return 0x16a34a;
+    case "failed":
+      return 0xdc2626;
+    case "cancelled":
+    case "canceled":
+      return 0x64748b;
+    case "paused":
+      return 0xf59e0b;
+    default:
+      return 0x60a5fa;
+  }
+};
+
+const compactRunId = (runId) => {
+  const normalized = normalizeString(runId);
+  return normalized.length > 26 ? `${normalized.slice(0, 18)}...${normalized.slice(-6)}` : normalized;
+};
+
+export const buildDownloadAllDirectMessagePayload = (notification = {}, publicBaseUrl = "") => {
+  const linkUrl = resolveNotificationLink(notification, "downloadall", publicBaseUrl);
+  const runId = normalizeString(notification.runId || notification.jobId);
+  const status = normalizeString(notification.status || notification.decisionType, "updated").toLowerCase();
+  const summary = normalizeObject(notification.summary);
+  const counts = normalizeObject(notification.counts);
+  const filters = normalizeObject(notification.filters);
+  const currentBatch = normalizeObject(notification.currentBatch);
+  const batchesPerApproval = toCount(
+    notification.batchesPerApproval ?? summary.batchesPerApproval ?? filters.batchesPerApproval,
+    1
+  );
+  const completedBatches = toCount(summary.completedBatches ?? counts.completedBatches ?? notification.completedBatches, 0);
+  const remainingBatches = toCount(summary.remainingBatches ?? counts.remainingBatches ?? notification.remainingBatches, 0);
+  const completedTitles = toCount(summary.completedTitles ?? counts.completedTitleTaskCount ?? notification.completedTitleTaskCount, 0);
+  const queued = toCount(summary.queued ?? counts.queuedCount ?? notification.queuedCount, 0);
+  const appended = toCount(summary.appended ?? counts.appendedCount ?? notification.appendedCount, 0);
+  const skippedCompleted = toCount(summary.skippedCompleted ?? counts.skippedCompletedCount ?? notification.skippedCompletedCount, 0);
+  const skippedCurrent = toCount(summary.skippedCurrent ?? counts.skippedCurrentCount ?? notification.skippedCurrentCount, 0);
+  const failedTitles = toCount(summary.failedTitles ?? counts.failedTitleTaskCount ?? notification.failedTitleTaskCount, 0);
+  const staleTitles = toCount(summary.staleTitles ?? counts.staleTitleTaskCount ?? notification.staleTitleTaskCount, 0);
+  const displayRunId = compactRunId(runId);
+  const actionLine = status === "paused"
+    ? `React ${DOWNLOADALL_APPROVE_REACTION} to run the next ${batchesPerApproval} batch(es), or ${DOWNLOADALL_DENY_REACTION} to cancel.`
+    : `Run ${displayRunId || "unknown"} is ${status}.`;
+  const fallbackCommand = runId ? `\`/downloadall continue runid:${runId}\`` : "`/downloadall continue runid:<id>`";
+  const currentBatchLabel = normalizeString(
+    summary.currentBatchLabel
+    || currentBatch.label
+    || [
+      normalizeString(currentBatch.titlePrefix || currentBatch.titlegroup),
+      normalizeString(currentBatch.type)
+    ].filter(Boolean).join(" ")
+  );
+  const queueLink = linkUrl ? `[Open queue](${linkUrl})` : "";
+  const needsAttention = [
+    failedTitles ? `Failed title tasks: **${failedTitles}**` : "",
+    staleTitles ? `Stale title tasks: **${staleTitles}**` : ""
+  ].filter(Boolean).join("\n") || "None reported";
+
+  return {
+    content: [
+      status === "paused"
+        ? `Downloadall paused after ${completedBatches} batch(es).`
+        : `Downloadall ${status}: ${completedTitles} title task(s) completed.`,
+      actionLine
+    ].filter(Boolean).join("\n"),
+    embeds: [{
+      title: `Scriptarr downloadall ${titleCase(status)}`,
+      description: runId ? `Run \`${displayRunId}\`` : "Durable downloadall run",
+      url: linkUrl || undefined,
+      color: resolveDownloadAllColor(status),
+      fields: [
+        {
+          name: "Progress",
+          value: [
+            `Batches: **${completedBatches}** done / **${remainingBatches}** remaining`,
+            `Title tasks completed: **${completedTitles}**`
+          ].join("\n"),
+          inline: true
+        },
+        {
+          name: "Queued work",
+          value: [
+            `New titles queued: **${queued}**`,
+            `Append updates: **${appended}**`
+          ].join("\n"),
+          inline: true
+        },
+        {
+          name: "Skipped",
+          value: [
+            `Completed titles: **${skippedCompleted}**`,
+            `Already current: **${skippedCurrent}**`
+          ].join("\n"),
+          inline: true
+        },
+        {
+          name: "Needs attention",
+          value: needsAttention,
+          inline: true
+        },
+        currentBatchLabel ? {
+          name: status === "paused" ? "Last completed batch" : "Current batch",
+          value: currentBatchLabel,
+          inline: true
+        } : null,
+        status === "paused" ? {
+          name: "Next action",
+          value: [
+            `${DOWNLOADALL_APPROVE_REACTION} Continue next **${batchesPerApproval}** batch(es)`,
+            `${DOWNLOADALL_DENY_REACTION} Cancel remaining run`,
+            `Fallback: ${fallbackCommand}`
+          ].join("\n"),
+          inline: false
+        } : null,
+        queueLink ? {
+          name: "Scriptarr",
+          value: queueLink,
+          inline: false
+        } : null
+      ].filter(Boolean),
+      footer: status === "paused"
+        ? {text: "React once. Duplicate or late decisions are ignored."}
+        : undefined
+    }]
+  };
+};
+
 const buildDirectMessagePayload = (notification, kind, publicBaseUrl, requestCommand) => {
-  if (kind === "system" || kind === "downloadall") {
+  if (kind === "downloadall") {
+    return buildDownloadAllDirectMessagePayload(notification, publicBaseUrl);
+  }
+
+  if (kind === "system") {
     const titleName = normalizeString(notification?.titleName, "Scriptarr system task");
     const message = normalizeString(notification?.message, `${titleName} changed state.`);
     const linkUrl = resolveNotificationLink(notification, kind, publicBaseUrl);
@@ -194,6 +356,7 @@ const deliverNotifications = async ({
   acknowledge,
   kind,
   discord,
+  sage,
   logger,
   publicBaseUrl,
   requestCommand
@@ -217,10 +380,31 @@ const deliverNotifications = async ({
       continue;
     }
     try {
-      await discord.sendDirectMessage(
+      const payload = await appendAiMessageContext({
+        sage,
+        kind,
+        notification,
+        payload: buildDirectMessagePayload(notification, kind, publicBaseUrl, requestCommand),
+        logger
+      });
+      const sentMessage = await discord.sendDirectMessage(
         notification.discordUserId,
-        buildDirectMessagePayload(notification, kind, publicBaseUrl, requestCommand)
+        payload
       );
+      if (kind === "downloadall" && normalizeString(notification.status) === "paused") {
+        await addDownloadAllDecisionReactions(sentMessage, logger);
+        if (notificationId && typeof sage?.recordDownloadAllDecisionPrompt === "function") {
+          await sage.recordDownloadAllDecisionPrompt(notificationId, {
+            messageId: normalizeString(sentMessage?.id),
+            channelId: normalizeString(sentMessage?.channelId || sentMessage?.channel?.id),
+            ownerDiscordUserId: normalizeString(notification.discordUserId),
+            runId: normalizeString(notification.jobId || notification.runId),
+            batchId: normalizeString(notification.batchId),
+            batchesPerApproval: toCount(notification.batchesPerApproval, 1),
+            status: normalizeString(notification.status)
+          });
+        }
+      }
       if (notificationId) {
         deliveredIds.add(notificationId);
         await acknowledge(notificationId);
@@ -235,6 +419,7 @@ const deliverReleaseChannelNotifications = async ({
   list,
   acknowledge,
   discord,
+  sage,
   logger,
   publicBaseUrl
 }) => {
@@ -255,15 +440,62 @@ const deliverReleaseChannelNotifications = async ({
       continue;
     }
     try {
+      const payload = await appendAiMessageContext({
+        sage,
+        kind: "release",
+        notification,
+        payload: buildReleaseChannelPayload(notification, publicBaseUrl),
+        logger
+      });
       await discord.sendChannelMessage(
         channelId,
-        buildReleaseChannelPayload(notification, publicBaseUrl)
+        payload
       );
       deliveredIds.add(notificationId);
       await acknowledge(notificationId);
     } catch (error) {
       logger?.error?.("Portal release channel notification delivery failed.", {notificationId, error});
     }
+  }
+};
+
+const appendAiMessageContext = async ({
+  sage,
+  kind,
+  notification,
+  payload,
+  logger
+}) => {
+  if (typeof sage?.assistOracle !== "function") {
+    return payload;
+  }
+  try {
+    const deterministicContent = normalizeString(payload?.content || payload?.embeds?.[0]?.description);
+    if (!deterministicContent) {
+      return payload;
+    }
+    const result = await sage.assistOracle({
+      task: "message",
+      kind,
+      deterministicContent,
+      context: {
+        titleName: notification?.titleName || notification?.title,
+        status: notification?.status,
+        requestId: notification?.requestId,
+        notificationId: notification?.id
+      }
+    });
+    const appendix = normalizeString(result?.payload?.text || result?.payload?.appendix);
+    if (!result?.ok || !appendix) {
+      return payload;
+    }
+    return {
+      ...payload,
+      content: truncate(`${deterministicContent}\n${appendix}`, 1900)
+    };
+  } catch (error) {
+    logger?.warn?.("Portal AI message assistance skipped.", {kind, error});
+    return payload;
   }
 };
 
@@ -289,6 +521,7 @@ export const createFollowNotifier = ({
         acknowledge: (id) => sage?.acknowledgeFollowNotification?.(id),
         kind: "follow",
         discord,
+        sage,
         logger,
         publicBaseUrl
       });
@@ -297,6 +530,7 @@ export const createFollowNotifier = ({
         acknowledge: (id) => sage?.acknowledgeRequestNotification?.(id),
         kind: "request",
         discord,
+        sage,
         logger,
         publicBaseUrl,
         requestCommand
@@ -305,6 +539,7 @@ export const createFollowNotifier = ({
         list: () => sage?.listReleaseNotifications?.(),
         acknowledge: (id) => sage?.acknowledgeReleaseNotification?.(id),
         discord,
+        sage,
         logger,
         publicBaseUrl
       });
@@ -313,6 +548,7 @@ export const createFollowNotifier = ({
         acknowledge: (id) => sage?.acknowledgeSystemNotification?.(id),
         kind: "system",
         discord,
+        sage,
         logger,
         publicBaseUrl
       });
@@ -321,6 +557,7 @@ export const createFollowNotifier = ({
         acknowledge: (id) => sage?.acknowledgeDownloadAllNotification?.(id),
         kind: "downloadall",
         discord,
+        sage,
         logger,
         publicBaseUrl
       });

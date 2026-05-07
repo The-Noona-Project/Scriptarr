@@ -44,6 +44,27 @@ Read this before editing Scriptarr.
 - [Oracle](services/oracle/AGENTS.md)
 - [Raven](services/raven/AGENTS.md)
 
+## Agent Navigation
+
+- Start every non-trivial turn with `git status --short`, then read this file and the closest service `AGENTS.md` for
+  any code you plan to touch.
+- Use `rg` first. Most work lands in these zones:
+  - Warden: `services/warden`, Docker socket orchestration, image updates, service plans, and health convergence.
+  - Vault: `services/vault`, durable storage APIs and the only first-party MySQL access.
+  - Sage: `services/sage`, auth, grants, Moon v3 routes, internal broker routes, admin workflows, and service
+    orchestration.
+  - Moon: `services/moon`, browser surfaces, same-origin proxies, admin Next pages under
+    `apps/admin-next/components`, user Next pages under `apps/user-next/components`, and public API/Swagger.
+  - Portal: `services/portal`, Discord commands, DMs, reactions, release posts, trivia, and Portal-to-Sage runtime.
+  - Oracle: `services/oracle`, FastAPI AI chat/assist logic and LocalAI/OpenAI adapters.
+  - Raven: `services/raven`, Java downloader, catalog promotion, `/downloadall`, media quality, naming, queue, and VPN.
+- Trace traffic before editing: browser -> Moon -> Sage -> internal services; Discord -> Portal -> Sage; Raven -> Sage
+  for brokered state; Vault -> MySQL. Do not add direct browser calls to internal services.
+- Prove changes with the narrow service test first, then the relevant Moon build or Docker smoke when behavior crosses
+  service boundaries. For production, publish only affected images, update through Warden, and smoke the exact
+  `https://pax-kun.com` surface.
+- Never print or commit secrets. Redact tokens, keys, sessions, credentials, and environment values in notes and logs.
+
 ## Workflow Notes
 
 - Browsers should stay behind Moon. Do not casually add browser calls to internal services.
@@ -61,13 +82,19 @@ Read this before editing Scriptarr.
   `/api/public/*` routes, store only hashed API keys in Vault through Sage, and preserve the NSFW, duplicate, and
   lowest-priority guards on external queueing.
 - Portal's Discord runtime is brokered through Moon admin's `/admin/discord` settings page. Keep guild id, onboarding,
-  DM superuser id, and per-command role mapping behind that settings object instead of drifting back to scattered env-only behavior.
+  DM superuser id, release notification channel, Noona trivia settings, and per-command role mapping behind that
+  settings object instead of drifting back to scattered env-only behavior.
 - Portal now sends request completion DMs. Preserve the single-send acknowledgment flow so retries or restarts do not
   spam the requester.
+- Moon admin's `/admin/system/ai` is the browser-safe owner for Oracle, optional LocalAI, and Sage-governed AI
+  proposals. Keep browser traffic behind Moon and Sage instead of adding direct browser calls to Oracle, Warden,
+  OpenAI, or LocalAI.
 - Raven stores active downloads under `downloading/<type>/...` and promotes completed library content into
   `downloaded/<type>/...`.
 - Raven should only report `100%` after promoted files persist into the brokered catalog, and startup recovery should
   reconcile finished `downloaded/<type>/...` files back into the library if catalog rows are missing.
+- Moon admin Wanted should keep `/admin/wanted/missing-content` as the canonical repair surface for chapter gaps,
+  missing pages, and bad-source quality states, with `/admin/wanted/missing-chapters` left as an alias only.
 - Oracle now lives in `services/oracle` as a Python FastAPI service even though the repo-level test and Docker helpers
   still flow through the npm workspace.
 - Warden's LocalAI presets now target the LocalAI AIO image family, should only report success after readiness, and

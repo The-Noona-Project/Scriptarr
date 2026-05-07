@@ -9,6 +9,7 @@ import {hasAdminGrant} from "../lib/access.js";
 import {requestJson, useAdminEventStaleness, useAdminJson} from "../lib/api.js";
 import {formatDate, formatDisplayValue, normalizeString} from "../lib/format.js";
 import {buildSettingsDraft, clearVpnPasswordDraft, mergeSettingsDraft, normalizeToastDraft} from "../lib/settingsDraft.js";
+import {vpnRuntimeLabel, vpnRuntimeTone} from "../lib/vpnRuntime.js";
 import {AdminActionBanner, AdminStatusBadge} from "./AdminUi.jsx";
 import {useAdminChrome} from "./AdminProviders.jsx";
 import {useAdminToast} from "./AdminToasts.jsx";
@@ -19,7 +20,21 @@ const emptySettings = Object.freeze({
   branding: {siteName: "Scriptarr", logo: {enabled: false, variants: {}}},
   publicBranding: {siteName: "Scriptarr", logo: {enabled: false, urls: {}}},
   ravenVpn: {enabled: false, region: "us_california", piaUsername: "", passwordConfigured: false},
-  ravenVpnRuntime: {connected: false, lastError: ""},
+  ravenVpnRuntime: {
+    state: "disabled",
+    enabled: false,
+    connected: false,
+    protected: false,
+    runtimeCapable: false,
+    settingsFresh: false,
+    lastCheckedAt: "",
+    settingsLastLoadedAt: "",
+    lastConnectionAttemptAt: "",
+    lastConnectedAt: "",
+    lastDisconnectedAt: "",
+    lastDisconnectReason: "",
+    lastError: ""
+  },
   metadataProviders: {providers: []},
   downloadProviders: {providers: []},
   requestWorkflow: {autoApproveAndDownload: false},
@@ -47,6 +62,8 @@ const formatBytes = (value) => {
   }
   return `${amount >= 10 ? amount.toFixed(1) : amount.toFixed(2)} ${units[unit]}`;
 };
+
+const yesNo = (value) => value ? "yes" : "no";
 
 const ToggleRow = ({checked, disabled = false, label, onChange}) => (
   <label className="admin-check-row">
@@ -322,6 +339,32 @@ export const SettingsPage = ({user}) => {
     }, "ravenVpn");
   };
 
+  const testVpn = async () => {
+    setBusy("VPN test");
+    setFlash("");
+    const result = await requestJson("/api/moon/v3/admin/settings/raven/vpn/test", {
+      method: "POST",
+      json: {}
+    });
+    setBusy("");
+    const runtime = result.payload?.vpn || result.payload?.ravenVpnRuntime || null;
+    if (runtime) {
+      setData((current) => ({...current, ravenVpnRuntime: runtime}));
+    }
+    if (!result.ok) {
+      const message = formatDisplayValue(result.payload?.error || runtime?.lastError, "Raven VPN test failed.");
+      setFlash(message);
+      setFlashTone("bad");
+      notify({message, tone: "bad", category: "action"});
+      return;
+    }
+    const stateLabel = vpnRuntimeLabel(draft.ravenVpn, runtime);
+    setFlash(`Raven VPN test finished: ${stateLabel}.`);
+    setFlashTone(runtime?.protected ? "good" : "warning");
+    notify({message: `Raven VPN test finished: ${stateLabel}.`, tone: runtime?.protected ? "good" : "warning", category: "action"});
+    void refresh();
+  };
+
   const resetPersonalToasts = () => {
     markDirty("personalToasts");
     setDraft((current) => ({
@@ -454,7 +497,9 @@ export const SettingsPage = ({user}) => {
               <div className="admin-kicker">Raven</div>
               <h2>VPN</h2>
             </div>
-            <AdminStatusBadge tone={draft.ravenVpn.enabled ? "good" : "warning"}>{draft.ravenVpn.enabled ? "enabled" : "disabled"}</AdminStatusBadge>
+            <AdminStatusBadge tone={vpnRuntimeTone(draft.ravenVpn, payload.ravenVpnRuntime)}>
+              {vpnRuntimeLabel(draft.ravenVpn, payload.ravenVpnRuntime)}
+            </AdminStatusBadge>
           </div>
           <div className="admin-task-form">
             <label>
@@ -477,11 +522,26 @@ export const SettingsPage = ({user}) => {
               <input disabled={!canSave} placeholder={payload.ravenVpn?.passwordConfigured ? "Configured - leave blank" : ""} type="password" value={draft.ravenVpn.piaPassword} onChange={(event) => patchDraft("ravenVpn", {piaPassword: event.target.value})} />
             </label>
           </div>
-          <button className="admin-button solid" type="button" disabled={!canSave || busy === "Raven VPN"} onClick={() => void saveVpn()}>Save VPN</button>
+          <div className="admin-action-row">
+            <button className="admin-button solid" type="button" disabled={!canSave || busy === "Raven VPN"} onClick={() => void saveVpn()}>Save VPN</button>
+            <button className="admin-button ghost" type="button" disabled={!canSave || busy === "VPN test" || dirtySections.has("ravenVpn")} onClick={() => void testVpn()}>{busy === "VPN test" ? "Testing VPN" : "Test VPN"}</button>
+          </div>
           <div className="admin-log-meta">
-            <span>Runtime: {payload.ravenVpnRuntime?.connected ? "connected" : "not connected"}</span>
+            <span>State: {vpnRuntimeLabel(draft.ravenVpn, payload.ravenVpnRuntime)}</span>
+            <span>Runtime capable: {yesNo(payload.ravenVpnRuntime?.runtimeCapable)}</span>
+            <span>Settings fresh: {yesNo(payload.ravenVpnRuntime?.settingsFresh)}</span>
+            <span>Connected: {yesNo(payload.ravenVpnRuntime?.connected)}</span>
+            <span>Protected: {yesNo(payload.ravenVpnRuntime?.protected)}</span>
             <span>Password: {payload.ravenVpn?.passwordConfigured ? "configured" : "missing"}</span>
+            <span>Runtime region: {formatDisplayValue(payload.ravenVpnRuntime?.region, draft.ravenVpn.region || "unknown")}</span>
+            <span>Last checked: {formatDate(payload.ravenVpnRuntime?.lastCheckedAt)}</span>
+            <span>Settings loaded: {formatDate(payload.ravenVpnRuntime?.settingsLastLoadedAt)}</span>
+            <span>Last attempt: {formatDate(payload.ravenVpnRuntime?.lastConnectionAttemptAt)}</span>
+            <span>Last connected: {formatDate(payload.ravenVpnRuntime?.lastConnectedAt)}</span>
+            <span>Last disconnected: {formatDate(payload.ravenVpnRuntime?.lastDisconnectedAt)}</span>
+            <span>Disconnect reason: {formatDisplayValue(payload.ravenVpnRuntime?.lastDisconnectReason, "none")}</span>
             <span>Last error: {formatDisplayValue(payload.ravenVpnRuntime?.lastError, "none")}</span>
+            {dirtySections.has("ravenVpn") ? <span>Save VPN before testing changed settings.</span> : null}
           </div>
         </article>
 

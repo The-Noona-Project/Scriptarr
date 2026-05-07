@@ -42,7 +42,7 @@ export const adminRoutes = [
   {id: "system-api", path: "/admin/system/api", title: "API", description: "Public Moon API access, admin automation key, and Swagger docs.", navLabel: "API", group: "System", domain: "publicapi", ported: true},
   {id: "system-status", path: "/admin/system/status", title: "System Status", description: "Grouped endpoint registry, GET probes, and service health.", navLabel: "Status", group: "System", domain: "system", ported: true},
   {id: "system-tasks", path: "/admin/system/tasks", title: "Tasks", description: "Cron-driven allowlisted maintenance jobs and recent runs.", navLabel: "Tasks", group: "System", domain: "system", ported: true},
-  {id: "system-ai", path: "/admin/system/ai", title: "AI", description: "Oracle and LocalAI settings, runtime state, and test prompts.", navLabel: "AI", group: "System", domain: "system", ported: true},
+  {id: "system-ai", path: "/admin/system/ai", title: "AI", description: "Oracle, LocalAI, and Sage-governed assistant tools.", navLabel: "AI", group: "System", domain: "ai", ported: true},
   {id: "system-updates", path: "/admin/system/updates", title: "Updates", description: "Current image tags and published channels.", navLabel: "Updates", group: "System", domain: "system", ported: true},
   {id: "system-events", path: "/admin/system/events", title: "Events", description: "Recent moderation and service timeline activity.", navLabel: "Events", group: "System", domain: "system", ported: true},
   {id: "system-logs", path: "/admin/system/logs", title: "Logs", description: "Sanitized operational log summaries for Scriptarr services.", navLabel: "Logs", group: "System", domain: "system", ported: true}

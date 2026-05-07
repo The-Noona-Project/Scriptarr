@@ -4,6 +4,7 @@ import {createPortalCommands} from "./discord/commands/index.mjs";
 import {createDirectMessageHandler} from "./discord/directMessageRouter.mjs";
 import {createRoleManager} from "./discord/roleManager.mjs";
 import {normalizePortalDiscordSettings} from "./discord/settings.mjs";
+import {createTriviaRuntime} from "./discord/triviaRuntime.mjs";
 import {normalizeString} from "./discord/utils.mjs";
 import {buildReleaseChannelPayload, createFollowNotifier} from "./followNotifier.mjs";
 
@@ -13,6 +14,8 @@ const renderTemplate = (template, values) => Object.entries(values).reduce(
 );
 
 const describeError = (error) => error instanceof Error ? error.message : String(error ?? "");
+const DOWNLOADALL_APPROVE_REACTION = "✅";
+const DOWNLOADALL_DENY_REACTION = "❌";
 
 const collectErrorText = (error) => {
   const fragments = [];
@@ -58,6 +61,7 @@ const createCapabilities = (state, settings) => {
   const authConfigured = Boolean(state.authConfigured);
   const connected = Boolean(state.connected);
   const onboardingConfigured = Boolean(settings.onboarding?.channelId);
+  const triviaConfigured = Boolean(settings.trivia?.enabled && settings.trivia?.channelId);
 
   const commandSync = !authConfigured
     ? {
@@ -124,10 +128,33 @@ const createCapabilities = (state, settings) => {
             detail: state.error || "Portal is not connected to Discord."
           };
 
+  const trivia = !triviaConfigured
+    ? {
+      status: settings.trivia?.enabled ? "pending" : "disabled",
+      detail: settings.trivia?.enabled
+        ? "Set a trivia channel id to let Noona post trivia rounds."
+        : "Discord trivia is disabled."
+    }
+    : !authConfigured
+      ? {
+        status: "missing",
+        detail: "Configure the Discord bot token and client id before enabling trivia."
+      }
+      : connected
+        ? {
+          status: "available",
+          detail: `Trivia rounds can post in channel ${settings.trivia.channelId}.`
+        }
+        : {
+          status: state.mode === "starting" ? "pending" : "disconnected",
+          detail: state.error || "Portal is not connected to Discord."
+        };
+
   return {
     commandSync,
     directMessages,
-    onboarding
+    onboarding,
+    trivia
   };
 };
 
@@ -140,6 +167,7 @@ export const createPortalRuntime = ({
   let settings = normalizePortalDiscordSettings({}, config.discordDefaults);
   let discord = null;
   let followNotifier = null;
+  let triviaRuntime = null;
   let state = {
     mode: config.discordToken && config.discordClientId ? "idle" : "disabled",
     connected: false,
@@ -167,7 +195,10 @@ export const createPortalRuntime = ({
     publicBaseUrl: config.publicBaseUrl,
     getSettings: () => settings,
     logger,
-    onRuntimeEvent: (event) => recordRuntimeEvent(event)
+    onRuntimeEvent: (event) => recordRuntimeEvent(event),
+    onTriviaStart: (payload) => triviaRuntime?.startRoundNow(payload),
+    onTriviaStop: (payload) => triviaRuntime?.stopRound(payload),
+    onTriviaLeaderboard: (windowName) => triviaRuntime?.postLeaderboard(windowName)
   });
 
   const roleManager = createRoleManager({
@@ -203,6 +234,25 @@ export const createPortalRuntime = ({
         lastDownloadAllHandledAt: event.at || new Date().toISOString(),
         lastDownloadAllSource: normalizeString(event.source),
         lastDownloadAllError: normalizeString(event.message)
+      };
+      return;
+    }
+
+    if (event.type === "downloadall-reaction") {
+      state = {
+        ...state,
+        lastDownloadAllHandledAt: event.at || new Date().toISOString(),
+        lastDownloadAllSource: "reaction",
+        lastDownloadAllError: null
+      };
+      return;
+    }
+
+    if (event.type === "trivia-round-started") {
+      state = {
+        ...state,
+        lastTriviaRoundStartedAt: event.at || new Date().toISOString(),
+        lastTriviaRoundId: normalizeString(event.roundId)
       };
       return;
     }
@@ -253,6 +303,7 @@ export const createPortalRuntime = ({
     if (discord && state.connected) {
       try {
         const sync = await discord.registerCommands();
+        await triviaRuntime?.refreshSettings?.();
         state = {
           ...state,
           lastSyncAt: new Date().toISOString(),
@@ -286,6 +337,38 @@ export const createPortalRuntime = ({
         logger,
         onRuntimeEvent: recordRuntimeEvent
       }),
+      guildMessageHandler: async (message) => {
+        await triviaRuntime?.handleGuildMessage?.(message);
+      },
+      reactionHandler: async (reaction, user) => {
+        const emoji = normalizeString(reaction?.emoji?.name || reaction?.emoji || "");
+        if (![DOWNLOADALL_APPROVE_REACTION, DOWNLOADALL_DENY_REACTION].includes(emoji)) {
+          return;
+        }
+        const userId = normalizeString(user?.id);
+        if (!userId || user?.bot || userId !== normalizeString(settings.superuserId)) {
+          return;
+        }
+        const messageId = normalizeString(reaction?.message?.id || reaction?.messageId);
+        if (!messageId) {
+          return;
+        }
+        const result = await sage.decideDownloadAllPrompt({
+          messageId,
+          userId,
+          emoji
+        });
+        const payload = result?.payload || {};
+        if (payload.message) {
+          await nextDiscord.sendDirectMessage(userId, {content: payload.message});
+        }
+        recordRuntimeEvent({
+          type: "downloadall-reaction",
+          requestedBy: userId,
+          status: payload.status || (result?.ok ? "handled" : "failed"),
+          message: payload.message || payload.error || ""
+        });
+      },
       guildMemberAddHandler: enableGuildMemberEvents ? async (member) => {
         const channelId = settings.onboarding.channelId;
         if (!channelId) {
@@ -362,6 +445,14 @@ export const createPortalRuntime = ({
           requestCommand: commands.get("request")
         });
         followNotifier.start();
+        triviaRuntime = createTriviaRuntime({
+          sage,
+          discord,
+          getSettings: () => settings,
+          logger,
+          onRuntimeEvent: recordRuntimeEvent
+        });
+        await triviaRuntime.start();
         state = {
           ...state,
           mode: "ready",
@@ -382,6 +473,8 @@ export const createPortalRuntime = ({
       } catch (error) {
         await followNotifier?.stop?.();
         followNotifier = null;
+        triviaRuntime?.stop?.();
+        triviaRuntime = null;
         error?.portalClient?.destroy?.();
         discord?.destroy?.();
         discord = null;
@@ -417,6 +510,8 @@ export const createPortalRuntime = ({
   const stop = async () => {
     followNotifier?.stop?.();
     followNotifier = null;
+    triviaRuntime?.stop?.();
+    triviaRuntime = null;
     discord?.destroy?.();
     discord = null;
     state = {
@@ -482,6 +577,50 @@ export const createPortalRuntime = ({
     };
   };
 
+  const startTriviaRound = async (payload = {}) => {
+    if (!triviaRuntime) {
+      throw new Error("Portal Discord runtime is not connected.");
+    }
+    return triviaRuntime.startRoundNow(payload);
+  };
+
+  const stopTriviaRound = async (payload = {}) => {
+    if (!triviaRuntime) {
+      throw new Error("Portal Discord runtime is not connected.");
+    }
+    return triviaRuntime.stopRound(payload);
+  };
+
+  const postTriviaLeaderboard = async (payload = {}) => {
+    if (!triviaRuntime) {
+      throw new Error("Portal Discord runtime is not connected.");
+    }
+    const overrideSettings = payload.settings?.trivia || payload.settings || null;
+    const targetChannelId = normalizeString(
+      payload.channelId
+      || overrideSettings?.leaderboardChannelId
+      || overrideSettings?.channelId
+      || settings.trivia?.leaderboardChannelId
+      || settings.trivia?.channelId
+    );
+    if (!targetChannelId) {
+      throw new Error("A trivia leaderboard channel id is required.");
+    }
+    const windowName = normalizeString(payload.window, "all");
+    if (payload.defer === true) {
+      void triviaRuntime.postLeaderboard(windowName, targetChannelId, {settings: overrideSettings || settings.trivia})
+        .catch((error) => logger?.warn?.("Deferred trivia leaderboard post failed.", {windowName, error}));
+      return {
+        ok: true,
+        accepted: true,
+        queued: true,
+        channelId: targetChannelId,
+        window: windowName
+      };
+    }
+    return triviaRuntime.postLeaderboard(windowName, targetChannelId, {settings: overrideSettings || settings.trivia});
+  };
+
   return {
     start,
     stop,
@@ -505,7 +644,10 @@ export const createPortalRuntime = ({
     },
     renderOnboarding,
     sendOnboardingTest,
-    sendReleaseNotificationTest
+    sendReleaseNotificationTest,
+    startTriviaRound,
+    stopTriviaRound,
+    postTriviaLeaderboard
   };
 };
 

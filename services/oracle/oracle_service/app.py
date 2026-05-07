@@ -71,6 +71,21 @@ def _normalize_provider(value: object, fallback: str = "openai") -> str:
     return normalized if normalized in {"openai", "localai"} else fallback
 
 
+def _short_string(value: object, limit: int = 600) -> str:
+    normalized = _normalize_string(value)
+    return normalized[:limit].strip()
+
+
+def _assist_fallback(task: str) -> dict[str, object]:
+    return {
+        "ok": True,
+        "degraded": True,
+        "task": task,
+        "text": "",
+        "decision": None
+    }
+
+
 def _provider_default_model(provider: str, config: OracleConfig) -> str:
     if provider == "localai":
         return LOCALAI_DEFAULT_MODEL
@@ -310,6 +325,77 @@ def create_app(
                 "degraded": True,
                 "reply": _provider_fallback_reply(active_config.noona_persona_name, runtime.provider),
                 "status": status_payload,
+                "error": str(error)
+            }
+
+    @app.post("/api/assist")
+    async def assist(request: Request):
+        try:
+            body = await request.json()
+        except Exception:  # noqa: BLE001
+            body = {}
+
+        task = _normalize_string((body or {}).get("task"), "message")
+        runtime = await resolve_oracle_runtime_settings(config=active_config, sage_client=active_sage_client)
+        if not runtime.enabled:
+            return {
+                **_assist_fallback(task),
+                "disabled": True,
+                "reason": "Oracle is disabled."
+            }
+        if runtime.provider == "openai" and not runtime.open_ai_api_key_configured:
+            return {
+                **_assist_fallback(task),
+                "disabled": True,
+                "reason": "OpenAI API key is not configured."
+            }
+
+        try:
+            if runtime.provider == "localai" and not await probe_local_ai_fn(runtime):
+                return {
+                    **_assist_fallback(task),
+                    "reason": "LocalAI probe failed."
+                }
+
+            deterministic = _short_string((body or {}).get("deterministicContent"))
+            prompt = _short_string((body or {}).get("prompt"), 1200)
+            context = (body or {}).get("context") if isinstance((body or {}).get("context"), dict) else {}
+            if task == "match-title":
+                message = (
+                    "Decide whether a user's guess should be accepted for a title trivia game. "
+                    "Return JSON with keys matched(boolean), confidence(0-1), reason(short). "
+                    f"Context: {context}. Guess prompt: {prompt}"
+                )
+            elif task == "message":
+                message = (
+                    "Append one concise, non-critical sentence to this deterministic Scriptarr Discord message. "
+                    "Do not change facts, links, statuses, or moderation wording. "
+                    f"Message: {deterministic}. Context: {context}"
+                )
+            else:
+                message = (
+                    "Help summarize this Scriptarr admin assist request in one concise sentence. "
+                    f"Task: {task}. Prompt: {prompt}. Context: {context}"
+                )
+
+            text = await invoke_oracle_fn(runtime, active_config.noona_persona_name, message)
+            return {
+                "ok": True,
+                "task": task,
+                "text": _short_string(text, 500),
+                "decision": None
+            }
+        except Exception as error:  # noqa: BLE001
+            active_logger.warning(
+                "Oracle assist degraded.",
+                extra={
+                    "task": task,
+                    "provider": runtime.provider,
+                    "error": str(error)
+                }
+            )
+            return {
+                **_assist_fallback(task),
                 "error": str(error)
             }
 

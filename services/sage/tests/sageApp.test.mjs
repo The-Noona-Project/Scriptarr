@@ -120,6 +120,7 @@ const createDependencyStub = ({
     bulkRunStatus: 0,
     bulkRunContinue: 0,
     bulkRunCancel: 0,
+    vpnTest: 0,
     contentResetPreview: 0,
     contentResetExecute: 0,
     logs: 0,
@@ -409,7 +410,7 @@ const createDependencyStub = ({
       return;
     }
 
-    if (request.url === "/v1/library") {
+    if (request.url === "/v1/library" || request.url === "/v1/library?view=card") {
       response.writeHead(200, {"Content-Type": "application/json"});
       response.end(JSON.stringify({titles: currentLibraryTitles}));
       return;
@@ -510,6 +511,24 @@ const createDependencyStub = ({
     if (request.url === "/v1/downloads/tasks") {
       response.writeHead(200, {"Content-Type": "application/json"});
       response.end(JSON.stringify(currentDownloadTasks));
+      return;
+    }
+
+    if (request.url === "/v1/vpn/test" && request.method === "POST") {
+      calls.vpnTest += 1;
+      response.writeHead(200, {"Content-Type": "application/json"});
+      response.end(JSON.stringify({
+        ok: true,
+        vpn: {
+          state: "armed",
+          enabled: true,
+          connected: false,
+          protected: false,
+          runtimeCapable: true,
+          settingsFresh: true,
+          region: "us_california"
+        }
+      }));
       return;
     }
 
@@ -1077,6 +1096,17 @@ test("sage signs in the first owner through the Discord callback and moderates r
 
   assert.equal(moonLibrary.titles[0].title, ownerSmokeLibraryTitle.title);
 
+  const moonCardLibrary = await fetch(`${baseUrl}/api/moon-v3/user/library?view=card&pageSize=1`, {
+    headers: {
+      "Authorization": `Bearer ${ownerClaim.token}`
+    }
+  }).then((response) => response.json());
+
+  assert.equal(moonCardLibrary.titles[0].title, ownerSmokeLibraryTitle.title);
+  assert.equal(Object.hasOwn(moonCardLibrary.titles[0], "chapters"), false);
+  assert.equal(Object.hasOwn(moonCardLibrary.titles[0], "downloadRoot"), false);
+  assert.equal(moonCardLibrary.pageInfo.pageSize, 1);
+
   const overview = await fetch(`${baseUrl}/api/moon-v3/admin/overview`, {
     headers: {
       "Authorization": `Bearer ${ownerClaim.token}`
@@ -1524,6 +1554,16 @@ test("sage round-trips Moon branding and exposes typed Moon reader payloads", as
   assert.equal(savedVpnWithoutPassword.enabled, false);
   assert.equal(savedVpnWithoutPassword.region, "us_california");
   assert.equal(savedVpnWithoutPassword.passwordConfigured, true);
+
+  const vpnTestResponse = await fetch(`${baseUrl}/api/moon-v3/admin/settings/raven/vpn/test`, {
+    method: "POST",
+    headers
+  });
+  const vpnTest = await vpnTestResponse.json();
+  assert.equal(vpnTestResponse.status, 200);
+  assert.equal(vpnTest.ok, true);
+  assert.equal(vpnTest.vpn.state, "armed");
+  assert.equal(dependencyStub.calls.vpnTest, 1);
 
   const personalToastResponse = await fetch(`${baseUrl}/api/moon-v3/admin/settings/toasts/personal`, {
     method: "PUT",

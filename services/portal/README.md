@@ -34,7 +34,8 @@ fallback, but that path depends on Discord delivering `messageCreate` events and
 interface anymore. The command stays owner-only and intentionally pinned to WeebCentral, so it fails if that provider
 is disabled instead of browsing MangaDex.
 Every `downloadall` request now creates a durable Raven run. Selecting `type:all` or `titlegroup:all` creates multiple
-batches; Raven pauses the run after each batch until the owner explicitly continues it from DM slash commands.
+batches; Raven pauses after the configured `groupsize` batch count, which defaults to one and is capped at 25. Paused
+summary DMs get check/cross reactions so the owner can continue or cancel without typing a follow-up command.
 Bulk queueing is still provider-browse first, but it now asks Raven to metadata-resolve each matched bulk title before
 queueing it. Portal only queues titles with one confident metadata match and reports already-active, completed,
 already-current, appended, adult-content, no-metadata, ambiguous-metadata, invalid-source, and failed outcomes in the

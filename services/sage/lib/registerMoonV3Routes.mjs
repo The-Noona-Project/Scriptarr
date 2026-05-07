@@ -24,6 +24,16 @@ import {buildMoonHomePayload} from "./buildMoonHomePayload.mjs";
 import {buildMoonProfilePayload} from "./buildMoonProfilePayload.mjs";
 import {buildSystemStatusPayload} from "./systemStatusRegistry.mjs";
 import {
+  buildToolPayload,
+  getProposal,
+  markToolUsed,
+  proposeAiAction,
+  readAiProposals,
+  toolForId,
+  updateProposalStatus,
+  writeAiToolSettings
+} from "./aiTools.mjs";
+import {
   buildMoonUserLibraryState,
   getTagPreference,
   normalizeTagPreferenceStore,
@@ -45,6 +55,7 @@ import {
   normalizePortalDiscordSettings,
   renderPortalOnboardingTemplate
 } from "./portalDiscordSettings.mjs";
+import {createPortalTriviaService} from "./portalTrivia.mjs";
 
 const defaultReaderPreferences = Object.freeze({
   readingMode: "infinite",
@@ -103,6 +114,7 @@ const EVENT_DOMAIN_ACCESS = Object.freeze({
   wanted: "wanted",
   requests: "requests",
   discord: "discord",
+  ai: "ai",
   settings: "settings",
   database: "database",
   system: "system",
@@ -111,6 +123,8 @@ const EVENT_DOMAIN_ACCESS = Object.freeze({
   reader: "library"
 });
 const ORACLE_ADMIN_TEST_TIMEOUT_MS = 75000;
+const LIBRARY_CARD_PAGE_SIZE_DEFAULT = 60;
+const LIBRARY_CARD_PAGE_SIZE_MAX = 100;
 
 const normalizeTypeSlug = (value, fallback = "manga") => {
   const normalized = normalizeString(value, fallback)
@@ -237,6 +251,74 @@ const toChapterSummary = (chapter = {}) => ({
   sourceUrl: normalizeString(chapter.sourceUrl),
   updatedAt: parseIso(chapter.updatedAt)
 });
+
+const truncateText = (value, maxLength = 280) => {
+  const normalized = normalizeString(value);
+  const limit = Math.max(0, maxLength);
+  if (!normalized || normalized.length <= limit) {
+    return normalized;
+  }
+  return `${normalized.slice(0, Math.max(0, limit - 3)).trim()}...`;
+};
+
+const compactStringArray = (value, maxItems = 8) => {
+  const seen = new Set();
+  const entries = [];
+  for (const item of normalizeArray(value)) {
+    const normalized = normalizeString(item);
+    if (!normalized) {
+      continue;
+    }
+    const key = normalized.toLowerCase();
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    entries.push(normalized);
+    if (entries.length >= maxItems) {
+      break;
+    }
+  }
+  return entries;
+};
+
+const toTitleCardSummary = (title = {}) => {
+  const id = normalizeString(title.id);
+  const coverUrl = normalizeString(title.coverUrl);
+  const updatedAt = parseIso(title.updatedAt);
+  const revision = createHash("sha1")
+    .update([id, coverUrl, updatedAt || "", normalizeString(title.metadataMatchedAt)].join("|"))
+    .digest("hex")
+    .slice(0, 12);
+  return {
+    id,
+    title: normalizeString(title.title, "Untitled"),
+    mediaType: normalizeString(title.mediaType, "manga"),
+    libraryTypeLabel: normalizeString(title.libraryTypeLabel, normalizeString(title.mediaType, "Manga")),
+    libraryTypeSlug: normalizeTypeSlug(title.libraryTypeSlug || title.mediaType),
+    status: normalizeString(title.status, "active"),
+    latestChapter: normalizeString(title.latestChapter, "Unknown"),
+    coverAccent: normalizeString(title.coverAccent, "#4f8f88"),
+    coverUrl,
+    coverThumbUrl: id && coverUrl ? `/api/moon/v3/user/covers/${encodeURIComponent(id)}.webp?rev=${revision}` : normalizeString(title.coverThumbUrl),
+    coverRevision: revision,
+    summary: truncateText(title.summary, 280),
+    releaseLabel: normalizeString(title.releaseLabel),
+    chapterCount: Number.parseInt(String(title.chapterCount || 0), 10) || 0,
+    chaptersDownloaded: Number.parseInt(String(title.chaptersDownloaded || 0), 10) || 0,
+    author: normalizeString(title.author),
+    tags: compactStringArray(title.tags, 8),
+    aliases: compactStringArray(title.aliases, 8),
+    metadataProvider: normalizeString(title.metadataProvider),
+    metadataMatchedAt: parseIso(title.metadataMatchedAt),
+    updatedAt,
+    qualityStatus: normalizeString(title.qualityStatus, "clean"),
+    cleanChapterCount: Number.parseInt(String(title.cleanChapterCount || 0), 10) || 0,
+    partialChapterCount: Number.parseInt(String(title.partialChapterCount || 0), 10) || 0,
+    missingContentCount: Number.parseInt(String(title.missingContentCount || 0), 10) || 0,
+    qualitySummary: truncateText(title.qualitySummary, 180)
+  };
+};
 
 const toRequestSummary = (request = {}, userIndex = new Map()) => {
   const requester = userIndex.get(String(request.requestedBy || "").trim()) || null;
@@ -462,6 +544,96 @@ export const registerMoonV3Routes = (app, {
   const loadLibrary = async () => {
     const payload = await fetchRavenJson("/v1/library");
     return normalizeArray(payload?.titles).map(toTitleSummary);
+  };
+
+  const loadLibraryCards = async () => {
+    const payload = await fetchRavenJson("/v1/library?view=card");
+    return normalizeArray(payload?.titles).map(toTitleCardSummary);
+  };
+
+  const libraryCardSearchKey = (title = {}) => [
+    title.title,
+    title.libraryTypeLabel,
+    title.libraryTypeSlug,
+    title.mediaType,
+    title.status,
+    title.author,
+    ...normalizeArray(title.tags),
+    ...normalizeArray(title.aliases)
+  ].filter(Boolean).join(" ").toLowerCase();
+
+  const resolveLibraryCardLetter = (title = {}) => {
+    const match = normalizeString(title.title).toUpperCase().match(/[A-Z]/);
+    return match ? match[0] : "#";
+  };
+
+  const sortLibraryCards = (titles = []) => [...normalizeArray(titles)].sort((left, right) => {
+    const titleCompare = normalizeString(left.title).localeCompare(normalizeString(right.title), "en", {
+      numeric: true,
+      sensitivity: "base"
+    });
+    if (titleCompare !== 0) {
+      return titleCompare;
+    }
+    return normalizeString(left.id).localeCompare(normalizeString(right.id), "en", {numeric: true});
+  });
+
+  const buildLibraryCardCounts = (titles = []) => {
+    const byLetter = {"#": 0};
+    const byType = {};
+    for (let index = 0; index < 26; index += 1) {
+      byLetter[String.fromCharCode(65 + index)] = 0;
+    }
+    for (const title of normalizeArray(titles)) {
+      const letter = resolveLibraryCardLetter(title);
+      byLetter[letter] = (byLetter[letter] || 0) + 1;
+      const type = normalizeTypeSlug(title.libraryTypeSlug || title.mediaType);
+      byType[type] = (byType[type] || 0) + 1;
+    }
+    return {total: normalizeArray(titles).length, byLetter, byType};
+  };
+
+  const buildLibraryCardPage = (titles = [], query = {}) => {
+    const q = normalizeString(query.q || query.query).toLowerCase();
+    const type = normalizeTypeSlug(query.type || "", "");
+    const letter = normalizeString(query.letter).toUpperCase();
+    const pageSize = Math.min(
+      LIBRARY_CARD_PAGE_SIZE_MAX,
+      Math.max(1, Number.parseInt(String(query.pageSize || LIBRARY_CARD_PAGE_SIZE_DEFAULT), 10) || LIBRARY_CARD_PAGE_SIZE_DEFAULT)
+    );
+    const cursor = Math.max(0, Number.parseInt(String(query.cursor || 0), 10) || 0);
+    const base = sortLibraryCards(titles).filter((title) => {
+      if (type && normalizeTypeSlug(title.libraryTypeSlug || title.mediaType) !== type) {
+        return false;
+      }
+      if (q && !libraryCardSearchKey(title).includes(q)) {
+        return false;
+      }
+      return true;
+    });
+    const counts = buildLibraryCardCounts(base);
+    const letterFiltered = letter
+      ? base.filter((title) => resolveLibraryCardLetter(title) === letter)
+      : base;
+    const page = letterFiltered.slice(cursor, cursor + pageSize);
+    const nextOffset = cursor + page.length;
+    return {
+      titles: page,
+      counts,
+      filters: {
+        q,
+        type,
+        letter: letter || "",
+        pageSize
+      },
+      pageInfo: {
+        cursor: String(cursor),
+        nextCursor: nextOffset < letterFiltered.length ? String(nextOffset) : "",
+        hasMore: nextOffset < letterFiltered.length,
+        pageSize,
+        total: letterFiltered.length
+      }
+    };
   };
 
   const loadLibraryTitle = async (titleId) => {
@@ -994,6 +1166,13 @@ export const registerMoonV3Routes = (app, {
     return {warden, portal, oracle, raven};
   };
 
+  const triviaService = createPortalTriviaService({
+    config,
+    vaultClient,
+    serviceJson,
+    readPortalDiscordSettings
+  });
+
   const withAdminAccess = (domain, level, handler) => async (req, res, next) => {
     await requireAdminGrant(domain, level)(req, res, async () => {
       try {
@@ -1022,6 +1201,9 @@ export const registerMoonV3Routes = (app, {
   const requireUsersRoot = (handler) => withAdminAccess("users", "root", handler);
   const requireDiscordRead = (handler) => withAdminAccess("discord", "read", handler);
   const requireDiscordWrite = (handler) => withAdminAccess("discord", "write", handler);
+  const requireAiRead = (handler) => withAdminAccess("ai", "read", handler);
+  const requireAiWrite = (handler) => withAdminAccess("ai", "write", handler);
+  const requireAiRoot = (handler) => withAdminAccess("ai", "root", handler);
   const requireMediaManagementRead = (handler) => withAdminAccess("mediamanagement", "read", handler);
   const requireSettingsRead = (handler) => withAdminAccess("settings", "read", handler);
   const requireSettingsWrite = (handler) => withAdminAccess("settings", "write", handler);
@@ -2172,7 +2354,13 @@ export const registerMoonV3Routes = (app, {
     return {
       ravenVpn,
       ravenVpnRuntime: ravenHealth?.ok ? normalizeObject(ravenHealth.payload?.vpn, {}) : {
+        enabled: false,
         connected: false,
+        protected: false,
+        settingsFresh: false,
+        runtimeCapable: false,
+        lastCheckedAt: "",
+        settingsLastLoadedAt: "",
         lastError: normalizeString(ravenHealth?.payload?.error, "Raven health is unavailable.")
       },
       metadataProviders,
@@ -2223,11 +2411,17 @@ export const registerMoonV3Routes = (app, {
     };
   };
 
-  const buildDiscordPayload = async () => {
+  const buildDiscordPayload = async (adminUser = null) => {
     const settings = normalizePortalDiscordSettings(await readPortalDiscordSettings());
+    const canRevealTriviaAnswer = hasDomainAccess(adminUser, "discord", "root");
+    const [runtime, triviaRuntime] = await Promise.all([
+      loadPortalDiscordRuntime(settings),
+      triviaService.getAdminState({includeActiveAnswer: canRevealTriviaAnswer})
+    ]);
     return {
       settings,
-      runtime: await loadPortalDiscordRuntime(settings),
+      runtime,
+      triviaRuntime,
       commandCatalog: knownPortalDiscordCommands
     };
   };
@@ -2250,10 +2444,12 @@ export const registerMoonV3Routes = (app, {
       metadata: {
         guildId: nextSettings.guildId,
         onboardingChannelId: nextSettings.onboarding.channelId,
-        releaseChannelId: nextSettings.notifications.releaseChannelId
+        releaseChannelId: nextSettings.notifications.releaseChannelId,
+        triviaEnabled: nextSettings.trivia.enabled,
+        triviaChannelId: nextSettings.trivia.channelId
       }
     });
-    const payload = await buildDiscordPayload();
+    const payload = await buildDiscordPayload(req.user);
     return {
       ...payload,
       runtime: {
@@ -2267,8 +2463,8 @@ export const registerMoonV3Routes = (app, {
     res.json(await buildSettingsPayload(req.user));
   }));
 
-  app.get("/api/moon-v3/admin/discord", requireDiscordRead(async (_req, res) => {
-    res.json(await buildDiscordPayload());
+  app.get("/api/moon-v3/admin/discord", requireDiscordRead(async (req, res) => {
+    res.json(await buildDiscordPayload(req.user));
   }));
 
   app.put("/api/moon-v3/admin/discord", requireDiscordWrite(async (req, res) => {
@@ -2301,6 +2497,7 @@ export const registerMoonV3Routes = (app, {
         ...runtime,
         reload: reload.payload || reload
       },
+      triviaRuntime: await triviaService.getAdminState({includeActiveAnswer: hasDomainAccess(req.user, "discord", "root")}),
       commandCatalog: knownPortalDiscordCommands
     });
   }));
@@ -2411,6 +2608,56 @@ export const registerMoonV3Routes = (app, {
       return;
     }
     res.json(portal.payload || portal);
+  }));
+
+  const runPortalTriviaAction = async (req, res, action, path, body = {}) => {
+    const portal = await safeJson(serviceJson(config.portalBaseUrl, path, {
+      method: "POST",
+      headers: portalInternalHeaders(),
+      body: {
+        requestedBy: {
+          discordUserId: normalizeString(req.user?.discordUserId),
+          username: normalizeString(req.user?.username, "Admin")
+        },
+        ...body
+      },
+      timeoutMs: action === "leaderboard-test" ? 5000 : 20000
+    }));
+    if (!portal.ok) {
+      res.status(portal.status || 503).json({
+        error: portal.payload?.error || `${action} failed.`
+      });
+      return;
+    }
+    await appendEventForUser({
+      domain: "discord",
+      eventType: `discord-trivia-${action}`,
+      user: req.user,
+      targetType: "discord-trivia",
+      targetId: "portal-trivia",
+      message: `${req.user.username} requested Discord trivia ${action}.`,
+      metadata: portal.payload || portal
+    });
+    res.json(portal.payload || portal);
+  };
+
+  app.post("/api/moon-v3/admin/discord/trivia/start", requireDiscordWrite(async (req, res) => {
+    await runPortalTriviaAction(req, res, "start", "/api/trivia/start", {
+      force: req.body?.force !== false,
+      settings: req.body?.settings || null
+    });
+  }));
+
+  app.post("/api/moon-v3/admin/discord/trivia/stop", requireDiscordWrite(async (req, res) => {
+    await runPortalTriviaAction(req, res, "stop", "/api/trivia/stop", {});
+  }));
+
+  app.post("/api/moon-v3/admin/discord/trivia/leaderboard/test", requireDiscordWrite(async (req, res) => {
+    await runPortalTriviaAction(req, res, "leaderboard-test", "/api/trivia/leaderboard/test", {
+      window: normalizeString(req.body?.window, "all"),
+      defer: req.body?.defer !== false,
+      settings: req.body?.settings || null
+    });
   }));
 
   app.put("/api/moon-v3/admin/settings/branding", requireSettingsWrite(async (req, res) => {
@@ -2547,6 +2794,46 @@ export const registerMoonV3Routes = (app, {
       }
     });
     res.json(saved);
+  }));
+
+  app.post("/api/moon-v3/admin/settings/raven/vpn/test", requireSettingsWrite(async (req, res) => {
+    let result;
+    try {
+      result = await serviceJson(config.ravenBaseUrl, "/v1/vpn/test", {
+        method: "POST",
+        body: {},
+        timeoutMs: 120000
+      });
+    } catch (error) {
+      res.status(503).json({
+        ok: false,
+        vpn: {},
+        error: error instanceof Error ? error.message : "Raven VPN test failed."
+      });
+      return;
+    }
+    const payload = normalizeObject(result.payload, {}) || {};
+    const vpn = normalizeObject(payload.vpn, payload) || {};
+    const ok = result.ok && payload.ok !== false;
+    await appendEventForUser({
+      domain: "settings",
+      eventType: "raven-vpn-tested",
+      user: req.user,
+      targetType: "setting",
+      targetId: RAVEN_VPN_KEY,
+      message: `${req.user.username} tested the Raven VPN connection.`,
+      metadata: {
+        ok,
+        state: normalizeString(vpn.state),
+        protected: vpn.protected === true,
+        region: normalizeString(vpn.region)
+      }
+    });
+    res.status(ok ? 200 : result.status || 503).json({
+      ok,
+      vpn,
+      error: ok ? "" : normalizeString(payload.error, normalizeString(vpn.lastError, "Raven VPN test failed."))
+    });
   }));
 
   app.put("/api/moon-v3/admin/settings/raven/metadata", requireSettingsWrite(async (req, res) => {
@@ -2976,13 +3263,279 @@ export const registerMoonV3Routes = (app, {
     res.json(job);
   }));
 
-  app.get("/api/moon-v3/admin/system/ai", requireSystemRead(async (_req, res) => {
-    const [oracle, oracleHealth, oracleStatus, localAiStatus, localAiProfile] = await Promise.all([
+  const runLocalAiLifecycle = async (user, action, body = {}) => {
+    const oracleSettings = action === "remove"
+      ? await readOracleSettings()
+      : await readLocalAiActionSettings(body);
+    if (action !== "remove") {
+      await syncWardenLocalAiConfig(oracleSettings);
+    }
+    const result = await safeJson(serviceJson(config.wardenBaseUrl, `/api/localai/actions/${encodeURIComponent(action)}`, {
+      method: "POST",
+      body: {
+        requestedBy: {
+          discordUserId: normalizeString(user?.discordUserId),
+          username: normalizeString(user?.username, "Admin")
+        }
+      },
+      timeoutMs: 10000
+    }));
+    await appendEvent({
+      ...buildUserActor(user, "admin"),
+      domain: "ai",
+      eventType: `localai-${action}-requested`,
+      severity: "info",
+      targetType: "service",
+      targetId: "scriptarr-warden",
+      message: `${normalizeString(user?.username, "An admin")} requested LocalAI ${action} from Moon admin AI.`,
+      metadata: {
+        result: result.payload || result
+      }
+    });
+    return result;
+  };
+
+  const executeAiProposal = async (proposal, user) => {
+    const tool = toolForId(proposal?.toolId);
+    if (!tool) {
+      return {ok: false, status: 404, payload: {error: "The proposal tool is no longer registered."}};
+    }
+    if (tool.grant && !hasDomainAccess(user, tool.grant.domain, tool.grant.level)) {
+      return {ok: false, status: 403, payload: {error: "You do not have access to confirm this AI proposal."}};
+    }
+    const args = proposal?.args && typeof proposal.args === "object" ? proposal.args : {};
+    if (tool.id === "status_check") {
+      const payload = await buildAdminSystemStatus();
+      await markToolUsed(vaultClient, tool.id);
+      return {ok: true, status: 200, payload};
+    }
+    if (tool.id === "trivia_start") {
+      const result = await safeJson(serviceJson(config.portalBaseUrl, "/api/trivia/start", {
+        method: "POST",
+        headers: portalInternalHeaders(),
+        body: {
+          requestedBy: {
+            discordUserId: normalizeString(user?.discordUserId),
+            username: normalizeString(user?.username, "Admin")
+          },
+          force: args.force !== false
+        },
+        timeoutMs: 12000
+      }));
+      await markToolUsed(vaultClient, tool.id);
+      return result;
+    }
+    if (tool.id === "trivia_stop") {
+      const result = await safeJson(serviceJson(config.portalBaseUrl, "/api/trivia/stop", {
+        method: "POST",
+        headers: portalInternalHeaders(),
+        body: {
+          requestedBy: {
+            discordUserId: normalizeString(user?.discordUserId),
+            username: normalizeString(user?.username, "Admin")
+          }
+        },
+        timeoutMs: 12000
+      }));
+      await markToolUsed(vaultClient, tool.id);
+      return result;
+    }
+    if (["localai_install", "localai_start", "localai_remove"].includes(tool.id)) {
+      const action = tool.id.replace("localai_", "");
+      const result = await runLocalAiLifecycle(user, action, args);
+      await markToolUsed(vaultClient, tool.id);
+      return result;
+    }
+    if (tool.id === "system_task_run") {
+      const taskId = normalizeString(args.taskId || args.task);
+      if (!taskId) {
+        return {ok: false, status: 400, payload: {error: "A taskId argument is required."}};
+      }
+      const job = await systemTaskRuntime.runTask(taskId, {
+        manual: true,
+        actor: buildUserActor(user, "admin")
+      });
+      await markToolUsed(vaultClient, tool.id);
+      return {ok: true, status: 200, payload: job};
+    }
+    return {
+      ok: false,
+      status: 409,
+      payload: {error: `${tool.label} is registered but does not have a confirmed executor yet.`}
+    };
+  };
+
+  const executeAiReadTool = async (tool, body = {}) => {
+    const args = normalizeObject(body.args, {}) || {};
+    if (tool.id === "stack_status" || tool.id === "service_health") {
+      await markToolUsed(vaultClient, tool.id);
+      return {message: "Stack status loaded.", data: await loadServiceStatus()};
+    }
+    if (tool.id === "events") {
+      await markToolUsed(vaultClient, tool.id);
+      return {
+        message: "Recent events loaded.",
+        data: {
+          events: await vaultClient.listEvents({
+            newestFirst: true,
+            limit: Math.min(25, Math.max(1, Number.parseInt(String(args.limit || 10), 10) || 10))
+          })
+        }
+      };
+    }
+    if (tool.id === "queue") {
+      await markToolUsed(vaultClient, tool.id);
+      return {message: "Queue loaded.", data: buildAdminQueuePayload(await loadTasks())};
+    }
+    if (tool.id === "requests") {
+      await markToolUsed(vaultClient, tool.id);
+      const requests = await loadRequests();
+      return {message: "Requests loaded.", data: {summary: buildRequestSummaryCounts(requests), requests: requests.slice(0, 25)}};
+    }
+    if (tool.id === "library_search") {
+      await markToolUsed(vaultClient, tool.id);
+      const query = normalizeString(args.query || body.query);
+      const library = await loadLibrary();
+      return {
+        message: "Library search loaded.",
+        data: {
+          query,
+          results: library.filter((title) => !query || normalizeString(title.title).toLowerCase().includes(query.toLowerCase())).slice(0, 25)
+        }
+      };
+    }
+    if (tool.id === "missing_content") {
+      await markToolUsed(vaultClient, tool.id);
+      return {message: "Missing content loaded.", data: buildMissingChapterPayload(await loadLibrary())};
+    }
+    if (tool.id === "discord_runtime") {
+      await markToolUsed(vaultClient, tool.id);
+      return {message: "Discord runtime loaded.", data: await buildDiscordPayload()};
+    }
+    if (tool.id === "trivia_status") {
+      await markToolUsed(vaultClient, tool.id);
+      return {message: "Trivia status loaded.", data: await triviaService.getState()};
+    }
+    if (tool.id === "localai_status") {
+      await markToolUsed(vaultClient, tool.id);
+      const result = await serviceJson(config.wardenBaseUrl, "/api/localai/status", {timeoutMs: 3000});
+      return {message: "LocalAI status loaded.", data: result.payload || result};
+    }
+    return {message: `${tool.label} is available, but no direct read executor is wired yet.`, data: null};
+  };
+
+  app.get("/api/moon-v3/admin/system/ai/tools", requireAiRead(async (_req, res) => {
+    res.json(await buildToolPayload(vaultClient));
+  }));
+
+  app.put("/api/moon-v3/admin/system/ai/tools", requireAiRoot(async (req, res) => {
+    const settings = await writeAiToolSettings(vaultClient, req.body || {});
+    await appendEventForUser({
+      domain: "ai",
+      eventType: "ai-tool-settings-updated",
+      user: req.user,
+      targetType: "setting",
+      targetId: "oracle.tools",
+      message: `${req.user.username} updated AI tool toggles.`
+    });
+    res.json(await buildToolPayload(vaultClient, settings));
+  }));
+
+  app.post("/api/moon-v3/admin/system/ai/assist", requireAiRead(async (req, res) => {
+    const planned = await proposeAiAction({
+      vaultClient,
+      prompt: req.body?.prompt || req.body?.message,
+      requestedToolId: req.body?.toolId,
+      args: req.body?.args,
+      user: req.user
+    });
+    if (planned.ok === false) {
+      res.status(planned.status || 400).json(planned);
+      return;
+    }
+    if (planned.proposal) {
+      await appendEventForUser({
+        domain: "ai",
+        eventType: "ai-proposal-created",
+        user: req.user,
+        targetType: "ai-proposal",
+        targetId: planned.proposal.id,
+        message: `${req.user.username} asked AI to propose ${planned.tool.label}.`,
+        metadata: {
+          toolId: planned.tool.id,
+          risk: planned.tool.risk
+        }
+      });
+      res.json(planned);
+      return;
+    }
+    const readResult = await executeAiReadTool(planned.tool, req.body || {});
+    res.json({
+      ...planned,
+      ...readResult,
+      tools: await buildToolPayload(vaultClient)
+    });
+  }));
+
+  app.post("/api/moon-v3/admin/system/ai/proposals/:id/cancel", requireAiWrite(async (req, res) => {
+    const proposal = await updateProposalStatus(vaultClient, req.params.id, "cancelled", {
+      actedBy: buildUserActor(req.user, "admin"),
+      result: {cancelled: true}
+    });
+    res.status(proposal ? 200 : 404).json(proposal || {error: "AI proposal was not found."});
+  }));
+
+  app.post("/api/moon-v3/admin/system/ai/proposals/:id/confirm", requireAiWrite(async (req, res) => {
+    const proposal = await getProposal(vaultClient, req.params.id);
+    if (!proposal) {
+      res.status(404).json({error: "AI proposal was not found."});
+      return;
+    }
+    if (proposal.status !== "pending") {
+      res.status(409).json({error: `This AI proposal is already ${proposal.status}.`, proposal});
+      return;
+    }
+    if (proposal.expiresAt && Date.parse(proposal.expiresAt) < Date.now()) {
+      const expired = await updateProposalStatus(vaultClient, proposal.id, "expired", {
+        actedBy: buildUserActor(req.user, "admin")
+      });
+      res.status(409).json({error: "This AI proposal expired.", proposal: expired});
+      return;
+    }
+    const executed = await executeAiProposal(proposal, req.user);
+    const nextStatus = executed.ok === false ? "failed" : "confirmed";
+    const updated = await updateProposalStatus(vaultClient, proposal.id, nextStatus, {
+      actedBy: buildUserActor(req.user, "admin"),
+      result: executed.payload || executed
+    });
+    await appendEventForUser({
+      domain: "ai",
+      eventType: nextStatus === "confirmed" ? "ai-proposal-confirmed" : "ai-proposal-failed",
+      severity: nextStatus === "confirmed" ? "info" : "warning",
+      user: req.user,
+      targetType: "ai-proposal",
+      targetId: proposal.id,
+      message: `${req.user.username} confirmed AI proposal ${proposal.id}.`,
+      metadata: {
+        toolId: proposal.toolId,
+        result: executed.payload || executed
+      }
+    });
+    res.status(executed.status || (executed.ok === false ? 502 : 200)).json({
+      proposal: updated,
+      result: executed.payload || executed
+    });
+  }));
+
+  app.get("/api/moon-v3/admin/system/ai", requireAiRead(async (_req, res) => {
+    const [oracle, oracleHealth, oracleStatus, localAiStatus, localAiProfile, tools, proposals] = await Promise.all([
       readOracleSettings(),
       safeJson(serviceJson(config.oracleBaseUrl, "/health", {timeoutMs: 2200})),
       safeJson(serviceJson(config.oracleBaseUrl, "/api/status", {timeoutMs: 2200})),
       safeJson(serviceJson(config.wardenBaseUrl, "/api/localai/status", {timeoutMs: 3000})),
-      safeJson(serviceJson(config.wardenBaseUrl, "/api/localai/profile", {timeoutMs: 2200}))
+      safeJson(serviceJson(config.wardenBaseUrl, "/api/localai/profile", {timeoutMs: 2200})),
+      buildToolPayload(vaultClient),
+      readAiProposals(vaultClient)
     ]);
     const modelProvider = normalizeString(oracle?.provider, "openai").toLowerCase();
     const safeModelProvider = ["openai", "localai"].includes(modelProvider) ? modelProvider : "openai";
@@ -2995,15 +3548,17 @@ export const registerMoonV3Routes = (app, {
       oracleStatus: oracleStatus.payload || oracleStatus,
       localAi: localAiStatus.payload || localAiStatus,
       localAiProfile: localAiProfile.payload || localAiProfile,
-      modelOptions: modelOptions.payload || modelOptions
+      modelOptions: modelOptions.payload || modelOptions,
+      tools,
+      proposals: normalizeArray(proposals?.proposals).slice(-10).reverse()
     });
   }));
 
-  app.put("/api/moon-v3/admin/system/ai/oracle", requireSettingsWrite(async (req, res) => {
+  app.put("/api/moon-v3/admin/system/ai/oracle", requireAiWrite(async (req, res) => {
     res.json(await persistOracleSettings(req.user, req.body || {}));
   }));
 
-  app.get("/api/moon-v3/admin/system/ai/models", requireSystemRead(async (req, res) => {
+  app.get("/api/moon-v3/admin/system/ai/models", requireAiRead(async (req, res) => {
     const requestedProvider = normalizeString(req.query.provider, "openai").toLowerCase();
     const provider = ["openai", "localai"].includes(requestedProvider) ? requestedProvider : "openai";
     const result = await safeJson(serviceJson(config.oracleBaseUrl, `/api/models?provider=${encodeURIComponent(provider)}`, {
@@ -3026,89 +3581,22 @@ export const registerMoonV3Routes = (app, {
     };
   };
 
-  app.post("/api/moon-v3/admin/system/ai/localai/install", requireSystemRoot(async (req, res) => {
-    const oracleSettings = await readLocalAiActionSettings(req.body || {});
-    await syncWardenLocalAiConfig(oracleSettings);
-    const result = await safeJson(serviceJson(config.wardenBaseUrl, "/api/localai/actions/install", {
-      method: "POST",
-      body: {
-        requestedBy: {
-          discordUserId: normalizeString(req.user?.discordUserId),
-          username: normalizeString(req.user?.username, "Admin")
-        }
-      },
-      timeoutMs: 10000
-    }));
-    await appendEvent({
-      ...buildUserActor(req.user, "admin"),
-      domain: "system",
-      eventType: "localai-install-requested",
-      severity: "info",
-      targetType: "service",
-      targetId: "scriptarr-warden",
-      message: `${req.user.username} started the LocalAI install flow from Moon admin AI.`,
-      metadata: {
-        result: result.payload || result
-      }
-    });
+  app.post("/api/moon-v3/admin/system/ai/localai/install", requireAiRoot(async (req, res) => {
+    const result = await runLocalAiLifecycle(req.user, "install", req.body || {});
     res.status(result.status || (result.ok === false ? 502 : 200)).json(result.payload || result);
   }));
 
-  app.post("/api/moon-v3/admin/system/ai/localai/start", requireSystemRoot(async (req, res) => {
-    const oracleSettings = await readLocalAiActionSettings(req.body || {});
-    await syncWardenLocalAiConfig(oracleSettings);
-    const result = await safeJson(serviceJson(config.wardenBaseUrl, "/api/localai/actions/start", {
-      method: "POST",
-      body: {
-        requestedBy: {
-          discordUserId: normalizeString(req.user?.discordUserId),
-          username: normalizeString(req.user?.username, "Admin")
-        }
-      },
-      timeoutMs: 10000
-    }));
-    await appendEvent({
-      ...buildUserActor(req.user, "admin"),
-      domain: "system",
-      eventType: "localai-start-requested",
-      severity: "info",
-      targetType: "service",
-      targetId: "scriptarr-warden",
-      message: `${req.user.username} started LocalAI from Moon admin AI.`,
-      metadata: {
-        result: result.payload || result
-      }
-    });
+  app.post("/api/moon-v3/admin/system/ai/localai/start", requireAiRoot(async (req, res) => {
+    const result = await runLocalAiLifecycle(req.user, "start", req.body || {});
     res.status(result.status || (result.ok === false ? 502 : 200)).json(result.payload || result);
   }));
 
-  app.post("/api/moon-v3/admin/system/ai/localai/remove", requireSystemRoot(async (req, res) => {
-    const result = await safeJson(serviceJson(config.wardenBaseUrl, "/api/localai/actions/remove", {
-      method: "POST",
-      body: {
-        requestedBy: {
-          discordUserId: normalizeString(req.user?.discordUserId),
-          username: normalizeString(req.user?.username, "Admin")
-        }
-      },
-      timeoutMs: 10000
-    }));
-    await appendEvent({
-      ...buildUserActor(req.user, "admin"),
-      domain: "system",
-      eventType: "localai-remove-requested",
-      severity: "info",
-      targetType: "service",
-      targetId: "scriptarr-warden",
-      message: `${req.user.username} requested LocalAI removal from Moon admin AI.`,
-      metadata: {
-        result: result.payload || result
-      }
-    });
+  app.post("/api/moon-v3/admin/system/ai/localai/remove", requireAiRoot(async (req, res) => {
+    const result = await runLocalAiLifecycle(req.user, "remove", req.body || {});
     res.status(result.status || (result.ok === false ? 502 : 200)).json(result.payload || result);
   }));
 
-  app.post("/api/moon-v3/admin/system/ai/test", requireSystemRead(async (req, res) => {
+  app.post("/api/moon-v3/admin/system/ai/test", requireAiRead(async (req, res) => {
     const message = normalizeString(req.body?.message, "Say hello from Scriptarr.");
     const result = await safeJson(serviceJson(config.oracleBaseUrl, "/api/chat", {
       method: "POST",
@@ -3165,11 +3653,11 @@ export const registerMoonV3Routes = (app, {
   }));
 
     app.get("/api/moon-v3/user/home", withUser(requireUser, async (req, res) => {
-      const [titles, requests, userLibrary] = await Promise.all([
+      const [titles, requests] = await Promise.all([
         loadLibrary(),
-      loadRequests(),
-      loadUserLibraryState(req.user.discordUserId)
-    ]);
+        loadRequests()
+      ]);
+      const userLibrary = await loadUserLibraryState(req.user.discordUserId, titles);
 
     res.json(buildMoonHomePayload({
       titles: userLibrary.titles.length ? userLibrary.titles : titles,
@@ -3305,8 +3793,27 @@ export const registerMoonV3Routes = (app, {
     res.json({apiKey: sanitizeApiKeyRecord(apiKey)});
   }));
 
-  app.get("/api/moon-v3/user/library", withUser(requireUser, async (_req, res) => {
+  app.get("/api/moon-v3/user/library", withUser(requireUser, async (req, res) => {
+    if (normalizeString(req.query.view) === "card") {
+      res.json(buildLibraryCardPage(await loadLibraryCards(), req.query));
+      return;
+    }
     res.json({titles: await loadLibrary()});
+  }));
+
+  app.get("/api/moon-v3/user/library/cover/:titleId/source", withUser(requireUser, async (req, res) => {
+    const title = await loadLibraryTitle(req.params.titleId);
+    const card = title ? toTitleCardSummary(title) : null;
+    if (!card?.id || !card.coverUrl) {
+      res.status(404).json({error: "Cover source not found."});
+      return;
+    }
+    res.json({
+      titleId: card.id,
+      coverUrl: card.coverUrl,
+      coverRevision: card.coverRevision,
+      updatedAt: card.updatedAt
+    });
   }));
 
   app.get("/api/moon-v3/user/title/:titleId", withUser(requireUser, async (req, res) => {

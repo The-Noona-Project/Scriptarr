@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import {buildReleaseChannelPayload, createFollowNotifier} from "../lib/followNotifier.mjs";
+import {
+  buildDownloadAllDirectMessagePayload,
+  buildReleaseChannelPayload,
+  createFollowNotifier
+} from "../lib/followNotifier.mjs";
 
 const waitFor = async (predicate, timeoutMs = 500) => {
   const started = Date.now();
@@ -23,6 +27,36 @@ test("release channel payload includes title, chapter, and read link", () => {
   assert.match(payload.content, /Dandadan/);
   assert.match(payload.content, /Chapter 42/);
   assert.match(payload.content, /https:\/\/pax-kun.com\/reader/);
+});
+
+test("downloadall payload uses compact content and grouped embed fields", () => {
+  const payload = buildDownloadAllDirectMessagePayload({
+    status: "paused",
+    runId: "bulkrun_cae17f4559204bb1bdc449632596bda0",
+    batchesPerApproval: 5,
+    linkUrl: "https://pax-kun.com/admin/activity/queue",
+    summary: {
+      completedBatches: 5,
+      remainingBatches: 99,
+      completedTitles: 149,
+      queued: 622,
+      appended: 38,
+      skippedCompleted: 515,
+      skippedCurrent: 330,
+      failedTitles: 473,
+      staleTitles: 0,
+      currentBatchLabel: "B Manga"
+    }
+  }, "https://pax-kun.com");
+
+  assert.match(payload.content, /Downloadall paused after 5 batch/);
+  assert.match(payload.content, /React ✅/);
+  assert.doesNotMatch(payload.content, /queued 622, appended 38, skipped 515/);
+  assert.equal(payload.embeds[0].title, "Scriptarr downloadall Paused");
+  assert.equal(payload.embeds[0].url, "https://pax-kun.com/admin/activity/queue");
+  assert.equal(payload.embeds[0].fields.some((field) => field.name === "Progress" && /99/.test(field.value)), true);
+  assert.equal(payload.embeds[0].fields.some((field) => field.name === "Needs attention" && /473/.test(field.value)), true);
+  assert.equal(payload.embeds[0].fields.some((field) => field.name === "Next action" && /next \*\*5\*\*/i.test(field.value)), true);
 });
 
 test("portal release notifier sends channel messages and acks after delivery", async () => {

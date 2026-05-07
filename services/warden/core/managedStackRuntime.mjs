@@ -87,6 +87,80 @@ const includesAll = (actual, desired) => desired.every((entry) => actual.include
 
 const resolveRestartPolicy = (descriptor) => descriptor.restartPolicy || "no";
 
+const valuesForOption = (extraArgs = [], option) => {
+  const values = [];
+  const normalizedOption = normalizeString(option);
+  for (let index = 0; index < extraArgs.length; index += 1) {
+    const entry = normalizeString(extraArgs[index]);
+    if (entry === normalizedOption && index + 1 < extraArgs.length) {
+      values.push(normalizeString(extraArgs[index + 1]));
+      index += 1;
+      continue;
+    }
+    if (entry.startsWith(`${normalizedOption}=`)) {
+      values.push(normalizeString(entry.slice(normalizedOption.length + 1)));
+    }
+  }
+  return values.filter(Boolean);
+};
+
+/**
+ * Resolve desired Linux capabilities from descriptor extra Docker arguments.
+ *
+ * @param {string[]} extraArgs Docker CLI arguments
+ * @returns {string[]} normalized capabilities
+ */
+export const desiredCapabilitiesForExtraArgs = (extraArgs = []) =>
+  valuesForOption(extraArgs, "--cap-add")
+    .map((entry) => entry.toUpperCase())
+    .sort();
+
+/**
+ * Resolve actual Linux capabilities from Docker inspect output.
+ *
+ * @param {Record<string, unknown>} inspect Docker inspect payload
+ * @returns {string[]} normalized capabilities
+ */
+export const actualCapabilitiesForInspect = (inspect) =>
+  (inspect?.HostConfig?.CapAdd || [])
+    .map((entry) => normalizeString(entry).toUpperCase())
+    .filter(Boolean)
+    .sort();
+
+const normalizeDeviceSpec = (spec) => {
+  const [hostPath, containerPath] = normalizeString(spec).split(":");
+  const host = normalizeString(hostPath);
+  return host ? `${host}=>${normalizeString(containerPath) || host}` : "";
+};
+
+/**
+ * Resolve desired device bindings from descriptor extra Docker arguments.
+ *
+ * @param {string[]} extraArgs Docker CLI arguments
+ * @returns {string[]} normalized device bindings
+ */
+export const desiredDevicesForExtraArgs = (extraArgs = []) =>
+  valuesForOption(extraArgs, "--device")
+    .map(normalizeDeviceSpec)
+    .filter(Boolean)
+    .sort();
+
+/**
+ * Resolve actual device bindings from Docker inspect output.
+ *
+ * @param {Record<string, unknown>} inspect Docker inspect payload
+ * @returns {string[]} normalized device bindings
+ */
+export const actualDevicesForInspect = (inspect) =>
+  (inspect?.HostConfig?.Devices || [])
+    .map((entry) => {
+      const host = normalizeString(entry?.PathOnHost);
+      const container = normalizeString(entry?.PathInContainer) || host;
+      return host ? `${host}=>${container}` : "";
+    })
+    .filter(Boolean)
+    .sort();
+
 const toNanoseconds = (value) => {
   const normalized = normalizeString(value).toLowerCase();
   if (!normalized) {
@@ -338,6 +412,16 @@ export const createManagedStackRuntime = ({env = process.env, logger}) => {
       reasons.push("healthCheck");
     }
 
+    const desiredCapabilities = desiredCapabilitiesForExtraArgs(descriptor.extraArgs);
+    if (desiredCapabilities.length && !includesAll(actualCapabilitiesForInspect(inspect), desiredCapabilities)) {
+      reasons.push("capabilities");
+    }
+
+    const desiredDevices = desiredDevicesForExtraArgs(descriptor.extraArgs);
+    if (desiredDevices.length && !includesAll(actualDevicesForInspect(inspect), desiredDevices)) {
+      reasons.push("devices");
+    }
+
     if (normalizeString(inspect?.HostConfig?.RestartPolicy?.Name || "no") !== resolveRestartPolicy(descriptor)) {
       reasons.push("restartPolicy");
     }
@@ -406,6 +490,7 @@ export const createManagedStackRuntime = ({env = process.env, logger}) => {
         networkAliases: descriptor.networkAliases,
         mounts: descriptor.mounts,
         publishedPorts: descriptor.publishedPorts,
+        extraArgs: descriptor.extraArgs,
         healthCheck: descriptor.healthCheck,
         labels: descriptor.labels,
         restartPolicy: descriptor.restartPolicy,
@@ -451,6 +536,7 @@ export const createManagedStackRuntime = ({env = process.env, logger}) => {
         networkAliases: descriptor.networkAliases,
         mounts: descriptor.mounts,
         publishedPorts: descriptor.publishedPorts,
+        extraArgs: descriptor.extraArgs,
         healthCheck: descriptor.healthCheck,
         labels: descriptor.labels,
         restartPolicy: descriptor.restartPolicy,
@@ -520,6 +606,7 @@ export const createManagedStackRuntime = ({env = process.env, logger}) => {
       networkAliases: descriptor.networkAliases,
       mounts: descriptor.mounts,
       publishedPorts: descriptor.publishedPorts,
+      extraArgs: descriptor.extraArgs,
       healthCheck: descriptor.healthCheck,
       labels: descriptor.labels,
       restartPolicy: descriptor.restartPolicy,

@@ -27,6 +27,9 @@ Moon 3.0 also includes a native reader flow with:
 
 Moon still accepts the older untyped title and reader URLs as backward-compatible shims, but the typed paths above are
 the canonical links emitted by the user app.
+Browse and library shelves use compact paginated title-card APIs so large catalogs do not send chapter arrays to the
+browser. Moon also owns a derived WebP cover cache: cards prefer Sage-provided `coverThumbUrl` values, cache files are
+stored outside authoritative catalog state, and `/admin/system/tasks` includes a safe `Optimize cover images` action.
 Moon's request and admin add-title flows now share the same metadata-first intake engine. Readers pick metadata only,
 and Scriptarr saves that metadata snapshot with the request so moderators can review the upstream metadata site and
 choose the exact Raven source later. Admin add-title uses the same intake base but lets staff pick a concrete source
@@ -133,7 +136,9 @@ Moon admin also owns the general Settings hub. It manages brokered `moon.brandin
 variants, database size summary with a Settings-only DB explorer link, toast notification preferences, project credit
 and support links, and compact Raven VPN, provider, request workflow, and Discord essentials. Section drafts stay dirty
 locally until their save succeeds, and Settings-owned saves use explicit Moon v3 endpoints rather than older generic
-admin routes.
+admin routes. The VPN card shows persisted settings beside Raven runtime capability, settings freshness, protected
+tunnel state, `armed / idle` lazy-connect state, and the latest tunnel or broker error. Its test action stays
+same-origin through Moon and Sage, then asks Raven to start the same fail-closed OpenVPN path used by downloads.
 The DB explorer stays same-origin through Moon -> Sage -> Vault, requires the `database` admin domain, redacts
 sensitive values, and only allows validated settings JSON edits.
 The signed-in admin shell now also uses the Discord-backed user avatar when one is available, with an initials fallback
