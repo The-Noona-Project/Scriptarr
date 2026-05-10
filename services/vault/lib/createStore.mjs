@@ -384,6 +384,165 @@ const applyRequestUpdate = (existing, update = {}) => {
 };
 
 const sortRavenTitles = (titles) => [...titles].sort((left, right) => String(left.title || "").localeCompare(String(right.title || "")));
+const RAVEN_TITLE_CARD_PAGE_SIZE_DEFAULT = 60;
+const RAVEN_TITLE_CARD_PAGE_SIZE_MAX = 100;
+const normalizeTypeSlug = (value, fallback = "manga") => {
+  const normalized = normalizeScalarString(value, fallback)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+/, "")
+    .replace(/-+$/, "");
+  return normalized || fallback;
+};
+const normalizeCardLetter = (value) => {
+  const normalized = normalizeScalarString(value).toUpperCase();
+  return /^[A-Z]$/.test(normalized) ? normalized : normalized === "#" ? "#" : "";
+};
+const resolveCardLetter = (title = "") => {
+  const first = normalizeScalarString(title).trim().toUpperCase().charAt(0);
+  return /^[A-Z]$/.test(first) ? first : "#";
+};
+const parseCardPageSize = (value) => Math.min(
+  RAVEN_TITLE_CARD_PAGE_SIZE_MAX,
+  Math.max(1, Number.parseInt(String(value || RAVEN_TITLE_CARD_PAGE_SIZE_DEFAULT), 10) || RAVEN_TITLE_CARD_PAGE_SIZE_DEFAULT)
+);
+const parseCardCursor = (value) => Math.max(0, Number.parseInt(String(value || 0), 10) || 0);
+const normalizeCardSort = (value) => {
+  const normalized = normalizeScalarString(value, "title").toLowerCase();
+  return ["recent", "updated"].includes(normalized) ? "recent" : "title";
+};
+const normalizeCardIds = (value) => Array.from(new Set(
+  (Array.isArray(value) ? value : String(value || "").split(","))
+    .map((entry) => normalizeScalarString(entry))
+    .filter(Boolean)
+)).slice(0, RAVEN_TITLE_CARD_PAGE_SIZE_MAX);
+const compactStringArray = (value, maxItems = 8) => {
+  const seen = new Set();
+  const entries = [];
+  for (const item of Array.isArray(value) ? value : []) {
+    const normalized = normalizeScalarString(item);
+    if (!normalized) {
+      continue;
+    }
+    const key = normalized.toLowerCase();
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    entries.push(normalized);
+    if (entries.length >= maxItems) {
+      break;
+    }
+  }
+  return entries;
+};
+const truncateText = (value, maxLength = 280) => {
+  const normalized = normalizeScalarString(value);
+  return normalized.length > maxLength ? `${normalized.slice(0, Math.max(0, maxLength - 3)).trim()}...` : normalized;
+};
+const toRavenTitleCard = (title = {}) => ({
+  id: normalizeScalarString(title.id),
+  title: normalizeScalarString(title.title, "Untitled"),
+  mediaType: normalizeScalarString(title.mediaType, "manga"),
+  libraryTypeLabel: normalizeScalarString(title.libraryTypeLabel, normalizeScalarString(title.mediaType, "Manga")),
+  libraryTypeSlug: normalizeTypeSlug(title.libraryTypeSlug || title.mediaType),
+  status: normalizeScalarString(title.status, "active"),
+  latestChapter: normalizeScalarString(title.latestChapter, "Unknown"),
+  coverAccent: normalizeScalarString(title.coverAccent, "#4f8f88"),
+  coverUrl: normalizeScalarString(title.coverUrl),
+  coverThumbUrl: "",
+  summary: truncateText(title.summary, 280),
+  releaseLabel: normalizeScalarString(title.releaseLabel),
+  chapterCount: Number.parseInt(String(title.chapterCount || 0), 10) || 0,
+  chaptersDownloaded: Number.parseInt(String(title.chaptersDownloaded || 0), 10) || 0,
+  author: normalizeScalarString(title.author),
+  tags: compactStringArray(title.tags, 8),
+  aliases: compactStringArray(title.aliases, 8),
+  metadataProvider: normalizeScalarString(title.metadataProvider),
+  metadataMatchedAt: toIsoTimestamp(title.metadataMatchedAt),
+  updatedAt: toIsoTimestamp(title.updatedAt),
+  qualityStatus: normalizeRavenQualityStatus(title.qualityStatus),
+  cleanChapterCount: Math.max(0, Number.parseInt(String(title.cleanChapterCount || 0), 10) || 0),
+  partialChapterCount: Math.max(0, Number.parseInt(String(title.partialChapterCount || 0), 10) || 0),
+  missingContentCount: Math.max(0, Number.parseInt(String(title.missingContentCount || 0), 10) || 0),
+  qualitySummary: truncateText(title.qualitySummary, 180)
+});
+const buildRavenTitleCardPage = (titles = [], query = {}) => {
+  const q = normalizeScalarString(query.q || query.query).toLowerCase();
+  const type = normalizeTypeSlug(query.type || "", "");
+  const letter = normalizeCardLetter(query.letter);
+  const exactIds = normalizeCardIds(query.ids);
+  const pageSize = parseCardPageSize(query.pageSize);
+  const cursor = parseCardCursor(query.cursor);
+  const sort = normalizeCardSort(query.sort);
+  const cards = (Array.isArray(titles) ? titles : []).map(toRavenTitleCard).filter((card) => {
+    if (exactIds.length && !exactIds.includes(card.id)) {
+      return false;
+    }
+    if (type && normalizeTypeSlug(card.libraryTypeSlug || card.mediaType) !== type) {
+      return false;
+    }
+    if (q) {
+      const haystack = [
+        card.title,
+        card.libraryTypeLabel,
+        card.libraryTypeSlug,
+        card.mediaType,
+        card.status,
+        card.author,
+        ...card.tags,
+        ...card.aliases
+      ].filter(Boolean).join(" ").toLowerCase();
+      if (!haystack.includes(q)) {
+        return false;
+      }
+    }
+    return true;
+  });
+  cards.sort((left, right) => {
+    if (exactIds.length) {
+      return exactIds.indexOf(left.id) - exactIds.indexOf(right.id);
+    }
+    if (sort === "recent") {
+      const delta = (Date.parse(right.updatedAt || right.metadataMatchedAt || "") || 0)
+        - (Date.parse(left.updatedAt || left.metadataMatchedAt || "") || 0);
+      if (delta !== 0) {
+        return delta;
+      }
+    }
+    const titleCompare = normalizeScalarString(left.title).localeCompare(normalizeScalarString(right.title), "en", {
+      numeric: true,
+      sensitivity: "base"
+    });
+    return titleCompare || normalizeScalarString(left.id).localeCompare(normalizeScalarString(right.id), "en", {numeric: true});
+  });
+  const byLetter = {"#": 0};
+  const byType = {};
+  for (let index = 0; index < 26; index += 1) {
+    byLetter[String.fromCharCode(65 + index)] = 0;
+  }
+  for (const card of cards) {
+    const resolvedLetter = resolveCardLetter(card.title);
+    byLetter[resolvedLetter] = (byLetter[resolvedLetter] || 0) + 1;
+    const resolvedType = normalizeTypeSlug(card.libraryTypeSlug || card.mediaType);
+    byType[resolvedType] = (byType[resolvedType] || 0) + 1;
+  }
+  const letterFiltered = letter ? cards.filter((card) => resolveCardLetter(card.title) === letter) : cards;
+  const page = letterFiltered.slice(cursor, cursor + pageSize);
+  const nextOffset = cursor + page.length;
+  return {
+    titles: page,
+    counts: {total: cards.length, byLetter, byType},
+    filters: {q, type, letter, ids: exactIds, pageSize, sort},
+    pageInfo: {
+      cursor: String(cursor),
+      nextCursor: nextOffset < letterFiltered.length ? String(nextOffset) : "",
+      hasMore: nextOffset < letterFiltered.length,
+      pageSize,
+      total: letterFiltered.length
+    }
+  };
+};
 const sortRavenChapters = (chapters) => [...chapters].sort((left, right) => {
   const leftNumber = Number.parseFloat(String(left.chapterNumber || "0"));
   const rightNumber = Number.parseFloat(String(right.chapterNumber || "0"));
@@ -1222,6 +1381,9 @@ const createMemoryStore = () => {
         normalizeRavenTitle(title, Array.from((state.ravenChapters.get(title.id) || new Map()).values()))
       ));
     },
+    async listRavenTitleCards(query = {}) {
+      return buildRavenTitleCardPage(Array.from(state.ravenTitles.values()), query);
+    },
     async getRavenTitle(titleId) {
       const title = state.ravenTitles.get(titleId);
       if (!title) {
@@ -1620,6 +1782,8 @@ const createMysqlStore = (config) => {
     await ignoreKnownAlterError("ALTER TABLE raven_titles ADD COLUMN partial_chapter_count INT NOT NULL DEFAULT 0");
     await ignoreKnownAlterError("ALTER TABLE raven_titles ADD COLUMN missing_content_count INT NOT NULL DEFAULT 0");
     await ignoreKnownAlterError("ALTER TABLE raven_titles ADD COLUMN quality_summary TEXT NULL");
+    await ignoreKnownAlterError("ALTER TABLE raven_titles ADD INDEX idx_raven_titles_type_title (library_type_slug, title)");
+    await ignoreKnownAlterError("ALTER TABLE raven_titles ADD INDEX idx_raven_titles_updated (updated_at)");
     await ignoreKnownAlterError("ALTER TABLE raven_chapters ADD COLUMN quality_status VARCHAR(64) NOT NULL DEFAULT 'clean'");
     await ignoreKnownAlterError("ALTER TABLE raven_chapters ADD COLUMN expected_page_count INT NOT NULL DEFAULT 0");
     await ignoreKnownAlterError("ALTER TABLE raven_chapters ADD COLUMN missing_page_count INT NOT NULL DEFAULT 0");
@@ -2861,6 +3025,139 @@ const createMysqlStore = (config) => {
         chaptersByTitle.get(row.title_id).push(toRavenChapter(row));
       }
       return titleRows.map((row) => toRavenTitle(row, chaptersByTitle.get(row.title_id) || []));
+    },
+    async listRavenTitleCards(query = {}) {
+      const sort = normalizeCardSort(query.sort);
+      const orderBy = sort === "recent"
+        ? "updated_at DESC, title ASC, title_id ASC"
+        : "title ASC, title_id ASC";
+      const q = normalizeScalarString(query.q || query.query).toLowerCase();
+      const type = normalizeTypeSlug(query.type || "", "");
+      const letter = normalizeCardLetter(query.letter);
+      const exactIds = normalizeCardIds(query.ids);
+      const pageSize = parseCardPageSize(query.pageSize);
+      const cursor = parseCardCursor(query.cursor);
+      const whereClauses = [];
+      const whereParams = [];
+      const cardColumns = `
+        title_id, title, media_type, library_type_label, library_type_slug, status_name, latest_chapter,
+        cover_accent, summary, release_label, chapter_count, chapters_downloaded, author_name,
+        tags_json, aliases_json, metadata_provider, metadata_matched_at, cover_url,
+        quality_status, clean_chapter_count, partial_chapter_count, missing_content_count, quality_summary, updated_at
+      `;
+      const toTitleCardRow = (row) => toRavenTitleCard({
+        id: row.title_id,
+        title: row.title,
+        mediaType: row.media_type,
+        libraryTypeLabel: row.library_type_label,
+        libraryTypeSlug: row.library_type_slug,
+        status: row.status_name,
+        latestChapter: row.latest_chapter,
+        coverAccent: row.cover_accent,
+        summary: row.summary,
+        releaseLabel: row.release_label,
+        chapterCount: row.chapter_count,
+        chaptersDownloaded: row.chapters_downloaded,
+        author: row.author_name,
+        tags: parseJsonColumn(row.tags_json, []),
+        aliases: parseJsonColumn(row.aliases_json, []),
+        metadataProvider: row.metadata_provider,
+        metadataMatchedAt: row.metadata_matched_at ? row.metadata_matched_at.toISOString() : null,
+        coverUrl: row.cover_url,
+        qualityStatus: row.quality_status,
+        cleanChapterCount: row.clean_chapter_count,
+        partialChapterCount: row.partial_chapter_count,
+        missingContentCount: row.missing_content_count,
+        qualitySummary: row.quality_summary,
+        updatedAt: row.updated_at ? row.updated_at.toISOString() : null
+      });
+
+      if (type) {
+        whereClauses.push("LOWER(COALESCE(NULLIF(library_type_slug, ''), media_type)) = ?");
+        whereParams.push(type);
+      }
+      if (exactIds.length) {
+        whereClauses.push(`title_id IN (${exactIds.map(() => "?").join(", ")})`);
+        whereParams.push(...exactIds);
+      }
+      if (q) {
+        const pattern = `%${q}%`;
+        whereClauses.push(`(
+          LOWER(title) LIKE ?
+          OR LOWER(COALESCE(library_type_label, '')) LIKE ?
+          OR LOWER(COALESCE(library_type_slug, '')) LIKE ?
+          OR LOWER(media_type) LIKE ?
+          OR LOWER(status_name) LIKE ?
+          OR LOWER(COALESCE(author_name, '')) LIKE ?
+          OR LOWER(CAST(tags_json AS CHAR)) LIKE ?
+          OR LOWER(CAST(aliases_json AS CHAR)) LIKE ?
+        )`);
+        whereParams.push(pattern, pattern, pattern, pattern, pattern, pattern, pattern, pattern);
+      }
+
+      const baseWhereSql = whereClauses.length ? `WHERE ${whereClauses.join(" AND ")}` : "";
+      const [countRows] = await pool.query(`
+        SELECT title, COALESCE(NULLIF(library_type_slug, ''), media_type) AS type_slug
+        FROM raven_titles
+        ${baseWhereSql}
+      `, whereParams);
+      const byLetter = {"#": 0};
+      const byType = {};
+      for (let index = 0; index < 26; index += 1) {
+        byLetter[String.fromCharCode(65 + index)] = 0;
+      }
+      for (const row of countRows) {
+        const resolvedLetter = resolveCardLetter(row.title);
+        byLetter[resolvedLetter] = (byLetter[resolvedLetter] || 0) + 1;
+        const resolvedType = normalizeTypeSlug(row.type_slug || "manga");
+        byType[resolvedType] = (byType[resolvedType] || 0) + 1;
+      }
+
+      const pageWhereClauses = [...whereClauses];
+      const pageWhereParams = [...whereParams];
+      const pageOrderParams = [];
+      const letterTotal = letter
+        ? countRows.filter((row) => resolveCardLetter(row.title) === letter).length
+        : countRows.length;
+      if (letter) {
+        if (letter === "#") {
+          pageWhereClauses.push("UPPER(LEFT(TRIM(title), 1)) NOT BETWEEN 'A' AND 'Z'");
+        } else {
+          pageWhereClauses.push("UPPER(LEFT(TRIM(title), 1)) = ?");
+          pageWhereParams.push(letter);
+        }
+      }
+      const pageWhereSql = pageWhereClauses.length ? `WHERE ${pageWhereClauses.join(" AND ")}` : "";
+      const resolvedOrderBy = exactIds.length
+        ? `CASE title_id ${exactIds.map(() => "WHEN ? THEN ?").join(" ")} ELSE ? END`
+        : orderBy;
+      if (exactIds.length) {
+        exactIds.forEach((id, index) => {
+          pageOrderParams.push(id, index);
+        });
+        pageOrderParams.push(exactIds.length);
+      }
+      const [titleRows] = await pool.query(`
+        SELECT ${cardColumns}
+        FROM raven_titles
+        ${pageWhereSql}
+        ORDER BY ${resolvedOrderBy}
+        LIMIT ? OFFSET ?
+      `, [...pageWhereParams, ...pageOrderParams, pageSize, cursor]);
+      const titles = titleRows.map(toTitleCardRow);
+      const nextOffset = cursor + titles.length;
+      return {
+        titles,
+        counts: {total: countRows.length, byLetter, byType},
+        filters: {q, type, letter, ids: exactIds, pageSize, sort},
+        pageInfo: {
+          cursor: String(cursor),
+          nextCursor: nextOffset < letterTotal ? String(nextOffset) : "",
+          hasMore: nextOffset < letterTotal,
+          pageSize,
+          total: letterTotal
+        }
+      };
     },
     async getRavenTitle(titleId) {
       const [titleRows] = await pool.query("SELECT * FROM raven_titles WHERE title_id = ? LIMIT 1", [titleId]);

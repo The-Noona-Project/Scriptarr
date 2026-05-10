@@ -1645,6 +1645,10 @@ export const registerInternalBrokerRoutes = (app, {
     res.json(await vaultClient.listRavenTitles());
   }));
 
+  app.get("/api/internal/vault/raven/title-cards", withService(requireService, ["scriptarr-raven"], async (req, res) => {
+    res.json(await vaultClient.listRavenTitleCards(req.query || {}));
+  }));
+
   app.get("/api/internal/vault/raven/titles/:titleId", withService(requireService, ["scriptarr-raven"], async (req, res) => {
     const title = await vaultClient.getRavenTitle(req.params.titleId);
     if (!title) {

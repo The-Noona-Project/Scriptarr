@@ -24,6 +24,11 @@ public final class FakeRavenBrokerClient implements RavenBrokerClient {
     private final Map<String, JsonNode> metadataMatches = new LinkedHashMap<>();
     private final Map<String, JsonNode> jobs = new LinkedHashMap<>();
     private final Map<String, Map<String, JsonNode>> jobTasks = new LinkedHashMap<>();
+    private int listLibraryTitlesCalls;
+    private int listLibraryTitleCardsCalls;
+    private boolean failNextJobTaskWrite;
+    private boolean failNextJobTaskListAfterWriteFailure;
+    private int remainingJobTaskListFailures;
 
     /**
      * Seed a setting value in the fake broker.
@@ -77,11 +82,95 @@ public final class FakeRavenBrokerClient implements RavenBrokerClient {
 
     @Override
     public JsonNode listLibraryTitles() {
+        listLibraryTitlesCalls += 1;
         List<JsonNode> payload = new ArrayList<>();
         for (String titleId : titles.keySet()) {
             payload.add(withChapters(titleId));
         }
         return objectMapper.valueToTree(payload);
+    }
+
+    @Override
+    public JsonNode listLibraryTitleCards(Map<String, String> query) {
+        listLibraryTitleCardsCalls += 1;
+        int pageSize = 60;
+        try {
+            pageSize = Integer.parseInt(query.getOrDefault("pageSize", "60"));
+        } catch (NumberFormatException ignored) {
+            pageSize = 60;
+        }
+        pageSize = Math.min(100, Math.max(1, pageSize));
+        List<String> exactIds = List.of(query.getOrDefault("ids", "").split(",")).stream()
+            .map(String::trim)
+            .filter((entry) -> !entry.isBlank())
+            .distinct()
+            .toList();
+        List<Map<String, Object>> cards = titles.values().stream()
+            .map((title) -> {
+                Map<String, Object> card = new LinkedHashMap<>();
+                card.put("id", title.path("id").asText(""));
+                card.put("title", title.path("title").asText("Untitled"));
+                card.put("mediaType", title.path("mediaType").asText("manga"));
+                card.put("libraryTypeLabel", title.path("libraryTypeLabel").asText(title.path("mediaType").asText("Manga")));
+                card.put("libraryTypeSlug", title.path("libraryTypeSlug").asText(title.path("mediaType").asText("manga")));
+                card.put("status", title.path("status").asText("active"));
+                card.put("latestChapter", title.path("latestChapter").asText("Unknown"));
+                card.put("coverUrl", title.path("coverUrl").asText(""));
+                card.put("chapterCount", title.path("chapterCount").asInt(0));
+                card.put("chaptersDownloaded", title.path("chaptersDownloaded").asInt(0));
+                card.put("updatedAt", title.path("updatedAt").asText(""));
+                return card;
+            })
+            .filter((card) -> exactIds.isEmpty() || exactIds.contains(String.valueOf(card.get("id"))))
+            .sorted((left, right) -> {
+                if (exactIds.isEmpty()) {
+                    return 0;
+                }
+                return Integer.compare(
+                    exactIds.indexOf(String.valueOf(left.get("id"))),
+                    exactIds.indexOf(String.valueOf(right.get("id")))
+                );
+            })
+            .limit(pageSize)
+            .toList();
+        return objectMapper.valueToTree(Map.of(
+            "titles", cards,
+            "counts", Map.of("total", titles.size(), "byLetter", Map.of(), "byType", Map.of()),
+            "pageInfo", Map.of(
+                "cursor", "0",
+                "nextCursor", titles.size() > cards.size() ? String.valueOf(cards.size()) : "",
+                "hasMore", titles.size() > cards.size(),
+                "pageSize", pageSize,
+                "total", titles.size()
+            )
+        ));
+    }
+
+    /**
+     * Count full-library list calls for projection tests.
+     *
+     * @return number of full-title list calls
+     */
+    public int listLibraryTitlesCalls() {
+        return listLibraryTitlesCalls;
+    }
+
+    /**
+     * Count compact-card list calls for projection tests.
+     *
+     * @return number of card-list calls
+     */
+    public int listLibraryTitleCardsCalls() {
+        return listLibraryTitleCardsCalls;
+    }
+
+    /**
+     * Simulate a transient durable job-task write failure followed by a failed
+     * job-task list reload.
+     */
+    public void failNextJobTaskWriteAndFollowingList() {
+        failNextJobTaskWrite = true;
+        failNextJobTaskListAfterWriteFailure = true;
     }
 
     @Override
@@ -152,6 +241,10 @@ public final class FakeRavenBrokerClient implements RavenBrokerClient {
 
     @Override
     public JsonNode listJobTasks(String jobId, String status) {
+        if (remainingJobTaskListFailures > 0) {
+            remainingJobTaskListFailures -= 1;
+            throw new IllegalStateException("Simulated durable job-task list failure.");
+        }
         Map<String, JsonNode> tasks = jobTasks.getOrDefault(jobId, Map.of());
         return objectMapper.valueToTree(tasks.values().stream().filter((task) ->
             status == null || status.isBlank() || status.equals(task.path("status").asText(""))
@@ -160,6 +253,14 @@ public final class FakeRavenBrokerClient implements RavenBrokerClient {
 
     @Override
     public JsonNode putJobTask(String jobId, String taskId, Map<String, Object> payload) {
+        if (failNextJobTaskWrite) {
+            failNextJobTaskWrite = false;
+            if (failNextJobTaskListAfterWriteFailure) {
+                failNextJobTaskListAfterWriteFailure = false;
+                remainingJobTaskListFailures += 1;
+            }
+            throw new IllegalStateException("Simulated durable job-task write failure.");
+        }
         jobTasks.computeIfAbsent(jobId, (ignored) -> new LinkedHashMap<>()).put(taskId, objectMapper.valueToTree(payload));
         return jobTasks.get(jobId).get(taskId);
     }

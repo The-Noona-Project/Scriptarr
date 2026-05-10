@@ -71,7 +71,9 @@ export const createTriviaCommand = ({
           force: true
         });
         await sendInteractionReply(interaction, {
-          content: `Trivia started: ${result?.round?.id || "new round"}.`,
+          content: result?.reused
+            ? `Trivia is already active: ${result?.round?.id || "current round"}.`
+            : `Trivia started: ${result?.round?.id || "new round"}.`,
           ephemeral: true
         });
       } catch (error) {

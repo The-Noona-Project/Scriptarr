@@ -466,6 +466,10 @@ export const createVaultApp = async ({logger = createLogger("VAULT")} = {}) => {
     res.json(await store.listRavenTitles());
   });
 
+  app.get("/api/service/raven/title-cards", async (req, res) => {
+    res.json(await store.listRavenTitleCards(req.query || {}));
+  });
+
   app.get("/api/service/raven/titles/:titleId", async (req, res) => {
     const title = await store.getRavenTitle(req.params.titleId);
     if (!title) {

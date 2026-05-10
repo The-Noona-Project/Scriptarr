@@ -17,6 +17,10 @@
 - Portal owns Noona trivia runtime delivery. It should start/stop rounds through Sage, treat normal messages in the
   configured trivia channel as guesses, post quiet reactions for wrong guesses, announce the first correct winner, and
   acknowledge leaderboard posts only after Discord accepts the message.
+- Keep one active trivia clock. Startup, settings reload, manual starts, wins, and timeouts should reconcile against
+  Sage state, schedule either the active round followups or the next round, and ignore stale timers from older runtime
+  generations. Repeated `/trivia start` during an active round should report the existing round without reposting the
+  clue.
 - Portal may ask Sage -> Oracle for bounded message assistance, but deterministic notification templates stay
   authoritative and acknowledgments still happen only after a Discord send succeeds.
 - Portal also sends deduped system DMs for LocalAI lifecycle jobs exposed by Sage, including install, start, and

@@ -88,6 +88,7 @@ const createSageStub = ({requests = []} = {}) => Promise.resolve(http.createServ
       ravenVpn: {enabled: false, region: "us_california"},
       metadataProviders: {providers: []},
       downloadProviders: {providers: []},
+      ravenDownloadRuntime: {activeTitleDownloads: 2, minActiveTitleDownloads: 1, maxActiveTitleDownloads: 6},
       requestWorkflow: {autoApproveAndDownload: false},
       discord: {guildId: "", superuserId: "", onboarding: {}, runtime: {}},
       toastSettings: {
@@ -218,6 +219,7 @@ const createSageStub = ({requests = []} = {}) => Promise.resolve(http.createServ
   if ([
     "/api/moon-v3/admin/settings/raven/metadata",
     "/api/moon-v3/admin/settings/raven/download-providers",
+    "/api/moon-v3/admin/settings/raven/download-runtime",
     "/api/moon-v3/admin/settings/portal/discord"
   ].includes(requestUrl.pathname) && request.method === "PUT") {
     response.writeHead(200, {"Content-Type": "application/json"});
@@ -597,6 +599,15 @@ test("moon serves branded split entry documents, typed routes, PWA assets, and M
   assert.equal(brandingResponse.status, 200);
   assert.deepEqual(await brandingResponse.json(), {siteName: "Pax Library"});
 
+  const chromeRequestStart = requests.length;
+  const chromeBootstrapResponse = await fetch(`${baseUrl}/api/moon/chrome/bootstrap?returnTo=%2Fbrowse`);
+  assert.equal(chromeBootstrapResponse.status, 200);
+  const chromeBootstrap = await chromeBootstrapResponse.json();
+  assert.deepEqual(chromeBootstrap.branding, {siteName: "Pax Library"});
+  assert.equal(chromeBootstrap.bootstrap.ownerClaimed, true);
+  assert.equal(chromeBootstrap.user, null);
+  assert.equal(requests.slice(chromeRequestStart).some((entry) => entry.url.startsWith("/api/auth/discord/url")), false);
+
   const discordSettingsResponse = await fetch(`${baseUrl}/api/moon/admin/settings/portal/discord`);
   assert.equal(discordSettingsResponse.status, 200);
   assert.deepEqual(await discordSettingsResponse.json(), {
@@ -772,6 +783,13 @@ test("moon serves branded split entry documents, typed routes, PWA assets, and M
   });
   assert.equal(downloadProvidersSave.status, 200);
 
+  const downloadRuntimeSave = await fetch(`${baseUrl}/api/moon/v3/admin/settings/raven/download-runtime`, {
+    method: "PUT",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({activeTitleDownloads: 4})
+  });
+  assert.equal(downloadRuntimeSave.status, 200);
+
   const discordBasicsSave = await fetch(`${baseUrl}/api/moon/v3/admin/settings/portal/discord`, {
     method: "PUT",
     headers: {"Content-Type": "application/json"},
@@ -860,6 +878,7 @@ test("moon serves branded split entry documents, typed routes, PWA assets, and M
   assert.ok(requests.some((entry) => entry.method === "PUT" && entry.url === "/api/moon-v3/admin/settings/branding/logo"));
   assert.ok(requests.some((entry) => entry.method === "PUT" && entry.url === "/api/moon-v3/admin/settings/raven/metadata"));
   assert.ok(requests.some((entry) => entry.method === "PUT" && entry.url === "/api/moon-v3/admin/settings/raven/download-providers"));
+  assert.ok(requests.some((entry) => entry.method === "PUT" && entry.url === "/api/moon-v3/admin/settings/raven/download-runtime"));
   assert.ok(requests.some((entry) => entry.method === "PUT" && entry.url === "/api/moon-v3/admin/settings/portal/discord"));
   assert.ok(requests.some((entry) => entry.method === "GET" && entry.url === "/api/moon-v3/admin/users"));
   assert.ok(requests.some((entry) => entry.method === "GET" && entry.url === "/api/moon-v3/admin/requests"));

@@ -7,10 +7,10 @@
 import {useEffect, useRef, useState} from "react";
 import Link from "next/link";
 import {usePathname} from "next/navigation";
-import {Avatar, Button} from "@once-ui-system/core";
 import {logoutMoonSession} from "../lib/api.js";
 import {buildProfilePath, canAccessAdmin} from "../lib/routes.js";
 import {buildAvatarProps} from "../lib/profile.js";
+import {Avatar, Button} from "./UiPrimitives.jsx";
 
 /**
  * Render Moon's signed-in avatar menu or the signed-out login action.

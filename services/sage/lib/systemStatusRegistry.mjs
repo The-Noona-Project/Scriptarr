@@ -42,8 +42,11 @@ export const buildEndpointRegistry = () => [
     endpoints: [
       endpoint("moon", "GET", "/health", {auth: "public", description: "Moon Express health is checked by browser context and external uptime monitors."}),
       endpoint("moon", "GET", "/api/moon/auth/status", {auth: "browser-session", description: "Current browser session."}),
+      endpoint("moon", "GET", "/api/moon/chrome/bootstrap", {auth: "browser-session", description: "Collapsed Moon chrome bootstrap payload."}),
       endpoint("moon", "GET", "/api/moon-v3/user/home", {auth: "user-session", description: "User home shelves."}),
-      endpoint("moon", "GET", "/api/moon-v3/admin/system/status", {auth: "admin system.read", description: "This status payload."})
+      endpoint("moon", "GET", "/api/moon-v3/admin/settings/runtime", {auth: "admin settings.read", description: "Settings runtime side payload."}),
+      endpoint("moon", "GET", "/api/moon-v3/admin/system/status", {auth: "admin system.read", description: "This status payload."}),
+      endpoint("moon", "GET", "/api/moon-v3/admin/system/status/runtime", {auth: "admin system.read", description: "Warden runtime side payload."})
     ]
   },
   {

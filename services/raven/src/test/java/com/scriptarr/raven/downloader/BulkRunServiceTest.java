@@ -104,6 +104,37 @@ class BulkRunServiceTest {
         assertEquals(List.of("task_1"), batchResult.get("completedTaskIds"));
     }
 
+    /**
+     * Verify transient broker failures pause the run instead of leaving a
+     * detached worker with a durable running status.
+     *
+     * @throws Exception when the async run does not settle in time
+     */
+    @Test
+    void brokerFailurePausesRunWhenFailureSummaryCannotLoad() throws Exception {
+        FakeRavenBrokerClient brokerClient = new FakeRavenBrokerClient();
+        BulkRunService service = new BulkRunService(
+            new CompletingDownloaderService(),
+            brokerClient,
+            new TestLogger()
+        );
+
+        Map<String, Object> created = service.createRun(Map.of(
+            "type", "manga",
+            "titlegroup", "A",
+            "requestedBy", "owner-1",
+            "start", false
+        ));
+        brokerClient.failNextJobTaskWriteAndFollowingList();
+
+        service.startRun(String.valueOf(created.get("runId")));
+        Map<String, Object> status = awaitStatus(service, String.valueOf(created.get("runId")), "paused");
+
+        assertEquals("paused", status.get("status"));
+        assertEquals(false, status.get("active"));
+        assertTrue(String.valueOf(status.get("message")).contains("Raven could not persist a durable bulk-run batch."));
+    }
+
     private static void assertBatch(Map<String, Object> batch, String group, String type, int sortOrder) {
         Map<String, Object> filters = map(batch.get("filters"));
         assertEquals(group, filters.get("titleGroup"));

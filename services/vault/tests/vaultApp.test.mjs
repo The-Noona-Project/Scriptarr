@@ -507,6 +507,82 @@ test("vault persists Raven titles with cover and managed roots", async () => {
   server.close();
 });
 
+test("vault exposes compact Raven title cards without chapter payloads", async () => {
+  const {app} = await createVaultApp();
+  const server = app.listen(0);
+  const {port} = server.address();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const headers = {
+    "Authorization": "Bearer sage-dev-token",
+    "Content-Type": "application/json"
+  };
+  const upsertTitle = (title) => fetch(`${baseUrl}/api/service/raven/titles/${title.id}`, {
+    method: "PUT",
+    headers,
+    body: JSON.stringify({
+      mediaType: "manga",
+      libraryTypeLabel: "Manga",
+      libraryTypeSlug: "manga",
+      status: "active",
+      latestChapter: "1",
+      chapterCount: 1,
+      chaptersDownloaded: 1,
+      workingRoot: `/downloads/downloading/manga/${title.id}`,
+      downloadRoot: `/downloads/downloaded/manga/${title.id}`,
+      chapters: [{
+        id: `${title.id}-c1`,
+        label: "Chapter 1",
+        chapterNumber: "1",
+        pageCount: 12,
+        available: true,
+        archivePath: `/downloads/downloaded/manga/${title.id}/Chapter_1.cbz`
+      }],
+      ...title
+    })
+  });
+
+  await upsertTitle({id: "dan-da-dan", title: "Dandadan", tags: ["action"], aliases: ["Dan Da Dan"]});
+  await upsertTitle({id: "blue-box", title: "Blue Box", tags: ["sports"], aliases: []});
+  await upsertTitle({
+    id: "solo-leveling",
+    title: "Solo Leveling",
+    mediaType: "manhwa",
+    libraryTypeLabel: "Manhwa",
+    libraryTypeSlug: "manhwa",
+    tags: ["action"],
+    aliases: ["Only I Level Up"]
+  });
+
+  const firstPage = await fetch(`${baseUrl}/api/service/raven/title-cards?pageSize=1&sort=title`, {headers}).then((response) => response.json());
+  assert.equal(firstPage.titles.length, 1);
+  assert.equal(firstPage.pageInfo.pageSize, 1);
+  assert.equal(firstPage.pageInfo.hasMore, true);
+  assert.equal(firstPage.counts.total, 3);
+  assert.equal(Object.hasOwn(firstPage.titles[0], "chapters"), false);
+  assert.equal(Object.hasOwn(firstPage.titles[0], "workingRoot"), false);
+  assert.equal(Object.hasOwn(firstPage.titles[0], "downloadRoot"), false);
+
+  const mangaPage = await fetch(`${baseUrl}/api/service/raven/title-cards?type=manga&pageSize=60`, {headers}).then((response) => response.json());
+  assert.deepEqual(mangaPage.titles.map((title) => title.title), ["Blue Box", "Dandadan"]);
+  assert.equal(mangaPage.counts.byType.manga, 2);
+
+  const letterPage = await fetch(`${baseUrl}/api/service/raven/title-cards?letter=D`, {headers}).then((response) => response.json());
+  assert.deepEqual(letterPage.titles.map((title) => title.title), ["Dandadan"]);
+  assert.equal(letterPage.pageInfo.total, 1);
+
+  const queryPage = await fetch(`${baseUrl}/api/service/raven/title-cards?q=only%20i`, {headers}).then((response) => response.json());
+  assert.deepEqual(queryPage.titles.map((title) => title.title), ["Solo Leveling"]);
+
+  const exactIdPage = await fetch(`${baseUrl}/api/service/raven/title-cards?ids=solo-leveling,dan-da-dan&pageSize=10`, {headers}).then((response) => response.json());
+  assert.deepEqual(exactIdPage.titles.map((title) => title.id), ["solo-leveling", "dan-da-dan"]);
+  assert.equal(exactIdPage.titles.some((title) => Object.hasOwn(title, "chapters")), false);
+
+  const fullTitles = await fetch(`${baseUrl}/api/service/raven/titles`, {headers}).then((response) => response.json());
+  assert.equal(fullTitles.find((title) => title.id === "dan-da-dan").chapters.length, 1);
+
+  server.close();
+});
+
 test("vault returns conflicts for duplicate owner claims and stale request revisions", async () => {
   const {app} = await createVaultApp();
   const server = app.listen(0);

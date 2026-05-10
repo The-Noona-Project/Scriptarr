@@ -1,15 +1,15 @@
 "use client";
 
 /**
- * @file Full-page Once UI reader for Moon's Next user app.
+ * @file Full-page reader for Moon's Next user app.
  */
 
 import {useCallback, useEffect, useMemo, useRef, useState} from "react";
 import {useRouter} from "next/navigation";
-import {Button, Flex, InfiniteScroll, SegmentedControl} from "@once-ui-system/core";
 import {requestJson, useMoonJson} from "../../lib/api.js";
 import {buildReaderPath, buildReaderPathForTitle, buildTitlePathForTitle} from "../../lib/routes.js";
 import {formatDate, formatProgress} from "../../lib/date.js";
+import {Button, Flex, InfiniteScroll, SegmentedControl} from "../UiPrimitives.jsx";
 import {useMoonChrome} from "../MoonChromeContext.jsx";
 import {AuthRequiredView, EmptyView, ErrorView, LoadingView} from "../StateView.jsx";
 

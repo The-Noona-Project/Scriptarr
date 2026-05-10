@@ -442,6 +442,18 @@ export const createVaultClient = (config) => {
       });
       return payload;
     },
+    async listRavenTitleCards(filters = {}) {
+      const params = new URLSearchParams();
+      for (const [key, value] of Object.entries(filters || {})) {
+        if (value != null && String(value).trim()) {
+          params.set(key, String(value));
+        }
+      }
+      const {payload} = await requestJson(baseUrl, headers, `/api/service/raven/title-cards${params.size ? `?${params.toString()}` : ""}`, {
+        context: "Failed to list Raven title cards from Vault"
+      });
+      return payload;
+    },
     async getRavenTitle(titleId) {
       const {status, payload} = await requestJson(baseUrl, headers, `/api/service/raven/titles/${encodeURIComponent(titleId)}`, {
         allowStatuses: [404],

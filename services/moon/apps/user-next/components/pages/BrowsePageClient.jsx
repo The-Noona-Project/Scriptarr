@@ -1,13 +1,13 @@
 "use client";
 
 /**
- * @file Browse page for Moon's Once UI Next user app.
+ * @file Browse page for Moon's Next user app.
  */
 
 import {useDeferredValue, useEffect, useMemo, useRef, useState} from "react";
-import {SegmentedControl} from "@once-ui-system/core";
 import {requestJson, useMoonJson} from "../../lib/api.js";
 import {BROWSE_LETTERS, buildBrowseSections} from "../../lib/browse.js";
+import {SegmentedControl} from "../UiPrimitives.jsx";
 import {useMoonChrome} from "../MoonChromeContext.jsx";
 import BrowseLetterRow from "../browse/BrowseLetterRow.jsx";
 import {AuthRequiredView, EmptyView, ErrorView, LoadingView} from "../StateView.jsx";

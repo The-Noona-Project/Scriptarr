@@ -130,6 +130,22 @@ export const registerAuthRoutes = (app, {config, getSessionToken, logger}) => {
     res.status(result.status).json(result.payload);
   });
 
+  app.get("/api/moon/chrome/bootstrap", async (req, res) => {
+    const [branding, auth, bootstrap] = await Promise.all([
+      proxyToSage(req, "/api/moon-v3/public/branding"),
+      proxyToSage(req, "/api/auth/status"),
+      proxyToSage(req, "/api/auth/bootstrap-status")
+    ]);
+    const authPayload = auth.status >= 200 && auth.status < 400 ? auth.payload : null;
+    const user = authPayload?.user || (authPayload?.authenticated ? authPayload : null);
+    res.json({
+      branding: branding.status >= 200 && branding.status < 400 ? branding.payload : {siteName: "Scriptarr"},
+      auth: authPayload,
+      user,
+      bootstrap: bootstrap.status >= 200 && bootstrap.status < 400 ? bootstrap.payload : null
+    });
+  });
+
   app.get("/api/moon/auth/discord/url", async (req, res) => {
     const query = toQueryString({
       returnTo: sanitizeReturnToPath(req.query?.returnTo, "/")

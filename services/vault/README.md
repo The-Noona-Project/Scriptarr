@@ -22,6 +22,9 @@ events remain read-only through the explorer.
 Its content reset path is content-only, not a factory reset: requests, work locks, progress, read state, follows,
 reader bookmarks, Raven catalog rows, Raven tasks, and Raven-owned jobs are cleared, while users, permission groups,
 API keys, sessions, settings, secrets, and durable events remain intact.
+Vault also exposes the service-only `GET /api/service/raven/title-cards` projection for Moon shelves. It reads from
+`raven_titles` only, supports query, type, letter, cursor, page-size, sort, and exact `ids` filters, preserves exact-id
+ordering for activity hydration, and keeps chapter arrays plus Raven filesystem roots out of card payloads.
 
 It also stores the Raven VPN settings, Raven metadata provider configuration, Oracle provider state, Portal Discord
 workflow settings including release notification channel id, and Oracle secrets used by the rest of the stack. Moon

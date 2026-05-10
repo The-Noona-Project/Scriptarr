@@ -4,7 +4,7 @@
  * @file Client-side same-origin API helpers for Moon's Next admin app.
  */
 
-import {useCallback, useEffect, useRef, useState} from "react";
+import {createContext, useCallback, useContext, useEffect, useMemo, useRef, useState} from "react";
 
 /**
  * Perform a Moon admin JSON request.
@@ -52,7 +52,7 @@ export const requestJson = async (url, options = {}) => {
 };
 
 /**
- * Build the admin chrome bootstrap requests.
+ * Fetch the collapsed admin chrome bootstrap payload.
  *
  * @param {string} [returnTo]
  * @returns {Promise<{branding: any, user: any, bootstrap: any, loginUrl: string}>}
@@ -63,19 +63,32 @@ export const loadAdminChromeContext = async (returnTo = "/admin") => {
       && !returnTo.startsWith("//")
     ? returnTo
     : "/admin";
-  const [branding, auth, bootstrap, discordUrl] = await Promise.all([
-    requestJson("/api/moon/v3/public/branding"),
-    requestJson("/api/moon/auth/status"),
-    requestJson("/api/moon/auth/bootstrap-status"),
-    requestJson(`/api/moon/auth/discord/url?returnTo=${encodeURIComponent(normalizedReturnTo)}`)
-  ]);
+  const chrome = await requestJson(`/api/moon/chrome/bootstrap?returnTo=${encodeURIComponent(normalizedReturnTo)}`);
+  const payload = chrome.ok ? chrome.payload || {} : {};
+  const user = payload.user || payload.auth?.user || (payload.auth?.authenticated ? payload.auth : null);
 
   return {
-    branding: branding.ok ? branding.payload : {siteName: "Scriptarr"},
-    user: auth.ok ? auth.payload?.user || auth.payload || null : null,
-    bootstrap: bootstrap.ok ? bootstrap.payload : null,
-    loginUrl: discordUrl.ok ? String(discordUrl.payload?.oauthUrl || "").trim() : ""
+    branding: payload.branding || {siteName: "Scriptarr"},
+    user,
+    bootstrap: payload.bootstrap || null,
+    loginUrl: ""
   };
+};
+
+/**
+ * Fetch the Discord OAuth URL only after the admin chrome knows it is signed out.
+ *
+ * @param {string} [returnTo]
+ * @returns {Promise<string>}
+ */
+export const loadAdminLoginUrl = async (returnTo = "/admin") => {
+  const normalizedReturnTo = typeof returnTo === "string"
+      && returnTo.startsWith("/admin")
+      && !returnTo.startsWith("//")
+    ? returnTo
+    : "/admin";
+  const discordUrl = await requestJson(`/api/moon/auth/discord/url?returnTo=${encodeURIComponent(normalizedReturnTo)}`);
+  return discordUrl.ok ? String(discordUrl.payload?.oauthUrl || "").trim() : "";
 };
 
 /**
@@ -145,8 +158,164 @@ export const useAdminJson = (url, {enabled = true, fallback = /** @type {T} */ (
   return {loading, refreshing, error, status, data, refresh, setData};
 };
 
+const AdminEventStreamContext = createContext(null);
+
+const normalizeDomains = (domains) => Array.isArray(domains)
+  ? Array.from(new Set(domains.map((domain) => String(domain || "").trim()).filter(Boolean))).sort()
+  : [];
+
+const sequenceFromEvent = (event) => Number.parseInt(String(event?.sequence || 0), 10) || 0;
+
 /**
- * Subscribe to a Moon admin SSE stream and mark local data stale.
+ * Provide one shared Moon admin event stream for all admin page subscribers.
+ *
+ * @param {{children: import("react").ReactNode, user: any}} props
+ * @returns {import("react").ReactNode}
+ */
+export const AdminEventStreamProvider = ({children, user}) => {
+  const subscribers = useRef(new Map());
+  const [version, setVersion] = useState(0);
+  const [state, setState] = useState("idle");
+
+  const register = useCallback((subscription) => {
+    const id = Symbol("admin-event-subscriber");
+    subscribers.current.set(id, {
+      domains: normalizeDomains(subscription?.domains),
+      onEvent: subscription?.onEvent
+    });
+    setVersion((current) => current + 1);
+    return () => {
+      subscribers.current.delete(id);
+      setVersion((current) => current + 1);
+    };
+  }, []);
+
+  const domainKey = useMemo(() => {
+    const allDomains = new Set();
+    let includesAllDomains = false;
+    for (const subscription of subscribers.current.values()) {
+      if (!subscription.domains.length) {
+        includesAllDomains = true;
+        break;
+      }
+      subscription.domains.forEach((domain) => allDomains.add(domain));
+    }
+    return includesAllDomains ? "*" : Array.from(allDomains).sort().join("|");
+  }, [version]);
+
+  useEffect(() => {
+    if (!user || !subscribers.current.size || typeof EventSource === "undefined") {
+      setState("idle");
+      return undefined;
+    }
+
+    let cancelled = false;
+    let stream = null;
+    let poller = 0;
+    const domains = domainKey === "*"
+      ? []
+      : domainKey.split("|").map((domain) => domain.trim()).filter(Boolean);
+    const domainParams = domains.map((domain) => `domain=${encodeURIComponent(domain)}`);
+
+    const notifySubscribers = (event) => {
+      const eventDomain = String(event?.domain || "").trim();
+      for (const subscription of subscribers.current.values()) {
+        if (!subscription.domains.length || !eventDomain || subscription.domains.includes(eventDomain)) {
+          subscription.onEvent?.(event);
+        }
+      }
+    };
+
+    const markAllSubscribersStale = () => {
+      notifySubscribers({domain: "", eventType: "stream-degraded"});
+    };
+
+    const openStream = async () => {
+      setState("connecting");
+      let afterSequence = 0;
+      const latest = await requestJson(`/api/moon/v3/admin/events?${[...domainParams, "limit=1", "newestFirst=true"].join("&")}`);
+      if (cancelled) {
+        return;
+      }
+      if (latest.ok) {
+        afterSequence = sequenceFromEvent(latest.payload?.events?.[0]);
+      }
+      const query = [
+        ...domainParams,
+        ...(afterSequence ? [`afterSequence=${encodeURIComponent(String(afterSequence))}`] : [])
+      ].join("&");
+      stream = new EventSource(`/api/moon/v3/admin/events/stream${query ? `?${query}` : ""}`);
+      stream.addEventListener("open", () => {
+        if (poller) {
+          window.clearInterval(poller);
+          poller = 0;
+        }
+        setState("live");
+      });
+      stream.addEventListener("admin-event", (message) => {
+        try {
+          notifySubscribers(JSON.parse(message.data || "{}"));
+        } catch {
+          markAllSubscribersStale();
+        }
+      });
+      stream.addEventListener("error", () => {
+        setState("degraded");
+        if (!poller) {
+          poller = window.setInterval(markAllSubscribersStale, 15000);
+        }
+      });
+    };
+
+    void openStream();
+
+    return () => {
+      cancelled = true;
+      stream?.close();
+      if (poller) {
+        window.clearInterval(poller);
+      }
+    };
+  }, [domainKey, user]);
+
+  const value = useMemo(() => ({register, state}), [register, state]);
+
+  return (
+    <AdminEventStreamContext.Provider value={value}>
+      {children}
+    </AdminEventStreamContext.Provider>
+  );
+};
+
+/**
+ * Subscribe to the shared Moon admin event stream.
+ *
+ * @param {{domains?: string[], enabled?: boolean, onEvent: (event: any) => void}} options
+ * @returns {{state: string}}
+ */
+export const useAdminEventSubscription = ({domains = [], enabled = true, onEvent}) => {
+  const stream = useContext(AdminEventStreamContext);
+  const onEventRef = useRef(onEvent);
+  const domainsKey = normalizeDomains(domains).join("|");
+  onEventRef.current = onEvent;
+
+  useEffect(() => {
+    if (!enabled || !stream) {
+      return undefined;
+    }
+    return stream.register({
+      domains,
+      onEvent: (event) => onEventRef.current?.(event)
+    });
+  }, [domainsKey, enabled, stream?.register]);
+
+  return {
+    state: enabled ? stream?.state || "idle" : "idle"
+  };
+};
+
+/**
+ * Subscribe to shared Moon admin events and mark local data stale.
  *
  * @param {{
  *   domains?: string[],
@@ -158,50 +327,20 @@ export const useAdminJson = (url, {enabled = true, fallback = /** @type {T} */ (
  * @returns {{state: string, stale: boolean, clearStale: () => void}}
  */
 export const useAdminEventStaleness = ({domains = [], enabled = true, locked = false, onStale, onRefresh}) => {
-  const [state, setState] = useState("connecting");
   const [stale, setStale] = useState(false);
   const onStaleRef = useRef(onStale);
   const onRefreshRef = useRef(onRefresh);
   onStaleRef.current = onStale;
   onRefreshRef.current = onRefresh;
 
-  useEffect(() => {
-    if (!enabled || typeof EventSource === "undefined") {
-      setState("idle");
-      return undefined;
-    }
-
-    const query = domains.map((domain) => `domain=${encodeURIComponent(domain)}`).join("&");
-    const stream = new EventSource(`/api/moon/v3/admin/events/stream${query ? `?${query}` : ""}`);
-    let poller = 0;
-
-    const markStale = () => {
+  const subscription = useAdminEventSubscription({
+    domains,
+    enabled,
+    onEvent: () => {
       setStale(true);
       onStaleRef.current?.();
-    };
-
-    stream.addEventListener("open", () => {
-      if (poller) {
-        clearInterval(poller);
-        poller = 0;
-      }
-      setState("live");
-    });
-    stream.addEventListener("admin-event", markStale);
-    stream.addEventListener("error", () => {
-      setState("degraded");
-      if (!poller) {
-        poller = window.setInterval(markStale, 15000);
-      }
-    });
-
-    return () => {
-      stream.close();
-      if (poller) {
-        clearInterval(poller);
-      }
-    };
-  }, [enabled, domains.join("|")]);
+    }
+  });
 
   useEffect(() => {
     if (!stale || locked) {
@@ -215,7 +354,7 @@ export const useAdminEventStaleness = ({domains = [], enabled = true, locked = f
   }, [locked, stale]);
 
   return {
-    state,
+    state: subscription.state,
     stale,
     clearStale: () => setStale(false)
   };

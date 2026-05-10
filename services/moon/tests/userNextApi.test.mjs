@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import {loadMoonChromeContext, logoutMoonSession, requestJson} from "../apps/user-next/lib/api.js";
+import {loadMoonChromeContext, loadMoonLoginUrl, logoutMoonSession, requestJson} from "../apps/user-next/lib/api.js";
 import {
   buildLibraryPath,
   buildProfilePath,
@@ -17,37 +17,18 @@ test("loadMoonChromeContext normalizes nested auth payloads from Moon auth statu
   globalThis.fetch = async (url) => {
     const href = String(url);
 
-    if (href === "/api/moon/v3/public/branding") {
-      return new Response(JSON.stringify({siteName: "Pax-Kun"}), {
-        status: 200,
-        headers: {"Content-Type": "application/json"}
-      });
-    }
-
-    if (href === "/api/moon/auth/status") {
+    if (href === "/api/moon/chrome/bootstrap?returnTo=%2Fbrowse%3Fq%3Dmoon") {
       return new Response(JSON.stringify({
-        authenticated: true,
+        branding: {siteName: "Pax-Kun"},
+        auth: {authenticated: true},
         user: {
           username: "CaptainPax",
           role: "owner",
           permissions: ["admin"],
           avatarUrl: "https://cdn.discordapp.com/avatars/captain.png"
-        }
+        },
+        bootstrap: {ownerClaimed: true}
       }), {
-        status: 200,
-        headers: {"Content-Type": "application/json"}
-      });
-    }
-
-    if (href === "/api/moon/auth/bootstrap-status") {
-      return new Response(JSON.stringify({ownerClaimed: true}), {
-        status: 200,
-        headers: {"Content-Type": "application/json"}
-      });
-    }
-
-    if (href === "/api/moon/auth/discord/url?returnTo=%2Fbrowse%3Fq%3Dmoon") {
-      return new Response(JSON.stringify({oauthUrl: "https://discord.example/login"}), {
         status: 200,
         headers: {"Content-Type": "application/json"}
       });
@@ -65,7 +46,25 @@ test("loadMoonChromeContext normalizes nested auth payloads from Moon auth statu
       permissions: ["admin"],
       avatarUrl: "https://cdn.discordapp.com/avatars/captain.png"
     });
-    assert.equal(context.loginUrl, "https://discord.example/login");
+    assert.equal(context.loginUrl, "");
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test("loadMoonLoginUrl fetches the Discord URL separately for signed-out chrome", async () => {
+  const previousFetch = globalThis.fetch;
+
+  globalThis.fetch = async (url) => {
+    assert.equal(String(url), "/api/moon/auth/discord/url?returnTo=%2Fbrowse%3Fq%3Dmoon");
+    return new Response(JSON.stringify({oauthUrl: "https://discord.example/login"}), {
+      status: 200,
+      headers: {"Content-Type": "application/json"}
+    });
+  };
+
+  try {
+    assert.equal(await loadMoonLoginUrl("/browse?q=moon"), "https://discord.example/login");
   } finally {
     globalThis.fetch = previousFetch;
   }

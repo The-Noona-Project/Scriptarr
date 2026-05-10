@@ -28,6 +28,8 @@
 - Keep `/api/moon-v3/user/profile` as the dedicated aggregate payload for Moon's tabbed `/profile` route. That
   response should stay focused on trusted identity, bookshelf/completion stats, request counts, and recent activity
   instead of forcing the browser to stitch several unrelated APIs together.
+- Home and profile activity cards should use Raven's compact exact-id card projection through Sage rather than
+  fanning out into full title reads. Preserve the order requested by Moon when brokering `view=card&ids=...`.
 - Broker Moon's sanitized Discord auth `returnTo` path through OAuth `state`, and let Moon's callback relay enforce
   the final fallback to `/` when the remembered route is invalid or the signed-in user cannot access it.
 - Moon's root-only content reset is Sage-owned orchestration. Keep the preview plus execute flow brokered, require the
@@ -53,6 +55,8 @@
   and Raven durable downloadall runs.
 - `portal.discord.trivia` is the source of truth for Noona trivia channels, scoring, hints, schedules, and AI
   borderline matching. Sage owns trivia round, guess, score, leaderboard, and ack state through Vault-backed settings.
+  Keep active round and `nextRoundAfter` state precise enough for Portal to reconcile one runtime clock after reloads
+  or repeated manual starts.
 - Portal's Raven downloadall broker route requires an explicit `providerId`. Keep `downloadall` locked to the
   WeebCentral provider on the Sage side too so Portal cannot accidentally fall through to MangaDex when that owner-only
   DM command is used. Preserve the `nsfw` flag exactly as Portal sends it so Raven can enforce explicit
@@ -85,15 +89,24 @@
   and settings-row edits behind database grants, route all data through Vault, redact sensitive values, and never add
   arbitrary SQL endpoints.
 - Sage owns the admin toast settings broker. Global defaults require `settings.root`; personal overrides must be scoped
-  to the signed-in admin's Discord user id.
-- Sage owns the explicit v3 Settings save routes for Raven metadata providers, Raven download providers, and Portal
-  Discord basics. Preserve legacy routes during migration, but keep new Moon Settings forms on the v3 save surface.
-- Sage's Settings aggregate should carry Raven health's VPN runtime fields (`runtimeCapable`, `settingsFresh`,
-  `state`, `protected`, and `lastError`) so Moon can show fail-closed VPN state without direct browser calls to Raven.
-  Broker the admin VPN test through the v3 Settings surface and never expose PIA secrets in the response.
+  to the signed-in admin's Discord user id. The toast-only read endpoint returns just `{global, personal, effective,
+  canEditGlobal}` so Moon admin does not need the full Settings aggregate on startup.
+- Sage owns the explicit v3 Settings save routes for Raven metadata providers, Raven download providers, Raven
+  download runtime, and Portal Discord basics. Preserve legacy routes during migration, but keep new Moon Settings
+  forms on the v3 save surface.
+- `raven.download.runtime` stores Raven's active title-download limit. Validate `activeTitleDownloads` as an integer
+  from `1` through `6`, persist through Vault, append a settings event, then call Raven's runtime reload route. A reload
+  failure should not roll back the saved value; return a warning so Moon can show that it applies after restart.
+- Keep the main Settings aggregate fast and saved-state focused. Raven VPN runtime fields (`runtimeCapable`,
+  `settingsFresh`, `state`, `protected`, and `lastError`), database overview, and Portal Discord runtime belong in
+  `/api/moon-v3/admin/settings/runtime`, with database overview returning `null` when the admin lacks database read
+  access. Broker the admin VPN test through the v3 Settings surface and never expose PIA secrets in the response.
 - Sage owns admin request summary counts and the request deny mutation. Deny requires `requests.write`, rejects blank
   comments, stores the moderator comment and timeline entry, appends a durable request event, and leaves notification
   delivery to the existing requester-notification flow.
+- Admin request summaries must expose `revision`, and approve, deny, override, resolve, and refresh-source mutations
+  should accept `expectedRevision`. Surface Vault's `REQUEST_REVISION_CONFLICT` and `REQUEST_WORK_KEY_CONFLICT` as
+  stable 409 payloads for Moon.
 - Sage owns the Wanted metadata and Missing Content broker routes. Keep `/api/moon-v3/admin/wanted/metadata`
   canonical, keep `/metadata-gaps` as a legacy alias, pass library ids into Raven metadata search, apply chosen
   matches through Raven identify, keep `/api/moon-v3/admin/wanted/missing-content` canonical, and keep
@@ -105,9 +118,10 @@
 - Sage owns the admin maintenance scheduler behind `/api/moon-v3/admin/system/tasks`. Keep the job catalog
   allowlisted, store cron schedules in Vault under Sage-owned settings, prevent overlapping runs per task, and append
   durable job snapshots plus events for manual or scheduled runs.
-- Sage owns the System Status endpoint registry. Keep `/api/moon-v3/admin/system/status` grouped by service, probe
-  GET/read endpoints, classify auth-gated reads as `protected`, keep mutation routes visible as `not_probed`, and
-  avoid adding browser-direct status calls around Moon.
+- Sage owns the System Status endpoint registry. Keep `/api/moon-v3/admin/system/status` grouped by service and
+  lightweight, keep Warden bootstrap/runtime details in `/api/moon-v3/admin/system/status/runtime`, probe GET/read
+  endpoints only from `/api/moon-v3/admin/system/status/check`, classify auth-gated reads as `protected`, keep mutation
+  routes visible as `not_probed`, and avoid adding browser-direct status calls around Moon.
 - Sage owns the dedicated AI admin broker at `/api/moon-v3/admin/system/ai` and the `ai` admin domain. Oracle settings
   saves require `ai.write`; LocalAI lifecycle actions require `ai.root`; install/start/remove requests should pass the
   Moon admin requester context to Warden. Admin test prompts and structured assist calls should degrade safely when
@@ -126,7 +140,8 @@
   batch id, and decision status durably; check reactions continue the run, cross reactions cancel the remaining run,
   duplicate decisions are idempotent, and expired prompts do not repeat actions.
 - Moon's user library card route should broker Raven's compact card view and paginate/filter in Sage so browsers never
-  need full chapter arrays for `/browse`, `/library`, or shelf cards.
+  need full chapter arrays for `/browse`, `/library`, or shelf cards. Pass `q`, `type`, `letter`, `cursor`,
+  `pageSize`, `sort`, and optional exact `ids` through Raven instead of sorting/slicing a full catalog in Sage.
 - Service-originated async changes from Raven, Portal, or Warden should append immutable summary events through Sage's
   internal broker routes after the authoritative mutation succeeds so `/admin/users`, `/admin/requests`, and
   `/admin/system/events` all reflect the same truth.

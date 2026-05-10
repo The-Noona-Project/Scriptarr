@@ -61,6 +61,16 @@ public interface RavenBrokerClient {
     JsonNode listLibraryTitles() throws IOException, InterruptedException;
 
     /**
+     * Load a compact, optionally paginated Raven library-card projection.
+     *
+     * @param query browser-facing card filters to broker through Sage
+     * @return parsed JSON card page payload
+     * @throws IOException when the response cannot be read
+     * @throws InterruptedException when the request is interrupted
+     */
+    JsonNode listLibraryTitleCards(Map<String, String> query) throws IOException, InterruptedException;
+
+    /**
      * Load one Raven library title persisted behind the broker.
      *
      * @param titleId stable title id

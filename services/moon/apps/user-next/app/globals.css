@@ -90,6 +90,242 @@ a {
   margin-left: auto;
 }
 
+.moon-ui-flex {
+  display: flex;
+}
+
+.moon-ui-column {
+  display: flex;
+  flex-direction: column;
+}
+
+.moon-ui-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 999px;
+  color: rgba(255, 248, 240, 0.94);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 800;
+  padding: 9px 15px;
+  text-decoration: none;
+  transition: transform 160ms ease, border-color 160ms ease, background 160ms ease;
+}
+
+.moon-ui-button:hover,
+.moon-ui-button:focus-visible {
+  transform: translateY(-1px);
+  border-color: rgba(255, 255, 255, 0.18);
+}
+
+.moon-ui-button.is-primary {
+  background: rgba(255, 176, 112, 0.94);
+  color: #14100d;
+}
+
+.moon-ui-button.is-secondary {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.moon-ui-button.is-l {
+  min-height: 46px;
+  padding: 11px 18px;
+}
+
+.moon-ui-button:disabled {
+  cursor: default;
+  opacity: 0.55;
+  transform: none;
+}
+
+.moon-ui-avatar {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 999px;
+  background: linear-gradient(135deg, rgba(255, 150, 98, 0.8), rgba(84, 122, 201, 0.8));
+  color: #fff;
+  font-size: 0.8rem;
+  font-weight: 900;
+}
+
+.moon-ui-avatar.is-l {
+  width: 42px;
+  height: 42px;
+}
+
+.moon-ui-avatar.is-xl {
+  width: 72px;
+  height: 72px;
+  font-size: 1.35rem;
+}
+
+.moon-ui-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.moon-ui-scroller {
+  display: flex;
+  scrollbar-width: thin;
+}
+
+.moon-ui-scroller.is-row {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 8px;
+}
+
+.moon-ui-scroller.is-column {
+  flex-direction: column;
+  overflow-y: auto;
+}
+
+.moon-ui-segmented {
+  display: inline-flex;
+  max-width: 100%;
+  flex-wrap: wrap;
+  gap: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 18px;
+  background: rgba(8, 14, 20, 0.78);
+  padding: 6px;
+}
+
+.moon-ui-segmented.is-fill {
+  display: flex;
+}
+
+.moon-ui-segmented button {
+  flex: 1 1 auto;
+  min-height: 34px;
+  border: 0;
+  border-radius: 13px;
+  background: transparent;
+  color: rgba(255, 248, 240, 0.78);
+  cursor: pointer;
+  font: inherit;
+  padding: 7px 12px;
+}
+
+.moon-ui-segmented button.is-active {
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 248, 240, 0.98);
+}
+
+.moon-ui-segmented button:disabled {
+  cursor: default;
+  opacity: 0.35;
+}
+
+.moon-ui-hover-root {
+  position: relative;
+  width: max-content;
+  max-width: 100%;
+}
+
+.moon-ui-hover-card {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 12px);
+  z-index: 30;
+  display: grid;
+  width: min(360px, calc(100vw - 48px));
+  gap: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 22px;
+  background: rgba(12, 18, 26, 0.97);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.38);
+  opacity: 0;
+  padding: 18px;
+  pointer-events: none;
+  transform: translateY(8px);
+  transition: opacity 160ms ease, transform 160ms ease;
+}
+
+.moon-ui-hover-root:hover .moon-ui-hover-card,
+.moon-ui-hover-root:focus-within .moon-ui-hover-card {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
+}
+
+.moon-ui-infinite-sentinel {
+  min-height: 1px;
+}
+
+.moon-local-nav {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.moon-local-nav-item {
+  position: relative;
+}
+
+.moon-local-nav a,
+.moon-local-mobile-nav a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 36px;
+  border-radius: 999px;
+  color: rgba(255, 248, 240, 0.82);
+  padding: 8px 12px;
+}
+
+.moon-local-nav a:hover,
+.moon-local-nav a.is-active,
+.moon-local-mobile-nav a:hover,
+.moon-local-mobile-nav a.is-active {
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 248, 240, 0.98);
+}
+
+.moon-local-nav-flyout {
+  position: absolute;
+  top: calc(100% + 10px);
+  left: 0;
+  z-index: 50;
+  display: none;
+  min-width: 180px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 18px;
+  background: rgba(8, 14, 20, 0.98);
+  box-shadow: 0 20px 54px rgba(0, 0, 0, 0.34);
+  padding: 8px;
+}
+
+.moon-local-nav-item:hover .moon-local-nav-flyout,
+.moon-local-nav-item:focus-within .moon-local-nav-flyout {
+  display: grid;
+}
+
+.moon-local-nav-flyout a,
+.moon-local-mobile-section a {
+  border-radius: 12px;
+  width: 100%;
+}
+
+.moon-local-mobile-nav,
+.moon-local-mobile-group,
+.moon-local-mobile-section {
+  display: grid;
+  gap: 6px;
+}
+
+.moon-local-mobile-section {
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
+  margin-left: 10px;
+  padding-left: 10px;
+}
+
 .moon-nav-desktop {
   display: flex;
   align-items: center;

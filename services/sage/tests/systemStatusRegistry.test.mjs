@@ -92,3 +92,28 @@ test("system status payload probes GET reads, classifies protected routes, and k
     globalThis.fetch = originalFetch;
   }
 });
+
+test("system status payload can return a lightweight registry without live probes", async () => {
+  const payload = await buildSystemStatusPayload({
+    config: {
+      ravenBaseUrl: "http://raven.test",
+      wardenBaseUrl: "http://warden.test",
+      portalBaseUrl: "http://portal.test",
+      oracleBaseUrl: "http://oracle.test",
+      vaultBaseUrl: "http://vault.test",
+      publicBaseUrl: "http://moon.test",
+      port: 4400,
+      serviceToken: "sage-dev-token",
+      serviceTokens: {"scriptarr-sage": "sage-dev-token"}
+    },
+    serviceJson: async () => {
+      throw new Error("serviceJson should not be called for lightweight status");
+    },
+    includeChecks: false
+  });
+  const endpoints = payload.groups.flatMap((group) => group.endpoints);
+
+  assert.equal(payload.summary.checked, 0);
+  assert.equal(endpoints.filter((endpoint) => endpoint.safeToProbe).every((endpoint) => endpoint.probeStatus === "pending"), true);
+  assert.equal(endpoints.filter((endpoint) => !endpoint.safeToProbe).every((endpoint) => endpoint.probeStatus === "not_probed"), true);
+});

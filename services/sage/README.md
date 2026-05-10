@@ -47,8 +47,11 @@ Sage exposes a Portal notification queue for paused, completed, failed, or cance
 notifications only after Portal confirms the requester DM. Paused downloadall DMs can persist reaction decision
 prompts through Sage so the owner can continue with a check reaction or cancel with a cross reaction; duplicate or
 expired prompt decisions are idempotent.
-Sage also brokers compact paginated Moon library card reads from Raven's card projection. Browse and shelf clients
-should use that route and reserve full title payloads for title detail and reader APIs.
+Sage also brokers compact paginated Moon library card reads from Raven's card projection, passing `q`, `type`,
+`letter`, `cursor`, `pageSize`, `sort`, and optional exact `ids` through instead of sorting a full catalog in memory.
+Browse, library, home, and profile shelf clients should use that route and reserve full title payloads for title
+detail and reader routes. Continue-reading and recent-activity card hydration should use the exact-id card projection
+instead of fanning out into individual full-title requests.
 Sage also owns the root-only content reset preview plus execute flow for Moon admin. It previews Vault plus Raven reset
 scope, requires an explicit confirmation string, appends durable reset events, clears Vault's content-side state, and
 then tells Raven to wipe its managed catalog, tasks, and managed download folders.
@@ -61,17 +64,24 @@ Moon now reads those shared events through same-origin `/api/moon-v3/admin/event
 falling back to one blanket system permission.
 Sage also brokers the Moon Settings hub. Branding site name, uploaded WebP logo variant metadata, toast defaults,
 personal toast overrides, Raven VPN, provider settings, request workflow, and Discord essentials all stay Vault-backed
-and browser-safe. The DB explorer routes under `/api/moon-v3/admin/settings/database` require the `database` admin
-domain, read only through Vault's allowlisted explorer contract, and only write validated settings JSON.
-The Settings payload also carries Raven health's VPN runtime details so Moon can display runtime capability and
-settings freshness without polling Raven directly. Sage also brokers the admin VPN test action to Raven and returns
-only sanitized runtime state, never PIA credentials.
-The v3 Settings save surface includes explicit Raven metadata-provider, Raven download-provider, and Portal Discord
-basics routes so Moon no longer has to rely on generic legacy settings mutations for those sections. Sage also exposes
+and browser-safe. The fast Settings payload stays saved-state focused. Raven VPN runtime, the database overview, and
+Portal Discord runtime hydrate from `/api/moon-v3/admin/settings/runtime`; the database overview returns `null` when
+the admin lacks the `database` read grant. The DB explorer routes under `/api/moon-v3/admin/settings/database` require
+the `database` admin domain, read only through Vault's allowlisted explorer contract, and only write validated settings
+JSON. Sage also brokers the admin VPN test action to Raven and returns only sanitized runtime state, never PIA
+credentials.
+The v3 Settings save surface includes explicit Raven metadata-provider, Raven download-provider, Raven download-runtime,
+and Portal Discord basics routes so Moon no longer has to rely on generic legacy settings mutations for those sections.
+`raven.download.runtime` stores the active title-download limit (`1` through `6`, default `2`); Sage saves it through
+Vault, appends a durable settings event, and asks Raven to reload it live. If Raven cannot reload immediately, Sage
+returns the saved setting plus a warning so the value can still apply after the next Raven restart. Sage also exposes
 the dedicated Discord settings routes for the full `/admin/discord` page, including release notification channel tests.
 Admin request moderation now returns summary counts with the request list and exposes `deny` as a first-class
 `requests.write` mutation that requires a moderator comment, records durable request events, and lets the existing
 notification flow tell the requester what happened.
+Admin request summaries include a revision number, and approve, deny, override, resolve, and source-refresh actions
+can pass that revision back as `expectedRevision`. Vault rejects stale actions with `REQUEST_REVISION_CONFLICT`, which
+Sage forwards as a clean 409 so Moon can refresh before the moderator retries.
 `/api/moon-v3/admin/calendar` now returns chapter release entries plus completed-title markers, preserving undated
 completed counts so Moon can surface finished catalog titles that do not have reliable chapter dates.
 
@@ -81,10 +91,11 @@ tail through Sage, `/admin/system/events` forwards richer durable-event filters 
 mutations.
 `/admin/system/tasks` is Sage's allowlisted maintenance scheduler: definitions are Scriptarr-owned, schedules are
 Vault-backed, overlapping runs are blocked per task, and every manual or scheduled run emits durable job and event
-state. `/admin/system/status` is built from Sage's endpoint registry, checks GET/read routes, classifies auth-gated
-reads as protected, and leaves mutation routes unprobed. `/admin/system/ai`
-centralizes Oracle settings plus brokered Warden LocalAI install, start, and remove controls with requester context for
-Portal completion DMs.
+state. `/admin/system/status` is the lightweight endpoint registry; Warden bootstrap and runtime details hydrate from
+`/api/moon-v3/admin/system/status/runtime`. It leaves GET/read checks pending until
+`/api/moon-v3/admin/system/status/check` is called, then classifies auth-gated reads as protected and leaves mutation
+routes unprobed. `/admin/system/ai` centralizes Oracle settings plus brokered Warden LocalAI
+install, start, and remove controls with requester context for Portal completion DMs.
 
 Moon's legacy and v3 library routes should mirror Raven's real-or-empty library state. Sage no longer seeds preview
 titles on behalf of Moon.

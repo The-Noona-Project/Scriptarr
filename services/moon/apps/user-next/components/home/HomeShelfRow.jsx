@@ -5,7 +5,7 @@
  */
 
 import Link from "next/link";
-import {Scroller} from "@once-ui-system/core";
+import {Scroller} from "../UiPrimitives.jsx";
 import {buildLibraryPath} from "../../lib/routes.js";
 import HomeArtCard from "./HomeArtCard.jsx";
 

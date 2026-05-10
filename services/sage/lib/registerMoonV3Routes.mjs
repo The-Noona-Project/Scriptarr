@@ -17,8 +17,19 @@ import {
 } from "./adminUiSettings.mjs";
 import {appendDurableEvent, appendUserEvent, buildServiceActor, buildUserActor} from "./adminEvents.mjs";
 import {buildIntakeSelection, evaluateSelectionAgainstGuardState} from "./requestSelectionGuards.mjs";
-import {buildRequestWorkConflictPayload, isRequestWorkConflictError} from "./requestConflict.mjs";
+import {
+  buildRequestRevisionConflictPayload,
+  buildRequestWorkConflictPayload,
+  isRequestRevisionConflictError,
+  isRequestWorkConflictError,
+  normalizeExpectedRequestRevision
+} from "./requestConflict.mjs";
 import {buildAdminQueuePayload} from "./buildAdminQueuePayload.mjs";
+import {
+  RAVEN_DOWNLOAD_RUNTIME_KEY,
+  normalizeRavenDownloadRuntimeSettings,
+  validateActiveTitleDownloads
+} from "./ravenDownloadRuntimeSettings.mjs";
 import {buildAdminCalendarPayload} from "./adminCalendar.mjs";
 import {buildMoonHomePayload} from "./buildMoonHomePayload.mjs";
 import {buildMoonProfilePayload} from "./buildMoonProfilePayload.mjs";
@@ -335,6 +346,7 @@ const toRequestSummary = (request = {}, userIndex = new Map()) => {
     notes: normalizeString(request.notes),
     status: normalizeString(request.status, "pending"),
     moderatorComment: normalizeString(request.moderatorComment),
+    revision: Number.parseInt(String(request.revision || 1), 10) || 1,
     createdAt: parseIso(request.createdAt),
     updatedAt: parseIso(request.updatedAt),
     commentCount: timeline.filter((entry) => normalizeString(entry.type) === "comment").length,
@@ -495,6 +507,7 @@ const mergeDisplayStrings = (...values) => {
  *   readRavenNamingSettings: () => Promise<Record<string, unknown>>,
  *   readMetadataProviderSettings: () => Promise<Record<string, unknown>>,
  *   readDownloadProviderSettings: () => Promise<Record<string, unknown>>,
+ *   readRavenDownloadRuntimeSettings: () => Promise<Record<string, unknown>>,
  *   readRequestWorkflowSettings: () => Promise<Record<string, unknown>>,
  *   readOracleSettings: () => Promise<Record<string, unknown>>,
  *   readMoonBrandingSettings: () => Promise<Record<string, unknown>>,
@@ -516,6 +529,7 @@ export const registerMoonV3Routes = (app, {
   readRavenNamingSettings,
   readMetadataProviderSettings,
   readDownloadProviderSettings,
+  readRavenDownloadRuntimeSettings,
   readRequestWorkflowSettings,
   readOracleSettings,
   readMoonBrandingSettings,
@@ -546,9 +560,48 @@ export const registerMoonV3Routes = (app, {
     return normalizeArray(payload?.titles).map(toTitleSummary);
   };
 
-  const loadLibraryCards = async () => {
-    const payload = await fetchRavenJson("/v1/library?view=card");
-    return normalizeArray(payload?.titles).map(toTitleCardSummary);
+  const toQueryString = (query = {}) => {
+    const params = new URLSearchParams();
+    for (const [key, value] of Object.entries(query || {})) {
+      if (value != null && normalizeString(value)) {
+        params.set(key, String(value));
+      }
+    }
+    return params.toString();
+  };
+
+  const loadLibraryCardPage = async (query = {}) => {
+    const params = toQueryString({
+      ...query,
+      view: "card"
+    });
+    const payload = await fetchRavenJson(`/v1/library${params ? `?${params}` : "?view=card"}`);
+    const normalizedPayload = normalizeObject(payload, {}) || {};
+    const titles = normalizeArray(payload?.titles).map(toTitleCardSummary);
+    return {
+      ...normalizedPayload,
+      titles,
+      counts: normalizeObject(payload?.counts, {}) || buildLibraryCardCounts(titles),
+      pageInfo: normalizeObject(payload?.pageInfo, {}) || {
+        cursor: "0",
+        nextCursor: "",
+        hasMore: false,
+        pageSize: titles.length,
+        total: titles.length
+      }
+    };
+  };
+
+  const loadLibraryCardPageByIds = async (titleIds = []) => {
+    const ids = Array.from(new Set(normalizeArray(titleIds).map((entry) => normalizeString(entry)).filter(Boolean))).slice(0, 100);
+    if (!ids.length) {
+      return [];
+    }
+    const page = await loadLibraryCardPage({
+      ids: ids.join(","),
+      pageSize: ids.length
+    });
+    return normalizeArray(page.titles);
   };
 
   const libraryCardSearchKey = (title = {}) => [
@@ -690,6 +743,26 @@ export const registerMoonV3Routes = (app, {
     return counts;
   };
 
+  /**
+   * Send a stable Moon admin request conflict response when Vault rejects a
+   * stale revision or active work-key update.
+   *
+   * @param {import("express").Response} res
+   * @param {unknown} error
+   * @returns {boolean}
+   */
+  const sendKnownRequestActionConflict = (res, error) => {
+    if (isRequestWorkConflictError(error)) {
+      res.status(409).json(buildRequestWorkConflictPayload(error));
+      return true;
+    }
+    if (isRequestRevisionConflictError(error)) {
+      res.status(409).json(buildRequestRevisionConflictPayload(error));
+      return true;
+    }
+    return false;
+  };
+
   const buildMissingChapterPayload = (titles = []) => {
     const rows = normalizeArray(titles)
       .map((title) => ({
@@ -763,41 +836,93 @@ export const registerMoonV3Routes = (app, {
   const readUserTagPreferences = async (discordUserId) =>
     normalizeTagPreferenceStore(await readUserScopedSetting(vaultClient, "moon.tag-preferences", discordUserId, {}));
 
-  const loadUserLibraryState = async (discordUserId, titles = null) => {
-    const resolvedTitles = Array.isArray(titles) ? titles : await loadLibrary();
+  const loadUserStateInputs = async (discordUserId) => {
     const [progress, readState, following, tagPreferences] = await Promise.all([
       vaultClient.getProgress(discordUserId),
       vaultClient.getReadState(discordUserId),
       readUserScopedSetting(vaultClient, "moon.following", discordUserId, []),
       readUserTagPreferences(discordUserId)
     ]);
-    const normalizedFollowing = normalizeArray(following).map(normalizeFollowingEntry);
-    const derived = buildMoonUserLibraryState({
-      titles: resolvedTitles,
-      progress: normalizeArray(progress),
-      readState,
-      following: normalizedFollowing
-    });
     return {
-      ...derived,
       progress: normalizeArray(progress),
       readState,
-      following: normalizedFollowing,
+      following: normalizeArray(following).map(normalizeFollowingEntry),
       tagPreferences
     };
   };
 
-  const loadUserTitleState = async (discordUserId, titleId, title = null) => {
-    const resolvedTitle = title || await loadLibraryTitle(titleId);
+  const buildUserLibraryStateFromInputs = (titles = [], inputs = {}) => {
+    const normalizedFollowing = normalizeArray(inputs.following).map(normalizeFollowingEntry);
+    const progress = normalizeArray(inputs.progress);
+    const derived = buildMoonUserLibraryState({
+      titles,
+      progress,
+      readState: inputs.readState,
+      following: normalizedFollowing
+    });
+    return {
+      ...derived,
+      progress,
+      readState: inputs.readState,
+      following: normalizedFollowing,
+      tagPreferences: normalizeTagPreferenceStore(inputs.tagPreferences)
+    };
+  };
+
+  const loadUserLibraryState = async (discordUserId, titles = null) => {
+    const resolvedTitles = Array.isArray(titles) ? titles : await loadLibrary();
+    return buildUserLibraryStateFromInputs(resolvedTitles, await loadUserStateInputs(discordUserId));
+  };
+
+  const collectUserActivityTitleIds = (inputs = {}) => {
+    const ids = new Set();
+    for (const entry of normalizeArray(inputs.progress)) {
+      const id = normalizeString(entry.mediaId || entry.titleId);
+      if (id) {
+        ids.add(id);
+      }
+    }
+    for (const entry of normalizeArray(inputs.readState?.titleStates)) {
+      const id = normalizeString(entry.mediaId || entry.titleId);
+      if (id) {
+        ids.add(id);
+      }
+    }
+    for (const entry of normalizeArray(inputs.readState?.chapterReads)) {
+      const id = normalizeString(entry.mediaId || entry.titleId);
+      if (id) {
+        ids.add(id);
+      }
+    }
+    for (const entry of normalizeArray(inputs.following)) {
+      const id = normalizeString(entry.titleId || entry.id);
+      if (id) {
+        ids.add(id);
+      }
+    }
+    return Array.from(ids).slice(0, 60);
+  };
+
+  const buildUserTitleStateFromInputs = (title = null, inputs = {}) => {
+    const resolvedTitle = title?.id ? title : null;
     if (!resolvedTitle?.id) {
       return null;
     }
-    const userLibrary = await loadUserLibraryState(discordUserId, [resolvedTitle]);
+    const userLibrary = buildUserLibraryStateFromInputs([resolvedTitle], inputs);
     const userTitle = userLibrary.titles[0] || resolvedTitle;
     return {
       title: decorateTitleWithTagPreferences(userTitle, userLibrary.tagPreferences),
       userLibrary
     };
+  };
+
+  const loadUserTitleState = async (discordUserId, titleId, title = null, userInputs = null) => {
+    const resolvedTitle = title || await loadLibraryTitle(titleId);
+    if (!resolvedTitle?.id) {
+      return null;
+    }
+    const inputs = userInputs || await loadUserStateInputs(discordUserId);
+    return buildUserTitleStateFromInputs(resolvedTitle, inputs);
   };
 
   const loadRequestById = async (requestId) => {
@@ -810,7 +935,10 @@ export const registerMoonV3Routes = (app, {
 
   const loadLiveRavenTasks = async () => {
     const ravenPayload = await fetchRavenJson("/v1/downloads/tasks");
-    return normalizeArray(ravenPayload).map((task) => ({
+    return normalizeArray(ravenPayload).map((task) => {
+      const details = normalizeObject(task.details, {}) || {};
+      const selectedDownload = normalizeObject(task.selectedDownload, normalizeObject(details.selectedDownload, {}) || {}) || {};
+      return {
       taskId: normalizeString(task.taskId),
       jobId: normalizeString(task.jobId, normalizeString(task.taskId)),
       requestId: normalizeString(task.requestId),
@@ -828,16 +956,38 @@ export const registerMoonV3Routes = (app, {
       percent: Number.parseInt(String(task.percent || 0), 10) || 0,
       priority: normalizeString(task.priority, normalizeString(task.details?.priority, "normal")),
       sortOrder: Number.parseInt(String(task.sortOrder ?? task.details?.sortOrder ?? 0), 10) || 0,
-      details: normalizeObject(task.details, {}) || {},
-      selectedMetadata: normalizeObject(task.selectedMetadata, normalizeObject(task.details?.selectedMetadata, {}) || {}),
-      selectedDownload: normalizeObject(task.selectedDownload, normalizeObject(task.details?.selectedDownload, {}) || {}),
+      downloadSpeedBytesPerSecond: Number(task.downloadSpeedBytesPerSecond ?? details.downloadSpeedBytesPerSecond ?? 0) || 0,
+      startedAt: normalizeString(task.startedAt, normalizeString(details.startedAt)),
+      details: {
+        downloadSpeedBytesPerSecond: Number(details.downloadSpeedBytesPerSecond || 0) || 0,
+        startedAt: normalizeString(details.startedAt),
+        sortOrder: Number.parseInt(String(details.sortOrder ?? 0), 10) || 0
+      },
+      selectedMetadata: {},
+      selectedDownload: {
+        providerId: normalizeString(selectedDownload.providerId, normalizeString(task.providerId)),
+        providerName: normalizeString(selectedDownload.providerName, normalizeString(task.providerId)),
+        titleName: normalizeString(selectedDownload.titleName, normalizeString(task.titleName)),
+        titleUrl: normalizeString(selectedDownload.titleUrl, normalizeString(task.titleUrl))
+      },
       workingRoot: normalizeString(task.workingRoot, normalizeString(task.details?.workingRoot)),
       downloadRoot: normalizeString(task.downloadRoot, normalizeString(task.details?.downloadRoot)),
       queuedAt: parseIso(task.queuedAt),
       updatedAt: parseIso(task.updatedAt),
       ownerService: "scriptarr-raven",
       source: "raven"
-    }));
+      };
+    });
+  };
+
+  const buildLiveRavenQueuePayload = async () => {
+    const [tasks, runtimeSettings] = await Promise.all([
+      loadLiveRavenTasks(),
+      readRavenDownloadRuntimeSettings()
+    ]);
+    return buildAdminQueuePayload(tasks, {
+      concurrency: runtimeSettings.activeTitleDownloads
+    });
   };
 
   const loadTasks = async () => {
@@ -1022,7 +1172,8 @@ export const registerMoonV3Routes = (app, {
     actor,
     actorUser,
     comment,
-    eventMessage
+    eventMessage,
+    expectedRevision
   }) => {
     const queueResult = await queueSelectedDownload({
       requestId,
@@ -1039,6 +1190,7 @@ export const registerMoonV3Routes = (app, {
       eventMessage: normalizeString(eventMessage, normalizeString(comment, "Approved from Moon admin.")),
       moderatorComment: normalizeString(comment),
       actor: normalizeString(actor),
+      expectedRevision: normalizeExpectedRequestRevision(expectedRevision),
       appendStatusEvent: false,
       detailsMerge: {
         availability: "available",
@@ -1534,8 +1686,7 @@ export const registerMoonV3Routes = (app, {
   }));
 
     app.get("/api/moon-v3/admin/activity/queue", requireActivityRead(async (_req, res) => {
-      const tasks = await loadLiveRavenTasks();
-      res.json(buildAdminQueuePayload(tasks));
+      res.json(await buildLiveRavenQueuePayload());
     }));
 
     app.post("/api/moon-v3/admin/activity/queue/:taskId/cancel", requireActivityWrite(async (req, res) => {
@@ -1891,6 +2042,7 @@ export const registerMoonV3Routes = (app, {
         notes: normalizeString(req.body?.notes, existing.notes),
         status: "pending",
         actor: req.user.username,
+        expectedRevision: normalizeExpectedRequestRevision(req.body?.expectedRevision),
         appendStatusEvent: false,
         detailsMerge: {
           query: normalizeString(req.body?.query, existing.details?.query),
@@ -1902,22 +2054,31 @@ export const registerMoonV3Routes = (app, {
         }
       });
     } catch (error) {
-      if (isRequestWorkConflictError(error)) {
-        res.status(409).json(buildRequestWorkConflictPayload(error));
+      if (sendKnownRequestActionConflict(res, error)) {
         return;
       }
       throw error;
     }
 
-    const approved = await approveAndQueueRequest({
-      requestId: req.params.id,
-      requestSummary: await loadRequestById(req.params.id),
-      requestedBy: existing.requestedBy.discordUserId || req.user.discordUserId,
-      actor: req.user.username,
-      actorUser: req.user,
-      comment: normalizeString(req.body?.comment, "Approved from Moon admin."),
-      eventMessage: normalizeString(req.body?.comment, "Approved from Moon admin.")
-    });
+    const approvedRequest = await loadRequestById(req.params.id);
+    let approved = null;
+    try {
+      approved = await approveAndQueueRequest({
+        requestId: req.params.id,
+        requestSummary: approvedRequest,
+        expectedRevision: approvedRequest?.revision,
+        requestedBy: existing.requestedBy.discordUserId || req.user.discordUserId,
+        actor: req.user.username,
+        actorUser: req.user,
+        comment: normalizeString(req.body?.comment, "Approved from Moon admin."),
+        eventMessage: normalizeString(req.body?.comment, "Approved from Moon admin.")
+      });
+    } catch (error) {
+      if (sendKnownRequestActionConflict(res, error)) {
+        return;
+      }
+      throw error;
+    }
     res.status(approved.status).json(approved.payload);
   }));
 
@@ -1933,11 +2094,20 @@ export const registerMoonV3Routes = (app, {
       return;
     }
 
-    const denied = await vaultClient.reviewRequest(req.params.id, {
-      status: "denied",
-      comment,
-      actor: req.user.username
-    });
+    let denied = null;
+    try {
+      denied = await vaultClient.reviewRequest(req.params.id, {
+        status: "denied",
+        comment,
+        actor: req.user.username,
+        expectedRevision: normalizeExpectedRequestRevision(req.body?.expectedRevision)
+      });
+    } catch (error) {
+      if (sendKnownRequestActionConflict(res, error)) {
+        return;
+      }
+      throw error;
+    }
     await appendEventForUser({
       domain: "requests",
       eventType: "request-denied",
@@ -2001,6 +2171,7 @@ export const registerMoonV3Routes = (app, {
         notes: normalizeString(req.body?.notes, existing.notes),
         status: nextStatus,
         actor: req.user.username,
+        expectedRevision: normalizeExpectedRequestRevision(req.body?.expectedRevision),
         appendStatusEvent: false,
         detailsMerge: {
           query: normalizeString(req.body?.query, existing.details?.query),
@@ -2012,8 +2183,7 @@ export const registerMoonV3Routes = (app, {
         }
       });
     } catch (error) {
-      if (isRequestWorkConflictError(error)) {
-        res.status(409).json(buildRequestWorkConflictPayload(error));
+      if (sendKnownRequestActionConflict(res, error)) {
         return;
       }
       throw error;
@@ -2078,6 +2248,7 @@ export const registerMoonV3Routes = (app, {
         title: normalizeString(selectedMetadata.title, existing.title),
         requestType: normalizeString(selectedDownload.requestType, existing.requestType),
         notes: normalizeString(req.body?.notes, existing.notes),
+        expectedRevision: normalizeExpectedRequestRevision(req.body?.expectedRevision),
         detailsMerge: {
           query: normalizeString(req.body?.query, existing.details?.query),
           selectedMetadata,
@@ -2087,8 +2258,7 @@ export const registerMoonV3Routes = (app, {
         actor: req.user.username
       });
     } catch (error) {
-      if (isRequestWorkConflictError(error)) {
-        res.status(409).json(buildRequestWorkConflictPayload(error));
+      if (sendKnownRequestActionConflict(res, error)) {
         return;
       }
       throw error;
@@ -2104,21 +2274,29 @@ export const registerMoonV3Routes = (app, {
       return;
     }
 
-    await vaultClient.updateRequest(req.params.id, {
-      status: "queued",
-      eventType: "approved",
-      eventMessage: "Unavailable request resolved and queued from Moon admin.",
-      actor: req.user.username,
-      appendStatusEvent: false,
-      detailsMerge: {
-        query: normalizeString(req.body?.query, existing.details?.query),
-        selectedMetadata,
-        selectedDownload,
-        availability: "available",
-        jobId: normalizeString(queueResult.payload?.jobId),
-        taskId: normalizeString(queueResult.payload?.taskId)
+    try {
+      await vaultClient.updateRequest(req.params.id, {
+        status: "queued",
+        expectedRevision: refreshed?.revision,
+        eventType: "approved",
+        eventMessage: "Unavailable request resolved and queued from Moon admin.",
+        actor: req.user.username,
+        appendStatusEvent: false,
+        detailsMerge: {
+          query: normalizeString(req.body?.query, existing.details?.query),
+          selectedMetadata,
+          selectedDownload,
+          availability: "available",
+          jobId: normalizeString(queueResult.payload?.jobId),
+          taskId: normalizeString(queueResult.payload?.taskId)
+        }
+      });
+    } catch (error) {
+      if (sendKnownRequestActionConflict(res, error)) {
+        return;
       }
-    });
+      throw error;
+    }
     await appendEvent({
       ...buildUserActor(req.user, "admin"),
       domain: "requests",
@@ -2157,18 +2335,26 @@ export const registerMoonV3Routes = (app, {
       selectedMetadata
     });
     const nextOptions = normalizeArray(downloads.results);
-    await vaultClient.updateRequest(req.params.id, {
-      status: nextOptions.length ? "pending" : "unavailable",
-      actor: req.user.username,
-      appendStatusEvent: false,
-      detailsMerge: {
-        selectedMetadata: normalizeObject(downloads.selectedMetadata, selectedMetadata) || selectedMetadata,
-        selectedDownload: null,
-        availability: nextOptions.length ? "available" : "unavailable",
-        sourceFoundAt: nextOptions.length ? new Date().toISOString() : "",
-        sourceFoundOptions: nextOptions
+    try {
+      await vaultClient.updateRequest(req.params.id, {
+        status: nextOptions.length ? "pending" : "unavailable",
+        actor: req.user.username,
+        expectedRevision: normalizeExpectedRequestRevision(req.body?.expectedRevision),
+        appendStatusEvent: false,
+        detailsMerge: {
+          selectedMetadata: normalizeObject(downloads.selectedMetadata, selectedMetadata) || selectedMetadata,
+          selectedDownload: null,
+          availability: nextOptions.length ? "available" : "unavailable",
+          sourceFoundAt: nextOptions.length ? new Date().toISOString() : "",
+          sourceFoundOptions: nextOptions
+        }
+      });
+    } catch (error) {
+      if (sendKnownRequestActionConflict(res, error)) {
+        return;
       }
-    });
+      throw error;
+    }
     await appendEvent({
       ...buildUserActor(req.user, "admin"),
       domain: "requests",
@@ -2332,48 +2518,54 @@ export const registerMoonV3Routes = (app, {
     };
   };
 
+  const ravenVpnRuntimeFromHealth = (ravenHealth) => ravenHealth?.ok ? normalizeObject(ravenHealth.payload?.vpn, {}) : {
+    enabled: false,
+    connected: false,
+    protected: false,
+    settingsFresh: false,
+    runtimeCapable: false,
+    lastCheckedAt: "",
+    settingsLastLoadedAt: "",
+    lastError: normalizeString(ravenHealth?.payload?.error, "Raven health is unavailable.")
+  };
+
   const buildSettingsPayload = async (user) => {
-    const [ravenVpn, metadataProviders, downloadProviders, requestWorkflow, branding, discord, toastSettings, databaseOverview, ravenHealth] = await Promise.all([
+    const [ravenVpn, metadataProviders, downloadProviders, ravenDownloadRuntime, requestWorkflow, branding, discord, toastSettings] = await Promise.all([
       readRavenVpnSettings(),
       readMetadataProviderSettings(),
       readDownloadProviderSettings(),
+      readRavenDownloadRuntimeSettings(),
       readRequestWorkflowSettings(),
       readMoonBrandingSettings(),
       readPortalDiscordSettings(),
-      buildToastSettingsPayload(user),
-      hasDomainAccess(user, "database", "read") ? vaultClient.getDatabaseOverview().catch((error) => ({
-        error: error instanceof Error ? error.message : String(error)
-      })) : null,
-      serviceJson(config.ravenBaseUrl, "/health").catch((error) => ({
-        ok: false,
-        status: 0,
-        payload: {error: error instanceof Error ? error.message : String(error)}
-      }))
+      buildToastSettingsPayload(user)
     ]);
 
     return {
       ravenVpn,
-      ravenVpnRuntime: ravenHealth?.ok ? normalizeObject(ravenHealth.payload?.vpn, {}) : {
-        enabled: false,
+      ravenVpnRuntime: {
+        state: ravenVpn.enabled ? "armed" : "disabled",
+        enabled: Boolean(ravenVpn.enabled),
         connected: false,
         protected: false,
-        settingsFresh: false,
-        runtimeCapable: false,
+        settingsFresh: true,
+        runtimeCapable: true,
         lastCheckedAt: "",
         settingsLastLoadedAt: "",
-        lastError: normalizeString(ravenHealth?.payload?.error, "Raven health is unavailable.")
+        lastError: ""
       },
       metadataProviders,
       downloadProviders,
+      ravenDownloadRuntime,
       requestWorkflow,
       branding,
       publicBranding: publicMoonBranding(branding),
       discord: {
         ...discord,
-        runtime: await loadPortalDiscordRuntime(discord)
+        runtime: {}
       },
       toastSettings,
-      databaseOverview,
+      databaseOverview: null,
       links: {
         databaseExplorer: "/admin/settings/database",
         noonaProject: "https://github.com/The-Noona-Project/Scriptarr",
@@ -2408,6 +2600,27 @@ export const registerMoonV3Routes = (app, {
         ? normalizeArray(commands?.payload?.commands || commands?.commands)
         : knownPortalDiscordCommands,
       portal: healthPayload
+    };
+  };
+
+  const buildSettingsRuntimePayload = async (user) => {
+    const discord = await readPortalDiscordSettings();
+    const [databaseOverview, ravenHealth, discordRuntime] = await Promise.all([
+      hasDomainAccess(user, "database", "read") ? vaultClient.getDatabaseOverview().catch((error) => ({
+        error: error instanceof Error ? error.message : String(error)
+      })) : null,
+      serviceJson(config.ravenBaseUrl, "/health").catch((error) => ({
+        ok: false,
+        status: 0,
+        payload: {error: error instanceof Error ? error.message : String(error)}
+      })),
+      loadPortalDiscordRuntime(discord)
+    ]);
+
+    return {
+      ravenVpnRuntime: ravenVpnRuntimeFromHealth(ravenHealth),
+      databaseOverview,
+      discordRuntime
     };
   };
 
@@ -2461,6 +2674,14 @@ export const registerMoonV3Routes = (app, {
 
   app.get("/api/moon-v3/admin/settings", requireSettingsRead(async (req, res) => {
     res.json(await buildSettingsPayload(req.user));
+  }));
+
+  app.get("/api/moon-v3/admin/settings/runtime", requireSettingsRead(async (req, res) => {
+    res.json(await buildSettingsRuntimePayload(req.user));
+  }));
+
+  app.get("/api/moon-v3/admin/settings/toasts", requireSettingsRead(async (req, res) => {
+    res.json(await buildToastSettingsPayload(req.user));
   }));
 
   app.get("/api/moon-v3/admin/discord", requireDiscordRead(async (req, res) => {
@@ -2890,6 +3111,48 @@ export const registerMoonV3Routes = (app, {
     res.json(saved);
   }));
 
+  app.put("/api/moon-v3/admin/settings/raven/download-runtime", requireSettingsWrite(async (req, res) => {
+    const validation = validateActiveTitleDownloads(req.body?.activeTitleDownloads);
+    if (!validation.ok) {
+      res.status(400).json({error: validation.error});
+      return;
+    }
+    const nextSettings = normalizeRavenDownloadRuntimeSettings({
+      activeTitleDownloads: validation.value
+    });
+    await vaultClient.setSetting(RAVEN_DOWNLOAD_RUNTIME_KEY, nextSettings);
+    const reload = await safeJson(serviceJson(config.ravenBaseUrl, "/v1/downloads/runtime/reload", {
+      method: "POST",
+      body: {},
+      timeoutMs: 10000
+    }));
+    const saved = await readRavenDownloadRuntimeSettings();
+    const applied = reload?.ok === true;
+    const warning = applied ? "" : normalizeString(
+      reload?.payload?.error || reload?.error,
+      "Raven saved the setting but could not apply it live. It will apply after Raven restarts."
+    );
+    await appendEventForUser({
+      domain: "settings",
+      eventType: "download-runtime-updated",
+      user: req.user,
+      targetType: "setting",
+      targetId: RAVEN_DOWNLOAD_RUNTIME_KEY,
+      message: `${req.user.username} updated Raven active download slots.`,
+      metadata: {
+        activeTitleDownloads: saved.activeTitleDownloads,
+        applied
+      }
+    });
+    res.json({
+      ...saved,
+      ravenDownloadRuntime: saved,
+      applied,
+      runtime: reload?.payload || reload || {},
+      warning
+    });
+  }));
+
   app.put("/api/moon-v3/admin/settings/portal/discord", requireSettingsWrite(async (req, res) => {
     const existing = normalizePortalDiscordSettings(await readPortalDiscordSettings());
     const body = normalizeObject(req.body, {}) || {};
@@ -3154,28 +3417,41 @@ export const registerMoonV3Routes = (app, {
     });
   }));
 
-  const buildAdminSystemStatus = async () => {
-    const [matrix, services, bootstrap, runtime] = await Promise.all([
-      buildSystemStatusPayload({config, serviceJson, includeChecks: true}),
-      loadServiceStatus(),
-      safeJson(serviceJson(config.wardenBaseUrl, "/api/bootstrap", {timeoutMs: 2200})),
-      safeJson(serviceJson(config.wardenBaseUrl, "/api/runtime", {timeoutMs: 2200}))
+  const buildAdminSystemStatus = async ({includeChecks = false} = {}) => {
+    const [matrix, services] = await Promise.all([
+      buildSystemStatusPayload({config, serviceJson, includeChecks}),
+      loadServiceStatus()
     ]);
 
     return {
       ...matrix,
       services,
+      bootstrap: null,
+      runtime: null
+    };
+  };
+
+  const buildAdminSystemStatusRuntime = async () => {
+    const [bootstrap, runtime] = await Promise.all([
+      safeJson(serviceJson(config.wardenBaseUrl, "/api/bootstrap", {timeoutMs: 2200})),
+      safeJson(serviceJson(config.wardenBaseUrl, "/api/runtime", {timeoutMs: 2200}))
+    ]);
+    return {
       bootstrap: bootstrap.payload || bootstrap,
       runtime: runtime.payload || runtime
     };
   };
 
   app.get("/api/moon-v3/admin/system/status", requireSystemRead(async (_req, res) => {
-    res.json(await buildAdminSystemStatus());
+    res.json(await buildAdminSystemStatus({includeChecks: false}));
+  }));
+
+  app.get("/api/moon-v3/admin/system/status/runtime", requireSystemRead(async (_req, res) => {
+    res.json(await buildAdminSystemStatusRuntime());
   }));
 
   app.post("/api/moon-v3/admin/system/status/check", requireSystemRead(async (_req, res) => {
-    res.json(await buildAdminSystemStatus());
+    res.json(await buildAdminSystemStatus({includeChecks: true}));
   }));
 
   app.get("/api/moon-v3/admin/system/content-reset/preview", requireSystemRoot(async (_req, res) => {
@@ -3385,7 +3661,11 @@ export const registerMoonV3Routes = (app, {
     }
     if (tool.id === "queue") {
       await markToolUsed(vaultClient, tool.id);
-      return {message: "Queue loaded.", data: buildAdminQueuePayload(await loadTasks())};
+      const [tasks, runtimeSettings] = await Promise.all([
+        loadTasks(),
+        readRavenDownloadRuntimeSettings()
+      ]);
+      return {message: "Queue loaded.", data: buildAdminQueuePayload(tasks, {concurrency: runtimeSettings.activeTitleDownloads})};
     }
     if (tool.id === "requests") {
       await markToolUsed(vaultClient, tool.id);
@@ -3653,27 +3933,34 @@ export const registerMoonV3Routes = (app, {
   }));
 
     app.get("/api/moon-v3/user/home", withUser(requireUser, async (req, res) => {
-      const [titles, requests] = await Promise.all([
-        loadLibrary(),
-        loadRequests()
+      const [cardPage, requests, userInputs] = await Promise.all([
+        loadLibraryCardPage({pageSize: 100, sort: "recent"}),
+        loadRequests(),
+        loadUserStateInputs(req.user.discordUserId)
       ]);
-      const userLibrary = await loadUserLibraryState(req.user.discordUserId, titles);
+      const activityIds = collectUserActivityTitleIds(userInputs);
+      const activityTitles = await loadLibraryCardPageByIds(activityIds);
+      const recentLibrary = buildUserLibraryStateFromInputs(cardPage.titles, userInputs);
+      const activityLibrary = buildUserLibraryStateFromInputs(activityTitles, userInputs);
 
     res.json(buildMoonHomePayload({
-      titles: userLibrary.titles.length ? userLibrary.titles : titles,
+      titles: recentLibrary.titles.length ? recentLibrary.titles : cardPage.titles,
       requests,
-      bookshelf: userLibrary.bookshelf,
-      following: userLibrary.following,
+      bookshelf: activityLibrary.bookshelf,
+      following: activityLibrary.following,
       discordUserId: req.user.discordUserId,
-      tagPreferences: userLibrary.tagPreferences
+      tagPreferences: recentLibrary.tagPreferences
       }));
     }));
 
     app.get("/api/moon-v3/user/profile", withUser(requireUser, async (req, res) => {
-      const [requests, userLibrary] = await Promise.all([
+      const [requests, userInputs] = await Promise.all([
         loadRequests(),
-        loadUserLibraryState(req.user.discordUserId)
+        loadUserStateInputs(req.user.discordUserId)
       ]);
+      const profileTitleIds = collectUserActivityTitleIds(userInputs);
+      const profileTitles = await loadLibraryCardPageByIds(profileTitleIds);
+      const userLibrary = buildUserLibraryStateFromInputs(profileTitles, userInputs);
       const userRequests = requests.filter((entry) => entry.requestedBy.discordUserId === req.user.discordUserId);
 
       res.json({
@@ -3795,7 +4082,7 @@ export const registerMoonV3Routes = (app, {
 
   app.get("/api/moon-v3/user/library", withUser(requireUser, async (req, res) => {
     if (normalizeString(req.query.view) === "card") {
-      res.json(buildLibraryCardPage(await loadLibraryCards(), req.query));
+      res.json(await loadLibraryCardPage(req.query));
       return;
     }
     res.json({titles: await loadLibrary()});
@@ -3817,10 +4104,12 @@ export const registerMoonV3Routes = (app, {
   }));
 
   app.get("/api/moon-v3/user/title/:titleId", withUser(requireUser, async (req, res) => {
-    const [titleState, requests] = await Promise.all([
-      loadUserTitleState(req.user.discordUserId, req.params.titleId),
+    const [rawTitle, userInputs, requests] = await Promise.all([
+      loadLibraryTitle(req.params.titleId),
+      loadUserStateInputs(req.user.discordUserId),
       loadRequests()
     ]);
+    const titleState = buildUserTitleStateFromInputs(rawTitle, userInputs);
     const title = titleState?.title || null;
     if (!title) {
       res.status(404).json({error: "Title not found."});
@@ -4449,13 +4738,19 @@ export const registerMoonV3Routes = (app, {
   }));
 
   app.get("/api/moon-v3/user/reader/title/:titleId", withUser(requireUser, async (req, res) => {
-    const result = await serviceJson(config.ravenBaseUrl, `/v1/reader/${encodeURIComponent(req.params.titleId)}`);
+    const [result, userInputs] = await Promise.all([
+      serviceJson(config.ravenBaseUrl, `/v1/reader/${encodeURIComponent(req.params.titleId)}`),
+      loadUserStateInputs(req.user.discordUserId)
+    ]);
     if (!result.ok) {
       res.status(result.status).json(result.payload);
       return;
     }
 
-    const titleState = await loadUserTitleState(req.user.discordUserId, req.params.titleId, toTitleSummary(result.payload?.title));
+    const titleState = buildUserTitleStateFromInputs(toTitleSummary({
+      ...(result.payload?.title || {}),
+      chapters: normalizeArray(result.payload?.chapters)
+    }), userInputs);
     if (!titleState?.title) {
       res.status(404).json({error: "Title not found."});
       return;
@@ -4468,13 +4763,12 @@ export const registerMoonV3Routes = (app, {
   }));
 
   app.get("/api/moon-v3/user/reader/title/:titleId/chapter/:chapterId", withUser(requireUser, async (req, res) => {
-    const [manifest, chapter, progress, bookmarks, storedPreferences, titleState] = await Promise.all([
+    const [manifest, chapter, userInputs, bookmarks, storedPreferences] = await Promise.all([
       serviceJson(config.ravenBaseUrl, `/v1/reader/${encodeURIComponent(req.params.titleId)}`),
       serviceJson(config.ravenBaseUrl, `/v1/reader/${encodeURIComponent(req.params.titleId)}/${encodeURIComponent(req.params.chapterId)}`),
-      vaultClient.getProgress(req.user.discordUserId),
+      loadUserStateInputs(req.user.discordUserId),
       readUserScopedSetting(vaultClient, "moon.reader.bookmarks", req.user.discordUserId, []),
-      readUserScopedSetting(vaultClient, "moon.reader.preferences", req.user.discordUserId, {}),
-      loadUserTitleState(req.user.discordUserId, req.params.titleId)
+      readUserScopedSetting(vaultClient, "moon.reader.preferences", req.user.discordUserId, {})
     ]);
 
     if (!chapter.ok) {
@@ -4483,6 +4777,13 @@ export const registerMoonV3Routes = (app, {
     }
 
     const payload = chapter.payload;
+    const manifestTitle = manifest.ok
+      ? toTitleSummary({
+        ...(manifest.payload?.title || payload.title || {}),
+        chapters: normalizeArray(manifest.payload?.chapters)
+      })
+      : toTitleSummary(payload.title);
+    const titleState = buildUserTitleStateFromInputs(manifestTitle, userInputs);
     const title = titleState?.title || toTitleSummary(payload.title);
     const chapterSummary = toChapterSummary(payload.chapter);
     const manifestPayload = manifest.ok
@@ -4495,7 +4796,7 @@ export const registerMoonV3Routes = (app, {
         chapters: normalizeArray(title?.chapters).length ? normalizeArray(title.chapters) : [chapterSummary]
       };
     const typeSlug = normalizeTypeSlug(title.libraryTypeSlug || title.mediaType);
-    const progressEntry = normalizeArray(progress).find((entry) => entry.mediaId === payload.title.id);
+    const progressEntry = normalizeArray(userInputs.progress).find((entry) => entry.mediaId === payload.title.id);
     const pageBase = `/api/moon/v3/user/reader/title/${encodeURIComponent(req.params.titleId)}/chapter/${encodeURIComponent(req.params.chapterId)}/page`;
     const enrichedChapter = normalizeArray(title?.chapters).find((entry) => entry.id === req.params.chapterId) || chapterSummary;
 

@@ -81,18 +81,33 @@ Read this before editing Scriptarr.
 - Moon also owns the trusted public automation API. Keep external search and request traffic behind Moon's
   `/api/public/*` routes, store only hashed API keys in Vault through Sage, and preserve the NSFW, duplicate, and
   lowest-priority guards on external queueing.
+- Moon browse, library, and home shelves should stay on the compact title-card broker path. Pass filters through Moon
+  -> Sage -> Vault or Raven card projections instead of hydrating full title or chapter arrays for list views.
+- For Moon load-speed work, measure before editing. Build a timing table for representative user and admin pages, split
+  document or Next asset load, chrome/bootstrap calls, main page payload, SSE/event calls, and payload size, then compare
+  Moon route time against downstream Sage, Raven, and Vault time for heavy endpoints.
+- Keep Moon performance fixes on the existing hot paths: compact card projections, bounded home shelves, shared admin
+  bootstrap/event streams, lightweight admin status, route-level dynamic admin loading, and measured bundle reduction.
+  Do not add browser-direct calls to internal services as a shortcut.
 - Portal's Discord runtime is brokered through Moon admin's `/admin/discord` settings page. Keep guild id, onboarding,
   DM superuser id, release notification channel, Noona trivia settings, and per-command role mapping behind that
   settings object instead of drifting back to scattered env-only behavior.
 - Portal now sends request completion DMs. Preserve the single-send acknowledgment flow so retries or restarts do not
   spam the requester.
+- Portal trivia should reconcile one active Sage-backed round clock. Reloads, repeated `/trivia start`, and settings
+  refreshes must not duplicate clues, hints, timeout posts, or leaderboard windows.
 - Moon admin's `/admin/system/ai` is the browser-safe owner for Oracle, optional LocalAI, and Sage-governed AI
   proposals. Keep browser traffic behind Moon and Sage instead of adding direct browser calls to Oracle, Warden,
   OpenAI, or LocalAI.
+- Moon admin's `/admin/system/status` is now registry-first. Keep the lightweight endpoint matrix fast on first load,
+  and only probe GET/read endpoints from the explicit check action while leaving mutation routes unprobed.
 - Raven stores active downloads under `downloading/<type>/...` and promotes completed library content into
   `downloaded/<type>/...`.
 - Raven should only report `100%` after promoted files persist into the brokered catalog, and startup recovery should
   reconcile finished `downloaded/<type>/...` files back into the library if catalog rows are missing.
+- Raven title-download concurrency is Sage-backed runtime config. Default to `2`, allow only `1` through `6`, apply
+  reloads live when possible without cancelling active titles, and treat the Moon Settings value as the owner of that
+  limit.
 - Moon admin Wanted should keep `/admin/wanted/missing-content` as the canonical repair surface for chapter gaps,
   missing pages, and bad-source quality states, with `/admin/wanted/missing-chapters` left as an alias only.
 - Oracle now lives in `services/oracle` as a Python FastAPI service even though the repo-level test and Docker helpers

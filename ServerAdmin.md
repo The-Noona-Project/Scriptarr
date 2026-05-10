@@ -230,6 +230,8 @@ sends arbitrary Discord broadcasts.
 - review Raven metadata providers, with MangaDex enabled by default, Anime-Planet enabled ahead of MangaUpdates, and
   AniList, MyAnimeList, or ComicVine available for wider coverage
 - review Raven download providers, with WeebCentral first by default and MangaDex available as a second normal source
+- set Raven's active title-download limit from `/admin/settings`; the value defaults to `2`, accepts `1` through `6`,
+  applies live when Raven can reload it, and otherwise persists for the next Raven restart
 - manage Moon branding from `/admin/settings`, including site name and a PNG, JPEG, or WebP logo that Scriptarr stores
   as WebP variants for user/admin chrome and install metadata
 - review database size and table counts from `/admin/settings`, then open the grant-protected DB explorer at
@@ -245,8 +247,8 @@ sends arbitrary Discord broadcasts.
   are Scriptarr-defined only, runs are non-overlapping, and every manual or scheduled run is brokered through Sage with
   durable job history
 - inspect the grouped endpoint matrix from `/admin/system/status`; Scriptarr lists Moon, Sage, Vault, Raven, Warden,
-  Portal, Oracle, and LocalAI routes, checks GET/read endpoints, reports auth-gated reads as protected, and marks
-  mutation routes as not probed
+  Portal, Oracle, and LocalAI routes quickly on first load, then checks GET/read endpoints only when you run the
+  explicit check action. Auth-gated reads report as protected, and mutation routes remain not probed.
 - configure Oracle and optional LocalAI runtime controls from `/admin/system/ai`, including provider, model dropdown,
   temperature, masked OpenAI key state, LocalAI image profile, manual install, start, or remove actions, lifecycle
   progress, completion toasts, Sage-governed AI tool toggles, confirmed action proposals, and prompt tests
@@ -254,7 +256,8 @@ sends arbitrary Discord broadcasts.
   and managed files without deleting users, settings, or durable events
 - manage users, roles, and permissions
 - inspect Warden service health and runtime config
-- monitor the live Raven queue board and reprioritize, retry, or cancel work from `/admin/activity/queue`
+- monitor the live Raven queue board and reprioritize, retry, or cancel work from `/admin/activity/queue`; the active
+  slot total shown there reflects the configured Raven title-download limit
 
 ## Moon Route Model
 
@@ -282,17 +285,19 @@ but the typed routes are the canonical links Moon now emits.
 
 Moon's user app also serves a same-origin `manifest.webmanifest` and `service-worker.js` so the reader can be
 installed like an app and keep a rolling cache of recently opened chapters on the current device.
-That same user app now runs through an embedded Next.js App Router frontend with Once UI shells, a single-row
-megamenu header with plain site-name branding, a compact avatar dropdown for Profile, conditional Admin, and Logout, a
-dedicated `/profile` page for local StylePanel preferences and install actions, a simple footer, and an immersive
+That same user app now runs through an embedded Next.js App Router frontend with lightweight local shell primitives, a
+single-row megamenu header with plain site-name branding, a compact avatar dropdown for Profile, conditional Admin,
+and Logout, a dedicated `/profile` page for local StylePanel preferences and install actions, a simple footer, and an immersive
 reader that defaults to infinite chapter scroll while still exposing paged mode. `/profile` is now a tabbed account
 hub with `Overview`, `Stats`, and `Preferences` instead of one long mixed settings panel. Library type links now live
-only inside the `Library` mega menu, and `/browse` now renders as A-Z shelf rows with the same Once UI scroller
+only inside the `Library` mega menu, and `/browse` now renders as A-Z shelf rows with the same lightweight scroller
 behavior used on the home page. It keeps a quick-jump letter rail on the left and tighter search against titles,
 aliases, types, and tags while browse cards clamp long copy until the user opens a title page. Its home route now
 favors a simpler media-library feel too, with a personalized "Your Bookshelf" continue-reading row followed by
 cover-led scrollers for recently added titles by type and tag-driven shelves based on explicit tag likes or hides plus
 inferred taste from read history, follows, and the active bookshelf.
+Moon chrome now starts from one same-origin bootstrap call for branding, auth state, user identity, and first-owner
+setup status; the Discord OAuth URL is fetched only when a signed-out page actually needs a login link.
 `/myrequests` is now both the request-creation surface and the personal status page. The top of the page runs the
 metadata-first request wizard, while the list below is split into `Active`, `Completed`, and `Closed` tabs. Readers
 can edit notes or cancel only while the request is still active.
@@ -331,6 +336,9 @@ and keeps request details in a drawer with saved metadata, selected source snaps
 timeline, linked Raven ids, and approve, resolve, refresh-source, override, or deny actions. Denying a request requires
 a moderator comment so the durable audit event and requester notification have a useful reason. It also supports safe
 bulk refresh-source and bulk deny actions; approvals remain per request so moderators can inspect each source choice.
+When a source lookup returns exactly one concrete Raven target, Moon selects it for the moderator but still waits for
+the explicit approve or resolve action. Each admin action carries the request revision, so stale drawers fail with a
+clear refresh-and-review conflict instead of overwriting another admin or background update.
 `/admin/wanted/metadata` replaces the old Metadata Gaps page and lets staff search provider matches and apply one to an
 existing library title through Sage and Raven. `/admin/wanted/metadata-gaps` redirects to the new canonical route.
 `/admin/wanted/missing-content` shows coverage gaps, bad chapters, possible missing pages, and bad-source quality
@@ -354,8 +362,9 @@ track them under System, Updates, and Events instead.
 The main Settings page is the compact place for general site administration. It includes branding, uploaded logo
 preview, database size summary, The Noona Project credit link, Discord support link, toast preferences, Raven VPN,
 metadata providers, download providers, request workflow, and Discord basics. AI controls intentionally stay under
-`/admin/system/ai`. Settings saves are section-scoped through Moon v3 routes, so background refreshes should not wipe
-unsaved edits and blank Raven VPN password fields preserve the existing stored secret.
+`/admin/system/ai`. Settings paints saved configuration first, then hydrates Raven VPN runtime, database overview, and
+Portal Discord runtime in the background. Settings saves are section-scoped through Moon v3 routes, so background
+refreshes should not wipe unsaved edits and blank Raven VPN password fields preserve the existing stored secret.
 
 The DB explorer is reachable only from the Settings page and requires the `database` admin grant unless the signed-in
 user is the protected owner. It can show a table overview, row counts, approximate table sizes, redacted rows, column
@@ -395,6 +404,9 @@ is only supported in bot DMs, and only checks the configured DM superuser id.
 `/trivia` controls Noona's title-summary guessing game. Normal channel messages are the guesses; exact titles, aliases,
 source links, Moon title links, and tolerant fuzzy matches count. Winners get XP with speed and streak bonuses, and
 leaderboards can be posted after each round plus daily, weekly, and monthly at the configured server-time hour.
+Portal reconciles trivia timers through Sage so reloads, repeated `/trivia start`, and settings refreshes keep one
+active round clock. If a round is already active, the command reports that active round instead of reposting the clue
+or arming duplicate hints and timeouts.
 Use `/downloadall run type:<type> nsfw:<true|false> titlegroup:<prefix> groupsize:<count>` in a DM with Noona as the supported bulk path.
 Every `downloadall` request creates a durable Raven run now, including single concrete type plus single `titlegroup`
 requests, so Portal can deliver delayed summaries even if the batch takes hours. `type:all` or `titlegroup:all`
@@ -418,8 +430,9 @@ entries. Raven skips completed catalog titles, appends only missing or new chapt
 and ignores malformed bare source URLs such as a provider `/series` root.
 That owner-only command is intentionally pinned to WeebCentral. If WeebCentral is disabled in Raven settings,
 `downloadall` fails instead of falling back to MangaDex or another provider.
-Moon user browse/library pages use compact paginated title-card reads so large libraries do not send chapter arrays to
-the browser. Cover images are cached by Moon as derived WebP files under the Moon cover-cache storage folder. The
+Moon user browse/library pages use compact paginated title-card reads so large libraries do not send chapter arrays or
+Raven filesystem roots to the browser. Cover images are cached by Moon as derived WebP files under the Moon
+cover-cache storage folder. The
 Tasks page has an `Optimize cover images` action that scans Sage-approved cover URLs, converts missing or stale cache
 entries, and is safe to rerun.
 Portal also sends requester DMs when a moderated request is approved, denied, or finishes downloading, and dedupes

@@ -38,16 +38,20 @@ Web request creation now lives only in `/myrequests`. That page runs an inline w
 rows first, choose the exact metadata match, review its provider link if needed, then submit the request with optional
 notes. If no source exists yet, Moon saves the request as `unavailable` and still shows it in the same page's tabbed
 status list. Admins later choose sources from `/admin/requests`, unless Sage auto-approves one high-confidence source.
-The forward-facing user app itself now runs through an embedded Next.js App Router program using Once UI shells. Moon
-keeps the same public routes and same-origin APIs, but the user experience now uses a single-row megamenu header with
-plain site-name branding, a compact anchored avatar dropdown, a simple footer, and a dedicated `/profile` page for
-local StylePanel preferences and install actions. That profile route is now a tabbed account hub with `Overview`,
+The forward-facing user app itself now runs through an embedded Next.js App Router program using lightweight local
+shell primitives. Moon keeps the same public routes and same-origin APIs, but the user experience now uses a
+single-row megamenu header with plain site-name branding, a compact anchored avatar dropdown, a simple footer, and a
+dedicated `/profile` page for local StylePanel preferences and install actions. That profile route is now a tabbed
+account hub with `Overview`,
 `Stats`, and `Preferences` sections instead of one long settings sheet. The older plain-JS user shell has been
 removed, and Library type links now live only under the `Library` mega menu, and `/browse` now uses A-Z shelf rows
-with the same Once UI scroller pattern as the home page.
+with the same lightweight scroller behavior as the home page.
 Discord login now also preserves the same-origin route where the user started whenever possible, so signing in from a
 title, reader, browse, request, or admin page returns to that page instead of always dropping into one fixed surface.
 If the remembered path is missing, unsafe, or not allowed for the signed-in user, Moon falls back to `/`.
+Chrome startup uses `/api/moon/chrome/bootstrap?returnTo=...` to collapse branding, auth state, user identity, and
+first-owner bootstrap into one same-origin call. Moon only asks Sage for the Discord OAuth URL when a signed-out
+surface actually needs to render a login link.
 It keeps a quick-jump index rail on the left and tighter search against titles, aliases, types, and tags while browse
 cards clamp long copy until the reader opens the full title page. The home route is intentionally simpler too: it
 starts with a personalized "Your Bookshelf" continue-reading shelf, then stacks cover-led scroller rows for recently
@@ -80,8 +84,8 @@ can keep lifecycle or alias enrichment on without relying only on API-backed sou
 Admin routes follow the Arr-style operations model, including library, add/import, calendar, activity, wanted,
 requests, users, Discord, settings, and system sections under `/admin`.
 Moon now serves `/admin` through the embedded Next.js App Router admin app with isolated `/admin/_next` assets and
-Once UI providers. The old plain-JS admin fallback and `/admin-assets` bundle are gone; every admin route now renders
-inside the Next shell and continues to use Moon's same-origin Sage-backed APIs.
+lightweight local shell providers. The old plain-JS admin fallback and `/admin-assets` bundle are gone; every admin
+route now renders inside the Next shell and continues to use Moon's same-origin Sage-backed APIs.
 `/admin/users` now acts as the full access-control surface: a dense user directory, reusable permission-group editor,
 group assignment panel, and recent auth or access event feed in one place. The bootstrap owner remains protected, and
 all other admin access is now derived from one or more permission groups with per-route-family `read`, `write`, or
@@ -90,6 +94,9 @@ all other admin access is now derived from one or more permission groups with pe
 review, keeps saved metadata and source snapshots visible in a drawer, and calls the Sage-backed approve, resolve,
 refresh-source, override, and deny routes without resetting active edits during live refreshes. It supports safe bulk
 refresh-source and bulk deny actions, but keeps approval and source resolution per request.
+Picked resolver sources now immediately affect the available actions, and Moon auto-selects exactly one concrete
+source candidate for review without auto-approving it. Admin request actions include the request revision so stale
+drawer actions return a clear conflict instead of overwriting newer request state.
 `/admin/wanted/metadata` is the dedicated metadata repair page. The old `/admin/wanted/metadata-gaps` path redirects
 there, and staff can search provider matches and apply one to the selected library title through Sage.
 `/admin/wanted/missing-content` is the dedicated coverage and quality repair page, showing missing counts, damaged
@@ -114,8 +121,9 @@ summary count.
 exposes card-level controls for retry, retry-all, cancel, priority changes, and queued-task reordering. Live refresh
 now defers while queue controls are being edited, running cards show live download speed plus an active ETA when Sage
 can estimate one credibly, and recovery cards can remove failed or stale queued tasks with their incomplete working
-folders. Section bulk controls can cancel all queued work, cancel all running work for root admins, retry all recovery
-items, or remove all removable recovery items.
+folders. The active slot total is display-only here and comes from the configured Raven title-download limit. Section
+bulk controls can cancel all queued work, cancel all running work for root admins, retry all recovery items, or remove
+all removable recovery items.
 
 Fresh installs intentionally show empty library states until Raven has real imported titles to surface, and the admin
 program now ships in a dark-only theme by default.
@@ -129,22 +137,29 @@ The admin System pages for Logs, Events, and Updates are now purpose-built Next 
 cards. Logs use Warden's server-redacted Docker tail through Sage, Events expose durable Vault filters plus a detail
 drawer, and Updates restore check/install controls with typed confirmation for `system.root` admins.
 Tasks, Status, and AI now follow the same Next pattern. Tasks renders the Sage-owned allowlisted scheduler with cron
-editing, preview, manual run, and recent history; Status renders a grouped endpoint matrix, checks GET/read routes,
-shows auth-gated reads as protected, and leaves mutation routes unprobed; AI owns Oracle settings, LocalAI lifecycle
-controls, asynchronous install/start/remove progress, completion toasts, and the admin test prompt.
+editing, preview, manual run, and recent history; Status initially renders Sage's lightweight grouped endpoint
+registry, then probes GET/read routes only when an admin runs the explicit check action. It shows auth-gated reads as
+protected and leaves mutation routes unprobed. Warden bootstrap and runtime details hydrate from the secondary
+same-origin status runtime payload; AI owns Oracle settings, LocalAI lifecycle controls, asynchronous install/start/remove
+progress, completion toasts, and the admin test prompt.
 Moon admin also owns the general Settings hub. It manages brokered `moon.branding` site name plus uploaded logo WebP
 variants, database size summary with a Settings-only DB explorer link, toast notification preferences, project credit
-and support links, and compact Raven VPN, provider, request workflow, and Discord essentials. Section drafts stay dirty
-locally until their save succeeds, and Settings-owned saves use explicit Moon v3 endpoints rather than older generic
-admin routes. The VPN card shows persisted settings beside Raven runtime capability, settings freshness, protected
-tunnel state, `armed / idle` lazy-connect state, and the latest tunnel or broker error. Its test action stays
-same-origin through Moon and Sage, then asks Raven to start the same fail-closed OpenVPN path used by downloads.
+and support links, and compact Raven VPN, provider, active title-download limit, request workflow, and Discord
+essentials. Section drafts stay dirty locally until their save succeeds, and Settings-owned saves use explicit Moon v3
+endpoints rather than older generic admin routes. The Raven download limit is a Settings-only numeric control for
+title-level concurrency (`1` through `6`, default `2`) and shows when a save was persisted but Raven could not apply it
+live. The VPN card shows persisted settings beside Raven runtime capability, settings freshness, protected tunnel
+state, `armed / idle` lazy-connect state, and the latest tunnel or broker error. Its test action stays same-origin
+through Moon and Sage, then asks Raven to start the same fail-closed OpenVPN path used by downloads. Settings paints
+saved configuration first, then hydrates Raven VPN runtime, database overview, and Portal Discord runtime from the
+secondary settings runtime payload without wiping dirty drafts.
 The DB explorer stays same-origin through Moon -> Sage -> Vault, requires the `database` admin domain, redacts
 sensitive values, and only allows validated settings JSON edits.
 The signed-in admin shell now also uses the Discord-backed user avatar when one is available, with an initials fallback
 so the top-right identity surface stays readable even without profile art.
 Admin pages use one shared toast provider for action results, async jobs, and live admin event stream updates instead
-of page-local stacks.
+of page-local stacks. The provider reads a toast-only settings endpoint and owns one shared admin SSE connection that
+pages subscribe to by event domain, so page-level EventSource connections should not be reintroduced.
 Moon admin also owns API management at `/admin/system/api`, including enable state, system-level keys assigned to
 permission groups, user-key audit for root API admins, and links to the plain same-origin Swagger docs and raw OpenAPI
 payload. Signed-in readers manage their own user-level API keys from `/profile`; those keys stay scoped to that

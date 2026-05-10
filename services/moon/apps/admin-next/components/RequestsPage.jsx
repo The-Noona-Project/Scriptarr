@@ -4,7 +4,7 @@
  * @file Purpose-built request moderation inbox for Moon admin.
  */
 
-import {useEffect, useMemo, useState} from "react";
+import {useEffect, useMemo, useRef, useState} from "react";
 import {hasAdminGrant} from "../lib/access.js";
 import {requestJson, useAdminEventStaleness, useAdminJson} from "../lib/api.js";
 import {
@@ -15,9 +15,14 @@ import {
   normalizeArray,
   normalizeString,
   requestActionState,
+  requestActionMessage,
   requestCoverUrl,
+  requestDownloadKey,
+  requestNextActionLabel,
   requestRowKey,
   resolveExistingRequestSelection,
+  selectSingleDownloadOption,
+  withEffectiveRequestSelection,
   requestTabs
 } from "../lib/adminRequests.js";
 import {formatDate, formatDisplayValue} from "../lib/format.js";
@@ -28,8 +33,6 @@ const emptyPayload = Object.freeze({
   requests: [],
   counts: {}
 });
-
-const sourceKey = (entry) => `${normalizeString(entry.providerId, normalizeString(entry.provider))}:${normalizeString(entry.titleUrl, normalizeString(entry.providerSeriesId))}`;
 
 const statusTone = (status) => {
   const normalized = normalizeString(status).toLowerCase();
@@ -124,11 +127,12 @@ export const RequestsPage = ({user}) => {
   const [busy, setBusy] = useState("");
   const [flash, setFlash] = useState("");
   const [flashTone, setFlashTone] = useState("");
+  const resolverResetKeyRef = useRef("");
   const {notify} = useAdminToast();
   const {loading, refreshing, error, data, refresh} = useAdminJson("/api/moon/v3/admin/requests", {
     fallback: emptyPayload
   });
-  useAdminEventStaleness({
+  const live = useAdminEventStaleness({
     domains: ["requests", "activity"],
     enabled: true,
     locked: Boolean(busy),
@@ -147,7 +151,13 @@ export const RequestsPage = ({user}) => {
   const bulkRefreshable = useMemo(() => bulkRefreshCandidates(selectedBulkRequests, {canWrite}), [selectedBulkRequests, canWrite]);
   const bulkDeniable = useMemo(() => bulkDenyCandidates(selectedBulkRequests, {canWrite}), [selectedBulkRequests, canWrite]);
   const allVisibleSelected = visibleRequests.length > 0 && visibleRequests.every((request) => selectedBulkIds.includes(requestRowKey(request)));
-  const actions = requestActionState(selectedRequest || {}, {canWrite, canRoot});
+  const effectiveSelectedRequest = useMemo(() => selectedRequest
+    ? withEffectiveRequestSelection(selectedRequest, {selectedMetadata, selectedDownload})
+    : null, [selectedDownload, selectedMetadata, selectedRequest]);
+  const actions = requestActionState(selectedRequest || {}, {canWrite, canRoot, selectedMetadata, selectedDownload});
+  const selectedActionLabel = requestNextActionLabel(effectiveSelectedRequest || selectedRequest || {}, actions);
+  const selectedSourceCount = downloadOptions.length;
+  const selectedRevision = selectedRequest?.revision;
 
   useEffect(() => {
     setSelectedId((current) => resolveExistingRequestSelection(requests, current));
@@ -160,15 +170,23 @@ export const RequestsPage = ({user}) => {
 
   useEffect(() => {
     if (!selectedRequest) {
+      resolverResetKeyRef.current = "";
       return;
     }
+    const resetKey = `${requestRowKey(selectedRequest)}:${String(selectedRequest.revision ?? selectedRequest.updatedAt ?? "")}`;
+    if (resolverResetKeyRef.current === resetKey) {
+      return;
+    }
+    resolverResetKeyRef.current = resetKey;
+    const sourceOptions = normalizeArray(selectedRequest.details?.sourceFoundOptions);
+    const savedDownload = selectedRequest.details?.selectedDownload || null;
     setDenyComment("");
     setSourceQuery(normalizeString(selectedRequest.details?.query, selectedRequest.title));
     setMetadataResults([]);
     setSelectedMetadata(selectedRequest.details?.selectedMetadata || null);
-    setDownloadOptions(normalizeArray(selectedRequest.details?.sourceFoundOptions));
-    setSelectedDownload(selectedRequest.details?.selectedDownload || null);
-  }, [selectedId, selectedRequest]);
+    setDownloadOptions(sourceOptions);
+    setSelectedDownload(savedDownload || selectSingleDownloadOption(sourceOptions));
+  }, [selectedRequest]);
 
   const setResult = (ok, message, category = "action") => {
     setFlash(message);
@@ -183,8 +201,8 @@ export const RequestsPage = ({user}) => {
     setBusy(label);
     const result = await requestJson(`/api/moon/v3/admin/requests/${encodeURIComponent(requestRowKey(selectedRequest))}${path}`, options);
     setBusy("");
-    setResult(result.ok, result.ok ? `${label} complete.` : result.payload?.error || `Moon could not ${label.toLowerCase()}.`, category);
-    if (result.ok) {
+    setResult(result.ok, result.ok ? `${label} complete.` : requestActionMessage(label, result), category);
+    if (result.ok || result.status === 409) {
       await refresh();
     }
     return result;
@@ -219,7 +237,7 @@ export const RequestsPage = ({user}) => {
       if (result.ok) {
         okCount += 1;
       } else {
-        lastError = result.payload?.error || `Could not ${label.toLowerCase()} ${request.title || "request"}.`;
+        lastError = requestActionMessage(label, result);
       }
     }
     setBusy("");
@@ -231,7 +249,10 @@ export const RequestsPage = ({user}) => {
   };
 
   const refreshSelectedSources = async () => {
-    await runBulkAction("Refresh sources", bulkRefreshable, "/refresh-sources", () => ({method: "POST"}));
+    await runBulkAction("Refresh sources", bulkRefreshable, "/refresh-sources", (request) => ({
+      method: "POST",
+      json: {expectedRevision: request.revision}
+    }));
   };
 
   const denySelectedRequests = async () => {
@@ -240,9 +261,9 @@ export const RequestsPage = ({user}) => {
       setResult(false, "Enter a bulk denial comment first.");
       return;
     }
-    await runBulkAction("Deny", bulkDeniable, "/deny", () => ({
+    await runBulkAction("Deny", bulkDeniable, "/deny", (request) => ({
       method: "POST",
-      json: {comment}
+      json: {comment, expectedRevision: request.revision}
     }));
     setBulkDenyComment("");
   };
@@ -285,6 +306,7 @@ export const RequestsPage = ({user}) => {
     }
     const results = normalizeArray(result.payload?.results);
     setDownloadOptions(results);
+    setSelectedDownload(selectSingleDownloadOption(results));
     setResult(Boolean(results.length), results.length ? `Found ${results.length} source option${results.length === 1 ? "" : "s"}.` : "No enabled download source matched this metadata.");
   };
 
@@ -294,6 +316,7 @@ export const RequestsPage = ({user}) => {
       json: {
         query: sourceQuery,
         comment: "Approved from Moon admin.",
+        expectedRevision: selectedRevision,
         selectedMetadata: selectedMetadata || selectedRequest?.details?.selectedMetadata,
         selectedDownload: selectedDownload || selectedRequest?.details?.selectedDownload
       }
@@ -305,6 +328,7 @@ export const RequestsPage = ({user}) => {
       method: "POST",
       json: {
         query: sourceQuery,
+        expectedRevision: selectedRevision,
         selectedMetadata: selectedMetadata || selectedRequest?.details?.selectedMetadata,
         selectedDownload
       }
@@ -317,6 +341,7 @@ export const RequestsPage = ({user}) => {
       json: {
         query: sourceQuery,
         notes: selectedRequest?.notes || "",
+        expectedRevision: selectedRevision,
         selectedMetadata: selectedMetadata || selectedRequest?.details?.selectedMetadata,
         selectedDownload: selectedDownload || null
       }
@@ -326,7 +351,7 @@ export const RequestsPage = ({user}) => {
   const denySelected = async () => {
     await runRequestAction("Deny", "/deny", {
       method: "POST",
-      json: {comment: denyComment}
+      json: {comment: denyComment, expectedRevision: selectedRevision}
     });
   };
 
@@ -344,6 +369,7 @@ export const RequestsPage = ({user}) => {
     <>
       {error ? <AdminActionBanner tone="bad">{error}</AdminActionBanner> : null}
       {flash ? <AdminActionBanner tone={flashTone}>{flash}</AdminActionBanner> : null}
+      {live.stale && busy ? <AdminActionBanner tone="warning">Requests changed while {busy.toLowerCase()} is running. Moon will refresh this inbox when the action settles.</AdminActionBanner> : null}
       <section className="admin-panel">
         <div className="admin-section-heading">
           <div>
@@ -461,7 +487,12 @@ export const RequestsPage = ({user}) => {
                   <div className="admin-kicker">Source resolver</div>
                   <h3>Metadata and download source</h3>
                 </div>
-                <button className="admin-button ghost small" type="button" disabled={!actions.canRefreshSources || busy === "Refresh sources"} onClick={() => void runRequestAction("Refresh sources", "/refresh-sources", {method: "POST"})}>Refresh sources</button>
+                <button className="admin-button ghost small" type="button" disabled={!actions.canRefreshSources || busy === "Refresh sources"} onClick={() => void runRequestAction("Refresh sources", "/refresh-sources", {method: "POST", json: {expectedRevision: selectedRevision}})}>Refresh sources</button>
+              </div>
+              <div className="admin-log-meta">
+                <span>Next: {selectedActionLabel}</span>
+                <span>{selectedSourceCount} source candidate{selectedSourceCount === 1 ? "" : "s"}</span>
+                <span>Revision {formatDisplayValue(selectedRevision, "unknown")}</span>
               </div>
               <div className="admin-task-form">
                 <label>
@@ -487,12 +518,24 @@ export const RequestsPage = ({user}) => {
                 {downloadOptions.map((entry) => (
                   <SourceCard
                     entry={entry}
-                    key={sourceKey(entry)}
-                    selected={sourceKey(selectedDownload || {}) === sourceKey(entry)}
+                    key={requestDownloadKey(entry)}
+                    selected={requestDownloadKey(selectedDownload || {}) === requestDownloadKey(entry)}
                     onPick={setSelectedDownload}
                   />
                 ))}
               </div>
+              {selectedDownload?.titleUrl ? (
+                <div className="admin-confirm-panel">
+                  <div>
+                    <div className="admin-kicker">Selected source</div>
+                    <strong>{normalizeString(selectedDownload.titleName, normalizeString(selectedDownload.title, selectedRequest.title))}</strong>
+                    <p className="admin-muted">{normalizeString(selectedDownload.providerName, normalizeString(selectedDownload.providerId, "download provider"))}</p>
+                  </div>
+                  <a className="admin-button ghost small" href={selectedDownload.titleUrl} target="_blank" rel="noreferrer">Open source</a>
+                </div>
+              ) : (
+                <div className="admin-empty">Pick a concrete download source before approving or resolving.</div>
+              )}
             </section>
 
             <section className="admin-subsection">
@@ -501,6 +544,12 @@ export const RequestsPage = ({user}) => {
                   <div className="admin-kicker">Snapshots</div>
                   <h3>Saved metadata and source</h3>
                 </div>
+              </div>
+              <div className="admin-detail-grid">
+                <span><strong>Metadata</strong>{formatDisplayValue(selectedRequest.details?.selectedMetadata?.providerName, selectedRequest.details?.selectedMetadata?.provider || "none")}</span>
+                <span><strong>Saved source</strong>{formatDisplayValue(selectedRequest.details?.selectedDownload?.providerName, selectedRequest.details?.selectedDownload?.providerId || "none")}</span>
+                <span><strong>Availability</strong>{formatDisplayValue(selectedRequest.availability, "unknown")}</span>
+                <span><strong>Work key</strong>{formatDisplayValue(selectedRequest.workKeyKind, "none")}</span>
               </div>
               <div className="admin-json-columns">
                 <pre>{JSON.stringify(selectedRequest.details?.selectedMetadata || {}, null, 2)}</pre>
@@ -534,6 +583,7 @@ export const RequestsPage = ({user}) => {
 
             <section className="admin-subsection">
               <div className="admin-kicker">Moderation actions</div>
+              <p className="admin-muted">{selectedActionLabel}</p>
               <div className="admin-action-row">
                 <button className="admin-button solid" type="button" disabled={!actions.canApprove || busy === "Approve"} onClick={() => void approveSelected()}>Approve source</button>
                 <button className="admin-button solid" type="button" disabled={!actions.canResolve || !selectedDownload || busy === "Resolve"} onClick={() => void resolveSelected()}>Resolve unavailable</button>

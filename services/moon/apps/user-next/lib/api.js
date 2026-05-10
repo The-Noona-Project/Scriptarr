@@ -115,7 +115,7 @@ export const useMoonJson = (url, {enabled = true, fallback = /** @type {T} */ (n
 };
 
 /**
- * Build the static Moon chrome bootstrap requests.
+ * Fetch the collapsed Moon chrome bootstrap payload.
  *
  * @returns {Promise<{
  *   branding: any,
@@ -131,19 +131,33 @@ export const loadMoonChromeContext = async (returnTo = "/") => {
       && !trimmedReturnTo.startsWith("/api/")
     ? trimmedReturnTo
     : "/";
-  const [branding, auth, bootstrap, discordUrl] = await Promise.all([
-    requestJson("/api/moon/v3/public/branding"),
-    requestJson("/api/moon/auth/status"),
-    requestJson("/api/moon/auth/bootstrap-status"),
-    requestJson(`/api/moon/auth/discord/url?returnTo=${encodeURIComponent(normalizedReturnTo)}`)
-  ]);
+  const chrome = await requestJson(`/api/moon/chrome/bootstrap?returnTo=${encodeURIComponent(normalizedReturnTo)}`);
+  const payload = chrome.ok ? chrome.payload || {} : {};
+  const user = payload.user || payload.auth?.user || (payload.auth?.authenticated ? payload.auth : null);
 
   return {
-    branding: branding.ok ? branding.payload : {siteName: "Scriptarr"},
-    auth: auth.ok ? auth.payload?.user || auth.payload || null : null,
-    bootstrap: bootstrap.ok ? bootstrap.payload : null,
-    loginUrl: discordUrl.ok ? String(discordUrl.payload?.oauthUrl || "").trim() : ""
+    branding: payload.branding || {siteName: "Scriptarr"},
+    auth: user,
+    bootstrap: payload.bootstrap || null,
+    loginUrl: ""
   };
+};
+
+/**
+ * Fetch a Discord OAuth URL only when a signed-out view needs it.
+ *
+ * @param {string} [returnTo]
+ * @returns {Promise<string>}
+ */
+export const loadMoonLoginUrl = async (returnTo = "/") => {
+  const trimmedReturnTo = typeof returnTo === "string" ? returnTo.trim() : "";
+  const normalizedReturnTo = trimmedReturnTo.startsWith("/")
+      && !trimmedReturnTo.startsWith("//")
+      && !trimmedReturnTo.startsWith("/api/")
+    ? trimmedReturnTo
+    : "/";
+  const discordUrl = await requestJson(`/api/moon/auth/discord/url?returnTo=${encodeURIComponent(normalizedReturnTo)}`);
+  return discordUrl.ok ? String(discordUrl.payload?.oauthUrl || "").trim() : "";
 };
 
 /**
@@ -157,6 +171,7 @@ export const useSearchKey = (value) =>
 
 export default {
   loadMoonChromeContext,
+  loadMoonLoginUrl,
   logoutMoonSession,
   requestJson,
   useMoonJson,

@@ -806,12 +806,37 @@ select {
   border-radius: 16px;
 }
 
-.admin-status-accordion [role="button"] {
-  color: var(--admin-text);
-}
-
 .admin-status-accordion-divider {
   border-top: 1px solid var(--admin-border);
+}
+
+.admin-local-accordion-trigger {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 0;
+  background: rgba(255, 255, 255, 0.025);
+  color: var(--admin-text);
+  cursor: pointer;
+  padding: 13px 14px;
+  text-align: left;
+}
+
+.admin-local-accordion-trigger:hover,
+.admin-local-accordion.is-open .admin-local-accordion-trigger {
+  background: rgba(245, 159, 66, 0.1);
+}
+
+.admin-local-accordion-trigger strong {
+  color: var(--admin-accent);
+  font-size: 1rem;
+}
+
+.admin-local-accordion-content {
+  border-top: 1px solid var(--admin-border);
+  padding: 12px;
 }
 
 .admin-endpoint-table code {

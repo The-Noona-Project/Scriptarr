@@ -705,6 +705,11 @@ class VpnServiceTest {
         }
 
         @Override
+        public JsonNode listLibraryTitleCards(Map<String, String> query) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
         public JsonNode getLibraryTitle(String titleId) {
             throw new UnsupportedOperationException();
         }
@@ -791,6 +796,11 @@ class VpnServiceTest {
 
         @Override
         public JsonNode listLibraryTitles() {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public JsonNode listLibraryTitleCards(Map<String, String> query) {
             throw new UnsupportedOperationException();
         }
 

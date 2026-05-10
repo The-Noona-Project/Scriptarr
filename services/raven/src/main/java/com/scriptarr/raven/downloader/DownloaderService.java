@@ -8,6 +8,7 @@ import com.scriptarr.raven.metadata.MetadataService;
 import com.scriptarr.raven.downloader.providers.DownloadProvider;
 import com.scriptarr.raven.downloader.providers.DownloadProviderRegistry;
 import com.scriptarr.raven.settings.RavenBrokerClient;
+import com.scriptarr.raven.settings.RavenDownloadRuntimeSettings;
 import com.scriptarr.raven.settings.RavenNamingSettings;
 import com.scriptarr.raven.settings.RavenSettingsService;
 import com.scriptarr.raven.support.ScriptarrLogger;
@@ -74,7 +75,6 @@ public class DownloaderService {
     private static final String PRIORITY_HIGH = "high";
     private static final String PRIORITY_NORMAL = "normal";
     private static final String PRIORITY_LOW = "low";
-    private static final int TITLE_DOWNLOAD_WORKER_COUNT = 2;
     private static final int PAGE_DOWNLOAD_WORKER_COUNT = 2;
     private static final int CHAPTER_SOURCE_RETRY_ATTEMPTS = 3;
     private static final int CHAPTER_DOWNLOAD_RETRY_ATTEMPTS = 3;
@@ -101,7 +101,8 @@ public class DownloaderService {
     private final AtomicBoolean persistedTaskRestoreStarted = new AtomicBoolean(false);
     private final AtomicLong queueSortSequence = new AtomicLong();
     private final AtomicLong queueSequence = new AtomicLong();
-    private ThreadPoolExecutor queueWorker = createQueueWorker();
+    private volatile int configuredActiveTitleDownloads = RavenDownloadRuntimeSettings.DEFAULT_ACTIVE_TITLE_DOWNLOADS;
+    private ThreadPoolExecutor queueWorker = createQueueWorker(configuredActiveTitleDownloads);
     private java.util.concurrent.ExecutorService pageDownloadWorker = createPageDownloadWorker();
     private final java.util.concurrent.ExecutorService persistedTaskRestoreWorker =
         Executors.newSingleThreadExecutor((runnable) -> {
@@ -172,6 +173,7 @@ public class DownloaderService {
      * after a container restart.
      */
     public void restorePersistedTasks() {
+        reloadDownloadRuntimeSettings();
         for (int attempt = 1; attempt <= RESTORE_RETRY_ATTEMPTS; attempt++) {
             try {
                 restorePersistedTasksOnce();
@@ -745,13 +747,36 @@ public class DownloaderService {
         long running = tasks.values().stream().filter(entry -> "running".equals(entry.get("status"))).count();
         long failed = tasks.values().stream().filter(entry -> "failed".equals(entry.get("status"))).count();
         long complete = tasks.values().stream().filter(entry -> "completed".equals(entry.get("status"))).count();
+        int titleSlots = configuredActiveTitleDownloads;
         return Map.of(
             "queued", queued,
             "running", running,
             "failed", failed,
             "completed", complete,
-            "activeSlots", TITLE_DOWNLOAD_WORKER_COUNT
+            "activeSlots", titleSlots,
+            "totalSlots", titleSlots,
+            "runningSlots", running,
+            "pageSlots", PAGE_DOWNLOAD_WORKER_COUNT
         );
+    }
+
+    /**
+     * Reload live title-download concurrency from brokered settings.
+     *
+     * @return refreshed runtime snapshot
+     */
+    public synchronized Map<String, Object> reloadDownloadRuntimeSettings() {
+        RavenDownloadRuntimeSettings settings = settingsService == null
+            ? RavenDownloadRuntimeSettings.defaults()
+            : settingsService.getDownloadRuntimeSettings();
+        resizeQueueWorker(settings.activeTitleDownloads());
+        Map<String, Object> runtime = new LinkedHashMap<>();
+        runtime.put("activeTitleDownloads", configuredActiveTitleDownloads);
+        runtime.put("minActiveTitleDownloads", RavenDownloadRuntimeSettings.MIN_ACTIVE_TITLE_DOWNLOADS);
+        runtime.put("maxActiveTitleDownloads", RavenDownloadRuntimeSettings.MAX_ACTIVE_TITLE_DOWNLOADS);
+        runtime.put("pageDownloadsPerTitle", PAGE_DOWNLOAD_WORKER_COUNT);
+        runtime.put("queue", stats());
+        return runtime;
     }
 
     /**
@@ -955,7 +980,7 @@ public class DownloaderService {
         Map<String, Object> preview = previewManagedContentReset();
         ThreadPoolExecutor previousQueueWorker = queueWorker;
         java.util.concurrent.ExecutorService previousPageWorker = pageDownloadWorker;
-        queueWorker = createQueueWorker();
+        queueWorker = createQueueWorker(configuredActiveTitleDownloads);
         pageDownloadWorker = createPageDownloadWorker();
         previousQueueWorker.shutdownNow();
         previousPageWorker.shutdownNow();
@@ -2148,14 +2173,40 @@ public class DownloaderService {
         queueWorker.execute(prioritizedTask);
     }
 
-    private ThreadPoolExecutor createQueueWorker() {
+    private ThreadPoolExecutor createQueueWorker(int activeTitleDownloads) {
+        int safeActiveTitleDownloads = RavenDownloadRuntimeSettings.normalizeActiveTitleDownloads(activeTitleDownloads);
         return new ThreadPoolExecutor(
-            TITLE_DOWNLOAD_WORKER_COUNT,
-            TITLE_DOWNLOAD_WORKER_COUNT,
+            safeActiveTitleDownloads,
+            safeActiveTitleDownloads,
             0L,
             TimeUnit.MILLISECONDS,
             new PriorityBlockingQueue<>()
         );
+    }
+
+    private void resizeQueueWorker(int requestedActiveTitleDownloads) {
+        int nextActiveTitleDownloads = RavenDownloadRuntimeSettings.normalizeActiveTitleDownloads(requestedActiveTitleDownloads);
+        ThreadPoolExecutor worker = queueWorker;
+        if (worker == null) {
+            configuredActiveTitleDownloads = nextActiveTitleDownloads;
+            queueWorker = createQueueWorker(nextActiveTitleDownloads);
+            return;
+        }
+        int currentMaximum = worker.getMaximumPoolSize();
+        int currentCore = worker.getCorePoolSize();
+        if (currentMaximum == nextActiveTitleDownloads && currentCore == nextActiveTitleDownloads) {
+            configuredActiveTitleDownloads = nextActiveTitleDownloads;
+            return;
+        }
+        if (nextActiveTitleDownloads > currentMaximum) {
+            worker.setMaximumPoolSize(nextActiveTitleDownloads);
+            worker.setCorePoolSize(nextActiveTitleDownloads);
+            worker.prestartAllCoreThreads();
+        } else {
+            worker.setCorePoolSize(nextActiveTitleDownloads);
+            worker.setMaximumPoolSize(nextActiveTitleDownloads);
+        }
+        configuredActiveTitleDownloads = nextActiveTitleDownloads;
     }
 
     private java.util.concurrent.ExecutorService createPageDownloadWorker() {

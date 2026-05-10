@@ -6,26 +6,43 @@
 
 import {canAccessAdmin, hasAdminGrant} from "../lib/access.js";
 import {matchAdminRoute} from "../lib/routes.js";
-import AddTitlePage from "./AddTitlePage.jsx";
-import AdminDataPage from "./AdminDataPage.jsx";
+import dynamic from "next/dynamic";
 import {useAdminChrome} from "./AdminProviders.jsx";
-import CalendarPage from "./CalendarPage.jsx";
-import DatabaseExplorerPage from "./DatabaseExplorerPage.jsx";
-import DiscordPage from "./DiscordPage.jsx";
-import MediaManagementPage from "./MediaManagementPage.jsx";
-import MetadataPage from "./MetadataPage.jsx";
-import MissingChaptersPage from "./MissingChaptersPage.jsx";
-import QueuePage from "./QueuePage.jsx";
-import RequestsPage from "./RequestsPage.jsx";
-import SettingsPage from "./SettingsPage.jsx";
-import SystemApiPage from "./SystemApiPage.jsx";
-import SystemAiPage from "./SystemAiPage.jsx";
-import SystemEventsPage from "./SystemEventsPage.jsx";
-import SystemLogsPage from "./SystemLogsPage.jsx";
-import SystemStatusPage from "./SystemStatusPage.jsx";
-import SystemTasksPage from "./SystemTasksPage.jsx";
-import SystemUpdatesPage from "./SystemUpdatesPage.jsx";
-import UsersPage from "./UsersPage.jsx";
+
+const AdminRouteLoadingPanel = () => (
+  <section className="admin-panel admin-state-panel">
+    <div className="admin-kicker">Loading</div>
+    <h2>Loading admin page</h2>
+    <p>Moon is opening this admin surface.</p>
+  </section>
+);
+
+const dynamicAdminPage = (loader) => dynamic(loader, {
+  loading: AdminRouteLoadingPanel
+});
+
+const AdminDataPage = dynamicAdminPage(() => import("./AdminDataPage.jsx"));
+
+const adminPageComponents = Object.freeze({
+  "activity-queue": dynamicAdminPage(() => import("./QueuePage.jsx")),
+  add: dynamicAdminPage(() => import("./AddTitlePage.jsx")),
+  calendar: dynamicAdminPage(() => import("./CalendarPage.jsx")),
+  discord: dynamicAdminPage(() => import("./DiscordPage.jsx")),
+  mediamanagement: dynamicAdminPage(() => import("./MediaManagementPage.jsx")),
+  requests: dynamicAdminPage(() => import("./RequestsPage.jsx")),
+  "settings-database": dynamicAdminPage(() => import("./DatabaseExplorerPage.jsx")),
+  settings: dynamicAdminPage(() => import("./SettingsPage.jsx")),
+  "system-ai": dynamicAdminPage(() => import("./SystemAiPage.jsx")),
+  "system-api": dynamicAdminPage(() => import("./SystemApiPage.jsx")),
+  "system-events": dynamicAdminPage(() => import("./SystemEventsPage.jsx")),
+  "system-logs": dynamicAdminPage(() => import("./SystemLogsPage.jsx")),
+  "system-status": dynamicAdminPage(() => import("./SystemStatusPage.jsx")),
+  "system-tasks": dynamicAdminPage(() => import("./SystemTasksPage.jsx")),
+  "system-updates": dynamicAdminPage(() => import("./SystemUpdatesPage.jsx")),
+  users: dynamicAdminPage(() => import("./UsersPage.jsx")),
+  "wanted-metadata": dynamicAdminPage(() => import("./MetadataPage.jsx")),
+  "wanted-missing": dynamicAdminPage(() => import("./MissingChaptersPage.jsx"))
+});
 
 /**
  * Render the active admin page or a guarded state.
@@ -78,79 +95,8 @@ export const AdminPageRouter = ({pathname}) => {
     );
   }
 
-  if (route.id === "activity-queue") {
-    return <QueuePage user={chrome.user} />;
-  }
-
-  if (route.id === "add") {
-    return <AddTitlePage />;
-  }
-
-  if (route.id === "calendar") {
-    return <CalendarPage />;
-  }
-
-  if (route.id === "discord") {
-    return <DiscordPage user={chrome.user} />;
-  }
-
-  if (route.id === "mediamanagement") {
-    return <MediaManagementPage user={chrome.user} />;
-  }
-
-  if (route.id === "settings") {
-    return <SettingsPage user={chrome.user} />;
-  }
-
-  if (route.id === "requests") {
-    return <RequestsPage user={chrome.user} />;
-  }
-
-  if (route.id === "wanted-metadata") {
-    return <MetadataPage user={chrome.user} />;
-  }
-
-  if (route.id === "wanted-missing") {
-    return <MissingChaptersPage user={chrome.user} />;
-  }
-
-  if (route.id === "users") {
-    return <UsersPage user={chrome.user} />;
-  }
-
-  if (route.id === "settings-database") {
-    return <DatabaseExplorerPage user={chrome.user} />;
-  }
-
-  if (route.id === "system-api") {
-    return <SystemApiPage user={chrome.user} />;
-  }
-
-  if (route.id === "system-logs") {
-    return <SystemLogsPage />;
-  }
-
-  if (route.id === "system-events") {
-    return <SystemEventsPage />;
-  }
-
-  if (route.id === "system-updates") {
-    return <SystemUpdatesPage user={chrome.user} />;
-  }
-
-  if (route.id === "system-status") {
-    return <SystemStatusPage />;
-  }
-
-  if (route.id === "system-tasks") {
-    return <SystemTasksPage user={chrome.user} />;
-  }
-
-  if (route.id === "system-ai") {
-    return <SystemAiPage user={chrome.user} />;
-  }
-
-  return <AdminDataPage route={route} />;
+  const PageComponent = adminPageComponents[route.id] || AdminDataPage;
+  return <PageComponent route={route} user={chrome.user} />;
 };
 
 export default AdminPageRouter;

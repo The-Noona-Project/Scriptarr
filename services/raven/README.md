@@ -66,8 +66,10 @@ the Raven title task ids queued by that batch, and resume skips completed batche
 uses the same WeebCentral-only metadata-confident bulk queue path while preserving the owner's `nsfw` filter. The
 `groupsize`/`batchesPerApproval` setting controls how many batch tasks run before Raven pauses, and failed or stale
 run-owned title tasks retry up to three total attempts before safe removal lets the rest of the run continue.
-`/v1/library?view=card` returns the compact Moon shelf projection without chapter arrays or filesystem roots; full
-title and reader routes remain the detail paths.
+`/v1/library?view=card` returns the compact Moon shelf projection without chapter arrays or filesystem roots. It
+accepts `q`, `type`, `letter`, `cursor`, `pageSize`, `sort`, and exact `ids`, forwards those filters through Sage to
+Vault's title-only projection, preserves requested exact-id ordering for activity cards, and keeps full title and
+reader routes as the detail paths.
 Raven now also treats cover art as first-class title metadata, carries it through intake, queue state, and library
 records, and exposes the same imagery Moon and Portal reuse in their UIs and embeds.
 Raven now also preserves chapter release dates from provider chapter scrapes and blends in richer title-level release
@@ -87,10 +89,12 @@ Download completion now waits for both file promotion and brokered catalog persi
 If catalog persistence fails, Raven marks the task failed instead of leaving it stuck at `90%`. On boot, Raven also
 rescans the existing `downloaded/<type>/...` tree to backfill missing catalog rows from already-finished archives.
 
-Raven now runs up to two title downloads at once globally while still preserving priority ordering and queued-task
-reordering inside each priority band. Page fetches inside a title still use their existing bounded concurrency,
-preserve archive ordering, skip already-written files on retry, and collapse duplicate restorable tasks for the same
-logical request during recovery.
+Raven's global title-download concurrency is now controlled by the Sage-backed `raven.download.runtime` setting. The
+default remains two active title downloads, admins can choose `1` through `6` from Moon Settings, and Raven reloads the
+value live through `/v1/downloads/runtime/reload` without cancelling already-running titles. Lower limits pause new
+starts until enough active work finishes. Page fetches inside a title still use their existing fixed two-worker
+concurrency, preserve archive ordering, skip already-written files on retry, and collapse duplicate restorable tasks
+for the same logical request during recovery.
 Raven task snapshots now also preserve a real `startedAt` for active attempts and, when a chapter download yields
 credible timing data, a live `downloadSpeedBytesPerSecond` value that Moon can show on running queue cards. Recovery
 or needs-attention views should still stay limited to Raven title-task state instead of pulling in unrelated service

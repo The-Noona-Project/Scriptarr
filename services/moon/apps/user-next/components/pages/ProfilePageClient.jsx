@@ -5,13 +5,19 @@
  */
 
 import {useState} from "react";
+import dynamic from "next/dynamic";
 import Link from "next/link";
-import {Avatar, Button, Column, Flex, StylePanel} from "@once-ui-system/core";
 import {useMoonChrome} from "../MoonChromeContext.jsx";
 import {AuthRequiredView, ErrorView, LoadingView} from "../StateView.jsx";
 import {requestJson, useMoonJson} from "../../lib/api.js";
 import {buildLibraryPath, buildTitlePath, canAccessAdmin} from "../../lib/routes.js";
 import {buildAvatarProps} from "../../lib/profile.js";
+import {Avatar, Button, Column, Flex} from "../UiPrimitives.jsx";
+
+const StylePanel = dynamic(() => import("../OnceStylePanel.jsx"), {
+  ssr: false,
+  loading: () => <div className="moon-reader-empty">Loading presentation controls.</div>
+});
 
 const PROFILE_TABS = Object.freeze([
   {id: "overview", label: "Overview"},

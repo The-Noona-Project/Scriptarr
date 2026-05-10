@@ -1,10 +1,10 @@
 "use client";
 
 /**
- * @file A-Z browse shelf row built on the same Once UI scroller pattern as Moon home.
+ * @file A-Z browse shelf row built on the same lightweight scroller pattern as Moon home.
  */
 
-import {Scroller} from "@once-ui-system/core";
+import {Scroller} from "../UiPrimitives.jsx";
 import TitleCard from "../TitleCard.jsx";
 
 /**

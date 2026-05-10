@@ -8,6 +8,7 @@ const IN_FLIGHT_MESSAGE_TTL_MS = 60000;
 const TRIVIA_STATE_TIMEOUT_MS = 2500;
 const TRIVIA_GUESS_TIMEOUT_MS = 9000;
 const MAX_TIMER_DELAY_MS = 2_147_000_000;
+const DEFAULT_TRIVIA_COOLDOWN_MINUTES = 30;
 
 const normalizeArray = (value) => Array.isArray(value) ? value : [];
 
@@ -17,6 +18,27 @@ const minutesToMs = (value, fallback) => {
 };
 
 const normalizeObject = (value) => value && typeof value === "object" && !Array.isArray(value) ? value : null;
+
+const parseDateMs = (value) => {
+  const parsed = Date.parse(normalizeString(value));
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const delayUntil = (value, fallbackMs = 1000) => {
+  const parsed = parseDateMs(value);
+  if (!parsed) {
+    return fallbackMs;
+  }
+  return Math.max(1000, parsed - Date.now());
+};
+
+const roundHintDelayMs = (round = {}, hintMinute) => {
+  const startedAt = parseDateMs(round.startedAt);
+  if (!startedAt) {
+    return minutesToMs(hintMinute, 7);
+  }
+  return Math.max(1000, (startedAt + minutesToMs(hintMinute, 7)) - Date.now());
+};
 
 const withTimeout = (promise, timeoutMs, label) => {
   let timeout = null;
@@ -114,6 +136,7 @@ export const createTriviaRuntime = ({
 }) => {
   let timers = [];
   let stopped = false;
+  let scheduleGeneration = 0;
   let activeRoundCache = {round: null, expiresAt: 0};
   const inFlightMessages = new Map();
 
@@ -122,6 +145,7 @@ export const createTriviaRuntime = ({
       clearTimeout(timer);
     }
     timers = [];
+    scheduleGeneration += 1;
   };
 
   const clearActiveRoundCache = () => {
@@ -222,18 +246,23 @@ export const createTriviaRuntime = ({
     return Boolean(settings.enabled && settings.channelId);
   };
 
-  const schedule = (callback, delayMs) => {
+  const isCurrentGeneration = (generation) => !stopped && generation === scheduleGeneration;
+
+  const schedule = (callback, delayMs, generation = scheduleGeneration) => {
     const dueAt = Date.now() + Math.max(1000, Number(delayMs) || 0);
     let timer = null;
     const arm = (ms) => {
       timer = setTimeout(() => {
         timers = timers.filter((entry) => entry !== timer);
+        if (!isCurrentGeneration(generation)) {
+          return;
+        }
         const remaining = dueAt - Date.now();
         if (remaining > 1000) {
           arm(Math.min(remaining, MAX_TIMER_DELAY_MS));
           return;
         }
-        void callback();
+        void callback(generation);
       }, Math.min(Math.max(1000, ms), MAX_TIMER_DELAY_MS));
       timers.push(timer);
     };
@@ -269,25 +298,42 @@ export const createTriviaRuntime = ({
     return {channelId: targetChannelId, leaderboard: leaderboard.payload, postId};
   };
 
-  const scheduleRoundFollowups = (round = {}, settingsOverride = null) => {
+  const scheduleRoundFollowups = (round = {}, settingsOverride = null, generation = scheduleGeneration) => {
     const settings = settingsOverride || currentSettings();
     if (!triviaEnabled(settings) || !round?.id) {
       return;
     }
+    const postedHints = new Set(normalizeArray(round.hintsPosted).map((entry) => Number.parseInt(String(entry), 10)).filter(Number.isFinite));
     if (settings.hintsEnabled !== false) {
       for (const hintMinute of normalizeArray(settings.hintMinutes)) {
-        schedule(async () => {
+        const normalizedMinute = Number.parseInt(String(hintMinute), 10);
+        if (!Number.isFinite(normalizedMinute) || postedHints.has(normalizedMinute)) {
+          continue;
+        }
+        schedule(async (scheduledGeneration) => {
+          if (!isCurrentGeneration(scheduledGeneration)) {
+            return;
+          }
           const result = await sage.postTriviaHint(round.id, hintMinute);
+          if (!isCurrentGeneration(scheduledGeneration)) {
+            return;
+          }
           if (result.ok && result.payload?.hint?.postedAt) {
             await discord.sendChannelMessage(settings.channelId, {
               content: renderHint(result.payload.round, result.payload.hint)
             });
           }
-        }, minutesToMs(hintMinute, 7));
+        }, roundHintDelayMs(round, hintMinute), generation);
       }
     }
-    schedule(async () => {
+    schedule(async (scheduledGeneration) => {
+      if (!isCurrentGeneration(scheduledGeneration)) {
+        return;
+      }
       const result = await sage.timeoutTriviaRound(round.id);
+      if (!isCurrentGeneration(scheduledGeneration)) {
+        return;
+      }
       if (result.ok && result.payload?.ok !== false) {
         clearActiveRoundCache();
         await discord.sendChannelMessage(settings.channelId, {
@@ -298,28 +344,33 @@ export const createTriviaRuntime = ({
             logger?.warn?.("Trivia leaderboard post after timeout failed.", {error});
           });
         }
+        await reconcileTriviaClock(settings);
       }
-    }, minutesToMs(settings.roundDurationMinutes, 20));
+    }, round.expiresAt ? delayUntil(round.expiresAt, minutesToMs(settings.roundDurationMinutes, 20)) : minutesToMs(settings.roundDurationMinutes, 20), generation);
   };
 
-  const scheduleLeaderboardPosts = () => {
-    if (!triviaEnabled()) {
+  const scheduleLeaderboardPosts = (settingsOverride = null, generation = scheduleGeneration) => {
+    const settings = settingsOverride || currentSettings();
+    if (!triviaEnabled(settings)) {
       return;
     }
-    const schedules = currentSettings().leaderboardSchedules || {};
+    const schedules = settings.leaderboardSchedules || {};
     const scheduleWindow = (windowName) => {
       if (schedules[windowName] === false) {
         return;
       }
       const at = nextScheduledAt(windowName, schedules.hour);
-      schedule(async () => {
+      schedule(async (scheduledGeneration) => {
+        if (!isCurrentGeneration(scheduledGeneration)) {
+          return;
+        }
         await postLeaderboard(windowName).catch((error) => {
           logger?.warn?.("Scheduled trivia leaderboard post failed.", {windowName, error});
         });
-        if (!stopped) {
+        if (isCurrentGeneration(scheduledGeneration)) {
           scheduleWindow(windowName);
         }
-      }, at.getTime() - Date.now());
+      }, at.getTime() - Date.now(), generation);
     };
     for (const windowName of ["daily", "weekly", "monthly"]) {
       scheduleWindow(windowName);
@@ -335,13 +386,21 @@ export const createTriviaRuntime = ({
     if (!result.ok || result.payload?.ok === false) {
       throw new Error(result.payload?.error || "Noona could not start a trivia round.");
     }
+    if (result.payload?.reused) {
+      rememberActiveRound(result.payload.round);
+      await reconcileTriviaClock(settings);
+      return result.payload;
+    }
+    clearTimers();
+    const generation = scheduleGeneration;
     await withTimeout(
       discord.sendChannelMessage(settings.channelId, {content: renderRoundPrompt(result.payload.round)}),
       10000,
       "Discord trivia round send"
     );
     rememberActiveRound(result.payload.round);
-    scheduleRoundFollowups(result.payload.round, settings);
+    scheduleLeaderboardPosts(settings, generation);
+    scheduleRoundFollowups(result.payload.round, settings, generation);
     onRuntimeEvent?.({
       type: "trivia-round-started",
       at: new Date().toISOString(),
@@ -366,24 +425,63 @@ export const createTriviaRuntime = ({
     return result.payload;
   };
 
-  const scheduleNextRound = async () => {
-    if (stopped || !triviaEnabled()) {
+  const loadTriviaState = async () => {
+    const result = await withTimeout(
+      sage.getTriviaState(),
+      TRIVIA_STATE_TIMEOUT_MS,
+      "Sage trivia state"
+    );
+    return result.ok ? result.payload || {} : {};
+  };
+
+  const scheduleNextRound = (settingsOverride = null, state = {}, generation = scheduleGeneration) => {
+    const settings = settingsOverride || currentSettings();
+    if (!isCurrentGeneration(generation) || !triviaEnabled(settings)) {
       return;
     }
-    const settings = currentSettings();
-    const delayMs = minutesToMs(settings.cooldownMinMinutes, 30);
-    schedule(async () => {
-      if (!triviaEnabled()) {
+    const delayMs = normalizeString(state.nextRoundAfter)
+      ? delayUntil(state.nextRoundAfter, minutesToMs(settings.cooldownMinMinutes, DEFAULT_TRIVIA_COOLDOWN_MINUTES))
+      : minutesToMs(settings.cooldownMinMinutes, DEFAULT_TRIVIA_COOLDOWN_MINUTES);
+    schedule(async (scheduledGeneration) => {
+      if (!isCurrentGeneration(scheduledGeneration) || !triviaEnabled(settings)) {
         return;
       }
       try {
-        await startRoundNow({requestedBy: "scriptarr-portal", force: false});
+        await startRoundNow({requestedBy: "scriptarr-portal", force: false, settings});
       } catch (error) {
         logger?.warn?.("Scheduled trivia round did not start.", {error});
-      } finally {
-        await scheduleNextRound();
+        if (isCurrentGeneration(scheduledGeneration)) {
+          await reconcileTriviaClock(settings);
+        }
       }
-    }, delayMs);
+    }, delayMs, generation);
+  };
+
+  const reconcileTriviaClock = async (settingsOverride = null) => {
+    const settings = actionSettings(settingsOverride);
+    clearTimers();
+    clearActiveRoundCache();
+    const generation = scheduleGeneration;
+    if (stopped || !triviaEnabled(settings)) {
+      return;
+    }
+    let state = {};
+    try {
+      state = await loadTriviaState();
+    } catch (error) {
+      logger?.warn?.("Trivia clock reconciliation failed.", {error});
+    }
+    if (!isCurrentGeneration(generation)) {
+      return;
+    }
+    scheduleLeaderboardPosts(settings, generation);
+    if (state.activeRound?.id) {
+      rememberActiveRound(state.activeRound);
+      scheduleRoundFollowups(state.activeRound, settings, generation);
+      return;
+    }
+    rememberActiveRound(null);
+    scheduleNextRound(settings, state, generation);
   };
 
   const handleGuildMessage = async (message) => {
@@ -464,8 +562,7 @@ export const createTriviaRuntime = ({
 
   const start = async () => {
     stopped = false;
-    clearTimers();
-    await scheduleAll();
+    await reconcileTriviaClock();
   };
 
   const stop = () => {
@@ -475,16 +572,13 @@ export const createTriviaRuntime = ({
   };
 
   const refreshSettings = async () => {
-    clearTimers();
-    clearActiveRoundCache();
     if (!stopped) {
-      await scheduleAll();
+      await reconcileTriviaClock();
     }
   };
 
   const scheduleAll = async () => {
-    await scheduleNextRound();
-    scheduleLeaderboardPosts();
+    await reconcileTriviaClock();
   };
 
   return {

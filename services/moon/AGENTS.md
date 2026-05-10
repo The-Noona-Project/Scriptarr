@@ -18,6 +18,12 @@ Moon serves the forward-facing user app at `/` and the admin app at `/admin` fro
 - Keep `/admin` aligned with Arr-style admin density and `/` aligned with Moon's native reading-first UX.
 - Keep Discord login as Moon's only first-owner and admin sign-in path. Do not reintroduce dev-session claim flows.
 - Keep Moon HTML uncacheable and its static CSS or JS assets versioned so publishes invalidate stale browser bundles cleanly.
+- For Moon speed work, measure before editing. Compare document and Next asset load, chrome/bootstrap requests, main
+  route payloads, event-stream calls, and payload sizes for user home, browse/library, reader/title, admin settings,
+  admin status, and admin queue or requests.
+- Preserve the current performance shape: user card lists use compact projections, home shelves stay bounded, admin
+  status starts lightweight, admin events share one provider stream, and admin routes should load leaf chunks only after
+  auth/grant checks.
 - Preserve Moon's native reader flows. Do not reintroduce Kavita runtime handoff behavior.
 - Keep user requests and admin add-title on the shared metadata-first intake flow. Moon should submit `query`,
   `selectedMetadata`, and nullable `selectedDownload` instead of regressing to free-text-only request payloads.
@@ -37,3 +43,12 @@ Moon serves the forward-facing user app at `/` and the admin app at `/admin` fro
   already-active guardrails before low-priority queueing.
 - Keep cover art visible across add-title, requests, queue/history, and library/title surfaces when Raven provides a
   `coverUrl`.
+
+## Performance Navigation
+
+- User Next surfaces live under `apps/user-next`; admin Next surfaces live under `apps/admin-next`.
+- Same-origin Moon API and proxy helpers live under `lib`, while Sage owns the actual Moon v3 payload assembly.
+- Use `services/moon/scripts/report-bundles.mjs` when first-load JS/CSS size is part of the investigation.
+- Use `services/moon/tests/adminFrontendPerformance.test.mjs`, `tests/settingsDraft.test.mjs`, and `tests/moonApp.test.mjs`
+  for narrow Moon regression coverage, then build the relevant Next app.
+- For cross-service speed fixes, run the narrow service tests first, then `npm run docker:healthcheck`.

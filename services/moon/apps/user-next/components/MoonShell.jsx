@@ -1,24 +1,25 @@
 "use client";
 
 /**
- * @file Shared Once UI app shell for Moon's Next-based user experience.
+ * @file Shared app shell for Moon's Next-based user experience.
  */
 
 import {useEffect, useMemo, useState} from "react";
 import Link from "next/link";
 import {usePathname} from "next/navigation";
-import {Flex, MegaMenu, MobileMegaMenu} from "@once-ui-system/core";
-import {loadMoonChromeContext} from "../lib/api.js";
+import {loadMoonChromeContext, loadMoonLoginUrl} from "../lib/api.js";
 import {buildLibraryPath, classifyPathname, getLibraryTypes} from "../lib/routes.js";
+import {Flex} from "./UiPrimitives.jsx";
+import {DesktopNavigation, MobileNavigation} from "./LocalNavigation.jsx";
 import MoonChromeContext from "./MoonChromeContext.jsx";
 import ProfileMenu from "./ProfileMenu.jsx";
 import SiteFooter from "./SiteFooter.jsx";
 
 /**
- * Build MegaMenu groups for the Moon user shell.
+ * Build navigation groups for the Moon user shell.
  *
  * @param {string} pathname
- * @returns {import("@once-ui-system/core").MenuGroup[]}
+ * @returns {Array<Record<string, any>>}
  */
 const buildMenuGroups = (pathname) => {
   const active = classifyPathname(pathname);
@@ -94,6 +95,13 @@ export const MoonShell = ({children}) => {
       if (active) {
         setChrome(nextValue);
       }
+      if (active && !nextValue.auth) {
+        void loadMoonLoginUrl(currentRoute).then((loginUrl) => {
+          if (active && loginUrl) {
+            setChrome((current) => current.auth ? current : {...current, loginUrl});
+          }
+        });
+      }
     });
 
     return () => {
@@ -138,7 +146,7 @@ export const MoonShell = ({children}) => {
             </Link>
             <Flex gap="16" vertical="center" className="moon-header-actions">
               <div className="moon-nav-desktop">
-                <MegaMenu menuGroups={menuGroups} />
+                <DesktopNavigation menuGroups={menuGroups} />
               </div>
               <div className="moon-nav-mobile">
                 <button
@@ -150,7 +158,7 @@ export const MoonShell = ({children}) => {
                 </button>
                 {mobileMenuOpen ? (
                   <div className="moon-mobile-menu-surface">
-                    <MobileMegaMenu menuGroups={menuGroups} onClose={() => setMobileMenuOpen(false)} />
+                    <MobileNavigation menuGroups={menuGroups} onClose={() => setMobileMenuOpen(false)} />
                   </div>
                 ) : null}
               </div>

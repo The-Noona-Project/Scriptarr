@@ -2,7 +2,7 @@
  * @file Shared loading and empty states for the Moon Next user app.
  */
 
-import {Button} from "@once-ui-system/core";
+import {Button} from "./UiPrimitives.jsx";
 
 /**
  * Render a compact loading view.

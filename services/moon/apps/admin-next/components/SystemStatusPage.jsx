@@ -4,14 +4,18 @@
  * @file Purpose-built grouped endpoint matrix for Moon admin status.
  */
 
-import {Accordion} from "@once-ui-system/core";
-import {Fragment, useState} from "react";
+import {Fragment, useEffect, useState} from "react";
 import {requestJson, useAdminEventStaleness, useAdminJson} from "../lib/api.js";
 import {formatDate} from "../lib/format.js";
 import {probeSafetyLabel, probeStatusLabel, probeStatusTone} from "../lib/statusDisplay.js";
 import {resolveStatusGroupKey, toggleStatusGroupKey} from "../lib/statusGroups.js";
+import {AdminAccordion} from "./AdminAccordion.jsx";
 import {AdminActionBanner, AdminStatusBadge} from "./AdminUi.jsx";
 import {useAdminToast} from "./AdminToasts.jsx";
+
+const SYSTEM_STATUS_ENDPOINT = "/api/moon/v3/admin/system/status?includeChecks=false";
+const SYSTEM_STATUS_RUNTIME_ENDPOINT = "/api/moon/v3/admin/system/status/runtime";
+const SYSTEM_STATUS_CHECK_ENDPOINT = "/api/moon/v3/admin/system/status/check";
 
 const normalizeArray = (value) => Array.isArray(value) ? value : [];
 
@@ -79,7 +83,7 @@ const EndpointGroup = ({group}) => {
 export const SystemStatusPage = () => {
   const [openGroupKeys, setOpenGroupKeys] = useState([]);
   const {notify} = useAdminToast();
-  const {loading, refreshing, error, data, refresh, setData} = useAdminJson("/api/moon/v3/admin/system/status", {
+  const {loading, refreshing, error, data, refresh, setData} = useAdminJson(SYSTEM_STATUS_ENDPOINT, {
     fallback: {
       groups: [],
       summary: {}
@@ -94,8 +98,27 @@ export const SystemStatusPage = () => {
   const groups = normalizeArray(data?.groups);
   const summary = data?.summary || {};
 
+  useEffect(() => {
+    if (loading) {
+      return;
+    }
+    let active = true;
+    void requestJson(SYSTEM_STATUS_RUNTIME_ENDPOINT).then((result) => {
+      if (active && result.ok) {
+        setData((current) => ({
+          ...(current || {}),
+          bootstrap: result.payload?.bootstrap || null,
+          runtime: result.payload?.runtime || null
+        }));
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, [loading, setData]);
+
   const runCheck = async () => {
-    const result = await requestJson("/api/moon/v3/admin/system/status/check", {method: "POST"});
+    const result = await requestJson(SYSTEM_STATUS_CHECK_ENDPOINT, {method: "POST"});
     if (result.ok) {
       setData(result.payload);
       notify({message: "GET endpoint check completed.", tone: "good", category: "action"});
@@ -153,14 +176,13 @@ export const SystemStatusPage = () => {
             const groupKey = resolveStatusGroupKey(group, index);
             return (
               <Fragment key={groupKey}>
-                <Accordion
-                  size="m"
+                <AdminAccordion
                   title={`${group.label} (${normalizeArray(group.endpoints).length})`}
                   open={openGroupKeys.includes(groupKey)}
                   onToggle={() => toggleGroup(groupKey)}
                 >
                   <EndpointGroup group={group} />
-                </Accordion>
+                </AdminAccordion>
                 {index < groups.length - 1 ? <div className="admin-status-accordion-divider" /> : null}
               </Fragment>
             );

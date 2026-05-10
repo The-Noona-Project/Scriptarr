@@ -1,15 +1,15 @@
 "use client";
 
 /**
- * @file Series detail page for Moon's Once UI Next user app.
+ * @file Series detail page for Moon's Next user app.
  */
 
 import {startTransition, useMemo, useState} from "react";
 import {useRouter} from "next/navigation";
-import {Button, Flex} from "@once-ui-system/core";
 import {requestJson, useMoonJson} from "../../lib/api.js";
 import {buildReaderPathForTitle, buildTitlePathForTitle} from "../../lib/routes.js";
 import {formatDate} from "../../lib/date.js";
+import {Button, Flex} from "../UiPrimitives.jsx";
 import {useMoonChrome} from "../MoonChromeContext.jsx";
 import {AuthRequiredView, EmptyView, ErrorView, LoadingView} from "../StateView.jsx";
 

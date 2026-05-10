@@ -5,7 +5,7 @@
  */
 
 import Link from "next/link";
-import {HoverCard} from "@once-ui-system/core";
+import {HoverCard} from "../UiPrimitives.jsx";
 import {buildReaderPath, buildTitlePath} from "../../lib/routes.js";
 import {formatDate, formatProgress} from "../../lib/date.js";
 

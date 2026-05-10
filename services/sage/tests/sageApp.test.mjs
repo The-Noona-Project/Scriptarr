@@ -103,12 +103,13 @@ const defaultIntakePayload = Object.freeze({
  * Create a small dependency stub for Sage's Raven, Warden, Portal, and Oracle
  * calls so the Moon v3 broker routes can be tested in isolation.
  *
- * @param {{libraryTitles?: Array<Record<string, unknown>>, downloadTasks?: Array<Record<string, unknown>>}} [options]
+ * @param {{libraryTitles?: Array<Record<string, unknown>>, downloadTasks?: Array<Record<string, unknown>>, downloadRuntimeReloadStatus?: number}} [options]
  * @returns {Promise<{server: http.Server, calls: Record<string, number>}>}
  */
 const createDependencyStub = ({
   libraryTitles = [defaultLibraryTitle],
-  downloadTasks = []
+  downloadTasks = [],
+  downloadRuntimeReloadStatus = 200
 } = {}) => {
   const calls = {
     health: 0,
@@ -121,6 +122,7 @@ const createDependencyStub = ({
     bulkRunContinue: 0,
     bulkRunCancel: 0,
     vpnTest: 0,
+    downloadRuntimeReload: 0,
     contentResetPreview: 0,
     contentResetExecute: 0,
     logs: 0,
@@ -133,6 +135,8 @@ const createDependencyStub = ({
     localAiInstall: 0,
     localAiStart: 0,
     releaseNotificationTest: 0,
+    library: 0,
+    libraryCard: 0,
     metadataIdentify: 0,
     metadataSearchUrls: []
   };
@@ -410,10 +414,56 @@ const createDependencyStub = ({
       return;
     }
 
-    if (request.url === "/v1/library" || request.url === "/v1/library?view=card") {
-      response.writeHead(200, {"Content-Type": "application/json"});
-      response.end(JSON.stringify({titles: currentLibraryTitles}));
-      return;
+    if (request.url?.startsWith("/v1/library")) {
+      const url = new URL(request.url, "http://scriptarr.test");
+      if (url.pathname === "/v1/library") {
+        if (url.searchParams.get("view") === "card") {
+          calls.libraryCard += 1;
+          const pageSize = Math.min(100, Math.max(1, Number.parseInt(url.searchParams.get("pageSize") || "60", 10) || 60));
+          const cursor = Math.max(0, Number.parseInt(url.searchParams.get("cursor") || "0", 10) || 0);
+          const exactIds = Array.from(new Set(String(url.searchParams.get("ids") || "")
+            .split(",")
+            .map((entry) => entry.trim())
+            .filter(Boolean)));
+          const cardTitles = currentLibraryTitles.filter((title) => !exactIds.length || exactIds.includes(title.id)).map((title) => ({
+            id: title.id,
+            title: title.title,
+            mediaType: title.mediaType,
+            libraryTypeLabel: title.libraryTypeLabel,
+            libraryTypeSlug: title.libraryTypeSlug,
+            status: title.status,
+            latestChapter: title.latestChapter,
+            coverAccent: title.coverAccent,
+            coverUrl: title.coverUrl,
+            summary: title.summary,
+            releaseLabel: title.releaseLabel,
+            chapterCount: title.chapterCount,
+            chaptersDownloaded: title.chaptersDownloaded,
+            author: title.author,
+            tags: title.tags || [],
+            aliases: title.aliases || [],
+            updatedAt: title.updatedAt || "2026-04-25T00:00:00.000Z"
+          })).sort((left, right) => exactIds.length ? exactIds.indexOf(left.id) - exactIds.indexOf(right.id) : 0);
+          const page = cardTitles.slice(cursor, cursor + pageSize);
+          response.writeHead(200, {"Content-Type": "application/json"});
+          response.end(JSON.stringify({
+            titles: page,
+            counts: {total: cardTitles.length, byLetter: {D: cardTitles.length}, byType: {webtoon: cardTitles.length}},
+            pageInfo: {
+              cursor: String(cursor),
+              nextCursor: cursor + page.length < cardTitles.length ? String(cursor + page.length) : "",
+              hasMore: cursor + page.length < cardTitles.length,
+              pageSize,
+              total: cardTitles.length
+            }
+          }));
+          return;
+        }
+        calls.library += 1;
+        response.writeHead(200, {"Content-Type": "application/json"});
+        response.end(JSON.stringify({titles: currentLibraryTitles}));
+        return;
+      }
     }
 
     if (request.url?.endsWith("/repair-options") && request.url.startsWith("/v1/library/")) {
@@ -527,6 +577,21 @@ const createDependencyStub = ({
           runtimeCapable: true,
           settingsFresh: true,
           region: "us_california"
+        }
+      }));
+      return;
+    }
+
+    if (request.url === "/v1/downloads/runtime/reload" && request.method === "POST") {
+      calls.downloadRuntimeReload += 1;
+      response.writeHead(downloadRuntimeReloadStatus, {"Content-Type": "application/json"});
+      response.end(JSON.stringify({
+        error: downloadRuntimeReloadStatus >= 400 ? "Raven reload failed." : undefined,
+        activeTitleDownloads: 4,
+        queue: {
+          activeSlots: 4,
+          totalSlots: 4,
+          runningSlots: 0
         }
       }));
       return;
@@ -1069,6 +1134,7 @@ test("sage signs in the first owner through the Discord callback and moderates r
   assert.equal(adminRequests.counts.queued, 1);
   assert.equal(adminRequests.counts.closed, 1);
   assert.equal(adminRequests.counts.needsReview, 0);
+  assert.equal(typeof adminRequests.requests[0].revision, "number");
   const requestEvents = await fetch(`${baseUrl}/api/moon-v3/admin/events?domain=requests`, {
     headers: {
       "Authorization": `Bearer ${ownerClaim.token}`
@@ -1106,6 +1172,7 @@ test("sage signs in the first owner through the Discord callback and moderates r
   assert.equal(Object.hasOwn(moonCardLibrary.titles[0], "chapters"), false);
   assert.equal(Object.hasOwn(moonCardLibrary.titles[0], "downloadRoot"), false);
   assert.equal(moonCardLibrary.pageInfo.pageSize, 1);
+  assert.equal(dependencyStub.calls.libraryCard, 1);
 
   const overview = await fetch(`${baseUrl}/api/moon-v3/admin/overview`, {
     headers: {
@@ -1151,12 +1218,23 @@ test("sage signs in the first owner through the Discord callback and moderates r
   }).then((response) => response.json());
 
   assert.equal(systemStatus.services.warden.service, "scriptarr-warden-health");
-  assert.equal(systemStatus.bootstrap.managedNetworkName, "scriptarr-network-bootstrap");
-  assert.equal(systemStatus.runtime.managedNetworkName, "scriptarr-network-runtime");
-  assert.equal(systemStatus.runtime.mysql.mode, "selfhost");
+  assert.equal(systemStatus.bootstrap, null);
+  assert.equal(systemStatus.runtime, null);
   assert.equal(systemStatus.groups.some((group) => group.id === "oracle"), true);
   assert.equal(systemStatus.summary.notProbed > 0, true);
   assert.equal(systemStatus.contentReset, undefined);
+  assert.equal(
+    systemStatus.groups.find((group) => group.id === "raven").endpoints.find((endpoint) => endpoint.path === "/v1/library").probeStatus,
+    "pending"
+  );
+  const systemStatusRuntime = await fetch(`${baseUrl}/api/moon-v3/admin/system/status/runtime`, {
+    headers: {
+      "Authorization": `Bearer ${ownerClaim.token}`
+    }
+  }).then((response) => response.json());
+  assert.equal(systemStatusRuntime.bootstrap.managedNetworkName, "scriptarr-network-bootstrap");
+  assert.equal(systemStatusRuntime.runtime.managedNetworkName, "scriptarr-network-runtime");
+  assert.equal(systemStatusRuntime.runtime.mysql.mode, "selfhost");
 
   const tasks = await fetch(`${baseUrl}/api/moon-v3/admin/system/tasks`, {
     headers: {
@@ -1519,8 +1597,16 @@ test("sage round-trips Moon branding and exposes typed Moon reader payloads", as
   }).then((response) => response.json());
   assert.equal(aggregatedSettings.branding.siteName, "Pax-Kun");
   assert.equal(aggregatedSettings.publicBranding.siteName, "Pax-Kun");
-  assert.equal(aggregatedSettings.databaseOverview.tables.some((table) => table.name === "settings" && table.editable), true);
+  assert.equal(aggregatedSettings.databaseOverview, null);
   assert.equal(aggregatedSettings.toastSettings.effective.actionToasts, true);
+  assert.equal(aggregatedSettings.ravenDownloadRuntime.activeTitleDownloads, 2);
+  const settingsRuntime = await fetch(`${baseUrl}/api/moon-v3/admin/settings/runtime`, {
+    headers: {
+      "Authorization": `Bearer ${ownerClaim.token}`
+    }
+  }).then((response) => response.json());
+  assert.equal(settingsRuntime.databaseOverview.tables.some((table) => table.name === "settings" && table.editable), true);
+  assert.equal(typeof settingsRuntime.discordRuntime.connected, "boolean");
 
   const savedVpnResponse = await fetch(`${baseUrl}/api/moon-v3/admin/settings/raven/vpn`, {
     method: "PUT",
@@ -1596,6 +1682,13 @@ test("sage round-trips Moon branding and exposes typed Moon reader payloads", as
   assert.equal(globalToastResponse.status, 200);
   assert.equal(globalToastPayload.global.failuresOnly, true);
 
+  const toastReadResponse = await fetch(`${baseUrl}/api/moon-v3/admin/settings/toasts`, {headers});
+  const toastReadPayload = await toastReadResponse.json();
+  assert.equal(toastReadResponse.status, 200);
+  assert.equal(toastReadPayload.canEditGlobal, true);
+  assert.equal(toastReadPayload.global.failuresOnly, true);
+  assert.equal(toastReadPayload.effective.liveEventToasts, false);
+
   const metadataSaveResponse = await fetch(`${baseUrl}/api/moon-v3/admin/settings/raven/metadata`, {
     method: "PUT",
     headers,
@@ -1625,6 +1718,27 @@ test("sage round-trips Moon branding and exposes typed Moon reader payloads", as
   assert.equal(downloadProviderSaveResponse.status, 200);
   assert.equal(downloadProviderSave.providers.find((provider) => provider.id === "mangadex").enabled, false);
   assert.equal(downloadProviderSave.providers.find((provider) => provider.id === "mangadex").priority, 5);
+
+  const downloadRuntimeSaveResponse = await fetch(`${baseUrl}/api/moon-v3/admin/settings/raven/download-runtime`, {
+    method: "PUT",
+    headers,
+    body: JSON.stringify({activeTitleDownloads: 4})
+  });
+  const downloadRuntimeSave = await downloadRuntimeSaveResponse.json();
+  assert.equal(downloadRuntimeSaveResponse.status, 200);
+  assert.equal(downloadRuntimeSave.activeTitleDownloads, 4);
+  assert.equal(downloadRuntimeSave.applied, true);
+  assert.equal(dependencyStub.calls.downloadRuntimeReload, 1);
+
+  const invalidDownloadRuntimeResponse = await fetch(`${baseUrl}/api/moon-v3/admin/settings/raven/download-runtime`, {
+    method: "PUT",
+    headers,
+    body: JSON.stringify({activeTitleDownloads: 7})
+  });
+  assert.equal(invalidDownloadRuntimeResponse.status, 400);
+
+  const queueAfterRuntimeSave = await fetch(`${baseUrl}/api/moon-v3/admin/activity/queue`, {headers}).then((response) => response.json());
+  assert.equal(queueAfterRuntimeSave.stats.totalSlots, 4);
 
   const discordBasicsResponse = await fetch(`${baseUrl}/api/moon-v3/admin/settings/portal/discord`, {
     method: "PUT",
@@ -1674,6 +1788,7 @@ test("sage round-trips Moon branding and exposes typed Moon reader payloads", as
   assert.equal(settingsAfterSaves.toastSettings.global.failuresOnly, true);
   assert.equal(settingsAfterSaves.metadataProviders.providers.find((provider) => provider.id === "mangadex").enabled, false);
   assert.equal(settingsAfterSaves.downloadProviders.providers.find((provider) => provider.id === "mangadex").enabled, false);
+  assert.equal(settingsAfterSaves.ravenDownloadRuntime.activeTitleDownloads, 4);
   assert.equal(settingsAfterSaves.discord.guildId, "");
 
   const databaseOverviewResponse = await fetch(`${baseUrl}/api/moon-v3/admin/settings/database`, {
@@ -1786,6 +1901,57 @@ test("sage round-trips Moon branding and exposes typed Moon reader payloads", as
   }).then((response) => response.json());
   assert.equal(home.latestTitles[0].libraryTypeSlug, "webtoon");
   assert.equal(home.latestTitles[0].libraryTypeLabel, "Webtoon");
+
+  await closeServer(sageServer);
+  await closeServer(vaultServer);
+  await closeServer(dependencyStub.server);
+});
+
+test("sage keeps saved Raven download runtime settings when live reload fails", async () => {
+  const {app: vaultApp} = await createVaultApp();
+  const vaultServer = vaultApp.listen(0);
+  const vaultPort = vaultServer.address().port;
+
+  const dependencyStub = await createDependencyStub({downloadRuntimeReloadStatus: 503});
+  dependencyStub.server.listen(0);
+  const dependencyPort = dependencyStub.server.address().port;
+
+  process.env.SCRIPTARR_VAULT_BASE_URL = `http://127.0.0.1:${vaultPort}`;
+  process.env.SCRIPTARR_WARDEN_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_PORTAL_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_ORACLE_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_RAVEN_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_PUBLIC_BASE_URL = "https://pax-kun.com";
+  process.env.SCRIPTARR_DISCORD_CLIENT_ID = "discord-client-id";
+  process.env.SCRIPTARR_DISCORD_CLIENT_SECRET = "discord-client-secret";
+
+  installDiscordFetchStub();
+
+  const {app: sageApp} = await createSageApp();
+  const sageServer = sageApp.listen(0);
+  const sagePort = sageServer.address().port;
+  const baseUrl = `http://127.0.0.1:${sagePort}`;
+  const ownerClaim = await signInViaDiscord(baseUrl);
+  const headers = {
+    "Authorization": `Bearer ${ownerClaim.token}`,
+    "Content-Type": "application/json"
+  };
+
+  const saveResponse = await fetch(`${baseUrl}/api/moon-v3/admin/settings/raven/download-runtime`, {
+    method: "PUT",
+    headers,
+    body: JSON.stringify({activeTitleDownloads: 3})
+  });
+  const savePayload = await saveResponse.json();
+  assert.equal(saveResponse.status, 200);
+  assert.equal(savePayload.activeTitleDownloads, 3);
+  assert.equal(savePayload.applied, false);
+  assert.match(savePayload.warning, /could not apply|reload failed/i);
+
+  const settings = await fetch(`${baseUrl}/api/moon-v3/admin/settings`, {
+    headers: {"Authorization": `Bearer ${ownerClaim.token}`}
+  }).then((response) => response.json());
+  assert.equal(settings.ravenDownloadRuntime.activeTitleDownloads, 3);
 
   await closeServer(sageServer);
   await closeServer(vaultServer);
@@ -2774,6 +2940,94 @@ test("sage admin resolve surfaces durable work-key conflicts from Vault cleanly"
   const conflict = await resolved.json();
   assert.equal(conflict.code, "REQUEST_WORK_KEY_CONFLICT");
   assert.match(conflict.error, /already queued|active request/i);
+
+  await closeServer(sageServer);
+  await closeServer(vaultServer);
+  await closeServer(dependencyStub.server);
+});
+
+test("sage admin request actions surface stale revision conflicts cleanly", async () => {
+  const {app: vaultApp} = await createVaultApp();
+  const vaultServer = vaultApp.listen(0);
+  const vaultPort = vaultServer.address().port;
+
+  const dependencyStub = await createDependencyStub({libraryTitles: []});
+  dependencyStub.server.listen(0);
+  const dependencyPort = dependencyStub.server.address().port;
+
+  process.env.SCRIPTARR_VAULT_BASE_URL = `http://127.0.0.1:${vaultPort}`;
+  process.env.SCRIPTARR_WARDEN_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_PORTAL_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_ORACLE_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_RAVEN_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_DISCORD_CLIENT_ID = "discord-client-id";
+  process.env.SCRIPTARR_DISCORD_CLIENT_SECRET = "discord-client-secret";
+
+  installDiscordFetchStub();
+
+  const {app: sageApp} = await createSageApp();
+  const sageServer = sageApp.listen(0);
+  const sagePort = sageServer.address().port;
+  const baseUrl = `http://127.0.0.1:${sagePort}`;
+
+  const ownerClaim = await signInViaDiscord(baseUrl);
+  const ownerHeaders = {
+    "Authorization": `Bearer ${ownerClaim.token}`,
+    "Content-Type": "application/json"
+  };
+  const vaultHeaders = {
+    "Authorization": "Bearer vault-dev-token",
+    "Content-Type": "application/json"
+  };
+
+  const request = await fetch(`http://127.0.0.1:${vaultPort}/api/service/requests`, {
+    method: "POST",
+    headers: vaultHeaders,
+    body: JSON.stringify({
+      source: "moon",
+      title: "Stale Request",
+      requestType: "manga",
+      requestedBy: ownerClaim.user.discordUserId,
+      status: "pending",
+      details: {
+        query: "stale request",
+        selectedMetadata: {
+          provider: "mangadex",
+          providerSeriesId: "stale-1",
+          title: "Stale Request",
+          type: "manga"
+        },
+        availability: "unavailable"
+      }
+    })
+  }).then((response) => response.json());
+
+  const listed = await fetch(`${baseUrl}/api/moon-v3/admin/requests`, {
+    headers: ownerHeaders
+  }).then((response) => response.json());
+  const staleRevision = listed.requests.find((entry) => String(entry.id) === String(request.id)).revision;
+
+  await fetch(`http://127.0.0.1:${vaultPort}/api/service/requests/${request.id}`, {
+    method: "PATCH",
+    headers: vaultHeaders,
+    body: JSON.stringify({
+      notes: "Changed elsewhere."
+    })
+  });
+
+  const staleDeny = await fetch(`${baseUrl}/api/moon-v3/admin/requests/${request.id}/deny`, {
+    method: "POST",
+    headers: ownerHeaders,
+    body: JSON.stringify({
+      comment: "Not this time.",
+      expectedRevision: staleRevision
+    })
+  });
+
+  assert.equal(staleDeny.status, 409);
+  const conflict = await staleDeny.json();
+  assert.equal(conflict.code, "REQUEST_REVISION_CONFLICT");
+  assert.match(conflict.error, /changed while you were reviewing/i);
 
   await closeServer(sageServer);
   await closeServer(vaultServer);

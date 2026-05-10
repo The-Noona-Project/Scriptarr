@@ -62,6 +62,17 @@ public class RavenSageClient implements RavenBrokerClient {
     }
 
     @Override
+    public JsonNode listLibraryTitleCards(Map<String, String> query) throws IOException, InterruptedException {
+        StringJoiner params = new StringJoiner("&");
+        for (Map.Entry<String, String> entry : query.entrySet()) {
+            if (entry.getValue() != null && !entry.getValue().isBlank()) {
+                params.add(encode(entry.getKey()) + "=" + encode(entry.getValue()));
+            }
+        }
+        return get("/api/internal/vault/raven/title-cards" + (params.length() > 0 ? "?" + params : ""));
+    }
+
+    @Override
     public JsonNode getLibraryTitle(String titleId) throws IOException, InterruptedException {
         return get("/api/internal/vault/raven/titles/" + encode(titleId));
     }

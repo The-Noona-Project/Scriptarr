@@ -51,12 +51,17 @@
   falling back to `/` otherwise.
 - Keep HTML responses uncached and static admin or user assets versioned so publishes invalidate the browser cache
   without relying on manual hard refreshes.
+- User and admin chrome should start from `/api/moon/chrome/bootstrap?returnTo=...`, which returns branding, auth,
+  user identity, and first-owner bootstrap status in one Moon-owned response. Do not include a Discord OAuth URL in
+  that payload; fetch the existing login URL endpoint only when a signed-out screen needs to render a sign-in action.
 - Keep the user app installable. `manifest.webmanifest` and `/service-worker.js` are Moon-owned routes, and the
   service worker should cache the app shell plus only a small rolling set of recent reader chapters.
 - The user app now runs as an embedded Next.js App Router program. Preserve the existing public Moon routes and
-  same-origin APIs while keeping the Once UI shell, single-row megamenu navigation, compact avatar dropdown,
-  `/profile` route for StylePanel or install actions, and simple footer inside Moon's runtime instead of bypassing
-  Moon. The old `apps/user` plain-JS shell is gone, so new user-surface work should stay inside `apps/user-next`.
+  same-origin APIs while keeping the lightweight local shell primitives, single-row megamenu navigation, compact
+  avatar dropdown, `/profile` route for the lazy StylePanel bridge or install actions, and simple footer inside
+  Moon's runtime instead of bypassing Moon. The old `apps/user` plain-JS shell is gone, so new user-surface work
+  should stay inside `apps/user-next`. Keep root `@once-ui-system/core` JS imports out of always-mounted user/admin
+  shell files; the profile-only StylePanel bridge is the exception and should stay lazy.
 - The admin app now also runs through embedded Next at `apps/admin-next` for all `/admin` routes. The old plain-JS
   `apps/admin` fallback and `/admin-assets` route are gone, so new admin work should stay in `apps/admin-next` and
   continue using Moon same-origin APIs rather than direct internal service calls.
@@ -69,7 +74,15 @@
   likes/dislikes plus inferred taste from read history, follows, and the active bookshelf.
 - Browse and library shelves should use `/api/moon-v3/user/library?view=card` with server-side filtering and pagination
   instead of pulling full title details. Full title detail and reader routes are still the only places that should load
-  chapter arrays.
+  chapter arrays. Home shelves should stay bounded to compact card reads and hydrate full titles only for exact
+  continue-reading, read-state, or following ids. Use the compact exact-id card projection (`view=card&ids=...`) for
+  those activity ids instead of fanning out into individual full title requests.
+- For the next Moon speed pass, build a fresh timing table before editing. Watch document load, Next JS/CSS chunk size,
+  chrome/session/bootstrap calls, main route payload, admin event-stream startup, image or cover-cache work, and
+  downstream Sage/Raven/Vault latency separately so the fix targets the real bottleneck.
+- Use `services/moon/scripts/report-bundles.mjs` for bundle reports and keep admin route chunks dynamically loaded
+  after auth/grant checks. If bundle size is still high, remove always-mounted shell dependencies before trimming leaf
+  page code that is already lazy.
 - Cover cards should prefer Moon's derived `coverThumbUrl` WebP cache when Sage provides one. The cache is derived
   storage only: Moon fetches Sage-approved cover URLs, converts them with `sharp`, stores WebP files under the Moon
   cover-cache folder, and exposes a rerunnable `Optimize cover images` admin task.
@@ -94,20 +107,26 @@
 - `/admin/system/tasks` is the scheduler surface for Sage-owned maintenance jobs. Keep it Radarr-style and dense:
   enabled state, free cron expression, timezone, next-run preview, manual run, last-run status, and recent history.
   Refresh quietly so cron drafts and focused controls are never wiped by SSE.
-- `/admin/system/status` is the grouped endpoint matrix. Use Once UI grouped sections for Moon, Sage, Vault, Raven,
-  Warden, Portal, Oracle, and LocalAI, check GET/read endpoints, show auth-gated reads as protected, and keep mutation
-  endpoints visible but clearly marked as not probed.
+- `/admin/system/status` is the grouped endpoint matrix. Initial load should use Sage's lightweight registry/status
+  payload; only the explicit check action should call the expensive live GET probes. Show auth-gated reads as
+  protected and keep mutation endpoints visible but clearly marked as not probed. Warden bootstrap and runtime details
+  belong in `/api/moon-v3/admin/system/status/runtime`, hydrated after the matrix paints.
 - `/admin/settings` is the general Settings hub. Keep branding, logo upload or remove, database summary, credits,
-  support links, toast notification preferences, Raven VPN, metadata providers, download providers, request workflow,
-  and Discord basics there. Do not drift AI controls back into this page. Keep section drafts protected from background
-  refreshes while dirty, and use the explicit Moon v3 settings save routes for Settings-owned forms. Show Raven VPN
-  runtime capability, settings freshness, `armed / idle`, and protected state from the brokered health payload. The
-  Settings VPN test button must call Moon -> Sage -> Raven rather than reaching around the browser-safe broker path.
+  support links, toast notification preferences, Raven VPN, metadata providers, download providers, Raven download
+  runtime, request workflow, and Discord basics there. Do not drift AI controls back into this page. Keep section
+  drafts protected from background refreshes while dirty, and use the explicit Moon v3 settings save routes for
+  Settings-owned forms. The Raven active title-download field should be numeric, constrained to `1` through `6`, and
+  should surface a saved-but-not-live warning if Raven reload fails. Show Raven VPN runtime capability, settings
+  freshness, `armed / idle`, and protected state from the secondary `/api/moon-v3/admin/settings/runtime` payload
+  instead of blocking the saved settings response on Raven, Vault overview, or Portal runtime work. The Settings VPN
+  test button must call Moon -> Sage -> Raven rather than reaching around the browser-safe broker path.
 - `/admin/settings/database` is a hidden-from-nav full page opened only from Settings. Keep it Moon -> Sage -> Vault,
   require database grants through the route model, show redacted/paginated rows, and allow editing only the validated
   settings JSON path the broker exposes.
 - Use the shared `AdminToastProvider` for admin action results, async jobs, and live SSE events. Page-local toast
   stacks should only be introduced for isolated surfaces that cannot sit under the admin provider.
+- Admin SSE should be shared through the provider. Pages register event domains and stale callbacks instead of opening
+  their own `EventSource` connections.
 - `/admin/system/ai` is the dedicated Oracle, LocalAI, and AI tooling page. Keep provider, provider-specific model
   dropdown, temperature, masked key state, LocalAI profile/image controls, manual install/start/remove actions,
   lifecycle progress, health/status, completion toasts, test prompt, tool toggles, assistant prompts, and confirmable
@@ -139,6 +158,9 @@
   not a raw table: default to Needs review, keep active request edits stable across SSE refreshes, and require a
   moderator comment before calling the deny route. Bulk actions are limited to refresh-source and deny; approvals stay
   per request so staff make one source decision at a time.
+- Request drawer state should reset only when the selected request id or revision changes. Use the locally selected
+  metadata/source when computing approve and resolve button state, auto-select a single concrete candidate for review,
+  and pass `expectedRevision` on admin mutations so stale actions surface clean 409 conflicts.
 - `/admin/wanted/metadata` is the canonical metadata repair surface. Keep `/admin/wanted/metadata-gaps` as a redirect
   only, search provider matches through Sage with the library id, and apply selected matches through Raven identify.
 - `/admin/wanted/missing-content` is the coverage and quality repair surface. Keep `/admin/wanted/missing-chapters`
@@ -160,6 +182,8 @@
   required to cancel running tasks or bulk-cancel all running work.
 - Queued cards should not show ETAs. Running cards can show download speed and active ETA only when Sage or Raven
   supplies credible values. Do not invent fake transfer rates or fake timing in the browser.
+- Queue active-slot totals should use the configured Raven title-download limit from Sage, while the queue page itself
+  stays display-only for that setting.
 - Moon's shared admin event feeds now come from `/api/moon-v3/admin/events` and `/api/moon-v3/admin/events/stream`.
   Those routes are same-origin, Sage-backed, and domain-scoped, so pages such as `/admin/users` and `/admin/requests`
   can subscribe with their own route-family grants instead of requiring blanket system access.

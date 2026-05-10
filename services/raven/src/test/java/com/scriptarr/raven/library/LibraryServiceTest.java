@@ -237,6 +237,60 @@ class LibraryServiceTest {
     }
 
     /**
+     * Verify Raven's card view uses the compact broker projection instead of
+     * loading full title/chapter records.
+     */
+    @Test
+    void titleCardPageUsesCompactBrokerProjection() {
+        FakeRavenBrokerClient brokerClient = new FakeRavenBrokerClient();
+        ScriptarrLogger logger = mock(ScriptarrLogger.class);
+        LibraryService service = new LibraryService(brokerClient, new RavenSettingsService(brokerClient, logger, List.of()), logger);
+
+        brokerClient.setLibraryTitle(new LibraryTitle(
+            "dandadan",
+            "Dandadan",
+            "manga",
+            "Manga",
+            "manga",
+            "active",
+            "166",
+            "#de6d3a",
+            "Aliens and yokai.",
+            "2021",
+            2,
+            2,
+            "Yukinobu Tatsu",
+            List.of("action"),
+            List.of("Dan Da Dan"),
+            "mangadex",
+            Instant.parse("2026-04-18T08:00:00Z").toString(),
+            List.of(),
+            "https://weebcentral.com/series/dandadan",
+            "https://images.example/dandadan.jpg",
+            "/downloads/downloading/manga/Dandadan",
+            "/downloads/downloaded/manga/Dandadan",
+            List.of(new LibraryChapter("dandadan-c166", "Chapter 166", "166", 24, Instant.parse("2026-04-20T08:00:00Z").toString(), true, "/downloads/downloaded/manga/Dandadan/ch166.cbz", null, null)),
+            null
+        ));
+
+        Map<String, Object> page = service.listTitleCardPage(Map.of("pageSize", "1"));
+
+        assertEquals(1, brokerClient.listLibraryTitleCardsCalls());
+        assertEquals(0, brokerClient.listLibraryTitlesCalls());
+        assertTrue(page.get("titles") instanceof List<?>);
+        List<?> titles = (List<?>) page.get("titles");
+        assertEquals(1, titles.size());
+        assertTrue(titles.getFirst() instanceof Map<?, ?>);
+        Map<?, ?> card = (Map<?, ?>) titles.getFirst();
+        assertEquals("Dandadan", card.get("title"));
+        assertFalse(card.containsKey("chapters"));
+        assertFalse(card.containsKey("downloadRoot"));
+        assertFalse(card.containsKey("workingRoot"));
+        assertTrue(page.get("pageInfo") instanceof Map<?, ?>);
+        assertEquals(1, ((Map<?, ?>) page.get("pageInfo")).get("pageSize"));
+    }
+
+    /**
      * Verify source download lifecycle labels are normalized into the shared
      * Scriptarr title status vocabulary.
      *

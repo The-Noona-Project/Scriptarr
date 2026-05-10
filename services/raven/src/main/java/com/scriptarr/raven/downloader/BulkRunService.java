@@ -290,12 +290,18 @@ public class BulkRunService {
                 buildRunSummary(loadBatchTasks(runId))
             );
         } catch (BulkRunCancelledException ignored) {
-            Map<String, Object> job = requireRun(runId);
-            updateRunStatus(job, STATUS_CANCELLED, "Cancelled by owner.", buildRunSummary(loadBatchTasks(runId)));
+            safelyUpdateRunAfterFailure(runId, STATUS_CANCELLED, "Cancelled by owner.", null);
         } catch (Exception error) {
             logger.error("DOWNLOAD", "Raven mega downloadall run failed.", error);
-            Map<String, Object> job = requireRun(runId);
-            updateRunStatus(job, STATUS_FAILED, firstNonBlank(error.getMessage(), "Raven mega downloadall failed."), buildRunSummary(loadBatchTasks(runId)));
+            boolean brokerFailure = isDurableBrokerFailure(error);
+            safelyUpdateRunAfterFailure(
+                runId,
+                brokerFailure ? STATUS_PAUSED : STATUS_FAILED,
+                brokerFailure
+                    ? firstNonBlank(error.getMessage(), "Raven paused downloadall after a durable broker error. Continue to retry.")
+                    : firstNonBlank(error.getMessage(), "Raven mega downloadall failed."),
+                error
+            );
         }
     }
 
@@ -754,6 +760,43 @@ public class BulkRunService {
         }
         updated.put("updatedAt", now);
         putJob(stringValue(updated.get("jobId")), updated);
+    }
+
+    private void safelyUpdateRunAfterFailure(String runId, String status, String message, Exception originalError) {
+        try {
+            Map<String, Object> job = requireRun(runId);
+            updateRunStatus(job, status, message, safeRunSummary(runId, originalError));
+        } catch (Exception statusError) {
+            logger.error("DOWNLOAD", "Raven could not persist bulk-run failure state.", statusError);
+        }
+    }
+
+    private Map<String, Object> safeRunSummary(String runId, Exception originalError) {
+        try {
+            return buildRunSummary(loadBatchTasks(runId));
+        } catch (Exception summaryError) {
+            logger.warn(
+                "DOWNLOAD",
+                "Raven could not load bulk-run batches while handling a run failure.",
+                "runId=" + runId + " error=" + summaryError.getMessage()
+            );
+            Map<String, Object> fallback = new LinkedHashMap<>();
+            fallback.put("summaryUnavailable", true);
+            fallback.put("error", firstNonBlank(
+                originalError == null ? "" : originalError.getMessage(),
+                summaryError.getMessage(),
+                "Raven could not load durable bulk-run batches."
+            ));
+            return fallback;
+        }
+    }
+
+    private boolean isDurableBrokerFailure(Exception error) {
+        String message = stringValue(error == null ? "" : error.getMessage());
+        return message.startsWith("Raven could not persist the durable bulk run.")
+            || message.startsWith("Raven could not persist a durable bulk-run batch.")
+            || message.startsWith("Raven could not load durable bulk runs.")
+            || message.startsWith("Raven could not load durable bulk-run batches.");
     }
 
     private void throwIfRunCancelled(String runId) {

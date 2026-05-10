@@ -357,6 +357,7 @@ export const createCachedStore = (
         "progress:",
         "read-state:",
         "raven-title:",
+        "raven-title-cards:",
         "raven-titles:list",
         "raven-download-tasks:list",
         "raven-metadata:",
@@ -371,17 +372,22 @@ export const createCachedStore = (
     async listRavenTitles() {
       return readThrough("raven-titles:list", () => baseStore.listRavenTitles());
     },
+    async listRavenTitleCards(filters = {}) {
+      return readThrough(makeListKey("raven-title-cards", filters), () => baseStore.listRavenTitleCards(filters));
+    },
     async getRavenTitle(titleId) {
       return readThrough(`raven-title:${titleId}`, () => baseStore.getRavenTitle(titleId));
     },
     async upsertRavenTitle(payload) {
       const title = await baseStore.upsertRavenTitle(payload);
       writeEntry(`raven-title:${title.id}`, title);
+      invalidatePrefix("raven-title-cards:");
       invalidate("raven-titles:list");
       return title;
     },
     async replaceRavenChapters(titleId, chapters) {
       const replaced = await baseStore.replaceRavenChapters(titleId, chapters);
+      invalidatePrefix("raven-title-cards:");
       invalidate("raven-titles:list", `raven-title:${titleId}`);
       return replaced;
     },

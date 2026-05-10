@@ -6,9 +6,13 @@ import {
   bulkRefreshCandidates,
   buildRequestCounts,
   filterRequests,
+  requestActionMessage,
   requestActionState,
+  requestNextActionLabel,
   requestNeedsReview,
-  resolveExistingRequestSelection
+  resolveExistingRequestSelection,
+  selectSingleDownloadOption,
+  withEffectiveRequestSelection
 } from "../apps/admin-next/lib/adminRequests.js";
 
 test("admin request helpers classify review and status counts", () => {
@@ -53,6 +57,44 @@ test("admin request action state follows grants and request status", () => {
   assert.equal(requestActionState(request, {canWrite: true}).canApprove, true);
   assert.equal(requestActionState(request, {canWrite: false}).canApprove, false);
   assert.equal(requestActionState(request, {canRoot: true}).canOverride, true);
+});
+
+test("admin request action state honors local resolver source picks", () => {
+  const request = {
+    status: "pending",
+    details: {
+      selectedMetadata: {provider: "mangadex"},
+      selectedDownload: null
+    }
+  };
+  const pickedDownload = {providerId: "weebcentral", titleUrl: "https://source"};
+  const effective = withEffectiveRequestSelection(request, {selectedDownload: pickedDownload});
+  const actions = requestActionState(request, {canWrite: true, selectedDownload: pickedDownload});
+
+  assert.equal(effective.details.selectedDownload.titleUrl, "https://source");
+  assert.equal(actions.canApprove, true);
+  assert.equal(requestNextActionLabel(effective, actions), "Ready to approve and queue");
+});
+
+test("admin request helpers auto-select exactly one concrete source", () => {
+  const first = {providerId: "weebcentral", titleUrl: "https://source/1"};
+  const second = {providerId: "weebcentral", titleUrl: "https://source/2"};
+
+  assert.equal(selectSingleDownloadOption([first]), first);
+  assert.equal(selectSingleDownloadOption([first, second]), null);
+  assert.equal(selectSingleDownloadOption([{providerId: "empty"}]), null);
+  assert.equal(selectSingleDownloadOption([first, second], second), second);
+});
+
+test("admin request helper formats conflict action failures", () => {
+  assert.match(
+    requestActionMessage("Approve", {status: 409, payload: {code: "REQUEST_REVISION_CONFLICT"}}),
+    /changed while you were reviewing/i
+  );
+  assert.match(
+    requestActionMessage("Resolve", {status: 409, payload: {code: "REQUEST_WORK_KEY_CONFLICT", requestId: "42"}}),
+    /Matching request: 42/
+  );
 });
 
 test("admin request selection helper never auto-opens first request", () => {

@@ -19,6 +19,7 @@ Portal's supported Discord command set is:
 - `/search`
 - `/request`
 - `/subscribe`
+- `/trivia`
 - owner-only DM `/downloadall`
 
 Discord `/request` now mirrors Moon's web flow instead of using a one-shot fuzzy picker. Portal first shows raw
@@ -61,3 +62,8 @@ waitlisted users again when the title becomes ready, DMs unavailable requesters 
 moves back into admin review, and DMs them again if that unavailable request expires after 90 days.
 Portal also polls Sage for durable downloadall run notifications and DMs the requester paused, completed, failed, or
 cancelled summaries once per stable notification id.
+
+Noona trivia is Sage-backed and runs from the configured trivia channel. Portal now reconciles one active trivia clock
+from Sage state on startup, settings refresh, manual start, win, and timeout. Repeated `/trivia start` calls while a
+round is open report the existing round instead of reposting the clue, and stale timers from old reloads cannot post
+duplicate hints, timeouts, leaderboards, or next rounds.

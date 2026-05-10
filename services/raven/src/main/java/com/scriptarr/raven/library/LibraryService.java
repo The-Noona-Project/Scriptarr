@@ -127,10 +127,38 @@ public final class LibraryService {
      * @return immutable list with chapter and filesystem details omitted
      */
     public List<Map<String, Object>> listTitleCards() {
-        return listTitles().stream()
+        Object titles = listTitleCardPage(Map.of()).get("titles");
+        if (titles instanceof List<?> titleList) {
+            return titleList.stream()
+                .filter(Map.class::isInstance)
+                .map((entry) -> new java.util.LinkedHashMap<>((Map<String, Object>) entry))
+                .map((entry) -> java.util.Collections.unmodifiableMap(entry))
+                .toList();
+        }
+        return List.of();
+    }
+
+    /**
+     * List a compact title-card page without materializing chapter rows.
+     *
+     * @param query card page filters and pagination
+     * @return card page payload with titles, counts, and pageInfo
+     */
+    public Map<String, Object> listTitleCardPage(Map<String, String> query) {
+        try {
+            JsonNode payload = brokerClient.listLibraryTitleCards(query == null ? Map.of() : query);
+            if (payload != null && payload.isObject()) {
+                return objectMapper.convertValue(payload, new TypeReference<Map<String, Object>>() {
+                });
+            }
+        } catch (Exception error) {
+            logger.warn("LIBRARY", "Failed to list Raven title cards.", error.getMessage());
+        }
+
+        return Map.of("titles", listTitles().stream()
             .filter(Objects::nonNull)
             .map(this::toTitleCard)
-            .toList();
+            .toList());
     }
 
     /**

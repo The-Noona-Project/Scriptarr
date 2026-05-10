@@ -21,6 +21,7 @@ test("settings draft prefers public branding when full branding is absent", () =
     piaUsername: "captain",
     piaPassword: ""
   });
+  assert.equal(draft.ravenDownloadRuntime.activeTitleDownloads, 2);
   assert.equal(draft.personalToasts.liveEventToasts, false);
 });
 
@@ -61,6 +62,7 @@ test("settings draft merge keeps dirty sections while rehydrating clean sections
   const incoming = buildSettingsDraft({
     branding: {siteName: "Saved"},
     ravenVpn: {enabled: true, region: "new"},
+    ravenDownloadRuntime: {activeTitleDownloads: 4},
     toastSettings: {effective: {}}
   });
 
@@ -68,6 +70,22 @@ test("settings draft merge keeps dirty sections while rehydrating clean sections
 
   assert.equal(merged.branding.siteName, "Unsaved");
   assert.equal(merged.ravenVpn.region, "new");
+  assert.equal(merged.ravenDownloadRuntime.activeTitleDownloads, 4);
+});
+
+test("settings draft preserves dirty Raven download runtime edits", () => {
+  const current = buildSettingsDraft({
+    ravenDownloadRuntime: {activeTitleDownloads: 6},
+    toastSettings: {effective: {}}
+  });
+  const incoming = buildSettingsDraft({
+    ravenDownloadRuntime: {activeTitleDownloads: 3},
+    toastSettings: {effective: {}}
+  });
+
+  const merged = mergeSettingsDraft(current, incoming, new Set(["ravenDownloadRuntime"]));
+
+  assert.equal(merged.ravenDownloadRuntime.activeTitleDownloads, 6);
 });
 
 test("settings draft clears VPN password after successful save", () => {

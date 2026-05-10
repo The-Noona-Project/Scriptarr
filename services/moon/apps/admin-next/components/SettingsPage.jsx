@@ -4,7 +4,7 @@
  * @file Purpose-built general settings hub for Moon admin.
  */
 
-import {useEffect, useMemo, useState} from "react";
+import {useCallback, useEffect, useMemo, useState} from "react";
 import {hasAdminGrant} from "../lib/access.js";
 import {requestJson, useAdminEventStaleness, useAdminJson} from "../lib/api.js";
 import {formatDate, formatDisplayValue, normalizeString} from "../lib/format.js";
@@ -15,6 +15,7 @@ import {useAdminChrome} from "./AdminProviders.jsx";
 import {useAdminToast} from "./AdminToasts.jsx";
 
 const normalizeArray = (value) => Array.isArray(value) ? value : [];
+const SETTINGS_RUNTIME_ENDPOINT = "/api/moon/v3/admin/settings/runtime";
 
 const emptySettings = Object.freeze({
   branding: {siteName: "Scriptarr", logo: {enabled: false, variants: {}}},
@@ -37,6 +38,7 @@ const emptySettings = Object.freeze({
   },
   metadataProviders: {providers: []},
   downloadProviders: {providers: []},
+  ravenDownloadRuntime: {activeTitleDownloads: 2, minActiveTitleDownloads: 1, maxActiveTitleDownloads: 6},
   requestWorkflow: {autoApproveAndDownload: false},
   discord: {guildId: "", superuserId: "", onboarding: {channelId: "", template: ""}, runtime: {}},
   toastSettings: {global: {}, personal: null, effective: {}, canEditGlobal: false},
@@ -147,13 +149,37 @@ export const SettingsPage = ({user}) => {
   const {loading, refreshing, error, data, refresh, setData} = useAdminJson("/api/moon/v3/admin/settings", {
     fallback: emptySettings
   });
+  const hydrateRuntime = useCallback(async () => {
+    const result = await requestJson(SETTINGS_RUNTIME_ENDPOINT);
+    if (!result.ok) {
+      return;
+    }
+    setData((current) => ({
+      ...(current || emptySettings),
+      ravenVpnRuntime: result.payload?.ravenVpnRuntime || current?.ravenVpnRuntime || emptySettings.ravenVpnRuntime,
+      databaseOverview: result.payload?.databaseOverview ?? current?.databaseOverview ?? null,
+      discord: {
+        ...(current?.discord || emptySettings.discord),
+        runtime: result.payload?.discordRuntime || current?.discord?.runtime || {}
+      }
+    }));
+  }, [setData]);
   useAdminEventStaleness({
     domains: canDatabase ? ["settings", "database"] : ["settings"],
     enabled: true,
     locked: Boolean(busy),
     onStale: () => {},
-    onRefresh: refresh
+    onRefresh: () => {
+      void refresh();
+      void hydrateRuntime();
+    }
   });
+
+  useEffect(() => {
+    if (!loading && data) {
+      void hydrateRuntime();
+    }
+  }, [hydrateRuntime, loading]);
 
   useEffect(() => {
     if (data) {
@@ -337,6 +363,34 @@ export const SettingsPage = ({user}) => {
         }
       }));
     }, "ravenVpn");
+  };
+
+  const saveDownloadRuntime = async () => {
+    const saved = await saveRequest("Raven download runtime", "/api/moon/v3/admin/settings/raven/download-runtime", {
+      method: "PUT",
+      json: {
+        activeTitleDownloads: draft.ravenDownloadRuntime.activeTitleDownloads
+      }
+    }, (payload) => {
+      const nextRuntime = payload?.ravenDownloadRuntime || payload || {};
+      setData((current) => ({
+        ...current,
+        ravenDownloadRuntime: nextRuntime,
+        ravenDownloadRuntimeApplied: payload?.applied !== false,
+        ravenDownloadRuntimeWarning: normalizeString(payload?.warning)
+      }));
+      setDraft((current) => ({
+        ...current,
+        ravenDownloadRuntime: {
+          activeTitleDownloads: Math.max(1, Math.min(6, Number.parseInt(String(nextRuntime.activeTitleDownloads ?? current?.ravenDownloadRuntime?.activeTitleDownloads ?? 2), 10) || 2))
+        }
+      }));
+    }, "ravenDownloadRuntime");
+    if (saved?.warning) {
+      setFlash(saved.warning);
+      setFlashTone("warning");
+      notify({message: saved.warning, tone: "warning", category: "action"});
+    }
   };
 
   const testVpn = async () => {
@@ -579,6 +633,31 @@ export const SettingsPage = ({user}) => {
               <div className="admin-kicker">Download</div>
               <h2>{providerCounts.download} provider{providerCounts.download === 1 ? "" : "s"} enabled</h2>
             </div>
+          </div>
+          <div className="admin-task-form">
+            <label>
+              <span>Active title downloads</span>
+              <input
+                disabled={!canSave}
+                max={payload.ravenDownloadRuntime?.maxActiveTitleDownloads || 6}
+                min={payload.ravenDownloadRuntime?.minActiveTitleDownloads || 1}
+                step="1"
+                type="number"
+                value={draft.ravenDownloadRuntime.activeTitleDownloads}
+                onChange={(event) => patchDraft("ravenDownloadRuntime", {
+                  activeTitleDownloads: Math.max(1, Math.min(6, Number.parseInt(event.target.value, 10) || 1))
+                })}
+              />
+            </label>
+          </div>
+          <div className="admin-action-row">
+            <button className="admin-button solid" type="button" disabled={!canSave || busy === "Raven download runtime"} onClick={() => void saveDownloadRuntime()}>Save active downloads</button>
+          </div>
+          <div className="admin-log-meta">
+            <span>Current limit: {payload.ravenDownloadRuntime?.activeTitleDownloads ?? 2}</span>
+            <span>Range: {payload.ravenDownloadRuntime?.minActiveTitleDownloads ?? 1}-{payload.ravenDownloadRuntime?.maxActiveTitleDownloads ?? 6}</span>
+            <span>Applies live: {payload.ravenDownloadRuntimeApplied === false ? "pending restart" : "yes"}</span>
+            {payload.ravenDownloadRuntimeWarning ? <span>{payload.ravenDownloadRuntimeWarning}</span> : null}
           </div>
           <ProviderList providers={draft.downloadProviders} disabled={!canSave} onChange={(id, patch) => patchProvider("downloadProviders", id, patch)} />
           <button className="admin-button solid" type="button" disabled={!canSave || busy === "Download providers"} onClick={() => void saveRequest("Download providers", "/api/moon/v3/admin/settings/raven/download-providers", {method: "PUT", json: {providers: draft.downloadProviders}}, (providers) => setData((current) => ({...current, downloadProviders: providers})), "downloadProviders")}>Save download providers</button>

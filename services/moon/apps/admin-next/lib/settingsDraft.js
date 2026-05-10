@@ -43,6 +43,7 @@ export const normalizeToastDraft = (value = {}) => ({
 export const settingsDraftSections = Object.freeze([
   "branding",
   "ravenVpn",
+  "ravenDownloadRuntime",
   "metadataProviders",
   "downloadProviders",
   "requestWorkflow",
@@ -66,6 +67,9 @@ export const buildSettingsDraft = (data = {}) => ({
     region: normalizeString(data.ravenVpn?.region, "us_california"),
     piaUsername: normalizeString(data.ravenVpn?.piaUsername),
     piaPassword: ""
+  },
+  ravenDownloadRuntime: {
+    activeTitleDownloads: Math.max(1, Math.min(6, Number.parseInt(String(data.ravenDownloadRuntime?.activeTitleDownloads ?? 2), 10) || 2))
   },
   metadataProviders: normalizeProviderDraft(data.metadataProviders?.providers),
   downloadProviders: normalizeProviderDraft(data.downloadProviders?.providers),

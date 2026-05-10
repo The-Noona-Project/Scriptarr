@@ -159,10 +159,11 @@ export const buildMoonUserLibraryState = ({
     const unreadAvailableCount = Math.max(0, availableChapters.length - readAvailableCount);
     const nextUnreadChapter = availableChapters.find((chapter) => !chapter.read) || null;
     const started = Boolean(progressEntry || titleState?.startedAt || titleState?.completedAt || chapterReads.size);
-    const completed = availableChapters.length > 0
+    const hasKnownChapters = availableChapters.length > 0;
+    const completed = hasKnownChapters
       ? unreadAvailableCount === 0
       : Boolean(titleState?.completedAt);
-    const bookshelf = started && unreadAvailableCount > 0;
+    const bookshelf = started && (hasKnownChapters ? unreadAvailableCount > 0 : !completed);
     const lastActivityAt = newestTimestamp(
       progressEntry?.updatedAt,
       titleState?.updatedAt,

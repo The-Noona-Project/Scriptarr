@@ -37,6 +37,8 @@ Common code paths:
 - Admin pages: `services/moon/apps/admin-next/components`.
 - User app pages: `services/moon/apps/user-next/components`.
 - Moon v3 proxy and public routes: `services/moon/lib`.
+- Moon bundle reporting: `services/moon/scripts/report-bundles.mjs` reads Next diagnostics from
+  `.next/diagnostics/route-bundle-stats.json`.
 - Sage Moon v3 and internal broker routes: `services/sage/lib/registerMoonV3Routes.mjs` and
   `services/sage/lib/registerInternalBrokerRoutes.mjs`.
 - Portal Discord commands/runtime: `services/portal/lib/discord`.
@@ -89,9 +91,12 @@ Architecture invariants:
   and durable `/downloadall` batches can queue requester DMs with `downloadall:<runId>:<batchId>:<status>` acks.
 - Portal's `/trivia` command and guild message handler are Sage-backed. Trivia rounds, guesses, score events,
   leaderboard acks, and runtime state persist through Vault settings; Oracle may only advise borderline matches.
+  Portal should reconcile one active trivia clock from Sage state so reloads, repeated manual starts, and settings
+  refreshes do not duplicate clues, hints, timeouts, leaderboards, or scheduled rounds.
 - Moon web request creation now lives in `/myrequests`, Discord `/request` now uses the same metadata-only requester
   flow, admins choose download sources during approval from `/admin/requests`, and unavailable requests are Sage-owned
-  records that recheck every 4 hours and expire after 90 days.
+  records that recheck every 4 hours and expire after 90 days. Admin request actions should carry request revisions so
+  stale drawers fail with a clean conflict instead of overwriting a newer moderation update.
 - Moon admin Wanted uses dedicated repair pages: `/admin/wanted/metadata` for provider metadata apply, and
   `/admin/wanted/missing-content` for coverage repair, damaged-page review, and bad-source summaries via staged
   replacement downloads. The old metadata-gaps and missing-chapters paths are legacy-only and should redirect.
@@ -99,6 +104,9 @@ Architecture invariants:
   moderation surfaces, while keeping source attribution internally for debugging.
 - Raven stores in-flight downloads under `downloading/<type>/...` and promotes completed library content into
   `downloaded/<type>/...`.
+- Raven title-download concurrency is brokered through `raven.download.runtime`. Default to two active titles, allow
+  only `1` through `6`, apply reloads live without cancelling active downloads, and keep per-title page download
+  concurrency fixed.
 - Raven should only report `100%` after the promoted files persist into the brokered catalog, and startup recovery now
   rescans finished `downloaded/<type>/...` content to heal missing library rows.
 - Raven should skip completed titles during `/downloadall`, append only missing/new chapters for existing active
@@ -113,8 +121,31 @@ Architecture invariants:
   while the calendar view consumes chapter release dates captured from source scrapes, metadata enrichment, and
   completed-title fallback dates so finished catalog titles remain visible.
 - Moon admin System pages now include Logs, Events, Updates, Tasks, Status, API, and AI as purpose-built Next surfaces.
-  Keep browser traffic same-origin through Moon -> Sage, keep task jobs allowlisted, probe GET/read endpoints in
-  Status, and keep Oracle/LocalAI settings plus Sage-governed AI tool proposals under `/admin/system/ai`.
+  Keep browser traffic same-origin through Moon -> Sage, keep task jobs allowlisted, make Status load the lightweight
+  registry first and probe GET/read endpoints only from its explicit check action, and keep Oracle/LocalAI settings
+  plus Sage-governed AI tool proposals under `/admin/system/ai`.
+- Moon browse, library, and home shelves should use Raven's compact card projection through Sage. Do not load full
+  Raven title/chapter arrays for card lists; hydrate full titles only for title/detail/reader flows or exact
+  continue-reading ids.
+- Moon chrome should collapse branding, auth, user identity, and first-owner bootstrap into
+  `/api/moon/chrome/bootstrap`, then fetch the Discord login URL lazily only when a signed-out screen needs it.
+- Moon Settings and Status should paint saved or registry payloads first, then hydrate runtime-only data from
+  `/api/moon-v3/admin/settings/runtime` and `/api/moon-v3/admin/system/status/runtime`.
+
+## Moon Load-Speed Handoff
+
+When the next task is "make Moon faster," start with observation instead of edits:
+
+- Capture a small timing table for `/`, `/browse`, `/library`, a title or reader route, `/admin/settings`,
+  `/admin/system/status`, `/admin/activity/queue`, and `/admin/requests`.
+- Separate document or Next asset load, Moon chrome/bootstrap calls, main route payload, admin SSE/event calls, payload
+  byte size, and downstream Sage/Raven/Vault latency where the payload crosses services.
+- Check whether the page is blocked by JS bundle size, same-origin API fan-out, downstream broker latency, payload
+  shape, cover/image work, auth/session bootstrap, SSE startup, or hydration/client rendering work.
+- Keep proven fast paths intact: compact library cards, bounded home shelves, toast-only settings reads, shared admin
+  event stream, lightweight System Status first load, and explicit deep status checks.
+- Prefer narrow proof first: Moon helper tests, Sage payload tests, Raven/Vault projection tests, then user/admin Next
+  builds. Use `npm run docker:healthcheck` for cross-service confirmation and prod smoke against `https://pax-kun.com`.
 
 ## Service Index
 

@@ -1,14 +1,13 @@
 "use client";
 
 /**
- * @file Shared Once UI providers and auth context for Moon admin.
+ * @file Shared auth context and browser providers for Moon admin.
  */
 
 import {createContext, useContext, useEffect, useMemo, useState} from "react";
 import {usePathname, useSearchParams} from "next/navigation";
-import {DataThemeProvider, LayoutProvider, ThemeProvider} from "@once-ui-system/core";
 import {canAccessAdmin} from "../lib/access.js";
-import {loadAdminChromeContext} from "../lib/api.js";
+import {AdminEventStreamProvider, loadAdminChromeContext, loadAdminLoginUrl} from "../lib/api.js";
 import {AdminToastProvider} from "./AdminToasts.jsx";
 
 const AdminChromeContext = createContext({
@@ -37,30 +36,13 @@ const toPublicAdminPath = (pathname) => {
 export const useAdminChrome = () => useContext(AdminChromeContext);
 
 /**
- * Mount Once UI and Moon admin auth providers.
+ * Mount Moon admin auth providers.
  *
  * @param {{children: import("react").ReactNode}} props
  * @returns {import("react").ReactNode}
  */
 export const AdminProviders = ({children}) => (
-  <ThemeProvider
-    theme="dark"
-    neutral="slate"
-    brand="orange"
-    accent="cyan"
-    solid="contrast"
-    solidStyle="flat"
-    border="rounded"
-    surface="filled"
-    transition="all"
-    scaling="95"
-  >
-    <DataThemeProvider>
-      <LayoutProvider>
-        <AdminChromeProvider>{children}</AdminChromeProvider>
-      </LayoutProvider>
-    </DataThemeProvider>
-  </ThemeProvider>
+  <AdminChromeProvider>{children}</AdminChromeProvider>
 );
 
 const AdminChromeProvider = ({children}) => {
@@ -84,6 +66,10 @@ const AdminChromeProvider = ({children}) => {
       ...nextChrome,
       loading: false
     });
+    if (!nextChrome.user) {
+      const loginUrl = await loadAdminLoginUrl(returnTo);
+      setChrome((current) => current.user ? current : {...current, loginUrl});
+    }
   }, [pathname, searchParams]);
 
   useEffect(() => {
@@ -97,6 +83,13 @@ const AdminChromeProvider = ({children}) => {
         setChrome({
           ...nextChrome,
           loading: false
+        });
+      }
+      if (active && !nextChrome.user) {
+        void loadAdminLoginUrl(returnTo).then((loginUrl) => {
+          if (active && loginUrl) {
+            setChrome((current) => current.user ? current : {...current, loginUrl});
+          }
         });
       }
     });
@@ -114,7 +107,9 @@ const AdminChromeProvider = ({children}) => {
 
   return (
     <AdminChromeContext.Provider value={value}>
-      <AdminToastProvider user={chrome.user}>{children}</AdminToastProvider>
+      <AdminEventStreamProvider user={chrome.user}>
+        <AdminToastProvider user={chrome.user}>{children}</AdminToastProvider>
+      </AdminEventStreamProvider>
     </AdminChromeContext.Provider>
   );
 };

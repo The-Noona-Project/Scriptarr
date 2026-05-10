@@ -24,6 +24,7 @@ public class RavenSettingsService {
     private static final String NAMING_KEY = "raven.naming";
     private static final String PROVIDERS_KEY = "raven.metadata.providers";
     private static final String DOWNLOAD_PROVIDERS_KEY = "raven.download.providers";
+    private static final String DOWNLOAD_RUNTIME_KEY = "raven.download.runtime";
 
     private final RavenBrokerClient brokerClient;
     private final ScriptarrLogger logger;
@@ -105,6 +106,27 @@ public class RavenSettingsService {
         } catch (Exception error) {
             logger.warn("SETTINGS", "Failed to load Raven naming settings.", error.getMessage());
             return RavenNamingSettings.defaults();
+        }
+    }
+
+    /**
+     * Load live Raven download runtime tuning.
+     *
+     * @return normalized runtime settings
+     */
+    public RavenDownloadRuntimeSettings getDownloadRuntimeSettings() {
+        try {
+            JsonNode settingsNode = Optional.ofNullable(brokerClient.getSetting(DOWNLOAD_RUNTIME_KEY).get("value")).orElse(null);
+            RavenDownloadRuntimeSettings defaults = RavenDownloadRuntimeSettings.defaults();
+            if (settingsNode == null || settingsNode.isMissingNode() || settingsNode.isNull()) {
+                return defaults;
+            }
+            return new RavenDownloadRuntimeSettings(
+                settingsNode.path("activeTitleDownloads").asInt(defaults.activeTitleDownloads())
+            ).normalized();
+        } catch (Exception error) {
+            logger.warn("SETTINGS", "Failed to load Raven download runtime settings.", error.getMessage());
+            return RavenDownloadRuntimeSettings.defaults();
         }
     }
 

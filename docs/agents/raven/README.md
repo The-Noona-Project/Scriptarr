@@ -50,8 +50,10 @@
   stale-task handling, summary DMs, reaction approvals, and continue prompts survive process restarts. `groupsize`
   maps to `batchesPerApproval`, so Raven should process that many batch tasks before pausing. Stale run-owned title
   tasks should count as failed after the timeout/retry budget and must not block the next batch forever.
-- `/v1/library?view=card` is the compact Moon shelf projection. Keep chapter arrays, archive paths, working roots, and
-  download roots out of that response; full title and reader routes remain the detail paths.
+- `/v1/library?view=card` is the compact Moon shelf projection. Accept and forward `q`, `type`, `letter`, `cursor`,
+  `pageSize`, `sort`, and exact `ids` through Sage to Vault's title-card endpoint, preserving requested exact-id
+  ordering for activity hydration. Keep chapter arrays, archive paths, working roots, and download roots out of that
+  response; full title and reader routes remain the detail paths.
 - New Raven catalog entries should use opaque durable ids instead of title slugs. Treat title ids as opaque route
   parameters everywhere outside Raven's internals.
 - Download tasks should only reach `100%` after file promotion and brokered catalog persistence both succeed. When a
@@ -62,8 +64,9 @@
   duplicate restorable tasks so Moon queue views only see one logical download. Keep this recovery after Spring's ready
   event and keep Sage broker calls explicitly timeout-bound so a large catalog or slow broker write cannot hold Raven
   below healthy.
-- Raven now runs up to two title downloads globally. Preserve priority ordering across those two active slots and keep
-  queued-task move up/down behavior limited to work that has not started yet.
+- Raven title-download concurrency is brokered through `raven.download.runtime`. Keep the default at two active titles,
+  allow only `1` through `6`, reload it live without cancelling running downloads, and preserve priority ordering plus
+  queued-task move up/down behavior for work that has not started yet. Per-title page download concurrency stays fixed.
 - Preserve real task telemetry for Moon admin. Active title tasks should carry a true `startedAt` when the attempt
   begins, and Raven should only expose `downloadSpeedBytesPerSecond` when it can measure a credible live rate from the
   current work instead of inventing one.

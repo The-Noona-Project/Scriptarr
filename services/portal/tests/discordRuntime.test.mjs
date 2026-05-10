@@ -339,7 +339,7 @@ test("trivia runtime reacts with eyes before final guess verdict", async () => {
     });
 
     assert.deepEqual(reactions, ["👀", "✅"]);
-    assert.equal(calls.state, 1);
+    assert.equal(calls.state, 2);
     assert.equal(calls.guess, 1);
     assert.match(sentMessages[0].payload.content, /Correct/);
   } finally {
@@ -409,6 +409,151 @@ test("trivia runtime caches active round state and ignores duplicate messages", 
   } finally {
     runtime.stop();
   }
+});
+
+test("trivia runtime does not repost reused active rounds", async () => {
+  const sentMessages = [];
+  let startCalls = 0;
+  const activeRound = {
+    id: "round-1",
+    prompt: "clue",
+    status: "open",
+    startedAt: new Date().toISOString(),
+    expiresAt: new Date(Date.now() + 20 * 60 * 1000).toISOString(),
+    hintsPosted: []
+  };
+  const runtime = createTriviaRuntime({
+    getSettings: () => ({
+      trivia: {
+        enabled: true,
+        channelId: "trivia-channel",
+        leaderboardAfterRound: false,
+        leaderboardSchedules: {daily: false, weekly: false, monthly: false}
+      }
+    }),
+    logger: createLogger(),
+    discord: {
+      async sendChannelMessage(channelId, payload) {
+        sentMessages.push({channelId, payload});
+        return {id: `message-${sentMessages.length}`};
+      }
+    },
+    sage: {
+      async getTriviaState() {
+        return {
+          ok: true,
+          payload: {
+            activeRound
+          }
+        };
+      },
+      async startTriviaRound() {
+        startCalls += 1;
+        return {
+          ok: true,
+          payload: {
+            ok: true,
+            reused: startCalls > 1,
+            round: activeRound
+          }
+        };
+      }
+    }
+  });
+
+  try {
+    const first = await runtime.startRoundNow({force: true});
+    const second = await runtime.startRoundNow({force: true});
+
+    assert.notEqual(first.reused, true);
+    assert.equal(second.reused, true);
+    assert.equal(sentMessages.length, 1);
+    assert.match(sentMessages[0].payload.content, /Noona Trivia/);
+  } finally {
+    runtime.stop();
+  }
+});
+
+test("trivia runtime keeps one scheduled next-round clock across refreshes", async () => {
+  const sentMessages = [];
+  let startCalls = 0;
+  const runtime = createTriviaRuntime({
+    getSettings: () => ({
+      trivia: {
+        enabled: true,
+        channelId: "trivia-channel",
+        leaderboardAfterRound: false,
+        cooldownMinMinutes: 1,
+        leaderboardSchedules: {daily: false, weekly: false, monthly: false}
+      }
+    }),
+    logger: createLogger(),
+    discord: {
+      async sendChannelMessage(channelId, payload) {
+        sentMessages.push({channelId, payload});
+        return {id: `message-${sentMessages.length}`};
+      }
+    },
+    sage: {
+      async getTriviaState() {
+        return {
+          ok: true,
+          payload: {
+            activeRound: null,
+            nextRoundAfter: new Date(Date.now() + 20).toISOString()
+          }
+        };
+      },
+      async startTriviaRound() {
+        startCalls += 1;
+        return {
+          ok: true,
+          payload: {
+            ok: true,
+            round: {
+              id: `round-${startCalls}`,
+              prompt: "clue",
+              status: "open",
+              startedAt: new Date().toISOString(),
+              expiresAt: new Date(Date.now() + 20 * 60 * 1000).toISOString(),
+              hintsPosted: []
+            }
+          }
+        };
+      }
+    }
+  });
+
+  try {
+    await runtime.start();
+    await runtime.refreshSettings();
+    await runtime.refreshSettings();
+    await new Promise((resolve) => setTimeout(resolve, 1250));
+
+    assert.equal(startCalls, 1);
+    assert.equal(sentMessages.length, 1);
+  } finally {
+    runtime.stop();
+  }
+});
+
+test("trivia command reports already active rounds without saying it started another", async () => {
+  const commands = createPortalCommands({
+    sage: {},
+    onTriviaStart: async () => ({
+      reused: true,
+      round: {id: "round-1"}
+    })
+  });
+  const interaction = createInteraction({
+    commandName: "trivia",
+    strings: {__subcommand: "start"}
+  });
+
+  await commands.get("trivia").execute(interaction);
+
+  assert.match(interaction.__calls.editReply[0].content, /already active/i);
+  assert.doesNotMatch(interaction.__calls.editReply[0].content, /^Trivia started/i);
 });
 
 test("portal runtime forwards configured guild messages into trivia handling", async () => {

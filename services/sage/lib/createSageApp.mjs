@@ -32,6 +32,10 @@ import {buildIntakeSelection, evaluateSelectionAgainstGuardState} from "./reques
 import {buildRequestWorkConflictPayload, isRequestWorkConflictError} from "./requestConflict.mjs";
 import {createSystemTaskRuntime} from "./systemTaskRuntime.mjs";
 import {
+  RAVEN_DOWNLOAD_RUNTIME_KEY,
+  normalizeRavenDownloadRuntimeSettings
+} from "./ravenDownloadRuntimeSettings.mjs";
+import {
   PORTAL_DISCORD_KEY,
   knownPortalDiscordCommands,
   normalizePortalDiscordSettings,
@@ -203,6 +207,9 @@ const defaultMetadataProviderSettings = () => ({
 const defaultDownloadProviderSettings = () => ({
   key: RAVEN_DOWNLOAD_PROVIDERS_KEY,
   providers: knownDownloadProviders.map((provider) => ({...provider}))
+});
+const defaultRavenDownloadRuntimeSettings = () => normalizeRavenDownloadRuntimeSettings({
+  key: RAVEN_DOWNLOAD_RUNTIME_KEY
 });
 const defaultRequestWorkflowSettings = () => ({
   key: SAGE_REQUESTS_KEY,
@@ -405,6 +412,10 @@ const readMetadataProviderSettings = async (vaultClient) => {
 const readDownloadProviderSettings = async (vaultClient) => {
   const settingsValue = await readSetting(vaultClient, RAVEN_DOWNLOAD_PROVIDERS_KEY, defaultDownloadProviderSettings());
   return normalizeDownloadProviderSettings(settingsValue);
+};
+const readRavenDownloadRuntimeSettings = async (vaultClient) => {
+  const settingsValue = await readSetting(vaultClient, RAVEN_DOWNLOAD_RUNTIME_KEY, defaultRavenDownloadRuntimeSettings());
+  return normalizeRavenDownloadRuntimeSettings(settingsValue);
 };
 const readRequestWorkflowSettings = async (vaultClient) => {
   const settingsValue = await readSetting(vaultClient, SAGE_REQUESTS_KEY, defaultRequestWorkflowSettings());
@@ -1880,6 +1891,7 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
     readRavenNamingSettings: () => readRavenNamingSettings(vaultClient),
     readMetadataProviderSettings: () => readMetadataProviderSettings(vaultClient),
     readDownloadProviderSettings: () => readDownloadProviderSettings(vaultClient),
+    readRavenDownloadRuntimeSettings: () => readRavenDownloadRuntimeSettings(vaultClient),
     readRequestWorkflowSettings: () => readRequestWorkflowSettings(vaultClient),
     readOracleSettings: () => readOracleSettings(vaultClient),
     readMoonBrandingSettings: () => readMoonBrandingSettings(vaultClient),

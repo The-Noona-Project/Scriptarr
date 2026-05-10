@@ -109,6 +109,16 @@ public class RavenController {
     }
 
     /**
+     * Reload live Raven download runtime settings from the broker.
+     *
+     * @return refreshed runtime and queue slot snapshot
+     */
+    @PostMapping("/v1/downloads/runtime/reload")
+    public Map<String, Object> reloadDownloadRuntime() {
+        return downloaderService.reloadDownloadRuntimeSettings();
+    }
+
+    /**
      * Search enabled metadata providers and resolve download availability.
      *
      * @param query intake search query
@@ -152,9 +162,12 @@ public class RavenController {
      * @return library payload
      */
     @GetMapping("/v1/library")
-    public Map<String, Object> library(@RequestParam(name = "view", required = false) String view) {
+    public Map<String, Object> library(
+        @RequestParam(name = "view", required = false) String view,
+        @RequestParam Map<String, String> query
+    ) {
         if ("card".equalsIgnoreCase(view == null ? "" : view.trim())) {
-            return Map.of("titles", libraryService.listTitleCards());
+            return libraryService.listTitleCardPage(query);
         }
         return Map.of("titles", libraryService.listTitles());
     }

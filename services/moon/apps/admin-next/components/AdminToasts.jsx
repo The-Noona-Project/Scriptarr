@@ -6,7 +6,7 @@
 
 import {createContext, useCallback, useContext, useEffect, useMemo, useRef, useState} from "react";
 import {hasAdminGrant} from "../lib/access.js";
-import {requestJson} from "../lib/api.js";
+import {requestJson, useAdminEventSubscription} from "../lib/api.js";
 import {createToastDedupeState, serializeToastDedupeState, shouldShowToast} from "../lib/toastDedupe.js";
 
 const defaultPreferences = Object.freeze({
@@ -196,15 +196,16 @@ export const AdminToastProvider = ({children, user}) => {
     if (!user) {
       return;
     }
-    const result = await requestJson("/api/moon/v3/admin/settings");
-    if (result.ok && result.payload?.toastSettings) {
+    const result = await requestJson("/api/moon/v3/admin/settings/toasts");
+    const nextToastSettings = result.payload?.toastSettings || result.payload;
+    if (result.ok && nextToastSettings?.effective) {
       setToastSettings({
-        global: normalizePreferences(result.payload.toastSettings.global),
-        personal: result.payload.toastSettings.personal
-          ? normalizePreferences(result.payload.toastSettings.personal, result.payload.toastSettings.global)
+        global: normalizePreferences(nextToastSettings.global),
+        personal: nextToastSettings.personal
+          ? normalizePreferences(nextToastSettings.personal, nextToastSettings.global)
           : null,
-        effective: normalizePreferences(result.payload.toastSettings.effective),
-        canEditGlobal: Boolean(result.payload.toastSettings.canEditGlobal)
+        effective: normalizePreferences(nextToastSettings.effective),
+        canEditGlobal: Boolean(nextToastSettings.canEditGlobal)
       });
     }
   }, [user]);
@@ -250,56 +251,21 @@ export const AdminToastProvider = ({children, user}) => {
     }, Number(input?.durationMs || 8000));
   }, [preferences, storageKey]);
 
-  useEffect(() => {
-    if (!user || typeof EventSource === "undefined" || preferences.liveEventToasts === false) {
-      return undefined;
+  const liveEventDomains = useMemo(() => accessibleEventDomains(user), [user]);
+  useAdminEventSubscription({
+    domains: liveEventDomains,
+    enabled: Boolean(user && liveEventDomains.length && preferences.liveEventToasts !== false),
+    onEvent: (payload) => {
+      notify({
+        category: "event",
+        eventId: payload?.eventId || payload?.sequence,
+        eventSequence: payload?.sequence,
+        message: payload?.message,
+        severity: payload?.severity || "info",
+        tone: payload?.severity === "error" ? "bad" : payload?.severity === "warning" ? "warning" : "good"
+      });
     }
-    const domains = accessibleEventDomains(user);
-    if (!domains.length) {
-      return undefined;
-    }
-    let cancelled = false;
-    let stream = null;
-    const domainParams = domains.map((domain) => `domain=${encodeURIComponent(domain)}`);
-    const handleEvent = (event) => {
-      try {
-        const payload = JSON.parse(event.data || "{}");
-        notify({
-          category: "event",
-          eventId: payload.eventId || payload.sequence,
-          eventSequence: payload.sequence,
-          message: payload.message,
-          severity: payload.severity || "info",
-          tone: payload.severity === "error" ? "bad" : payload.severity === "warning" ? "warning" : "good"
-        });
-      } catch {
-        // Ignore malformed event frames; the page-level refresh hooks still recover state.
-      }
-    };
-    const openStream = async () => {
-      let afterSequence = normalizeSequence(eventCursor.current);
-      if (!afterSequence) {
-        const latest = await requestJson(`/api/moon/v3/admin/events?${[...domainParams, "limit=1", "newestFirst=true"].join("&")}`);
-        afterSequence = normalizeSequence(latest.payload?.events?.[0]?.sequence);
-        eventCursor.current = afterSequence;
-        writeStoredToastDedupe(storageKey, dedupeState.current, eventCursor.current);
-      }
-      if (cancelled) {
-        return;
-      }
-      const query = [
-        ...domainParams,
-        ...(afterSequence ? [`afterSequence=${encodeURIComponent(String(afterSequence))}`] : [])
-      ].join("&");
-      stream = new EventSource(`/api/moon/v3/admin/events/stream?${query}`);
-      stream.addEventListener("admin-event", handleEvent);
-    };
-    void openStream();
-    return () => {
-      cancelled = true;
-      stream?.close();
-    };
-  }, [notify, preferences.liveEventToasts, storageKey, user]);
+  });
 
   const savePersonalPreferences = useCallback(async (nextPreferences) => {
     const result = await requestJson("/api/moon/v3/admin/settings/toasts/personal", {
