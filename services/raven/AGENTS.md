@@ -38,3 +38,17 @@ Raven is Scriptarr's Java download, library, metadata, and VPN-aware download en
   or browser-driven scraping.
 - Manual metadata overrides are admin-visible contracts and should stay documented.
 - Keep full JavaDoc on Raven main and test Java sources. `gradlew check` is the expected enforcement path.
+
+## Coding Map
+
+- Public Raven endpoints live in `src/main/java/com/scriptarr/raven/api/RavenController.java`; keep controllers thin
+  and move behavior into downloader, library, settings, metadata, or VPN services.
+- Download queue, active title concurrency, retry behavior, and `/downloadall` orchestration live under
+  `downloader`. Durable task and bulk-run state must stay Sage/Vault-backed through `settings/RavenBrokerClient`.
+- Catalog projection, file promotion, archive naming, quality markers, and startup recovery live under `library`.
+  Keep in-progress files under `downloading/<type>/...` and completed content under `downloaded/<type>/...`.
+- Runtime settings are read through `settings/RavenSettingsService`; apply live reloads where possible without
+  cancelling active titles, and let Moon/Sage surface saved-but-not-live warnings when reload fails.
+- VPN behavior lives under `vpn` and should fail closed whenever VPN is enabled but tunnel setup or verification is
+  unsafe.
+- Prove Raven changes with `npm run test:raven`; add focused Java tests near the changed package.

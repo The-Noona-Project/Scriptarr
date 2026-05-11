@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * @file Library page for Moon's Once UI Next user app.
+ * @file Library page for Moon's Next user app.
  */
 
 import {useEffect, useMemo, useState} from "react";

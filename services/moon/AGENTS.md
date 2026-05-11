@@ -44,6 +44,22 @@ Moon serves the forward-facing user app at `/` and the admin app at `/admin` fro
 - Keep cover art visible across add-title, requests, queue/history, and library/title surfaces when Raven provides a
   `coverUrl`.
 
+## Coding Map
+
+- User pages live in `apps/user-next/components/pages`; shared user shell, chrome, navigation, cards, and local UI
+  primitives live beside them under `apps/user-next/components`.
+- Admin pages live in `apps/admin-next/components`; shared admin API helpers, access checks, routes, event streams, and
+  formatting live in `apps/admin-next/lib`.
+- Same-origin runtime and proxy routes live in `lib`. Moon should proxy or compose through Sage instead of teaching the
+  browser about Sage, Vault, Raven, Warden, Portal, Oracle, OpenAI, or LocalAI URLs.
+- User/admin chrome should start from `/api/moon/chrome/bootstrap?returnTo=...`; fetch the Discord login URL only when
+  a signed-out view needs a sign-in action.
+- User card lists should call `/api/moon-v3/user/library?view=card`, including `ids=...` for exact activity cards.
+  Title and reader pages are the places that may hydrate full title, manifest, chapter, preference, bookmark, and
+  read-state payloads.
+- Keep always-mounted user/admin shells on local primitives. Do not reintroduce root `@once-ui-system/core` JavaScript
+  imports outside the lazy profile-only style panel bridge.
+
 ## Performance Navigation
 
 - User Next surfaces live under `apps/user-next`; admin Next surfaces live under `apps/admin-next`.
@@ -52,3 +68,6 @@ Moon serves the forward-facing user app at `/` and the admin app at `/admin` fro
 - Use `services/moon/tests/adminFrontendPerformance.test.mjs`, `tests/settingsDraft.test.mjs`, and `tests/moonApp.test.mjs`
   for narrow Moon regression coverage, then build the relevant Next app.
 - For cross-service speed fixes, run the narrow service tests first, then `npm run docker:healthcheck`.
+- For UI route changes, build the touched app with `npm --workspace services/moon run build:user` or
+  `npm --workspace services/moon run build:admin`. For bundle work, build both apps before running
+  `npm --workspace services/moon run bundle:report`.

@@ -1,5 +1,5 @@
 /**
- * @file Next.js configuration for Moon's Once UI-powered admin application.
+ * @file Next.js configuration for Moon's admin application.
  */
 
 /** @type {import("next").NextConfig} */

@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * @file Following page for Moon's Once UI Next user app.
+ * @file Following page for Moon's Next user app.
  */
 
 import Link from "next/link";

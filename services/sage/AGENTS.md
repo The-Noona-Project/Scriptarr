@@ -30,3 +30,19 @@ HTTP broker.
 - Keep Warden aggregation split by contract: `/health` for service health, `/api/bootstrap` for the static plan, and
   `/api/runtime` for live runtime details.
 - Keep full JSDoc on exported Sage `.mjs` source and test files. `npm test` should enforce that gate.
+
+## Coding Map
+
+- Moon v3 browser-safe payloads live in `lib/registerMoonV3Routes.mjs`; split reusable payload logic into nearby helper
+  modules when the route file starts hiding policy decisions.
+- First-party service broker routes live in `lib/registerInternalBrokerRoutes.mjs`. Portal, Raven, Warden, and Oracle
+  should call those internal routes instead of talking directly to Vault or each other.
+- Durable state reads and writes go through `lib/vaultClient.mjs`, which is the Sage-side client for Vault's service
+  API. Do not add MySQL access here.
+- User-specific Moon title, reader, bookshelf, bookmark, follow, and tag-state helpers should reuse shared user-state
+  loaders instead of fanning out into repeated Vault reads.
+- Settings that have both saved state and runtime state should keep the saved payload fast, then expose a secondary
+  runtime endpoint such as `/api/moon-v3/admin/settings/runtime` or
+  `/api/moon-v3/admin/system/status/runtime`.
+- Prove Sage changes with `npm --workspace services/sage test`; add route-level tests in `services/sage/tests` when
+  a broker payload, grant, conflict, or fan-out contract changes.

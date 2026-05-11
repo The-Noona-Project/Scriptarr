@@ -25,3 +25,16 @@ Portal handles Discord onboarding, requests, notifications, subscriptions, Noona
   completed, failed, or cancelled run summaries only once after Sage exposes a stable notification id.
 - Reuse the shared `coverUrl` and Moon public base URL in Portal embeds and DMs when they are available instead of
   inventing a second artwork or link source.
+
+## Coding Map
+
+- Discord command handlers and runtime helpers live under `lib/discord`. Keep slash command parsing, DM-only command
+  branches, notification polling, and trivia timers in small modules instead of expanding a single gateway file.
+- Portal should persist and decide shared state through Sage routes only. Use brokered settings for guild, role,
+  onboarding, release-channel, trivia, and DM superuser configuration.
+- Request and completion notifications should keep stable acknowledgment ids so retries or restarts do not duplicate
+  requester DMs or release posts.
+- Trivia runtime must reconcile one Sage-backed active round clock. Refreshes, repeated starts, and settings reloads
+  should not create duplicate clues, hints, timeouts, or leaderboards.
+- Prove Portal changes with `npm --workspace services/portal test`; use `npm run docker:healthcheck` when the change
+  crosses Sage, Raven, Vault, or Moon.

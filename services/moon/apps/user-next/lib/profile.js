@@ -17,7 +17,7 @@ export const initialsFromName = (value) =>
     .join("") || "R";
 
 /**
- * Resolve Once UI Avatar props from a Moon auth payload.
+ * Resolve avatar props from a Moon auth payload.
  *
  * @param {{avatarUrl?: string, username?: string} | null | undefined} user
  * @returns {{src: string} | {value: string}}

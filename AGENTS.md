@@ -65,6 +65,40 @@ Read this before editing Scriptarr.
   `https://pax-kun.com` surface.
 - Never print or commit secrets. Redact tokens, keys, sessions, credentials, and environment values in notes and logs.
 
+## Coding Map
+
+- Start from the request path, not the file name. Browser work usually starts in Moon, flows through Sage, and then
+  reaches Vault, Raven, Warden, Portal, Oracle, or LocalAI only through brokered server-side calls.
+- Moon UI edits belong in `services/moon/apps/user-next` for reader/user pages and
+  `services/moon/apps/admin-next` for admin pages. Same-origin Moon route and proxy logic belongs in
+  `services/moon/lib`.
+- Sage route assembly belongs in `services/sage/lib/registerMoonV3Routes.mjs` for Moon v3 payloads,
+  `services/sage/lib/registerInternalBrokerRoutes.mjs` for first-party service routes, and focused helper modules when
+  payload logic starts to sprawl.
+- Vault owns durable MySQL-backed state through `services/vault/lib/createStore.mjs` and cached store wrappers. Other
+  services should add broker routes instead of reaching for MySQL directly.
+- Raven Java work lives under `services/raven/src/main/java/com/scriptarr/raven`, with API endpoints in `api`,
+  downloader and `/downloadall` orchestration in `downloader`, catalog projection and promotion in `library`, and VPN
+  or settings behavior in their matching packages.
+- Portal Discord work lives under `services/portal/lib/discord`; Warden orchestration lives under
+  `services/warden/config` and `services/warden/core`; Oracle FastAPI work lives under `services/oracle`.
+- Keep comments and docs current with the code. Remove stale Kavita, Komf, old plain-JS Moon, setup-wizard, or broad
+  Once UI shell language unless it is explicitly historical/reference context.
+
+## Test Map
+
+- Moon UI/proxy changes: `npm --workspace services/moon test`, then `npm --workspace services/moon run build:user`
+  or `npm --workspace services/moon run build:admin` for touched Next apps.
+- Sage route/broker changes: `npm --workspace services/sage test`.
+- Vault storage changes: `npm --workspace services/vault test`.
+- Portal Discord/runtime changes: `npm --workspace services/portal test`.
+- Warden orchestration changes: `npm --workspace services/warden test`.
+- Raven Java changes: `npm run test:raven`.
+- Cross-service behavior: `npm run docker:healthcheck`. Use `npm run docker:test` only when the deeper flow is needed,
+  and clean it with `npm run docker:test:teardown` if it is left running.
+- Moon performance work also needs `npm --workspace services/moon run bundle:report` after user/admin builds, and
+  bundle regressions should be compared against the current route first-load JS baseline.
+
 ## Workflow Notes
 
 - Browsers should stay behind Moon. Do not casually add browser calls to internal services.

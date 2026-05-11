@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * @file Personalized homepage for Moon's Once UI Next user app.
+ * @file Personalized homepage for Moon's Next user app.
  */
 
 import HomeShelfRow from "../home/HomeShelfRow.jsx";
@@ -61,7 +61,7 @@ export const HomePageClient = () => {
           </div>
           <EmptyView
             title="Your bookshelf is waiting"
-            detail="Open any chapter and Moon will turn this into a continue-reading row that feels more like Plex or Kavita."
+            detail="Open any chapter and Moon will turn this into a continue-reading row for the titles you are actively reading."
           />
         </section>
       )}

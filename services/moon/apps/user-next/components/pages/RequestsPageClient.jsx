@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * @file My Requests page for Moon's Once UI Next user app.
+ * @file My Requests page for Moon's Next user app.
  */
 
 import Link from "next/link";

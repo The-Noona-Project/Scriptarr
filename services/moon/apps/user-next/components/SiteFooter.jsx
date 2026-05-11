@@ -1,5 +1,5 @@
 /**
- * @file Simple footer for Moon's Once UI user shell.
+ * @file Simple footer for Moon's user shell.
  */
 
 import Link from "next/link";

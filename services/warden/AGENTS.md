@@ -44,3 +44,17 @@ image for the host hardware, and exposes manual LocalAI lifecycle actions after 
   - `amd`: `--device /dev/kfd --device /dev/dri --group-add video`
 - If service boot order, network topology, LocalAI image selection, first-boot auth, or Docker test mode changes,
   update the Warden docs.
+
+## Coding Map
+
+- Service definitions, env injection, network aliases, ports, volumes, and health commands live in
+  `config/servicePlan.mjs`.
+- Container reconciliation and drift handling live in `core/managedStackRuntime.mjs`; update orchestration lives in
+  `core/updateRuntime.mjs`; LocalAI lifecycle work lives in `core/localAiRuntime.mjs`.
+- Docker CLI helpers live under `docker`; filesystem and storage layout helpers live under `filesystem`.
+- Warden should reconcile sibling first-party services from inside the `scriptarr-warden` container through the Docker
+  socket. Do not move this responsibility into Moon, Sage, or host scripts.
+- Managed-service updates are for sibling services only. Warden itself and MySQL stay manual unless product
+  requirements explicitly change.
+- Prove Warden changes with `npm --workspace services/warden test`, then `npm run docker:healthcheck` for plan,
+  network, health, update, or first-boot behavior.

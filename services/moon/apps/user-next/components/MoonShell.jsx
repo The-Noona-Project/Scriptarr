@@ -69,7 +69,7 @@ const buildMenuGroups = (pathname) => {
 };
 
 /**
- * Wrap every user page in Moon's Once UI shell.
+ * Wrap every user page in Moon's local Next shell.
  *
  * @param {{children: import("react").ReactNode}} props
  * @returns {import("react").ReactNode}
