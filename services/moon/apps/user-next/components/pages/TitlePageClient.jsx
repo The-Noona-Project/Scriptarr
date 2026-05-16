@@ -7,6 +7,7 @@
 import {startTransition, useEffect, useMemo, useState} from "react";
 import {useRouter} from "next/navigation";
 import {requestJson, useMoonJson} from "../../lib/api.js";
+import {clearPersistentMoonJsonCache} from "../../lib/persistentJsonCache.js";
 import {buildReaderPathForTitle, buildTitlePathForTitle} from "../../lib/titleRoutes.js";
 import {formatDate, formatProgress} from "../../lib/date.js";
 import {Button, Flex} from "../UiPrimitives.jsx";
@@ -96,6 +97,9 @@ export const TitlePageClient = ({titleId, typeSlug = ""}) => {
   const [selectedChapterIds, setSelectedChapterIds] = useState(() => new Set());
   const [lastSelectedChapterId, setLastSelectedChapterId] = useState("");
   const [notice, setNotice] = useState("");
+  const clearCachedCardPayloads = () => auth?.discordUserId
+    ? clearPersistentMoonJsonCache(auth.discordUserId)
+    : Promise.resolve(0);
 
   const title = data?.title || null;
   const chaptersNewest = useMemo(() => sortChapters(title?.chapters, "newest"), [title?.chapters]);
@@ -186,6 +190,7 @@ export const TitlePageClient = ({titleId, typeSlug = ""}) => {
           }
         });
       if (nextResult.ok) {
+        await clearCachedCardPayloads();
         setData((current) => ({...current, following: !current.following}));
       } else {
         await refresh();
@@ -195,10 +200,13 @@ export const TitlePageClient = ({titleId, typeSlug = ""}) => {
 
   const updateTagPreference = (tag, preference) => {
     runBusy(async () => {
-      await requestJson("/api/moon-v3/user/tag-preferences", {
+      const result = await requestJson("/api/moon-v3/user/tag-preferences", {
         method: "PUT",
         json: {tag, preference}
       });
+      if (result.ok) {
+        await clearCachedCardPayloads();
+      }
       await refresh();
     });
   };
@@ -208,6 +216,9 @@ export const TitlePageClient = ({titleId, typeSlug = ""}) => {
       const result = await requestJson(`/api/moon-v3/user/title/${encodeURIComponent(title.id)}/${mode}`, {
         method: "POST"
       });
+      if (result.ok) {
+        await clearCachedCardPayloads();
+      }
       await syncTitleFromPayload(result);
       setNotice(mode === "read" ? "Title marked read." : "Title reset off your bookshelf.");
     });
@@ -226,6 +237,9 @@ export const TitlePageClient = ({titleId, typeSlug = ""}) => {
         `/api/moon-v3/user/title/${encodeURIComponent(title.id)}/chapters/${encodeURIComponent(targetChapterId)}/${mode}`,
         {method: "POST"}
       );
+      if (result.ok) {
+        await clearCachedCardPayloads();
+      }
       await syncTitleFromPayload(result);
       setNotice(mode === "read" ? "Chapter marked read." : "Chapter marked unread.");
     });
@@ -291,6 +305,9 @@ export const TitlePageClient = ({titleId, typeSlug = ""}) => {
           chapterIds: selectedIds
         }
       });
+      if (result.ok) {
+        await clearCachedCardPayloads();
+      }
       await syncTitleFromPayload(result);
       if (result.ok) {
         setSelectedChapterIds(new Set());

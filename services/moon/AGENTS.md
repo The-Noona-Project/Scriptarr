@@ -64,6 +64,9 @@ from the same runtime.
 - Browse owns `q`, `type`, and `letter` in the URL. Update only the results chunk on search/filter changes, keep
   previous card data visible while a newer same-origin request is in flight, and rely on the server-side compact card
   path for filtering/pagination.
+- Home, browse, library, and profile may use the user-next persistent JSON cache for signed-in return visits. Keep it
+  browser-local, per-user, stale-while-revalidate, and limited to compact card/profile-preview payloads; never store
+  card JSON in cookies or cache admin, API key, request mutation, title detail, or reader payloads there.
 - Compact cards should use the merged `readerTarget` for cover/art links and the canonical title route for title/copy
   links. Use `CoverImage.jsx` for card artwork so broken remote covers fall back to a styled initial instead of a
   broken image glyph.

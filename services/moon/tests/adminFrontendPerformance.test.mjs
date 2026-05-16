@@ -87,3 +87,16 @@ test("user chrome keeps reader route helpers out of shell imports", () => {
   const navigationRoutes = readMoonFile("apps/user-next/lib/navigationRoutes.js");
   assert.doesNotMatch(navigationRoutes, /titleRoutes|buildReaderPath|readerTarget/);
 });
+
+test("user return-visit cache stays browser-local and card scoped", () => {
+  const cacheSource = readMoonFile("apps/user-next/lib/persistentJsonCache.js");
+  const apiSource = readMoonFile("apps/user-next/lib/api.js");
+  const profileSource = readMoonFile("apps/user-next/components/pages/ProfilePageClient.jsx");
+
+  assert.doesNotMatch(`${cacheSource}\n${apiSource}`, /document\.cookie/);
+  assert.doesNotMatch(cacheSource, /fetch\(/);
+  assert.doesNotMatch(cacheSource, /\/api\/moon-v3\/admin|\/api\/moon\/v3\/admin|api-keys/);
+  assert.match(cacheSource, /\/api\/moon-v3\/user\/library/);
+  assert.match(cacheSource, /view"\) === "card"/);
+  assert.doesNotMatch(profileSource, /user\/api-keys[\s\S]{0,180}persistentCache/);
+});

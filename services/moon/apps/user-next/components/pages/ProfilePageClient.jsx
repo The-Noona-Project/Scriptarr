@@ -136,7 +136,8 @@ export const ProfilePageClient = () => {
   const {loading, error, status, data} = useMoonJson(auth ? "/api/moon-v3/user/profile" : null, {
     enabled: Boolean(auth),
     fallback: emptyProfile,
-    deps: [auth?.discordUserId || ""]
+    deps: [auth?.discordUserId || ""],
+    persistentCache: {userKey: auth?.discordUserId, scope: "profile"}
   });
   const apiKeysState = useMoonJson(auth ? "/api/moon-v3/user/api-keys" : null, {
     enabled: Boolean(auth),
@@ -351,7 +352,7 @@ export const ProfilePageClient = () => {
       <section className="moon-profile-card">
         <h3>Style panel</h3>
         <p className="moon-muted">
-          Adjust Once UI presentation preferences for this browser without affecting the rest of the server.
+          Adjust local presentation preferences for this browser without affecting the rest of the server.
         </p>
         <StylePanel />
       </section>

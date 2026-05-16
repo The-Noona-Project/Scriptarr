@@ -62,6 +62,7 @@ export const BrowsePageClient = ({initialSearchParams = {}} = {}) => {
   }), [activeLetter, activeQuery, activeType]);
   const {loading, refreshing, error, status, data} = useMoonJson(libraryUrl, {
     keepPreviousData: true,
+    persistentCache: {userKey: auth?.discordUserId, scope: "library"},
     fallback: {titles: [], counts: {total: 0, byLetter: {}}, pageInfo: {total: 0}}
   });
 

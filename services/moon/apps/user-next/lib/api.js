@@ -5,6 +5,13 @@
  */
 
 import {useCallback, useEffect, useMemo, useRef, useState} from "react";
+import {
+  clearPersistentMoonJsonCache,
+  clearPersistentMoonJsonCacheForStatus,
+  isPersistentMoonJsonCacheable,
+  readPersistentMoonJsonCache,
+  writePersistentMoonJsonCache
+} from "./persistentJsonCache.js";
 
 /**
  * Perform a same-origin JSON request against Moon.
@@ -67,16 +74,20 @@ export const requestJson = async (url, options = {}) => {
  *
  * @returns {Promise<{ok: boolean, status: number, payload: any}>}
  */
-export const logoutMoonSession = () => requestJson("/api/moon/auth/logout", {
-  method: "POST"
-});
+export const logoutMoonSession = async () => {
+  const result = await requestJson("/api/moon/auth/logout", {
+    method: "POST"
+  });
+  await clearPersistentMoonJsonCache();
+  return result;
+};
 
 /**
  * Fetch a Moon JSON endpoint whenever its dependencies change.
  *
  * @template T
  * @param {string | null} url
- * @param {{enabled?: boolean, fallback?: T, deps?: unknown[], keepPreviousData?: boolean}} [options]
+ * @param {{enabled?: boolean, fallback?: T, deps?: unknown[], keepPreviousData?: boolean, persistentCache?: false | {userKey?: string, scope?: string}}} [options]
  * @returns {{
  *   loading: boolean,
  *   refreshing: boolean,
@@ -87,7 +98,7 @@ export const logoutMoonSession = () => requestJson("/api/moon/auth/logout", {
  *   setData: import("react").Dispatch<import("react").SetStateAction<T>>
  * }}
  */
-export const useMoonJson = (url, {enabled = true, fallback = /** @type {T} */ (null), deps = [], keepPreviousData = false} = {}) => {
+export const useMoonJson = (url, {enabled = true, fallback = /** @type {T} */ (null), deps = [], keepPreviousData = false, persistentCache = false} = {}) => {
   const [loading, setLoading] = useState(Boolean(enabled && url));
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
@@ -97,7 +108,28 @@ export const useMoonJson = (url, {enabled = true, fallback = /** @type {T} */ (n
   const controllerRef = useRef(null);
   const requestSeqRef = useRef(0);
   const hasLoadedRef = useRef(false);
+  const persistentUserKey = persistentCache && typeof persistentCache === "object"
+    ? String(persistentCache.userKey || "")
+    : "";
+  const persistentScope = persistentCache && typeof persistentCache === "object"
+    ? String(persistentCache.scope || "")
+    : "";
+  const persistentEnabled = Boolean(persistentUserKey && url && isPersistentMoonJsonCacheable(url));
+  const persistentUserKeyRef = useRef(persistentUserKey);
+  const persistentScopeRef = useRef(persistentScope);
   fallbackRef.current = fallback;
+  persistentUserKeyRef.current = persistentUserKey;
+  persistentScopeRef.current = persistentScope;
+
+  const resolvePersistentCacheOptions = useCallback(() => {
+    const nextUserKey = persistentUserKeyRef.current;
+    const nextScope = persistentScopeRef.current;
+    return {
+      enabled: Boolean(nextUserKey && url && isPersistentMoonJsonCacheable(url)),
+      userKey: nextUserKey,
+      scope: nextScope
+    };
+  }, [url]);
 
   const fetchValue = useCallback(async () => {
     requestSeqRef.current += 1;
@@ -117,7 +149,27 @@ export const useMoonJson = (url, {enabled = true, fallback = /** @type {T} */ (n
 
     const controller = new AbortController();
     controllerRef.current = controller;
-    const shouldRefresh = keepPreviousData && hasLoadedRef.current;
+    let loadedPersistentCache = false;
+    const initialPersistentCache = resolvePersistentCacheOptions();
+    if (initialPersistentCache.enabled) {
+      const cachedPayload = await readPersistentMoonJsonCache({
+        url,
+        userKey: initialPersistentCache.userKey,
+        scope: initialPersistentCache.scope
+      });
+      if (requestSeq !== requestSeqRef.current || controller.signal.aborted) {
+        return;
+      }
+      if (cachedPayload != null) {
+        hasLoadedRef.current = true;
+        loadedPersistentCache = true;
+        setData(cachedPayload);
+        setError("");
+        setStatus(200);
+      }
+    }
+
+    const shouldRefresh = loadedPersistentCache || (keepPreviousData && hasLoadedRef.current);
     setLoading(!shouldRefresh);
     setRefreshing(shouldRefresh);
     const result = await requestJson(url, {signal: controller.signal});
@@ -130,8 +182,20 @@ export const useMoonJson = (url, {enabled = true, fallback = /** @type {T} */ (n
       return;
     }
     if (!result.ok) {
+      const failurePersistentCache = resolvePersistentCacheOptions();
+      await clearPersistentMoonJsonCacheForStatus(result.status, failurePersistentCache.userKey);
+      if (loadedPersistentCache && ![401, 403].includes(result.status)) {
+        setStatus(result.status);
+        setLoading(false);
+        setRefreshing(false);
+        return;
+      }
       setError(result.payload?.error || "Moon could not finish loading this page.");
       setStatus(result.status);
+      if ([401, 403].includes(result.status)) {
+        setData(fallbackRef.current);
+        hasLoadedRef.current = false;
+      }
       setLoading(false);
       setRefreshing(false);
       return;
@@ -143,7 +207,7 @@ export const useMoonJson = (url, {enabled = true, fallback = /** @type {T} */ (n
     setStatus(result.status);
     setLoading(false);
     setRefreshing(false);
-  }, [enabled, keepPreviousData, url]);
+  }, [enabled, keepPreviousData, resolvePersistentCacheOptions, url]);
 
   useEffect(() => {
     void fetchValue();
@@ -151,6 +215,18 @@ export const useMoonJson = (url, {enabled = true, fallback = /** @type {T} */ (n
       controllerRef.current?.abort?.();
     };
   }, [fetchValue, ...deps]);
+
+  useEffect(() => {
+    if (!persistentEnabled || !hasLoadedRef.current) {
+      return;
+    }
+    void writePersistentMoonJsonCache({
+      url,
+      userKey: persistentUserKey,
+      scope: persistentScope,
+      payload: data
+    });
+  }, [data, persistentEnabled, persistentScope, persistentUserKey, url]);
 
   return {loading, refreshing, error, status, data, refresh: fetchValue, setData};
 };

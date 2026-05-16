@@ -7,6 +7,7 @@
 import Link from "next/link";
 import {useState} from "react";
 import {requestJson, useMoonJson} from "../../lib/api.js";
+import {clearPersistentMoonJsonCache} from "../../lib/persistentJsonCache.js";
 import {formatDate} from "../../lib/date.js";
 import {useMoonChrome} from "../MoonChromeContext.jsx";
 import {AuthRequiredView, EmptyView, ErrorView, LoadingView} from "../StateView.jsx";
@@ -188,6 +189,9 @@ export const RequestsPageClient = () => {
   const [selectedMetadata, setSelectedMetadata] = useState(null);
   const [submitPending, setSubmitPending] = useState(false);
   const [notice, setNotice] = useState(null);
+  const clearCachedProfilePayloads = () => auth?.discordUserId
+    ? clearPersistentMoonJsonCache(auth.discordUserId)
+    : Promise.resolve(0);
 
   const requests = normalizeArray(data?.requests);
   const visibleRequests = requests.filter((entry) => entry.tab === activeTab);
@@ -252,6 +256,7 @@ export const RequestsPageClient = () => {
 
     if (result.ok) {
       const nextRequest = result.payload;
+      await clearCachedProfilePayloads();
       setNotice({
         tone: "good",
         message: nextRequest?.status === "unavailable"
@@ -282,6 +287,7 @@ export const RequestsPageClient = () => {
         linkUrl: result.payload?.linkUrl,
         linkLabel: "Open My Requests"
       });
+      await clearCachedProfilePayloads();
       await refresh();
       return;
     }
@@ -310,6 +316,7 @@ export const RequestsPageClient = () => {
         : result.payload?.error || "Moon could not update those notes."
     });
     if (result.ok) {
+      await clearCachedProfilePayloads();
       await refresh();
     }
   };
@@ -328,6 +335,7 @@ export const RequestsPageClient = () => {
         : result.payload?.error || "Moon could not cancel that request."
     });
     if (result.ok) {
+      await clearCachedProfilePayloads();
       await refresh();
     }
   };

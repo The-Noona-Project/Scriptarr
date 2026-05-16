@@ -28,7 +28,8 @@ export const LibraryPageClient = ({typeSlug = ""}) => {
     return `/api/moon-v3/user/library?${params.toString()}`;
   }, [typeSlug]);
   const {loading, error, status, data} = useMoonJson(libraryUrl, {
-    fallback: {titles: [], pageInfo: {hasMore: false, nextCursor: "", total: 0}}
+    fallback: {titles: [], pageInfo: {hasMore: false, nextCursor: "", total: 0}},
+    persistentCache: {userKey: auth?.discordUserId, scope: "library"}
   });
   const [titles, setTitles] = useState([]);
   const [pageInfo, setPageInfo] = useState({hasMore: false, nextCursor: "", total: 0});

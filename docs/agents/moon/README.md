@@ -82,6 +82,9 @@
   chapter arrays. Home shelves should stay bounded to compact card reads and hydrate full titles only for exact
   continue-reading, read-state, or following ids. Use the compact exact-id card projection (`view=card&ids=...`) for
   those activity ids instead of fanning out into individual full title requests.
+- The user app has a browser-local return-visit JSON cache in `apps/user-next/lib/persistentJsonCache.js`. Use it only
+  through `useMoonJson({persistentCache})` for signed-in home, browse, library, and profile card/preview payloads;
+  keep auth, cookies, API keys, requests mutations, title detail, reader state, and admin data live-only.
 - `/browse` search/filter state is shareable URL state. Use `q`, `type`, and `letter`, debounce URL replacement, keep
   previously loaded cards visible while new results refresh, and load additional chunks with `cursor`/`pageSize`.
 - User cards have two routes by design: cover/art opens the best reader target from the server-merged `readerTarget`,

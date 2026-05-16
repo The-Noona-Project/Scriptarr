@@ -23,7 +23,8 @@ export const HomePageClient = () => {
       requests: [],
       following: [],
       shelves: []
-    }
+    },
+    persistentCache: {userKey: auth?.discordUserId, scope: "home"}
   });
 
   if (loading) {
