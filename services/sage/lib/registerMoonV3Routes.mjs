@@ -547,7 +547,16 @@ export const registerMoonV3Routes = (app, {
     if (!ids.length || !normalizeString(discordUserId)) {
       return titles;
     }
-    const targets = normalizeObject(await vaultClient.listReaderTargets(discordUserId, ids), {}) || {};
+    let targets = {};
+    try {
+      targets = normalizeObject(await vaultClient.listReaderTargets(discordUserId, ids), {}) || {};
+    } catch (error) {
+      logger?.warn?.("Moon v3 reader targets unavailable; returning cards without reader targets.", {
+        status: Number(error?.status || 0) || undefined,
+        errorName: error?.name || "Error"
+      });
+      return titles;
+    }
     return titles.map((title) => ({
       ...title,
       readerTarget: normalizeReaderTarget(targets[normalizeString(title.id)])

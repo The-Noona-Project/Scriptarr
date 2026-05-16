@@ -29,6 +29,73 @@ const closeServer = (server) => new Promise((resolve, reject) => {
   server?.close((error) => error ? reject(error) : resolve());
 });
 
+/**
+ * Read a test proxy request body into a buffer for forwarding.
+ *
+ * @param {http.IncomingMessage} request
+ * @returns {Promise<Buffer>}
+ */
+const readRequestBody = (request) => new Promise((resolve, reject) => {
+  const chunks = [];
+  request.on("data", (chunk) => {
+    chunks.push(Buffer.from(chunk));
+  });
+  request.on("end", () => resolve(Buffer.concat(chunks)));
+  request.on("error", reject);
+});
+
+/**
+ * Create a Vault proxy that forwards every request except reader-target
+ * lookups, which mimic the HTML error returned by an older prod Vault image.
+ *
+ * @param {{targetBaseUrl: string}} options
+ * @returns {{server: http.Server, calls: {readerTargets: number, forwarded: number}}}
+ */
+const createVaultReaderTargetFailureProxy = ({targetBaseUrl}) => {
+  const calls = {
+    readerTargets: 0,
+    forwarded: 0
+  };
+  const server = http.createServer((request, response) => {
+    if (request.url?.startsWith("/api/service/reader-targets/")) {
+      calls.readerTargets += 1;
+      response.writeHead(500, {"Content-Type": "text/html"});
+      response.end("<!DOCTYPE html><title>Error</title><h1>Reader targets unavailable</h1>");
+      return;
+    }
+
+    readRequestBody(request)
+      .then(async (body) => {
+        calls.forwarded += 1;
+        const headers = {};
+        for (const [key, value] of Object.entries(request.headers || {})) {
+          if (key.toLowerCase() !== "host" && value != null) {
+            headers[key] = Array.isArray(value) ? value.join(", ") : String(value);
+          }
+        }
+        const upstream = await originalFetch(`${targetBaseUrl}${request.url || "/"}`, {
+          method: request.method,
+          headers,
+          body: ["GET", "HEAD"].includes(String(request.method || "GET").toUpperCase()) ? undefined : body
+        });
+        const responseHeaders = {};
+        upstream.headers.forEach((value, key) => {
+          responseHeaders[key] = value;
+        });
+        response.writeHead(upstream.status, responseHeaders);
+        response.end(await upstream.text());
+      })
+      .catch((error) => {
+        response.writeHead(500, {"Content-Type": "application/json"});
+        response.end(JSON.stringify({
+          error: error instanceof Error ? error.message : String(error)
+        }));
+      });
+  });
+
+  return {server, calls};
+};
+
 const defaultLibraryTitle = Object.freeze({
   id: "dan-da-dan",
   title: "Dandadan",
@@ -1467,6 +1534,68 @@ test("sage signs in the first owner through the Discord callback and moderates r
   await closeServer(sageServer);
   await closeServer(vaultServer);
   await closeServer(dependencyStub.server);
+});
+
+test("sage keeps Moon card routes available when Vault reader targets fail", async () => {
+  let vaultServer;
+  let vaultProxyServer;
+  let sageServer;
+  let dependencyStub;
+  try {
+    const {app: vaultApp} = await createVaultApp();
+    vaultServer = vaultApp.listen(0);
+    const vaultPort = vaultServer.address().port;
+    const vaultProxy = createVaultReaderTargetFailureProxy({
+      targetBaseUrl: `http://127.0.0.1:${vaultPort}`
+    });
+    vaultProxyServer = vaultProxy.server;
+    vaultProxyServer.listen(0);
+    const vaultProxyPort = vaultProxyServer.address().port;
+
+    dependencyStub = await createDependencyStub({libraryTitles: [ownerSmokeLibraryTitle]});
+    dependencyStub.server.listen(0);
+    const dependencyPort = dependencyStub.server.address().port;
+
+    process.env.SCRIPTARR_VAULT_BASE_URL = `http://127.0.0.1:${vaultProxyPort}`;
+    process.env.SCRIPTARR_WARDEN_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+    process.env.SCRIPTARR_PORTAL_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+    process.env.SCRIPTARR_ORACLE_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+    process.env.SCRIPTARR_RAVEN_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+    process.env.SCRIPTARR_PUBLIC_BASE_URL = "https://pax-kun.com";
+    process.env.SCRIPTARR_DISCORD_CLIENT_ID = "discord-client-id";
+    process.env.SCRIPTARR_DISCORD_CLIENT_SECRET = "discord-client-secret";
+
+    installDiscordFetchStub();
+
+    const {app: sageApp} = await createSageApp();
+    sageServer = sageApp.listen(0);
+    const sagePort = sageServer.address().port;
+    const baseUrl = `http://127.0.0.1:${sagePort}`;
+    const ownerClaim = await signInViaDiscord(baseUrl);
+    const headers = {
+      "Authorization": `Bearer ${ownerClaim.token}`
+    };
+
+    const homeResponse = await fetch(`${baseUrl}/api/moon-v3/user/home`, {headers});
+    const home = await homeResponse.json();
+    assert.equal(homeResponse.status, 200);
+    assert.equal(home.latestTitles[0].title, ownerSmokeLibraryTitle.title);
+    assert.equal(Object.hasOwn(home.latestTitles[0], "readerTarget"), false);
+
+    const libraryResponse = await fetch(`${baseUrl}/api/moon-v3/user/library?view=card&pageSize=1`, {headers});
+    const library = await libraryResponse.json();
+    assert.equal(libraryResponse.status, 200);
+    assert.equal(library.titles[0].title, ownerSmokeLibraryTitle.title);
+    assert.equal(Object.hasOwn(library.titles[0], "readerTarget"), false);
+    assert.equal(vaultProxy.calls.readerTargets >= 2, true);
+  } finally {
+    await Promise.all([
+      sageServer,
+      vaultProxyServer,
+      vaultServer,
+      dependencyStub?.server
+    ].filter(Boolean).map((server) => closeServer(server)));
+  }
 });
 
 test("sage treats Raven's immediate linked-request queue sync as approval success", async () => {
