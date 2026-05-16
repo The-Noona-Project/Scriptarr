@@ -143,7 +143,7 @@ const buildOracleMessage = ({branch, baseSha, compareUrl, commits, truncated}) =
 const requestOracleSummary = async ({config, serviceJson, branch, baseSha, compareUrl, commits, truncated}) => {
   const result = await serviceJson(config.oracleBaseUrl, "/api/chat", {
     method: "POST",
-      timeoutMs: 120000,
+      timeoutMs: 240000,
     body: {
       message: buildOracleMessage({branch, baseSha, compareUrl, commits, truncated}),
       context: {

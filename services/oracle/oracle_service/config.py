@@ -45,6 +45,6 @@ def resolve_oracle_config() -> OracleConfig:
         local_ai_api_key=os.getenv("SCRIPTARR_LOCALAI_API_KEY", "localai"),
         model=os.getenv("SCRIPTARR_ORACLE_MODEL") or os.getenv("SCRIPTARR_ORACLE_OPENAI_MODEL") or "gpt-4.1-mini",
         temperature=_parse_float(os.getenv("SCRIPTARR_ORACLE_TEMPERATURE"), 0.2),
-        llm_timeout_seconds=_parse_float(os.getenv("SCRIPTARR_ORACLE_LLM_TIMEOUT_SECONDS"), 60.0),
+        llm_timeout_seconds=_parse_float(os.getenv("SCRIPTARR_ORACLE_LLM_TIMEOUT_SECONDS"), 180.0),
         noona_persona_name=os.getenv("SCRIPTARR_NOONA_PERSONA_NAME", "Noona")
     )
