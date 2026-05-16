@@ -757,6 +757,47 @@ a {
   line-height: 0.96;
 }
 
+.moon-title-skeleton .moon-title-hero-copy {
+  align-content: start;
+}
+
+.moon-title-skeleton-cover {
+  min-height: 380px;
+  display: grid;
+  place-items: stretch;
+}
+
+.moon-title-skeleton-heading,
+.moon-title-skeleton-copy {
+  display: grid;
+  gap: 8px;
+}
+
+.moon-title-skeleton-pill {
+  min-width: 82px;
+  justify-content: center;
+}
+
+.moon-once-skeleton-fallback {
+  display: inline-flex;
+  width: 100%;
+  min-height: 12px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.09), rgba(255, 255, 255, 0.045));
+  background-size: 220% 100%;
+  animation: moon-skeleton-pan 1.2s ease-in-out infinite;
+}
+
+@keyframes moon-skeleton-pan {
+  0% {
+    background-position: 120% 0;
+  }
+
+  100% {
+    background-position: -120% 0;
+  }
+}
+
 .moon-title-action-strip,
 .moon-title-tabs,
 .moon-title-chapter-tools,
@@ -907,6 +948,68 @@ a {
   overflow: auto;
   border: 1px solid rgba(255, 255, 255, 0.07);
   border-radius: 8px;
+}
+
+.moon-title-chapter-list {
+  display: grid;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 8px;
+  background: rgba(6, 11, 16, 0.42);
+}
+
+.moon-title-chapter-row {
+  display: grid;
+  grid-template-columns: 28px minmax(210px, 1fr) minmax(150px, 0.36fr) auto minmax(190px, auto);
+  gap: 12px;
+  align-items: center;
+  min-height: 72px;
+  padding: 12px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.moon-title-chapter-row:last-child {
+  border-bottom: 0;
+}
+
+.moon-title-chapter-row.is-read {
+  color: rgba(245, 239, 234, 0.72);
+}
+
+.moon-title-chapter-row.is-unread {
+  background: rgba(255, 255, 255, 0.012);
+}
+
+.moon-title-chapter-row input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  accent-color: rgba(255, 176, 112, 0.94);
+}
+
+.moon-title-chapter-main {
+  min-width: 0;
+}
+
+.moon-title-chapter-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  color: rgba(240, 237, 232, 0.62);
+  font-size: 0.84rem;
+}
+
+.moon-title-chapter-page-foot {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px;
+  color: rgba(240, 237, 232, 0.62);
+  font-size: 0.85rem;
+}
+
+.moon-title-chapter-row-skeleton,
+.moon-title-request-row-skeleton {
+  pointer-events: none;
 }
 
 .moon-chapter-table {
@@ -1993,6 +2096,16 @@ a {
   .moon-title-bulk-toolbar {
     top: 144px;
   }
+
+  .moon-title-chapter-row {
+    grid-template-columns: 28px minmax(210px, 1fr) minmax(130px, auto);
+  }
+
+  .moon-title-chapter-meta,
+  .moon-title-state-chip,
+  .moon-chapter-actions {
+    grid-column: 2 / -1;
+  }
 }
 
 @media (max-width: 720px) {
@@ -2057,5 +2170,26 @@ a {
 
   .moon-title-action-strip > * {
     flex: 1 1 160px;
+  }
+
+  .moon-title-chapter-row {
+    grid-template-columns: 24px minmax(0, 1fr);
+    align-items: start;
+  }
+
+  .moon-title-chapter-main,
+  .moon-title-chapter-meta,
+  .moon-title-state-chip,
+  .moon-chapter-actions {
+    grid-column: 2 / -1;
+  }
+
+  .moon-chapter-actions {
+    align-items: stretch;
+  }
+
+  .moon-chapter-actions > * {
+    flex: 1 1 132px;
+    justify-content: center;
   }
 }

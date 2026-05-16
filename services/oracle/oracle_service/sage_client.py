@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""Small Sage HTTP client used for Oracle's read-only broker calls."""
+
 import json
 from urllib.parse import quote
 
@@ -31,6 +33,7 @@ class SageClient:
             try:
                 payload = response.json()
             except json.JSONDecodeError:
+                # Preserve plain-text upstream failures instead of dropping the response body.
                 payload = {"raw": text}
 
         return response.is_success, response.status_code, payload

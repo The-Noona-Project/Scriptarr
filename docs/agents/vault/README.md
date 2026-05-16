@@ -31,8 +31,9 @@
   permission groups, API keys, and durable events stay read-only from browser-admin flows.
 - Moon branding, uploaded WebP logo variants, and admin toast preferences are normal settings records. Content reset
   must preserve them with other settings.
-- Brokered Portal Discord settings now include the release notification channel id, and durable release notification
-  acknowledgments are normal settings-backed state that content reset should preserve.
+- Brokered Portal Discord settings now include release and update notification channel ids, and durable release/update
+  notification acknowledgments or latest posted GitHub update digests are normal settings-backed state that content
+  reset should preserve.
 - Downloadall notification acknowledgments and reaction decision prompts are also operational settings-backed state.
   Content reset should preserve them so an owner cannot accidentally lose a paused-run decision path during unrelated
   catalog cleanup.
@@ -45,6 +46,12 @@
 - Vault owns the compact Raven title-card projection at `/api/service/raven/title-cards`. Keep it title-table-only,
   indexed for type/title/recency filters, paginated by cursor/pageSize, able to return exact `ids` in caller order,
   and free of chapter arrays or filesystem roots.
+- Vault also owns the title-page split projections used by Sage. `/api/service/raven/titles/:titleId/summary` returns
+  title metadata, user read/progress counts, primary/latest chapter hints, and no `title.chapters` payload.
+  `/api/service/raven/titles/:titleId/chapters` returns paged chapter rows with read state plus server-side
+  cursor/pageSize/sort/filter/q handling. Keep memory and MySQL behavior aligned, cap chapter page size at 100, and
+  invalidate summary/chapter-page caches whenever progress, title read state, chapter read state, or Raven title/chapter
+  rows change.
 - Vault also owns the service-only reader-target projection for compact cards. Given a Discord user id and bounded
   title ids, return the best chapter target using progress/bookmark first, then next unread, then first readable
   chapter. Keep this projection cache-aware and invalidate it with progress, bookmark, chapter-read, and Raven chapter

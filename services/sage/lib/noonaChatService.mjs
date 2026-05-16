@@ -4,6 +4,10 @@
 
 import {proposeAiAction} from "./aiTools.mjs";
 import {
+  GITHUB_UPDATE_DIGEST_SETTING_KEY,
+  normalizeGithubUpdateDigestState
+} from "./githubUpdateDigest.mjs";
+import {
   applyNoonaMemoryCommand,
   buildNoonaMemoryContext,
   readNoonaChatMemory,
@@ -36,6 +40,7 @@ const isActionPrompt = (message) => /\b(start|stop|cancel|end|run|check|probe)\b
 const isStatusPrompt = (message) => /\b(status|health|alive|up|down|broken|working)\b/i.test(normalizeString(message));
 const isTriviaPrompt = (message) => /\btrivia\b/i.test(normalizeString(message));
 const isLibraryPrompt = (message) => /\b(library|search|find|have|manga|comic|manhwa|webtoon)\b/i.test(normalizeString(message));
+const isUpdatePrompt = (message) => /\b(update|updates|updated|changelog|change\s*log|release\s+notes?|what\s+changed|new\s+commit|github|how\s+(do|can)\s+i\s+use)\b/i.test(normalizeString(message));
 
 const buildServiceHealthContext = async ({config, serviceJson}) => {
   const services = [
@@ -88,6 +93,30 @@ const buildLibraryContext = async ({vaultClient, message}) => {
   };
 };
 
+const buildLatestUpdateContext = async ({vaultClient}) => {
+  const state = normalizeGithubUpdateDigestState((await vaultClient.getSetting(GITHUB_UPDATE_DIGEST_SETTING_KEY).catch(() => null))?.value);
+  const latest = normalizeObject(state.latestPosted, null);
+  if (!latest?.summary) {
+    return null;
+  }
+  return {
+    repository: latest.repository || `${state.repository.owner}/${state.repository.repo}`,
+    branch: normalizeString(latest.branch, normalizeString(state.repository.branch)),
+    summary: normalizeString(latest.summary),
+    compareUrl: normalizeString(latest.compareUrl),
+    commitCount: Number.parseInt(String(latest.commitCount || 0), 10) || 0,
+    latestSha: normalizeString(latest.latestSha, normalizeString(state.lastPostedSha).slice(0, 12)),
+    postedAt: normalizeString(latest.postedAt, normalizeString(state.lastPostedAt)),
+    commits: normalizeArray(latest.commits).slice(-8).map((commit) => ({
+      sha: normalizeString(commit.sha),
+      title: normalizeString(commit.title),
+      author: normalizeString(commit.author),
+      date: normalizeString(commit.date),
+      url: normalizeString(commit.url)
+    }))
+  };
+};
+
 const buildReadContext = async ({config, serviceJson, vaultClient, triviaService, readPortalDiscordSettings, message}) => {
   const context = {};
   if (isStatusPrompt(message)) {
@@ -106,6 +135,12 @@ const buildReadContext = async ({config, serviceJson, vaultClient, triviaService
   }
   if (isLibraryPrompt(message)) {
     context.library = await buildLibraryContext({vaultClient, message});
+  }
+  if (isUpdatePrompt(message)) {
+    const latestUpdate = await buildLatestUpdateContext({vaultClient});
+    if (latestUpdate) {
+      context.latestUpdate = latestUpdate;
+    }
   }
   return Object.keys(context).length ? context : null;
 };

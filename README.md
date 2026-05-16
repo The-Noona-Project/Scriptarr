@@ -73,7 +73,7 @@ editor instead of a generic records view.
 Raven now keeps WeebCentral first by default, exposes MangaDex as a second normal download-provider option, and enables
 Anime-Planet ahead of MangaUpdates as a scrape-based metadata source for aliases, summaries, and lifecycle hints.
 Moon admin also exposes a dedicated Discord page at `/admin/discord` for guild workflow settings, onboarding template
-or channel management, per-command role gates, release-channel posts, Noona trivia, public mention-chat settings,
+or channel management, per-command role gates, release-channel posts, GitHub update-summary posts, Noona trivia, public mention-chat settings,
 Noona memory review or clears, and Portal runtime visibility without exposing Discord credentials.
 Moon's user app now runs as an embedded Next.js App Router frontend with a megamenu header, avatar profile controls,
 and a simple footer, while the fullscreen reader runs as its own embedded `/reader` Next app.
@@ -172,9 +172,10 @@ For end-to-end Docker verification, use:
   in the Discord DM summary. Completed library titles are skipped, in-progress titles append only missing or new
   chapters, and `nsfw:false` still requires explicit WeebCentral `Adult Content: No`. That owner-only command is
   intentionally locked to WeebCentral and will fail fast if WeebCentral is disabled.
-- Moon browse and library shelves use compact paginated title-card APIs instead of loading every chapter row. Cover art
-  is converted into a derived Moon WebP cache on demand, and `/admin/system/tasks` includes a rerunnable cover
-  optimization action to prebuild missing or stale cached covers.
+- Moon browse and library shelves use compact paginated title-card APIs, and title pages now load a summary first,
+  chapter rows through paged InfiniteScroll, and requests only when the Requests tab opens. Cover art is converted into
+  a derived Moon WebP cache on demand, and `/admin/system/tasks` includes a rerunnable cover optimization action to
+  prebuild missing or stale cached covers.
 - Portal now prefers a minimal Discord runtime over going fully dark when privileged intents are unavailable, so slash
   commands and DMs can stay online while onboarding is shown as degraded in Moon admin.
 - Discord `/subscribe` reuses Moon's shared follow store, so Moon and Discord notifications stay aligned instead of
@@ -184,6 +185,10 @@ For end-to-end Docker verification, use:
 - Portal can also post completed Raven downloads to the configured Discord release channel from `/admin/discord`.
   Those release posts use stable `release:<taskId>` notification ids and are acknowledged only after Discord accepts
   the channel message, so restarts do not repost successful releases.
+- Portal can also post Noona-written GitHub update summaries to a separate update channel from `/admin/discord`.
+  Sage checks `The-Noona-Project/Scriptarr` during the scheduled or manual update-check task, asks Oracle for the
+  summary, retries instead of posting a fallback when AI is unavailable, and exposes stable `update:<latestSha>`
+  notifications that Portal acknowledges only after Discord accepts the message.
 - Noona trivia is configured from `/admin/discord`. Portal posts sanitized title-summary clues in the configured
   channel, accepts public guesses, awards XP for exact, alias, URL, and tolerant fuzzy matches, and posts leaderboards
   after rounds plus scheduled daily, weekly, and monthly windows. Oracle can advise only borderline guesses when AI
@@ -232,7 +237,7 @@ For end-to-end Docker verification, use:
   Content, Discord, trivia, and LocalAI state; mutation or message-affecting tools stay disabled until an admin enables
   them and always create a proposal that must be confirmed before execution.
 - Public Discord chat gets a stricter Sage allowlist than the admin AI page. Noona can read only conservative status,
-  Discord runtime, trivia, and library context, and can draft only low-risk proposals such as status checks or trivia
+  Discord runtime, latest posted update digest, trivia, and library context, and can draft only low-risk proposals such as status checks or trivia
   start/stop for later admin confirmation. LocalAI lifecycle, root/system, destructive, and arbitrary broadcast actions
   are excluded from public chat even if enabled for admins.
 - LocalAI install, start, and remove actions are asynchronous Warden lifecycle jobs. Moon shows Docker pull, container,

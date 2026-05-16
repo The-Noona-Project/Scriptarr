@@ -18,6 +18,7 @@ const withPortalEnv = async (overrides, handler) => {
     "SCRIPTARR_DISCORD_CLIENT_ID",
     "SCRIPTARR_DISCORD_GUILD_ID",
     "SCRIPTARR_DISCORD_SUPERUSER_ID",
+    "SCRIPTARR_DISCORD_UPDATE_CHANNEL_ID",
     "SCRIPTARR_ONBOARDING_TEMPLATE"
   ];
   const previous = new Map(keys.map((key) => [key, process.env[key]]));
@@ -272,6 +273,9 @@ test("portal notifier delivers follow, approval, denial, and completion DMs once
     discord: {
       async sendDirectMessage(discordUserId, payload) {
         sent.push({discordUserId, payload});
+      },
+      async sendChannelMessage(channelId, payload) {
+        sent.push({channelId, payload});
       }
     },
     sage: {
@@ -397,6 +401,35 @@ test("portal notifier delivers follow, approval, denial, and completion DMs once
         ackedIds.add(notificationId);
         acknowledged.push(`system:${notificationId}`);
         return {ok: true};
+      },
+      async listUpdateNotifications() {
+        return {
+          ok: true,
+          payload: {
+            notifications: ackedIds.has("update:abc123def456") ? [] : [{
+              id: "update:abc123def456",
+              channelId: "updates-channel",
+              repository: "The-Noona-Project/Scriptarr",
+              branch: "main",
+              summary: "Noona says a new update is ready. Ask me what changed.",
+              compareUrl: "https://github.com/The-Noona-Project/Scriptarr/compare/base...main",
+              commitCount: 2,
+              latestSha: "abc123def456",
+              commits: [{
+                sha: "abc123def456",
+                title: "Add update summaries",
+                author: "Noona",
+                date: "2026-05-16T00:00:00.000Z",
+                url: "https://github.com/The-Noona-Project/Scriptarr/commit/abc123def456"
+              }]
+            }]
+          }
+        };
+      },
+      async acknowledgeUpdateNotification(notificationId) {
+        ackedIds.add(notificationId);
+        acknowledged.push(`update:${notificationId}`);
+        return {ok: true};
       }
     },
     requestCommand: {
@@ -421,6 +454,7 @@ test("portal notifier delivers follow, approval, denial, and completion DMs once
   assert.ok(sent.some((entry) => entry.payload?.content.includes("moved it back into admin review")));
   assert.ok(sent.some((entry) => entry.payload?.content.includes("expired after 90 days")));
   assert.ok(sent.some((entry) => entry.payload?.content.includes("LocalAI startup completed")));
+  assert.ok(sent.some((entry) => entry.channelId === "updates-channel" && entry.payload?.content.includes("new update is ready")));
   assert.ok(sent.some((entry) => entry.payload?.content.includes("https://pax-kun.com/myrequests")));
   assert.ok(sent.some((entry) => entry.payload?.embeds?.[0]?.image?.url === "https://images.example/solo.jpg"));
   assert.deepEqual(acknowledged.sort(), [
@@ -432,6 +466,7 @@ test("portal notifier delivers follow, approval, denial, and completion DMs once
     "request:request-5:ready:user-3",
     "request:request-6:source-found",
     "request:request-7:expired",
-    "system:localai:job-1:completed"
+    "system:localai:job-1:completed",
+    "update:update:abc123def456"
   ]);
 });

@@ -481,6 +481,24 @@ export const createVaultApp = async ({logger = createLogger("VAULT")} = {}) => {
     }));
   });
 
+  app.get("/api/service/raven/titles/:titleId/summary", async (req, res) => {
+    const summary = await store.getRavenTitleSummary(req.params.titleId, req.query || {});
+    if (!summary) {
+      res.status(404).json({error: "Raven title not found."});
+      return;
+    }
+    res.json(summary);
+  });
+
+  app.get("/api/service/raven/titles/:titleId/chapters", async (req, res) => {
+    const chapters = await store.listRavenTitleChapters(req.params.titleId, req.query || {});
+    if (!chapters) {
+      res.status(404).json({error: "Raven title not found."});
+      return;
+    }
+    res.json(chapters);
+  });
+
   app.get("/api/service/raven/titles/:titleId", async (req, res) => {
     const title = await store.getRavenTitle(req.params.titleId);
     if (!title) {

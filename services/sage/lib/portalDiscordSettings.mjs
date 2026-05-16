@@ -168,7 +168,8 @@ export const normalizePortalNoonaChatSettings = (value = {}) => {
  *     template: string
  *   },
  *   notifications: {
- *     releaseChannelId: string
+ *     releaseChannelId: string,
+ *     updateChannelId: string
  *   },
  *   trivia: ReturnType<typeof defaultPortalTriviaSettings>,
  *   noonaChat: ReturnType<typeof defaultPortalNoonaChatSettings>,
@@ -184,7 +185,8 @@ export const defaultPortalDiscordSettings = () => ({
     template: "Welcome to {guild_name}, {user_mention}! Start reading at {moon_url}"
   },
   notifications: {
-    releaseChannelId: ""
+    releaseChannelId: "",
+    updateChannelId: ""
   },
   trivia: defaultPortalTriviaSettings(),
   noonaChat: defaultPortalNoonaChatSettings(),
@@ -220,7 +222,8 @@ export const normalizePortalDiscordSettings = (value) => {
       template: normalizeString(onboarding.template, defaults.onboarding.template).slice(0, 1200)
     },
     notifications: {
-      releaseChannelId: normalizeString(notifications.releaseChannelId)
+      releaseChannelId: normalizeString(notifications.releaseChannelId),
+      updateChannelId: normalizeString(notifications.updateChannelId)
     },
     trivia: normalizePortalTriviaSettings(source.trivia),
     noonaChat: normalizePortalNoonaChatSettings(source.noonaChat),

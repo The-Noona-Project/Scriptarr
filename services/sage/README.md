@@ -124,6 +124,10 @@ external NSFW and duplicate guards on request creation, and queues accepted exte
 Sage also owns the admin Wanted repair routes. `/api/moon-v3/admin/wanted/metadata` is canonical, the old
 `metadata-gaps` route remains an alias, metadata search is scoped with the Raven library id, metadata apply calls
 Raven identify, and missing-chapter repair stays on the existing staged replacement download broker.
-Sage also owns Portal's release notification queue. Completed Raven tasks become stable `release:<taskId>` channel
-notifications when a release channel is configured, and Portal acknowledges them through Sage only after Discord
-accepts the channel message.
+Sage also owns Portal's release and update notification queues. Completed Raven tasks become stable
+`release:<taskId>` channel notifications when a release channel is configured. The scheduled or manual update-check
+task also asks GitHub for new `The-Noona-Project/Scriptarr` commits since the last posted update, asks Oracle for an
+AI-written Noona summary, and exposes a stable `update:<latestSha>` channel notification when an update channel is
+configured. If Oracle cannot summarize the commits, Sage stores the pending range for retry instead of posting a
+fallback. Portal acknowledges release and update notifications through Sage only after Discord accepts the channel
+message.

@@ -18,6 +18,9 @@ Recommended environment:
 - `SCRIPTARR_MYSQL_USER`: managed MySQL app user, or the username fallback when the external MySQL URL omits one
 - `SCRIPTARR_MYSQL_PASSWORD`: password shared by the managed MySQL root and app user, or the password fallback when the
   external MySQL URL omits one
+- `SCRIPTARR_DISCORD_UPDATE_CHANNEL_ID`: optional default Discord channel for Noona GitHub update summaries
+- `SCRIPTARR_GITHUB_TOKEN`: optional GitHub API token for higher update-check rate limits; Scriptarr never stores it
+  in Vault or posts it to Discord
 
 ## Docker Helpers
 
@@ -233,8 +236,8 @@ chat even if an admin enabled them on the AI page.
 - manage reusable permission groups, user-group assignments, protected-owner visibility, and access audit feeds in
   `/admin/users`
 - manage the Discord bot workflow in `/admin/discord`, including guild id, onboarding channel or template, DM
-  superuser id, release notification channel, Noona mention chat, Noona memory controls, trivia channel and scoring,
-  and per-command role mapping
+  superuser id, release notification channel, GitHub update notification channel, Noona mention chat, Noona memory
+  controls, trivia channel and scoring, and per-command role mapping
 - configure Raven VPN credentials and region for PIA/OpenVPN-backed downloads
 - review Raven metadata providers, with MangaDex enabled by default, Anime-Planet enabled ahead of MangaUpdates, and
   AniList, MyAnimeList, or ComicVine available for wider coverage
@@ -315,8 +318,10 @@ setup status; the Discord OAuth URL is fetched only when a signed-out page actua
 `/myrequests` is now both the request-creation surface and the personal status page. The top of the page runs the
 metadata-first request wizard, while the list below is split into `Active`, `Completed`, and `Closed` tabs. Readers
 can edit notes or cancel only while the request is still active.
-Title pages now also expose a cover-led detail view, continue/read action strip, tabs, and a dense selectable chapter
-table. Marking a title unread now means reset it off the bookshelf: title read state, chapter reads, progress, and
+Title pages now paint in chunks. The hero and continue/read action strip load from a lightweight summary first, chapter
+rows load through paged InfiniteScroll with search/filter/sort, and request history loads only after the Requests tab
+opens. Bulk chapter actions intentionally operate on "loaded" rows, not every matching row that may exist on later
+pages. Marking a title unread now means reset it off the bookshelf: title read state, chapter reads, progress, and
 title bookmarks are cleared while follows stay. Individual chapter mark-unread is non-destructive, and selected
 chapter `reset` is the destructive bulk action that can clear bookmarks and current progress.
 
@@ -404,6 +409,8 @@ Moon admin now owns the Discord workflow settings that Portal uses at runtime:
 - guild id for slash-command scoping
 - DM superuser id for the private `downloadall` command
 - onboarding channel id and message template
+- release and update channel ids. Release posts announce completed Raven downloads; update posts announce AI-written
+  GitHub commit summaries from `The-Noona-Project/Scriptarr`.
 - Noona public mention-chat enable state, allowed channels, memory toggle, conservative proposal mode, and memory clear
   actions
 - trivia channel id, optional leaderboard channel id, scoring, cooldowns, hints, and AI borderline matching
@@ -467,9 +474,9 @@ entries. Raven skips completed catalog titles, appends only missing or new chapt
 and ignores malformed bare source URLs such as a provider `/series` root.
 That owner-only command is intentionally pinned to WeebCentral. If WeebCentral is disabled in Raven settings,
 `downloadall` fails instead of falling back to MangaDex or another provider.
-Moon user browse/library pages use compact paginated title-card reads so large libraries do not send chapter arrays or
-Raven filesystem roots to the browser. Cover images are cached by Moon as derived WebP files under the Moon
-cover-cache storage folder. The
+Moon user browse/library pages use compact paginated title-card reads, and title pages use summary plus paged chapter
+reads, so large libraries do not send chapter arrays or Raven filesystem roots to the browser. Cover images are cached
+by Moon as derived WebP files under the Moon cover-cache storage folder. The
 Tasks page has an `Optimize cover images` action that scans Sage-approved cover URLs, converts missing or stale cache
 entries, and is safe to rerun.
 Portal also sends requester DMs when a moderated request is approved, denied, or finishes downloading, and dedupes
@@ -477,6 +484,12 @@ those notifications by request id plus decision state so retries and restarts do
 If a release channel id is configured in `/admin/discord`, Portal also posts completed Raven downloads to that channel
 with a Moon read or title link. Release channel notifications use stable `release:<taskId>` ids and are only
 acknowledged after Discord accepts the message.
+If an update channel id is configured, Sage checks `The-Noona-Project/Scriptarr` after the managed image update refresh
+inside the scheduled or manual `update-check` task. New commits since the last posted update are summarized by Oracle
+in Noona's voice, stored durably, and posted by Portal with a stable `update:<latestSha>` id. If Oracle is unavailable
+or returns no summary, Sage keeps the commit range pending and retries on the next update check instead of posting a
+weak fallback. After an update post is acknowledged, public Noona mention chat can answer questions like "what
+changed?" or "how do I use it?" from the latest posted digest in any channel already allowed for Noona mention chat.
 When a duplicate request is blocked because Scriptarr is already tracking the same concrete work, Sage now attaches the
 user to a hidden notification waitlist instead of creating a second visible request row. Portal DMs those waitlisted
 users when the title is ready. Portal also DMs requesters when an unavailable request later finds a source and moves

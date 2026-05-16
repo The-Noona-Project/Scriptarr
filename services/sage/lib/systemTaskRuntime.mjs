@@ -3,6 +3,7 @@
  */
 
 import {appendDurableEvent, buildServiceActor} from "./adminEvents.mjs";
+import {createGithubUpdateDigestService} from "./githubUpdateDigest.mjs";
 import {defaultSystemTimezone, getNextCronRuns, normalizeCronSchedule, normalizeString, validateCronExpression} from "./systemCron.mjs";
 import {buildSystemStatusPayload} from "./systemStatusRegistry.mjs";
 import {runUnavailableRequestSweep} from "./unavailableRequestSweep.mjs";
@@ -198,7 +199,8 @@ const DEFAULT_TASKS = Object.freeze([
  *   vaultClient: ReturnType<import("./vaultClient.mjs").createVaultClient>,
  *   serviceJson: Function,
  *   logger?: {info?: Function, warn?: Function, error?: Function},
- *   readRequestWorkflowSettings: () => Promise<Record<string, unknown>>
+ *   readRequestWorkflowSettings: () => Promise<Record<string, unknown>>,
+ *   githubUpdateDigest?: {checkForNewCommits: () => Promise<Record<string, unknown>>}
  * }} options
  * @returns {Record<string, Function>}
  */
@@ -207,7 +209,8 @@ export const createSystemTaskRuntime = ({
   vaultClient,
   serviceJson,
   logger,
-  readRequestWorkflowSettings
+  readRequestWorkflowSettings,
+  githubUpdateDigest = createGithubUpdateDigestService({config, vaultClient, serviceJson, logger})
 }) => {
   const runningTaskIds = new Set();
   let timer = null;
@@ -346,7 +349,11 @@ export const createSystemTaskRuntime = ({
         if (!result.ok) {
           throw new Error(result.payload?.error || "Warden update check failed.");
         }
-        return result.payload;
+        const digest = await githubUpdateDigest.checkForNewCommits();
+        return {
+          ...result.payload,
+          githubUpdateDigest: digest
+        };
       }
       case "event-retention-prune":
         return vaultClient.pruneEvents(180);

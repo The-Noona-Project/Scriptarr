@@ -624,6 +624,32 @@ test("vault exposes compact Raven title cards without chapter payloads", async (
   assert.equal(nextUnreadTargets["dan-da-dan"].kind, "next-unread");
   assert.equal(nextUnreadTargets["dan-da-dan"].chapterId, "dan-da-dan-c2");
 
+  const titleSummary = await fetch(`${baseUrl}/api/service/raven/titles/dan-da-dan/summary?discordUserId=reader-1`, {headers}).then((response) => response.json());
+  assert.equal(titleSummary.title.id, "dan-da-dan");
+  assert.equal(Object.hasOwn(titleSummary.title, "chapters"), false);
+  assert.equal(Object.hasOwn(titleSummary.title, "workingRoot"), false);
+  assert.equal(Object.hasOwn(titleSummary.title, "downloadRoot"), false);
+  assert.equal(titleSummary.title.userState.readAvailableCount, 1);
+  assert.equal(titleSummary.title.userState.unreadAvailableCount, 1);
+  assert.equal(titleSummary.primaryChapter.id, "dan-da-dan-c2");
+  assert.equal(titleSummary.latestChapter.id, "dan-da-dan-c2");
+
+  const chapterPageOne = await fetch(`${baseUrl}/api/service/raven/titles/dan-da-dan/chapters?discordUserId=reader-1&pageSize=1&sort=number-asc`, {headers}).then((response) => response.json());
+  assert.deepEqual(chapterPageOne.chapters.map((chapter) => chapter.id), ["dan-da-dan-c1"]);
+  assert.equal(chapterPageOne.chapters[0].read, true);
+  assert.equal(chapterPageOne.pageInfo.hasMore, true);
+
+  const chapterPageTwo = await fetch(`${baseUrl}/api/service/raven/titles/dan-da-dan/chapters?discordUserId=reader-1&pageSize=1&sort=number-asc&cursor=${encodeURIComponent(chapterPageOne.pageInfo.nextCursor)}`, {headers}).then((response) => response.json());
+  assert.deepEqual(chapterPageTwo.chapters.map((chapter) => chapter.id), ["dan-da-dan-c2"]);
+  assert.equal(chapterPageTwo.chapters[0].read, false);
+  assert.equal(chapterPageTwo.pageInfo.hasMore, false);
+
+  const unreadChapters = await fetch(`${baseUrl}/api/service/raven/titles/dan-da-dan/chapters?discordUserId=reader-1&filter=unread`, {headers}).then((response) => response.json());
+  assert.deepEqual(unreadChapters.chapters.map((chapter) => chapter.id), ["dan-da-dan-c2"]);
+
+  const searchedChapters = await fetch(`${baseUrl}/api/service/raven/titles/dan-da-dan/chapters?discordUserId=reader-1&q=chapter%202`, {headers}).then((response) => response.json());
+  assert.deepEqual(searchedChapters.chapters.map((chapter) => chapter.id), ["dan-da-dan-c2"]);
+
   await fetch(`${baseUrl}/api/service/progress`, {
     method: "POST",
     headers,

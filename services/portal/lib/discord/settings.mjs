@@ -153,7 +153,8 @@ export const normalizePortalDiscordSettings = (value = {}, defaults = {}) => {
       )
     },
     notifications: {
-      releaseChannelId: normalizeOptionalString(source?.notifications?.releaseChannelId ?? normalizedDefaults?.notifications?.releaseChannelId)
+      releaseChannelId: normalizeOptionalString(source?.notifications?.releaseChannelId ?? normalizedDefaults?.notifications?.releaseChannelId),
+      updateChannelId: normalizeOptionalString(source?.notifications?.updateChannelId ?? normalizedDefaults?.notifications?.updateChannelId)
     },
     trivia: normalizeTriviaSettings(source?.trivia, normalizedDefaults?.trivia),
     noonaChat: normalizeNoonaChatSettings(source?.noonaChat, normalizedDefaults?.noonaChat),

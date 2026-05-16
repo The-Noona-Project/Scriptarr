@@ -59,6 +59,7 @@ const normalizeString = (value, fallback = "") => {
   const normalized = typeof value === "string" ? value.trim() : "";
   return normalized || fallback;
 };
+const normalizeArray = (value) => Array.isArray(value) ? value : [];
 const normalizeScalarString = (value, fallback = "") => {
   if (typeof value === "string") {
     const normalized = value.trim();
@@ -678,6 +679,201 @@ const normalizeRavenTitle = (title, chapters = []) => ({
   updatedAt: toIsoTimestamp(title.updatedAt || title.updated_at),
   chapters: sortRavenChapters(chapters.map(normalizeRavenChapter))
 });
+const TITLE_CHAPTER_PAGE_SIZE_DEFAULT = 40;
+const TITLE_CHAPTER_PAGE_SIZE_MAX = 100;
+const parseTitleChapterPageSize = (value) => Math.min(
+  TITLE_CHAPTER_PAGE_SIZE_MAX,
+  Math.max(1, Number.parseInt(String(value || TITLE_CHAPTER_PAGE_SIZE_DEFAULT), 10) || TITLE_CHAPTER_PAGE_SIZE_DEFAULT)
+);
+const parseTitleChapterCursor = (value) => Math.max(0, Number.parseInt(String(value || 0), 10) || 0);
+const normalizeTitleChapterSort = (value) => {
+  const normalized = normalizeScalarString(value, "newest").toLowerCase();
+  return ["oldest", "number-desc", "number-asc"].includes(normalized) ? normalized : "newest";
+};
+const normalizeTitleChapterFilter = (value) => {
+  const normalized = normalizeScalarString(value, "all").toLowerCase();
+  return ["read", "unread"].includes(normalized) ? normalized : "all";
+};
+const toRavenTitleSummary = (title = {}) => ({
+  id: normalizeScalarString(title.id),
+  title: normalizeScalarString(title.title, "Untitled"),
+  mediaType: normalizeScalarString(title.mediaType, "manga"),
+  libraryTypeLabel: normalizeScalarString(title.libraryTypeLabel, normalizeScalarString(title.mediaType, "Manga")),
+  libraryTypeSlug: normalizeTypeSlug(title.libraryTypeSlug || title.mediaType),
+  status: normalizeScalarString(title.status, "active"),
+  latestChapter: normalizeScalarString(title.latestChapter),
+  coverAccent: normalizeScalarString(title.coverAccent, "#4f8f88"),
+  summary: normalizeScalarString(title.summary),
+  releaseLabel: normalizeScalarString(title.releaseLabel),
+  chapterCount: Number.parseInt(String(title.chapterCount || 0), 10) || 0,
+  chaptersDownloaded: Number.parseInt(String(title.chaptersDownloaded || 0), 10) || 0,
+  author: normalizeScalarString(title.author),
+  tags: normalizeStringArray(title.tags),
+  aliases: normalizeStringArray(title.aliases),
+  metadataProvider: normalizeScalarString(title.metadataProvider),
+  metadataMatchedAt: toIsoTimestamp(title.metadataMatchedAt),
+  relations: Array.isArray(title.relations) ? cloneJsonValue(title.relations, []) : [],
+  sourceUrl: normalizeScalarString(title.sourceUrl),
+  coverUrl: normalizeScalarString(title.coverUrl),
+  qualityStatus: normalizeRavenQualityStatus(title.qualityStatus),
+  cleanChapterCount: Math.max(0, Number.parseInt(String(title.cleanChapterCount || 0), 10) || 0),
+  partialChapterCount: Math.max(0, Number.parseInt(String(title.partialChapterCount || 0), 10) || 0),
+  missingContentCount: Math.max(0, Number.parseInt(String(title.missingContentCount || 0), 10) || 0),
+  qualitySummary: normalizeScalarString(title.qualitySummary),
+  updatedAt: toIsoTimestamp(title.updatedAt || title.updated_at)
+});
+const normalizeTitleProgress = (entry = {}) => entry ? {
+  mediaId: normalizeScalarString(entry.mediaId || entry.media_id),
+  discordUserId: normalizeScalarString(entry.discordUserId || entry.discord_user_id),
+  chapterLabel: normalizeScalarString(entry.chapterLabel || entry.chapter_label),
+  positionRatio: Number(entry.positionRatio ?? entry.position_ratio ?? 0) || 0,
+  bookmark: entry.bookmark && typeof entry.bookmark === "object" ? cloneJsonValue(entry.bookmark, null) : null,
+  updatedAt: toIsoTimestamp(entry.updatedAt || entry.updated_at)
+} : null;
+const decorateChaptersWithReadState = (chapters = [], chapterReads = []) => {
+  const readByChapter = new Map(normalizeArray(chapterReads)
+    .map((entry) => [normalizeScalarString(entry.chapterId || entry.chapter_id), entry])
+    .filter(([chapterId]) => Boolean(chapterId)));
+  return sortRavenChapters(normalizeArray(chapters).map(normalizeRavenChapter)).map((chapter) => {
+    const readState = readByChapter.get(normalizeScalarString(chapter.id));
+    return {
+      ...chapter,
+      read: Boolean(readState),
+      readAt: toIsoTimestamp(readState?.readAt || readState?.read_at)
+    };
+  });
+};
+const compareTitleChaptersByNumber = (left = {}, right = {}) => {
+  const leftNumber = Number.parseFloat(String(left.chapterNumber || ""));
+  const rightNumber = Number.parseFloat(String(right.chapterNumber || ""));
+  if (Number.isFinite(leftNumber) && Number.isFinite(rightNumber) && leftNumber !== rightNumber) {
+    return leftNumber - rightNumber;
+  }
+  return normalizeScalarString(left.label || left.id).localeCompare(normalizeScalarString(right.label || right.id), "en", {
+    numeric: true,
+    sensitivity: "base"
+  });
+};
+const sortTitleChapterRows = (chapters = [], sort = "newest") => [...normalizeArray(chapters)].sort((left, right) => {
+  const numberDelta = compareTitleChaptersByNumber(left, right);
+  if (sort === "number-asc") {
+    return numberDelta;
+  }
+  if (sort === "number-desc") {
+    return -numberDelta;
+  }
+  const leftDate = Date.parse(String(left.releaseDate || ""));
+  const rightDate = Date.parse(String(right.releaseDate || ""));
+  if (sort === "oldest") {
+    return (Number.isFinite(leftDate) ? leftDate : 0) - (Number.isFinite(rightDate) ? rightDate : 0) || numberDelta;
+  }
+  return (Number.isFinite(rightDate) ? rightDate : 0) - (Number.isFinite(leftDate) ? leftDate : 0) || -numberDelta;
+});
+const buildTitleChapterPage = ({titleId, chapters = [], chapterReads = [], query = {}} = {}) => {
+  const sort = normalizeTitleChapterSort(query.sort);
+  const filter = normalizeTitleChapterFilter(query.filter);
+  const q = normalizeScalarString(query.q || query.query).toLowerCase();
+  const pageSize = parseTitleChapterPageSize(query.pageSize);
+  const cursor = parseTitleChapterCursor(query.cursor);
+  const rows = decorateChaptersWithReadState(chapters, chapterReads).filter((chapter) => {
+    if (filter === "read" && chapter.read !== true) {
+      return false;
+    }
+    if (filter === "unread" && chapter.read === true) {
+      return false;
+    }
+    if (!q) {
+      return true;
+    }
+    return [
+      chapter.id,
+      chapter.label,
+      chapter.chapterNumber,
+      chapter.releaseDate,
+      chapter.qualityStatus
+    ].some((value) => normalizeScalarString(value).toLowerCase().includes(q));
+  });
+  const sortedRows = sortTitleChapterRows(rows, sort);
+  const page = sortedRows.slice(cursor, cursor + pageSize);
+  const nextOffset = cursor + page.length;
+  return {
+    titleId: normalizeScalarString(titleId),
+    chapters: page,
+    filters: {q, filter, sort, pageSize},
+    pageInfo: {
+      cursor: String(cursor),
+      nextCursor: nextOffset < sortedRows.length ? String(nextOffset) : "",
+      hasMore: nextOffset < sortedRows.length,
+      pageSize,
+      total: sortedRows.length
+    }
+  };
+};
+const toTitleChapterHint = (chapter = null, kind = "") => {
+  if (!chapter?.id) {
+    return null;
+  }
+  return {
+    id: normalizeScalarString(chapter.id),
+    label: normalizeScalarString(chapter.label, normalizeScalarString(chapter.chapterNumber, "Chapter")),
+    chapterNumber: normalizeScalarString(chapter.chapterNumber),
+    pageCount: Number.parseInt(String(chapter.pageCount || 0), 10) || 0,
+    releaseDate: chapter.releaseDate || null,
+    available: chapter.available !== false,
+    read: chapter.read === true,
+    readAt: toIsoTimestamp(chapter.readAt),
+    kind
+  };
+};
+const buildRavenTitleSummaryPayload = ({title = null, chapters = [], progress = null, titleState = null, chapterReads = []} = {}) => {
+  if (!title?.id) {
+    return null;
+  }
+  const decoratedChapters = decorateChaptersWithReadState(chapters, chapterReads);
+  const availableChapters = sortTitleChapterRows(
+    decoratedChapters.filter((chapter) => chapter.available !== false),
+    "number-asc"
+  );
+  const latestChapter = sortTitleChapterRows(availableChapters, "newest")[0] || null;
+  const normalizedProgress = normalizeTitleProgress(progress);
+  const bookmarkChapterId = normalizeScalarString(normalizedProgress?.bookmark?.chapterId);
+  const bookmarkChapter = bookmarkChapterId
+    ? availableChapters.find((chapter) => normalizeScalarString(chapter.id) === bookmarkChapterId) || null
+    : null;
+  const nextUnreadChapter = availableChapters.find((chapter) => chapter.read !== true) || null;
+  const readChapterIds = decoratedChapters
+    .filter((chapter) => chapter.read === true)
+    .map((chapter) => normalizeScalarString(chapter.id))
+    .filter(Boolean);
+  const readAvailableCount = availableChapters.filter((chapter) => chapter.read === true).length;
+  const normalizedTitleState = titleState ? toTitleReadState(titleState) : null;
+  const userState = {
+    started: Boolean(normalizedTitleState?.startedAt || normalizedProgress?.updatedAt || readChapterIds.length),
+    completed: Boolean(normalizedTitleState?.completedAt),
+    bookshelf: Boolean(normalizedTitleState?.startedAt || normalizedProgress?.updatedAt || readChapterIds.length) && !normalizedTitleState?.completedAt,
+    startedAt: normalizedTitleState?.startedAt || null,
+    completedAt: normalizedTitleState?.completedAt || null,
+    lastActivityAt: normalizedProgress?.updatedAt || normalizedTitleState?.updatedAt || null,
+    chapterLabel: normalizedProgress?.chapterLabel || "",
+    positionRatio: normalizedProgress?.positionRatio || 0,
+    bookmark: normalizedProgress?.bookmark || null,
+    readChapterIds,
+    readAvailableCount,
+    unreadAvailableCount: Math.max(0, availableChapters.length - readAvailableCount),
+    totalAvailableChapters: availableChapters.length,
+    nextUnreadChapterId: normalizeScalarString(nextUnreadChapter?.id),
+    nextUnreadChapterLabel: normalizeScalarString(nextUnreadChapter?.label || nextUnreadChapter?.chapterNumber)
+  };
+  const titleSummary = toRavenTitleSummary(title);
+  return {
+    title: {
+      ...titleSummary,
+      userState
+    },
+    primaryChapter: toTitleChapterHint(bookmarkChapter || nextUnreadChapter || latestChapter, bookmarkChapter ? "continue" : nextUnreadChapter ? "next-unread" : "latest"),
+    latestChapter: toTitleChapterHint(latestChapter, "latest")
+  };
+};
 
 const sortVaultJobs = (jobs) => [...jobs].sort((left, right) =>
   String(right.updatedAt || right.createdAt || "").localeCompare(String(left.updatedAt || left.createdAt || ""))
@@ -1482,6 +1678,34 @@ const createMemoryStore = () => {
         return null;
       }
       return normalizeRavenTitle(title, Array.from((state.ravenChapters.get(titleId) || new Map()).values()));
+    },
+    async getRavenTitleSummary(titleId, {discordUserId = ""} = {}) {
+      const normalizedTitleId = normalizeString(titleId);
+      const title = state.ravenTitles.get(normalizedTitleId);
+      if (!title) {
+        return null;
+      }
+      const normalizedUserId = normalizeString(discordUserId);
+      return buildRavenTitleSummaryPayload({
+        title,
+        chapters: Array.from((state.ravenChapters.get(normalizedTitleId) || new Map()).values()),
+        progress: normalizedUserId ? state.progress.get(readStateKey(normalizedUserId, normalizedTitleId)) || null : null,
+        titleState: normalizedUserId ? getMemoryTitleState(normalizedUserId, normalizedTitleId) : null,
+        chapterReads: normalizedUserId ? getMemoryChapterReads(normalizedUserId, normalizedTitleId) : []
+      });
+    },
+    async listRavenTitleChapters(titleId, query = {}) {
+      const normalizedTitleId = normalizeString(titleId);
+      if (!state.ravenTitles.has(normalizedTitleId)) {
+        return null;
+      }
+      const normalizedUserId = normalizeString(query.discordUserId);
+      return buildTitleChapterPage({
+        titleId: normalizedTitleId,
+        chapters: Array.from((state.ravenChapters.get(normalizedTitleId) || new Map()).values()),
+        chapterReads: normalizedUserId ? getMemoryChapterReads(normalizedUserId, normalizedTitleId) : [],
+        query
+      });
     },
     async upsertRavenTitle(title) {
       const existing = state.ravenTitles.get(title.id) || {};
@@ -3321,6 +3545,84 @@ const createMysqlStore = (config) => {
       }
       const [chapterRows] = await pool.query("SELECT * FROM raven_chapters WHERE title_id = ?", [titleId]);
       return toRavenTitle(titleRows[0], chapterRows.map(toRavenChapter));
+    },
+    async getRavenTitleSummary(titleId, {discordUserId = ""} = {}) {
+      const normalizedTitleId = normalizeString(titleId);
+      const normalizedUserId = normalizeString(discordUserId);
+      const [titleRows] = await pool.query("SELECT * FROM raven_titles WHERE title_id = ? LIMIT 1", [normalizedTitleId]);
+      if (!titleRows[0]) {
+        return null;
+      }
+      const pendingReads = [
+        pool.query("SELECT * FROM raven_chapters WHERE title_id = ?", [normalizedTitleId])
+      ];
+      if (normalizedUserId) {
+        pendingReads.push(
+          pool.query("SELECT * FROM media_progress WHERE discord_user_id = ? AND media_id = ? LIMIT 1", [normalizedUserId, normalizedTitleId]),
+          pool.query("SELECT * FROM media_title_state WHERE discord_user_id = ? AND media_id = ? LIMIT 1", [normalizedUserId, normalizedTitleId]),
+          pool.query("SELECT * FROM media_chapter_reads WHERE discord_user_id = ? AND media_id = ?", [normalizedUserId, normalizedTitleId])
+        );
+      }
+      const [chapterResult, progressResult, titleStateResult, chapterReadResult] = await Promise.all(pendingReads);
+      const progressRow = normalizedUserId ? progressResult[0][0] || null : null;
+      const titleStateRow = normalizedUserId ? titleStateResult[0][0] || null : null;
+      const chapterReadRows = normalizedUserId ? chapterReadResult[0] : [];
+      return buildRavenTitleSummaryPayload({
+        title: toRavenTitle(titleRows[0], []),
+        chapters: chapterResult[0].map(toRavenChapter),
+        progress: progressRow ? {
+          mediaId: progressRow.media_id,
+          discordUserId: progressRow.discord_user_id,
+          chapterLabel: progressRow.chapter_label,
+          positionRatio: Number(progressRow.position_ratio),
+          bookmark: parseJsonColumn(progressRow.bookmark_json, null),
+          updatedAt: progressRow.updated_at ? progressRow.updated_at.toISOString() : null
+        } : null,
+        titleState: titleStateRow ? {
+          mediaId: titleStateRow.media_id,
+          discordUserId: titleStateRow.discord_user_id,
+          startedAt: titleStateRow.started_at ? titleStateRow.started_at.toISOString() : null,
+          completedAt: titleStateRow.completed_at ? titleStateRow.completed_at.toISOString() : null,
+          updatedAt: titleStateRow.updated_at ? titleStateRow.updated_at.toISOString() : null
+        } : null,
+        chapterReads: chapterReadRows.map((row) => ({
+          mediaId: row.media_id,
+          chapterId: row.chapter_id,
+          discordUserId: row.discord_user_id,
+          readAt: row.read_at ? row.read_at.toISOString() : null,
+          updatedAt: row.updated_at ? row.updated_at.toISOString() : null
+        }))
+      });
+    },
+    async listRavenTitleChapters(titleId, query = {}) {
+      const normalizedTitleId = normalizeString(titleId);
+      const normalizedUserId = normalizeString(query.discordUserId);
+      const [titleRows] = await pool.query("SELECT title_id FROM raven_titles WHERE title_id = ? LIMIT 1", [normalizedTitleId]);
+      if (!titleRows[0]) {
+        return null;
+      }
+      const pendingReads = [
+        pool.query("SELECT * FROM raven_chapters WHERE title_id = ?", [normalizedTitleId])
+      ];
+      if (normalizedUserId) {
+        pendingReads.push(pool.query(
+          "SELECT * FROM media_chapter_reads WHERE discord_user_id = ? AND media_id = ?",
+          [normalizedUserId, normalizedTitleId]
+        ));
+      }
+      const [chapterResult, chapterReadResult] = await Promise.all(pendingReads);
+      return buildTitleChapterPage({
+        titleId: normalizedTitleId,
+        chapters: chapterResult[0].map(toRavenChapter),
+        chapterReads: normalizedUserId ? chapterReadResult[0].map((row) => ({
+          mediaId: row.media_id,
+          chapterId: row.chapter_id,
+          discordUserId: row.discord_user_id,
+          readAt: row.read_at ? row.read_at.toISOString() : null,
+          updatedAt: row.updated_at ? row.updated_at.toISOString() : null
+        })) : [],
+        query
+      });
     },
     async upsertRavenTitle(title) {
       await pool.query(`

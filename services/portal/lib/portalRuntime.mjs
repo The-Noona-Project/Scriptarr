@@ -7,7 +7,7 @@ import {createRoleManager} from "./discord/roleManager.mjs";
 import {normalizePortalDiscordSettings} from "./discord/settings.mjs";
 import {createTriviaRuntime} from "./discord/triviaRuntime.mjs";
 import {normalizeString} from "./discord/utils.mjs";
-import {buildReleaseChannelPayload, createFollowNotifier} from "./followNotifier.mjs";
+import {buildReleaseChannelPayload, buildUpdateChannelPayload, createFollowNotifier} from "./followNotifier.mjs";
 
 const renderTemplate = (template, values) => Object.entries(values).reduce(
   (current, [key, value]) => current.replaceAll(`{${key}}`, normalizeString(value)),
@@ -64,6 +64,7 @@ const createCapabilities = (state, settings) => {
   const onboardingConfigured = Boolean(settings.onboarding?.channelId);
   const triviaConfigured = Boolean(settings.trivia?.enabled && settings.trivia?.channelId);
   const noonaChatConfigured = Boolean(settings.noonaChat?.enabled);
+  const updatePostsConfigured = Boolean(settings.notifications?.updateChannelId);
 
   const commandSync = !authConfigured
     ? {
@@ -177,7 +178,21 @@ const createCapabilities = (state, settings) => {
     directMessages,
     onboarding,
     trivia,
-    noonaChat
+    noonaChat,
+    updatePosts: !updatePostsConfigured
+      ? {
+        status: "disabled",
+        detail: "Set an update channel id to let Noona post GitHub update summaries."
+      }
+      : connected
+        ? {
+          status: "available",
+          detail: `Noona can post update summaries in channel ${settings.notifications.updateChannelId}.`
+        }
+        : {
+          status: state.mode === "starting" ? "pending" : "disconnected",
+          detail: state.error || "Portal is not connected to Discord."
+        }
   };
 };
 
@@ -638,6 +653,33 @@ export const createPortalRuntime = ({
     };
   };
 
+  const sendUpdateNotificationTest = async (payload = {}) => {
+    const notification = payload.notification || {};
+    const channelId = normalizeString(
+      notification.channelId
+      || payload.settings?.notifications?.updateChannelId,
+      settings.notifications?.updateChannelId || ""
+    );
+    if (!channelId) {
+      throw new Error("An update notification channel id is required.");
+    }
+    if (!discord || !state.connected) {
+      throw new Error("Portal Discord runtime is not connected.");
+    }
+    const messagePayload = buildUpdateChannelPayload({
+      ...notification,
+      channelId
+    }, config.publicBaseUrl);
+    await discord.sendChannelMessage(channelId, messagePayload);
+    return {
+      channelId,
+      notification: {
+        ...notification,
+        channelId
+      }
+    };
+  };
+
   const startTriviaRound = async (payload = {}) => {
     if (!triviaRuntime) {
       throw new Error("Portal Discord runtime is not connected.");
@@ -706,6 +748,7 @@ export const createPortalRuntime = ({
     renderOnboarding,
     sendOnboardingTest,
     sendReleaseNotificationTest,
+    sendUpdateNotificationTest,
     startTriviaRound,
     stopTriviaRound,
     postTriviaLeaderboard

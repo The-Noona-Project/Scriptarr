@@ -12,8 +12,9 @@ enabled as more providers land later. WeebCentral stays first by default, MangaD
 download provider, and the Discord `downloadall` command remains intentionally pinned to WeebCentral for the
 configured owner account.
 Moon admin now also includes a dedicated Discord page at `/admin/discord` for guild workflow settings, slash-command
-role gates, onboarding template or channel management, release-channel posts, Noona mention chat, Noona memory review
-or clear actions, and Portal runtime visibility without exposing Discord credentials in the browser.
+role gates, onboarding template or channel management, release-channel posts, GitHub update-summary posts, Noona
+mention chat, Noona memory review or clear actions, and Portal runtime visibility without exposing Discord credentials
+in the browser.
 That Discord page now distinguishes connected command runtime, command-sync health, onboarding capability, and the last
 meaningful Portal runtime error instead of collapsing everything into one disconnected status. It also surfaces the
 last Noona mention-chat time or error so public chat problems can be diagnosed without reading Portal logs.
@@ -64,10 +65,13 @@ Moon's reader is now a dedicated fullscreen app at `/reader/<type>/<titleId>/<ch
 layout preferences for webtoon, single page, double page, manga double, LTR/RTL direction, and width/height/contain
 fit. It still uses Moon's same-origin typed reader APIs for progress, bookmarks, preferences, manifest payloads, and
 page images.
-Moon title pages now expose a cover-led detail surface, a clear continue/read action strip, tabs, and a dense
-selectable chapter table. Marking a title unread is now a reset-off-shelf action: it clears title read state, chapter
-read state, reader progress, and title bookmarks while preserving follows. Individual chapter mark-unread remains
-non-destructive; selected chapter `reset` is the bookmark/progress-clearing bulk action.
+Moon title pages now paint from chunked same-origin reads: the cover-led hero and action strip call the lightweight
+`/api/moon-v3/user/title/<titleId>/summary` route first, chapter rows stream through the paged
+`/chapters?cursor=&pageSize=&sort=&filter=&q=` route, and request history waits until the Requests tab opens. The
+chapter list is a dense InfiniteScroll surface with "Select loaded" bulk semantics, so bulk read/unread/reset actions
+only touch rows already loaded into the page. Marking a title unread is still a reset-off-shelf action: it clears title
+read state, chapter read state, reader progress, and title bookmarks while preserving follows. Individual chapter
+mark-unread remains non-destructive; selected chapter `reset` is the bookmark/progress-clearing bulk action.
 `/admin/system` now also exposes a root-only content reset preview plus execute flow. That maintenance action clears
 content-side requests, follows, bookmarks, progress, Raven catalog state, Raven task state, and managed Raven download
 folders while keeping users, permission groups, settings, secrets, sessions, and durable events.

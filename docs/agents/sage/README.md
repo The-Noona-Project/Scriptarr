@@ -26,6 +26,12 @@
   the user-facing Moon routes browser-safe, write durable read/progress state through Vault, and rebuild
   home/title/reader payloads from explicit tag preferences plus inferred taste from read history, follows, and the
   active bookshelf.
+- User title pages now have a split broker contract. Keep the legacy full
+  `/api/moon-v3/user/title/:titleId` route for compatibility, but new Moon UI should call
+  `/summary` for hero/action data, `/chapters?cursor=&pageSize=&sort=&filter=&q=` for paged chapter rows with read
+  state, and `/requests` only after the Requests tab opens. Summary and chapter routes should be Vault-backed instead
+  of loading Raven's full title payload, and compact mutation responses (`view=compact` or `response=compact`) must
+  return refreshed summary fields without `title.chapters`.
 - `POST /api/moon-v3/user/title/:titleId/unread` is a reset-off-shelf action. It must clear title read state, chapter
   reads, title progress, and title bookmarks while preserving follows.
 - `POST /api/moon-v3/user/title/:titleId/chapters/bulk-read-state` supports `read`, `unread`, and `reset`. Keep
@@ -60,11 +66,11 @@
   payloads except through the explicit public logo variant routes.
 - Broker Portal's Discord workflow settings through the shared `portal.discord` setting, and keep Portal-facing broker
   routes for intake search, request creation, library search, follow updates, onboarding tests, release channel tests,
-  and Raven durable downloadall runs.
+  update channel tests, and Raven durable downloadall runs.
 - Broker public Noona mention chat through `/api/internal/portal/noona-chat`. Sage should own the capped
   `portal.noonaChat.memory` settings payload, natural memory commands, secret rejection, conservative read-context
-  loading, public proposal filtering, Oracle fallback, and admin-safe memory review/clear payloads. Portal must not
-  call Oracle or Vault directly for this flow.
+  loading, latest posted GitHub update digest context, public proposal filtering, Oracle fallback, and admin-safe
+  memory review/clear payloads. Portal must not call Oracle or Vault directly for this flow.
 - Public mention chat proposals are stricter than `/admin/system/ai`: allow only low-risk status-check and trivia
   start/stop proposals, even when broader LocalAI, root/system, or destructive tools are enabled for admins.
 - `portal.discord.trivia` is the source of truth for Noona trivia channels, scoring, hints, schedules, and AI
@@ -149,6 +155,10 @@
   requested them without making Portal poll Warden directly.
 - Sage should expose acked release-channel notification queues for Portal from completed Raven download tasks. Use
   stable `release:<taskId>` ids and only mark them acknowledged after Portal confirms the Discord channel send.
+- Sage should expose acked update-channel notification queues for Portal from GitHub update digests. The `update-check`
+  system task must call Warden's image check first, then compare `The-Noona-Project/Scriptarr` commits against the
+  last posted update baseline, ask Oracle for the Noona summary, store pending retry state when Oracle is unavailable,
+  and use stable `update:<latestSha>` ids that are acknowledged only after Portal confirms the Discord channel send.
 - Sage should expose acked downloadall notification queues for Portal from Raven durable run jobs. Use stable
   `downloadall:<runId>:<batchId>:<status>` ids and only mark them acknowledged after Portal confirms the requester DM.
 - Sage also owns downloadall reaction decision prompts. Store the paused-notification DM message id, owner id, run id,

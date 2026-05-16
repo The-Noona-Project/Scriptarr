@@ -93,7 +93,8 @@ export const normalizeDiscordSettings = (value = {}) => {
       template: normalizeString(onboarding.template, "Welcome to {guild_name}, {user_mention}! Start reading at {moon_url}")
     },
     notifications: {
-      releaseChannelId: normalizeString(notifications.releaseChannelId)
+      releaseChannelId: normalizeString(notifications.releaseChannelId),
+      updateChannelId: normalizeString(notifications.updateChannelId)
     },
     noonaChat: normalizeNoonaChatSettings(source.noonaChat),
     trivia: normalizeTriviaSettings(source.trivia),

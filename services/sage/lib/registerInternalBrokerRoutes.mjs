@@ -8,6 +8,10 @@ import {buildIntakeSelection, evaluateSelectionAgainstGuardState} from "./reques
 import {buildRequestWorkConflictPayload, isRequestWorkConflictError} from "./requestConflict.mjs";
 import {createNoonaChatService} from "./noonaChatService.mjs";
 import {
+  GITHUB_UPDATE_DIGEST_SETTING_KEY,
+  normalizeGithubUpdateDigestState
+} from "./githubUpdateDigest.mjs";
+import {
   attachRequestWaitlistEntry,
   buildActiveRequestDuplicatePayload,
   buildLibraryDuplicatePayload,
@@ -715,6 +719,52 @@ const buildReleaseNotifications = async ({config, vaultClient, serviceJson}) => 
     })
     .filter((notification) => notification.taskId && notification.id && !ackedSet.has(notification.id))
     .slice(0, 50);
+};
+
+const readGithubUpdateDigestState = async (vaultClient) =>
+  normalizeGithubUpdateDigestState((await vaultClient.getSetting(GITHUB_UPDATE_DIGEST_SETTING_KEY))?.value);
+
+const writeGithubUpdateDigestState = async (vaultClient, state) =>
+  vaultClient.setSetting(GITHUB_UPDATE_DIGEST_SETTING_KEY, normalizeGithubUpdateDigestState(state));
+
+const buildUpdateNotifications = async ({vaultClient}) => {
+  const settings = await readPortalDiscordSettings(vaultClient);
+  const channelId = normalizeString(settings?.notifications?.updateChannelId);
+  if (!channelId) {
+    return [];
+  }
+
+  const state = await readGithubUpdateDigestState(vaultClient);
+  const pending = normalizeObject(state.pending, null);
+  if (
+    !pending
+    || normalizeString(pending.status) !== "ready"
+    || !normalizeString(pending.id).startsWith("update:")
+    || !normalizeString(pending.summary)
+    || normalizeString(state.lastPostedSha).slice(0, 12) === normalizeString(pending.latestSha)
+  ) {
+    return [];
+  }
+
+  return [{
+    id: normalizeString(pending.id),
+    channelId,
+    repository: normalizeString(pending.repository, `${state.repository.owner}/${state.repository.repo}`),
+    branch: normalizeString(pending.branch, normalizeString(state.repository.branch)),
+    summary: normalizeString(pending.summary),
+    compareUrl: normalizeString(pending.compareUrl),
+    commitCount: Number.parseInt(String(pending.commitCount || 0), 10) || normalizeArray(pending.commits).length,
+    aheadBy: Number.parseInt(String(pending.aheadBy || 0), 10) || 0,
+    latestSha: normalizeString(pending.latestSha),
+    createdAt: normalizeString(pending.createdAt),
+    commits: normalizeArray(pending.commits).slice(-10).map((commit) => ({
+      sha: normalizeString(commit.sha),
+      title: normalizeString(commit.title),
+      author: normalizeString(commit.author),
+      date: normalizeString(commit.date),
+      url: normalizeString(commit.url)
+    }))
+  }];
 };
 
 const buildRequestNotifications = async ({config, vaultClient, serviceJson}) => {
@@ -2191,6 +2241,48 @@ export const registerInternalBrokerRoutes = (app, {
     const current = await readAckedReleaseNotifications(vaultClient);
     if (!current.includes(notificationId)) {
       await writeAckedReleaseNotifications(vaultClient, [...current, notificationId]);
+    }
+
+    res.json({
+      ok: true,
+      notificationId
+    });
+  }));
+
+  app.get("/api/internal/portal/notifications/updates", withService(requireService, ["scriptarr-portal"], async (_req, res) => {
+    res.json({
+      notifications: await buildUpdateNotifications({vaultClient})
+    });
+  }));
+
+  app.post("/api/internal/portal/notifications/updates/:notificationId/ack", withService(requireService, ["scriptarr-portal"], async (req, res) => {
+    const notificationId = normalizeString(req.params.notificationId);
+    if (!notificationId.startsWith("update:")) {
+      res.status(400).json({error: "A valid update notification id is required."});
+      return;
+    }
+
+    const state = await readGithubUpdateDigestState(vaultClient);
+    const pending = normalizeObject(state.pending, null);
+    const postedAt = new Date().toISOString();
+    if (normalizeString(pending?.id) === notificationId) {
+      const latestPosted = {
+        ...pending,
+        status: "posted",
+        postedAt,
+        updatedAt: postedAt
+      };
+      await writeGithubUpdateDigestState(vaultClient, {
+        ...state,
+        lastPostedSha: normalizeString(pending.latestFullSha, normalizeString(pending.latestSha)),
+        lastPostedAt: postedAt,
+        latestPosted,
+        pending: null,
+        updatedAt: postedAt
+      });
+    } else if (normalizeString(state.latestPosted?.id) !== notificationId) {
+      res.status(404).json({error: "Update notification is not pending."});
+      return;
     }
 
     res.json({

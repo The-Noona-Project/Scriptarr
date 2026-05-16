@@ -193,6 +193,15 @@ const toChapterSummary = (chapter = {}) => ({
   updatedAt: parseIso(chapter.updatedAt)
 });
 
+const toUserChapterRow = (chapter = {}) => ({
+  ...toChapterSummary(chapter),
+  read: chapter.read === true,
+  readAt: parseIso(chapter.readAt),
+  qualityStatus: normalizeString(chapter.qualityStatus, "clean"),
+  expectedPageCount: Number.parseInt(String(chapter.expectedPageCount || 0), 10) || 0,
+  missingPageCount: Number.parseInt(String(chapter.missingPageCount || 0), 10) || 0
+});
+
 const truncateText = (value, maxLength = 280) => {
   const normalized = normalizeString(value);
   const limit = Math.max(0, maxLength);
@@ -841,6 +850,67 @@ export const registerMoonV3Routes = (app, {
     }
     const inputs = userInputs || await loadUserStateInputs(discordUserId);
     return buildUserTitleStateFromInputs(resolvedTitle, inputs);
+  };
+
+  const loadUserTitleSummaryState = async (discordUserId, titleId) => {
+    const [summary, following, tagPreferences] = await Promise.all([
+      vaultClient.getRavenTitleSummary(titleId, {discordUserId}),
+      readUserScopedSetting(vaultClient, "moon.following", discordUserId, []),
+      readUserTagPreferences(discordUserId)
+    ]);
+    const title = summary?.title || null;
+    if (!title?.id) {
+      return null;
+    }
+    const normalizedFollowing = normalizeArray(following).map(normalizeFollowingEntry);
+    const isFollowing = normalizedFollowing.some((entry) => normalizeString(entry.titleId || entry.id) === normalizeString(title.id));
+    return {
+      title: decorateTitleWithTagPreferences({
+        ...title,
+        userState: {
+          ...(title.userState || {}),
+          following: isFollowing
+        }
+      }, tagPreferences),
+      following: isFollowing,
+      tagPreferences: normalizeTagPreferenceStore(tagPreferences),
+      primaryChapter: summary.primaryChapter || null,
+      latestChapter: summary.latestChapter || null
+    };
+  };
+
+  const loadUserTitleRequests = async (discordUserId, title = {}) => {
+    const titleName = normalizeString(title.title);
+    const sourceUrl = normalizeString(title.sourceUrl);
+    const requests = (await loadRequests()).filter((entry) =>
+      entry.requestedBy.discordUserId === discordUserId && (
+        normalizeString(entry.title) === titleName
+        || normalizeString(entry.details?.selectedDownload?.titleUrl) === sourceUrl
+        || normalizeString(entry.details?.selectedMetadata?.title) === titleName
+      )
+    );
+    return {requests};
+  };
+
+  const wantsCompactTitleResponse = (req) => {
+    const view = normalizeString(req.query?.view || req.query?.response).toLowerCase();
+    return ["compact", "summary"].includes(view);
+  };
+
+  const sendTitleMutationResponse = async (req, res, fallbackTitle = null, extras = {}) => {
+    if (wantsCompactTitleResponse(req)) {
+      const summary = await loadUserTitleSummaryState(req.user.discordUserId, req.params.titleId);
+      res.json({
+        ...(summary || {title: fallbackTitle}),
+        ...extras
+      });
+      return;
+    }
+    const refreshed = await loadUserTitleState(req.user.discordUserId, req.params.titleId);
+    res.json({
+      title: refreshed?.title || fallbackTitle,
+      ...extras
+    });
   };
 
   const loadRequestById = async (requestId) => {
@@ -2626,6 +2696,7 @@ export const registerMoonV3Routes = (app, {
         guildId: nextSettings.guildId,
         onboardingChannelId: nextSettings.onboarding.channelId,
         releaseChannelId: nextSettings.notifications.releaseChannelId,
+        updateChannelId: nextSettings.notifications.updateChannelId,
         noonaChatEnabled: nextSettings.noonaChat.enabled,
         noonaChatChannelCount: normalizeArray(nextSettings.noonaChat.allowedChannelIds).length,
         noonaChatMemoryEnabled: nextSettings.noonaChat.memoryEnabled,
@@ -2798,6 +2869,55 @@ export const registerMoonV3Routes = (app, {
     if (!portal.ok) {
       res.status(portal.status || 503).json({
         error: portal.payload?.error || "Portal could not send the release notification test."
+      });
+      return;
+    }
+    res.json(portal.payload || portal);
+  }));
+
+  app.post("/api/moon-v3/admin/discord/update-notifications/test", requireDiscordWrite(async (req, res) => {
+    const [discordSettings, branding] = await Promise.all([
+      readPortalDiscordSettings(),
+      readMoonBrandingSettings()
+    ]);
+    const body = normalizeObject(req.body, {}) || {};
+    const previewSettings = normalizePortalDiscordSettings({
+      ...discordSettings,
+      ...body,
+      notifications: {
+        ...discordSettings.notifications,
+        ...normalizeObject(body.notifications, {})
+      }
+    });
+    const updateChannelId = normalizeString(previewSettings.notifications.updateChannelId);
+    if (!updateChannelId) {
+      res.status(400).json({error: "An update notification channel id is required."});
+      return;
+    }
+    const portal = await safeJson(serviceJson(config.portalBaseUrl, "/api/notifications/update/test", {
+      method: "POST",
+      headers: portalInternalHeaders(),
+      body: {
+        settings: previewSettings,
+        branding,
+        notification: {
+          id: `update-test:${Date.now()}`,
+          channelId: updateChannelId,
+          repository: "The-Noona-Project/Scriptarr",
+          branch: "main",
+          summary: normalizeString(
+            body.summary,
+            `Noona test update for ${branding.siteName || "Scriptarr"} is ready. Ask Noona what changed to try the new flow.`
+          ),
+          compareUrl: "https://github.com/The-Noona-Project/Scriptarr",
+          commitCount: 1,
+          latestSha: "test-update"
+        }
+      }
+    }));
+    if (!portal.ok) {
+      res.status(portal.status || 503).json({
+        error: portal.payload?.error || "Portal could not send the update notification test."
       });
       return;
     }
@@ -4119,6 +4239,39 @@ export const registerMoonV3Routes = (app, {
     });
   }));
 
+  app.get("/api/moon-v3/user/title/:titleId/summary", withUser(requireUser, async (req, res) => {
+    const summary = await loadUserTitleSummaryState(req.user.discordUserId, req.params.titleId);
+    if (!summary?.title) {
+      res.status(404).json({error: "Title not found."});
+      return;
+    }
+    res.json(summary);
+  }));
+
+  app.get("/api/moon-v3/user/title/:titleId/chapters", withUser(requireUser, async (req, res) => {
+    const page = await vaultClient.listRavenTitleChapters(req.params.titleId, {
+      ...req.query,
+      discordUserId: req.user.discordUserId
+    });
+    if (!page) {
+      res.status(404).json({error: "Title not found."});
+      return;
+    }
+    res.json({
+      ...page,
+      chapters: normalizeArray(page.chapters).map(toUserChapterRow)
+    });
+  }));
+
+  app.get("/api/moon-v3/user/title/:titleId/requests", withUser(requireUser, async (req, res) => {
+    const summary = await loadUserTitleSummaryState(req.user.discordUserId, req.params.titleId);
+    if (!summary?.title) {
+      res.status(404).json({error: "Title not found."});
+      return;
+    }
+    res.json(await loadUserTitleRequests(req.user.discordUserId, summary.title));
+  }));
+
   app.get("/api/moon-v3/user/title/:titleId", withUser(requireUser, async (req, res) => {
     const [rawTitle, userInputs, requests] = await Promise.all([
       loadLibraryTitle(req.params.titleId),
@@ -4226,10 +4379,7 @@ export const registerMoonV3Routes = (app, {
         chapterCount: availableChapterIds.length
       }
     });
-    const refreshed = await loadUserTitleState(req.user.discordUserId, req.params.titleId);
-    res.json({
-      title: refreshed?.title || titleState.title
-    });
+    await sendTitleMutationResponse(req, res, titleState.title);
   }));
 
   app.post("/api/moon-v3/user/title/:titleId/unread", withUser(requireUser, async (req, res) => {
@@ -4259,10 +4409,7 @@ export const registerMoonV3Routes = (app, {
         clearedBookmarkCount: bookmarks.length - nextBookmarks.length
       }
     });
-    const refreshed = await loadUserTitleState(req.user.discordUserId, req.params.titleId);
-    res.json({
-      title: refreshed?.title || titleState.title
-    });
+    await sendTitleMutationResponse(req, res, titleState.title);
   }));
 
   app.post("/api/moon-v3/user/title/:titleId/chapters/:chapterId/read", withUser(requireUser, async (req, res) => {
@@ -4296,9 +4443,7 @@ export const registerMoonV3Routes = (app, {
         chapterId: normalizeString(chapter.id)
       }
     });
-    const refreshed = await loadUserTitleState(req.user.discordUserId, req.params.titleId);
-    res.json({
-      title: refreshed?.title || title,
+    await sendTitleMutationResponse(req, res, title, {
       chapterId: normalizeString(chapter.id)
     });
   }));
@@ -4329,9 +4474,7 @@ export const registerMoonV3Routes = (app, {
         chapterId: normalizeString(chapter.id)
       }
     });
-    const refreshed = await loadUserTitleState(req.user.discordUserId, req.params.titleId);
-    res.json({
-      title: refreshed?.title || title,
+    await sendTitleMutationResponse(req, res, title, {
       chapterId: normalizeString(chapter.id)
     });
   }));
@@ -4426,9 +4569,7 @@ export const registerMoonV3Routes = (app, {
         clearedProgress
       }
     });
-    const refreshed = await loadUserTitleState(req.user.discordUserId, req.params.titleId);
-    res.json({
-      title: refreshed?.title || title,
+    await sendTitleMutationResponse(req, res, title, {
       action,
       chapterIds: selectedIds,
       clearedBookmarkCount,

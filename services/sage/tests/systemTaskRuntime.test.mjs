@@ -76,7 +76,12 @@ test("system task runtime previews, persists schedules, and blocks overlapping r
       return {ok: true, status: 200, payload: {tasks: [], titles: []}};
     },
     logger: {},
-    readRequestWorkflowSettings: async () => ({autoApproveAndDownload: false})
+    readRequestWorkflowSettings: async () => ({autoApproveAndDownload: false}),
+    githubUpdateDigest: {
+      async checkForNewCommits() {
+        return {status: "current"};
+      }
+    }
   });
 
   const preview = await runtime.previewTaskSchedule("update-check", {
@@ -101,6 +106,7 @@ test("system task runtime previews, persists schedules, and blocks overlapping r
   releaseUpdateCheck();
   const job = await running;
   assert.equal(job.status, "completed");
+  assert.equal(job.result.githubUpdateDigest.status, "current");
 });
 
 test("stale queue cleanup inspects durable bulk runs and records recovery actions", async () => {
@@ -188,7 +194,12 @@ test("stale queue cleanup inspects durable bulk runs and records recovery action
       return {ok: true, status: 200, payload: {tasks: [], titles: []}};
     },
     logger: {},
-    readRequestWorkflowSettings: async () => ({autoApproveAndDownload: false})
+    readRequestWorkflowSettings: async () => ({autoApproveAndDownload: false}),
+    githubUpdateDigest: {
+      async checkForNewCommits() {
+        return {status: "current"};
+      }
+    }
   });
 
   const job = await runtime.runTask("stale-queue-cleanup", {manual: true});

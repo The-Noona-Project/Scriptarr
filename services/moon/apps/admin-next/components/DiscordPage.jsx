@@ -154,6 +154,12 @@ export const DiscordPage = ({user}) => {
     {method: "POST", json: draft}
   );
 
+  const testUpdate = () => runAction(
+    "Send update test",
+    "/api/moon/v3/admin/discord/update-notifications/test",
+    {method: "POST", json: draft}
+  );
+
   const clearNoonaMemory = (scope = "all", discordUserId = "") => runAction(
     scope === "user" ? "Clear Noona user memory" : scope === "server" ? "Clear Noona server memory" : "Clear Noona memory",
     "/api/moon/v3/admin/discord/noona-memory",
@@ -291,11 +297,16 @@ export const DiscordPage = ({user}) => {
               <span>Release channel id</span>
               <input disabled={!canWrite} value={draft.notifications.releaseChannelId} onChange={(event) => setNotifications({releaseChannelId: event.target.value})} />
             </label>
+            <label>
+              <span>Update channel id</span>
+              <input disabled={!canWrite} value={draft.notifications.updateChannelId} onChange={(event) => setNotifications({updateChannelId: event.target.value})} />
+            </label>
           </div>
           <div className="admin-action-row">
             <button className="admin-button solid" type="button" disabled={!canWrite || busy !== ""} onClick={save}>Save settings</button>
             <button className="admin-button ghost" type="button" disabled={!canWrite || busy !== ""} onClick={reload}>Reload runtime</button>
             <button className="admin-button ghost" type="button" disabled={!canWrite || busy !== "" || !draft.notifications.releaseChannelId} onClick={testRelease}>Test release post</button>
+            <button className="admin-button ghost" type="button" disabled={!canWrite || busy !== "" || !draft.notifications.updateChannelId} onClick={testUpdate}>Test update post</button>
           </div>
         </article>
 

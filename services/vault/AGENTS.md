@@ -16,8 +16,8 @@ MySQL.
 - Keep generic async jobs and job tasks durable here so other services do not invent sidecar state stores.
 - Preserve Raven title/chapter quality fields and durable downloadall job state; Missing Content and Portal DMs depend
   on those records surviving cache refreshes and MySQL restarts.
-- Preserve brokered Portal trivia state and AI tool/proposal settings through normal settings storage and content
-  reset; Portal and Sage depend on those records surviving restarts.
+- Preserve brokered Portal trivia state, GitHub update digest state, and AI tool/proposal settings through normal
+  settings storage and content reset; Portal and Sage depend on those records surviving restarts.
 - Preserve service-to-service auth boundaries.
 - Sage is the supported caller for Vault's HTTP surface. Other first-party services should not bypass Sage.
 - Keep public docs concise and operational.

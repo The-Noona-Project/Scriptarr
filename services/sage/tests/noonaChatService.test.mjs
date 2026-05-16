@@ -121,6 +121,35 @@ test("Noona chat sends curated memory and read context to Oracle without mutatin
   assert.equal(oracleCall.options.body.context.readContext.library.results[0].title, "Yotsuba&!");
 });
 
+test("Noona chat injects latest posted update digest for update questions", async () => {
+  const calls = [];
+  const vault = createMemoryVault();
+  await vault.setSetting("portal.githubUpdateDigest", {
+    key: "portal.githubUpdateDigest",
+    repository: {owner: "The-Noona-Project", repo: "Scriptarr", branch: "main"},
+    lastPostedSha: "abc123def4567890",
+    latestPosted: {
+      id: "update:abc123def456",
+      repository: "The-Noona-Project/Scriptarr",
+      branch: "main",
+      summary: "Noona says the update makes title pages faster.",
+      compareUrl: "https://github.com/The-Noona-Project/Scriptarr/compare/base...main",
+      commitCount: 2,
+      latestSha: "abc123def456",
+      postedAt: "2026-05-16T00:00:00.000Z",
+      commits: [{sha: "abc123def456", title: "Chunk title loading", author: "Noona", date: "2026-05-16T00:00:00.000Z"}]
+    }
+  });
+  const {service} = createService({vault, calls});
+
+  const result = await service.handlePortalMention(mentionPayload("what changed in the update and how do I use it?"));
+  const oracleCall = calls.find((call) => call.path === "/api/chat");
+
+  assert.equal(result.ok, true);
+  assert.equal(oracleCall.options.body.context.readContext.latestUpdate.summary, "Noona says the update makes title pages faster.");
+  assert.equal(oracleCall.options.body.context.readContext.latestUpdate.commits[0].title, "Chunk title loading");
+});
+
 test("Noona chat creates only conservative public proposals", async () => {
   const vault = createMemoryVault();
   const {service} = createService({vault});

@@ -73,7 +73,8 @@ export const resolvePortalConfig = (env = process.env) => ({
       )
     },
     notifications: {
-      releaseChannelId: normalizeOptionalString(env.SCRIPTARR_DISCORD_RELEASE_CHANNEL_ID)
+      releaseChannelId: normalizeOptionalString(env.SCRIPTARR_DISCORD_RELEASE_CHANNEL_ID),
+      updateChannelId: normalizeOptionalString(env.SCRIPTARR_DISCORD_UPDATE_CHANNEL_ID)
     },
     trivia: {
       enabled: false,

@@ -482,6 +482,32 @@ export const createVaultClient = (config) => {
       });
       return status === 404 ? null : payload;
     },
+    async getRavenTitleSummary(titleId, filters = {}) {
+      const params = new URLSearchParams();
+      for (const [key, value] of Object.entries(filters || {})) {
+        if (value != null && String(value).trim()) {
+          params.set(key, String(value));
+        }
+      }
+      const {status, payload} = await requestJson(baseUrl, headers, `/api/service/raven/titles/${encodeURIComponent(titleId)}/summary${params.size ? `?${params.toString()}` : ""}`, {
+        allowStatuses: [404],
+        context: "Failed to load a Raven title summary from Vault"
+      });
+      return status === 404 ? null : payload;
+    },
+    async listRavenTitleChapters(titleId, filters = {}) {
+      const params = new URLSearchParams();
+      for (const [key, value] of Object.entries(filters || {})) {
+        if (value != null && String(value).trim()) {
+          params.set(key, String(value));
+        }
+      }
+      const {status, payload} = await requestJson(baseUrl, headers, `/api/service/raven/titles/${encodeURIComponent(titleId)}/chapters${params.size ? `?${params.toString()}` : ""}`, {
+        allowStatuses: [404],
+        context: "Failed to load Raven title chapters from Vault"
+      });
+      return status === 404 ? null : payload;
+    },
     async upsertRavenTitle(titleId, payload) {
       return (await requestJson(baseUrl, headers, `/api/service/raven/titles/${encodeURIComponent(titleId)}`, {
         method: "PUT",

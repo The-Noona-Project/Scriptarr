@@ -202,6 +202,20 @@ export const createSageClient = (config) => {
         }
       );
     },
+    listUpdateNotifications() {
+      return requestJson(config.sageBaseUrl, authHeader, "/api/internal/portal/notifications/updates");
+    },
+    acknowledgeUpdateNotification(notificationId) {
+      return requestJson(
+        config.sageBaseUrl,
+        jsonHeaders,
+        `/api/internal/portal/notifications/updates/${encodeURIComponent(notificationId)}/ack`,
+        {
+          method: "POST",
+          body: {}
+        }
+      );
+    },
     listRequestNotifications() {
       return requestJson(config.sageBaseUrl, authHeader, "/api/internal/portal/notifications/requests");
     },

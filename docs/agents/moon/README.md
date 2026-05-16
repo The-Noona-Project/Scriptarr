@@ -78,8 +78,9 @@
   continue-reading scroller first, then recent-by-type shelves and tag-driven shelves built from explicit tag
   likes/dislikes plus inferred taste from read history, follows, and the active bookshelf.
 - Browse and library shelves should use `/api/moon-v3/user/library?view=card` with server-side filtering and pagination
-  instead of pulling full title details. Full title detail and reader routes are still the only places that should load
-  chapter arrays. Home shelves should stay bounded to compact card reads and hydrate full titles only for exact
+  instead of pulling full title details. User title pages should use the split summary, paged chapters, and lazy
+  requests routes instead of the compatibility full-title payload; reader routes can still load the chapter manifest
+  they need to render pages. Home shelves should stay bounded to compact card reads and hydrate full titles only for exact
   continue-reading, read-state, or following ids. Use the compact exact-id card projection (`view=card&ids=...`) for
   those activity ids instead of fanning out into individual full title requests.
 - The user app has a browser-local return-visit JSON cache in `apps/user-next/lib/persistentJsonCache.js`. Use it only
@@ -107,8 +108,13 @@
   the source of truth for started vs completed bookshelf behavior while still keeping progress rows for the active
   reading position.
 - Title pages should keep the explicit reader actions visible: mark title read, reset title off shelf, mark chapter
-  read/unread, selected bulk read/unread/reset, and per-tag `Like`, `Hide`, or `Clear` actions. Resetting a title off
-  shelf clears read state, reader progress, and title bookmarks while preserving follows.
+  read/unread, selected bulk read/unread/reset, and per-tag `Like`, `Hide`, or `Clear` actions. They should paint from
+  `/api/moon-v3/user/title/:titleId/summary`, load chapter rows through `/chapters` with cursor/pageSize/sort/filter/q,
+  and load `/requests` only when the Requests tab opens. Use direct Once UI leaf imports such as
+  `@once-ui-system/core/components/Skeleton` or `@once-ui-system/core/components/InfiniteScroll` in the title leaf
+  only; do not import the root `@once-ui-system/core` barrel or move Once UI components into always-mounted shell
+  files. Bulk selection is "Select loaded" by design, not all matching rows. Resetting a title off shelf clears read
+  state, reader progress, and title bookmarks while preserving follows.
 - Reader preferences are now centered on the new immersive reader. Store type defaults plus title overrides for
   layout mode, reading direction, page fit, page numbers, and pinned sidebar. Keep legacy `readingMode` accepted as a
   compatibility input while emitting canonical layout fields.
@@ -155,9 +161,10 @@
   same-origin, and honest about what will be deleted: content-side requests, progress, read state, follows, bookmarks,
   Raven catalog state, Raven task state, and managed Raven download folders only.
 - `/admin/discord` should surface Portal capability state honestly: command runtime, command sync, onboarding
-  availability, release notification channel id, Noona mention-chat enable state, allowed channel ids, memory counts
-  and clear actions, Noona trivia channel/scoring/schedule settings, last mention-chat time/error, and the last
-  meaningful runtime error should all be visible without forcing the admin to read logs.
+  availability, release notification channel id, update notification channel id, Noona mention-chat enable state,
+  allowed channel ids, memory counts and clear actions, Noona trivia channel/scoring/schedule settings, last
+  mention-chat time/error, and the last meaningful runtime error should all be visible without forcing the admin to
+  read logs.
 - Keep Noona mention-chat controls operational rather than decorative: the page should save the `portal.discord.noonaChat`
   settings object, make `publicReplies` visible but fixed, keep memory review counts clear, and call the Sage memory
   clear route through Moon's same-origin API. Do not call Portal, Vault, or Oracle directly from the browser.

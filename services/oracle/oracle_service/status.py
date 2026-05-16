@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""Read-only Scriptarr status projection for Oracle endpoints."""
+
 
 async def read_scriptarr_status(sage_client) -> dict[str, object]:
     try:
@@ -12,6 +14,7 @@ async def read_scriptarr_status(sage_client) -> dict[str, object]:
             "services": payload.get("services")
         }
     except Exception as error:  # noqa: BLE001
+        # Health-style callers expect a degraded payload, not an exception bubble-up.
         return {
             "ok": False,
             "error": str(error)

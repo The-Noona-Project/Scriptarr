@@ -203,6 +203,7 @@ const createDependencyStub = ({
     localAiInstall: 0,
     localAiStart: 0,
     releaseNotificationTest: 0,
+    updateNotificationTest: 0,
     library: 0,
     libraryCard: 0,
     metadataIdentify: 0,
@@ -294,6 +295,24 @@ const createDependencyStub = ({
 
     if (request.url === "/api/notifications/release/test" && request.method === "POST") {
       calls.releaseNotificationTest += 1;
+      let body = "";
+      request.on("data", (chunk) => {
+        body += chunk;
+      });
+      request.on("end", () => {
+        const payload = JSON.parse(body || "{}");
+        response.writeHead(200, {"Content-Type": "application/json"});
+        response.end(JSON.stringify({
+          ok: true,
+          channelId: payload?.notification?.channelId || "",
+          notification: payload?.notification || {}
+        }));
+      });
+      return;
+    }
+
+    if (request.url === "/api/notifications/update/test" && request.method === "POST") {
+      calls.updateNotificationTest += 1;
       let body = "";
       request.on("data", (chunk) => {
         body += chunk;
@@ -1044,6 +1063,42 @@ const installDiscordFetchStub = (identity = {
 
     if (url === "https://discord.com/api/users/@me") {
       return new Response(JSON.stringify(identity), {
+        status: 200,
+        headers: {"Content-Type": "application/json"}
+      });
+    }
+
+    if (url === "https://api.github.com/repos/The-Noona-Project/Scriptarr") {
+      return new Response(JSON.stringify({default_branch: "main"}), {
+        status: 200,
+        headers: {"Content-Type": "application/json"}
+      });
+    }
+
+    if (url.startsWith("https://api.github.com/repos/The-Noona-Project/Scriptarr/compare/")) {
+      return new Response(JSON.stringify({
+        ahead_by: 0,
+        html_url: "https://github.com/The-Noona-Project/Scriptarr/compare/base...main",
+        commits: []
+      }), {
+        status: 200,
+        headers: {"Content-Type": "application/json"}
+      });
+    }
+
+    if (url.startsWith("https://api.github.com/repos/The-Noona-Project/Scriptarr/commits")) {
+      return new Response(JSON.stringify([{
+        sha: "testbaseline1234567890",
+        html_url: "https://github.com/The-Noona-Project/Scriptarr/commit/testbaseline1234567890",
+        author: {login: "Noona"},
+        commit: {
+          message: "Test baseline",
+          author: {
+            name: "Noona",
+            date: "2026-05-16T00:00:00.000Z"
+          }
+        }
+      }]), {
         status: 200,
         headers: {"Content-Type": "application/json"}
       });
@@ -1850,6 +1905,15 @@ test("sage round-trips Moon branding and exposes typed Moon reader payloads", as
     "Content-Type": "application/json"
   };
 
+  await fetch(`http://127.0.0.1:${vaultPort}/api/service/raven/titles/${defaultLibraryTitle.id}`, {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": "Bearer vault-dev-token"
+    },
+    body: JSON.stringify(defaultLibraryTitle)
+  });
+
   const initialBranding = await fetch(`${baseUrl}/api/admin/settings/moon/branding`, {
     headers
   }).then((response) => response.json());
@@ -2127,6 +2191,32 @@ test("sage round-trips Moon branding and exposes typed Moon reader payloads", as
   }).then((response) => response.json());
   assert.equal(titleDetail.title.libraryTypeSlug, "webtoon");
   assert.equal(titleDetail.title.libraryTypeLabel, "Webtoon");
+  assert.ok(Array.isArray(titleDetail.title.chapters));
+
+  const titleSummary = await fetch(`${baseUrl}/api/moon-v3/user/title/dan-da-dan/summary`, {
+    headers: {
+      "Authorization": `Bearer ${ownerClaim.token}`
+    }
+  }).then((response) => response.json());
+  assert.equal(titleSummary.title.libraryTypeSlug, "webtoon");
+  assert.equal(titleSummary.title.libraryTypeLabel, "Webtoon");
+  assert.equal(Object.hasOwn(titleSummary.title, "chapters"), false);
+  assert.equal(titleSummary.latestChapter.id, "dandadan-c167");
+
+  const titleChapters = await fetch(`${baseUrl}/api/moon-v3/user/title/dan-da-dan/chapters?pageSize=1&sort=number-asc`, {
+    headers: {
+      "Authorization": `Bearer ${ownerClaim.token}`
+    }
+  }).then((response) => response.json());
+  assert.deepEqual(titleChapters.chapters.map((chapter) => chapter.id), ["dandadan-c166"]);
+  assert.equal(titleChapters.pageInfo.hasMore, true);
+
+  const titleRequests = await fetch(`${baseUrl}/api/moon-v3/user/title/dan-da-dan/requests`, {
+    headers: {
+      "Authorization": `Bearer ${ownerClaim.token}`
+    }
+  }).then((response) => response.json());
+  assert.ok(Array.isArray(titleRequests.requests));
 
   const adminTitleDetail = await fetch(`${baseUrl}/api/moon-v3/admin/library/dan-da-dan`, {
     headers: {
@@ -2537,12 +2627,13 @@ test("sage persists user tag preferences and title or chapter read state into bo
   }).then((response) => response.json());
   assert.equal(bookmarksAfterBulkReset.bookmarks.length, 0);
 
-  const chapterUnread = await fetch(`${baseUrl}/api/moon-v3/user/title/dan-da-dan/chapters/dandadan-c166/unread`, {
+  const chapterUnread = await fetch(`${baseUrl}/api/moon-v3/user/title/dan-da-dan/chapters/dandadan-c166/unread?view=compact`, {
     method: "POST",
     headers
   }).then((response) => response.json());
   assert.equal(chapterUnread.title.userState.readAvailableCount, 0);
   assert.equal(chapterUnread.title.userState.unreadAvailableCount, 2);
+  assert.equal(Object.hasOwn(chapterUnread.title, "chapters"), false);
 
   await closeServer(sageServer);
   await closeServer(vaultServer);
@@ -4035,7 +4126,8 @@ test("sage round-trips brokered Portal Discord settings and exposes them in admi
         template: "Welcome to {siteName}, {username}!"
       },
       notifications: {
-        releaseChannelId: "release-789"
+        releaseChannelId: "release-789",
+        updateChannelId: "updates-789"
       },
       commands: {
         request: {
@@ -4055,6 +4147,7 @@ test("sage round-trips brokered Portal Discord settings and exposes them in admi
   assert.equal(savedDiscord.commands.request.roleId, "role-request");
   assert.equal(savedDiscord.commands.subscribe.enabled, false);
   assert.equal(savedDiscord.notifications.releaseChannelId, "release-789");
+  assert.equal(savedDiscord.notifications.updateChannelId, "updates-789");
   assert.equal(savedDiscord.runtime.authConfigured, true);
   assert.equal(savedDiscord.runtime.botTokenConfigured, true);
 
@@ -4071,6 +4164,7 @@ test("sage round-trips brokered Portal Discord settings and exposes them in admi
     headers
   }).then((response) => response.json());
   assert.equal(discordPayload.settings.notifications.releaseChannelId, "release-789");
+  assert.equal(discordPayload.settings.notifications.updateChannelId, "updates-789");
   assert.ok(discordPayload.commandCatalog.some((command) => command.id === "request"));
 
   const savedV3 = await fetch(`${baseUrl}/api/moon-v3/admin/discord`, {
@@ -4079,11 +4173,13 @@ test("sage round-trips brokered Portal Discord settings and exposes them in admi
     body: JSON.stringify({
       ...discordPayload.settings,
       notifications: {
-        releaseChannelId: "release-999"
+        releaseChannelId: "release-999",
+        updateChannelId: "updates-999"
       }
     })
   }).then((response) => response.json());
   assert.equal(savedV3.settings.notifications.releaseChannelId, "release-999");
+  assert.equal(savedV3.settings.notifications.updateChannelId, "updates-999");
   assert.equal(savedV3.runtime.reload.ok, true);
 
   const releaseTest = await fetch(`${baseUrl}/api/moon-v3/admin/discord/release-notifications/test`, {
@@ -4094,6 +4190,58 @@ test("sage round-trips brokered Portal Discord settings and exposes them in admi
   assert.equal(releaseTest.channelId, "release-999");
   assert.equal(dependencyStub.calls.releaseNotificationTest, 1);
 
+  const updateTest = await fetch(`${baseUrl}/api/moon-v3/admin/discord/update-notifications/test`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(savedV3.settings)
+  }).then((response) => response.json());
+  assert.equal(updateTest.channelId, "updates-999");
+  assert.equal(dependencyStub.calls.updateNotificationTest, 1);
+
+  await fetch(`http://127.0.0.1:${vaultPort}/api/service/settings/portal.githubUpdateDigest`, {
+    method: "PUT",
+    headers: {
+      "Authorization": "Bearer vault-dev-token",
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      value: {
+        key: "portal.githubUpdateDigest",
+        repository: {owner: "The-Noona-Project", repo: "Scriptarr", branch: "main"},
+        lastPostedSha: "base-sha",
+        pending: {
+          id: "update:abc123def456",
+          status: "ready",
+          repository: "The-Noona-Project/Scriptarr",
+          branch: "main",
+          baseSha: "base-sha",
+          latestSha: "abc123def456",
+          latestFullSha: "abc123def4567890",
+          compareUrl: "https://github.com/The-Noona-Project/Scriptarr/compare/base...main",
+          commitCount: 1,
+          commits: [{sha: "abc123def456", title: "Add update summaries", author: "Noona", date: "2026-05-16T00:00:00.000Z"}],
+          summary: "Noona found a useful Scriptarr update.",
+          createdAt: "2026-05-16T00:00:00.000Z"
+        }
+      }
+    })
+  });
+  const updateNotifications = await fetch(`${baseUrl}/api/internal/portal/notifications/updates`, {
+    headers: {"Authorization": "Bearer portal-dev-token"}
+  }).then((response) => response.json());
+  assert.equal(updateNotifications.notifications[0].channelId, "updates-999");
+  assert.equal(updateNotifications.notifications[0].summary, "Noona found a useful Scriptarr update.");
+
+  const updateAck = await fetch(`${baseUrl}/api/internal/portal/notifications/updates/update%3Aabc123def456/ack`, {
+    method: "POST",
+    headers: {"Authorization": "Bearer portal-dev-token"}
+  }).then((response) => response.json());
+  assert.equal(updateAck.ok, true);
+  const updateNotificationsAfterAck = await fetch(`${baseUrl}/api/internal/portal/notifications/updates`, {
+    headers: {"Authorization": "Bearer portal-dev-token"}
+  }).then((response) => response.json());
+  assert.deepEqual(updateNotificationsAfterAck.notifications, []);
+
   const aggregatedSettings = await fetch(`${baseUrl}/api/moon-v3/admin/settings`, {
     headers: {
       "Authorization": `Bearer ${ownerClaim.token}`
@@ -4102,6 +4250,7 @@ test("sage round-trips brokered Portal Discord settings and exposes them in admi
   assert.equal(aggregatedSettings.discord.guildId, "guild-123");
   assert.equal(aggregatedSettings.discord.commands.request.roleId, "role-request");
   assert.equal(aggregatedSettings.discord.notifications.releaseChannelId, "release-999");
+  assert.equal(aggregatedSettings.discord.notifications.updateChannelId, "updates-999");
 
   await closeServer(sageServer);
   await closeServer(vaultServer);

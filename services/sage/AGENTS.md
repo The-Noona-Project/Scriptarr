@@ -30,10 +30,14 @@ HTTP broker.
   toggles, grant checks, proposal confirmation, expiry, and durable events.
 - Portal-facing downloadall notifications should use stable ack ids and only acknowledge after Portal confirms the
   requester DM was sent.
+- Portal-facing GitHub update notifications should use stable `update:<latestSha>` ids and only acknowledge after
+  Portal confirms the channel post was sent.
 - Keep Moon's trusted public API brokered here. Sage should hash stored API keys, issue short-lived selection tokens,
   and enforce NSFW plus duplicate guards before queueing external requests at the lowest priority.
 - Keep Warden aggregation split by contract: `/health` for service health, `/api/bootstrap` for the static plan, and
   `/api/runtime` for live runtime details.
+- Keep GitHub update digests Sage-owned. The `update-check` system task may read GitHub's public API and ask Oracle
+  for a Noona summary, but Portal only receives durable update notification payloads through Sage.
 - Keep full JSDoc on exported Sage `.mjs` source and test files. `npm test` should enforce that gate.
 
 ## Coding Map

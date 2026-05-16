@@ -1,3 +1,5 @@
+<!-- Keep this README user-facing; move contributor-only implementation detail into docs/agents or AGENTS.md. -->
+
 # Oracle
 
 Oracle is the Noona AI persona for Scriptarr.

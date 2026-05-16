@@ -351,6 +351,50 @@ export const buildReleaseChannelPayload = (notification = {}, publicBaseUrl = ""
   };
 };
 
+export const buildUpdateChannelPayload = (notification = {}, publicBaseUrl = "") => {
+  const repository = normalizeString(notification.repository, "The-Noona-Project/Scriptarr");
+  const branch = normalizeString(notification.branch, "main");
+  const summary = normalizeString(notification.summary, "Noona found a Scriptarr update.");
+  const compareUrl = normalizeString(notification.compareUrl);
+  const adminUrl = normalizeString(publicBaseUrl) ? `${normalizeString(publicBaseUrl).replace(/\/+$/g, "")}/admin/system/updates` : "";
+  const commitCount = toCount(notification.commitCount, normalizeArray(notification.commits).length);
+  const latestSha = normalizeString(notification.latestSha);
+  const commitLines = normalizeArray(notification.commits)
+    .slice(0, 5)
+    .map((commit) => {
+      const sha = normalizeString(commit.sha);
+      const title = normalizeString(commit.title, "Untitled commit");
+      const url = normalizeString(commit.url);
+      return url ? `[${sha}](${url}) ${title}` : `${sha} ${title}`.trim();
+    });
+  const linkLine = compareUrl ? `\nCompare: ${compareUrl}` : adminUrl ? `\nOpen updates: ${adminUrl}` : "";
+  return {
+    content: truncate(`${summary}${linkLine}`, 1900),
+    embeds: [{
+      title: "Scriptarr update from Noona",
+      description: summary,
+      url: compareUrl || adminUrl || undefined,
+      color: 0x8b5cf6,
+      fields: [
+        {name: "Repository", value: `${repository} (${branch})`, inline: true},
+        {name: "Commits", value: String(commitCount), inline: true},
+        latestSha ? {name: "Latest", value: latestSha, inline: true} : null,
+        commitLines.length ? {
+          name: "Included commits",
+          value: commitLines.join("\n").slice(0, 1000),
+          inline: false
+        } : null,
+        adminUrl ? {
+          name: "Scriptarr",
+          value: `[Open updates](${adminUrl})`,
+          inline: false
+        } : null
+      ].filter(Boolean),
+      footer: {text: "Mention Noona to ask what changed or how to use it."}
+    }]
+  };
+};
+
 const deliverNotifications = async ({
   list,
   acknowledge,
@@ -459,6 +503,42 @@ const deliverReleaseChannelNotifications = async ({
   }
 };
 
+const deliverUpdateChannelNotifications = async ({
+  list,
+  acknowledge,
+  discord,
+  logger,
+  publicBaseUrl
+}) => {
+  if (typeof list !== "function" || typeof acknowledge !== "function") {
+    return;
+  }
+
+  const response = await list();
+  if (!response?.ok) {
+    return;
+  }
+
+  const deliveredIds = new Set();
+  for (const notification of normalizeArray(response.payload?.notifications)) {
+    const notificationId = normalizeString(notification?.id);
+    const channelId = normalizeString(notification?.channelId);
+    if (!notificationId || !channelId || deliveredIds.has(notificationId)) {
+      continue;
+    }
+    try {
+      await discord.sendChannelMessage(
+        channelId,
+        buildUpdateChannelPayload(notification, publicBaseUrl)
+      );
+      deliveredIds.add(notificationId);
+      await acknowledge(notificationId);
+    } catch (error) {
+      logger?.error?.("Portal update channel notification delivery failed.", {notificationId, error});
+    }
+  }
+};
+
 const appendAiMessageContext = async ({
   sage,
   kind,
@@ -540,6 +620,13 @@ export const createFollowNotifier = ({
         acknowledge: (id) => sage?.acknowledgeReleaseNotification?.(id),
         discord,
         sage,
+        logger,
+        publicBaseUrl
+      });
+      await deliverUpdateChannelNotifications({
+        list: () => sage?.listUpdateNotifications?.(),
+        acknowledge: (id) => sage?.acknowledgeUpdateNotification?.(id),
+        discord,
         logger,
         publicBaseUrl
       });

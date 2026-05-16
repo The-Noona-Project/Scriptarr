@@ -321,7 +321,7 @@ export const createCachedStore = (
         `progress:${payload.discordUserId}`
       );
       invalidatePrefix("reader-targets:");
-      invalidatePrefix("raven-title:", "raven-titles:list");
+      invalidatePrefix("raven-title:", "raven-title-summary:", "raven-title-chapters:", "raven-titles:list");
       return result;
     },
     async markTitleUnread(payload) {
@@ -332,7 +332,7 @@ export const createCachedStore = (
         `progress:${payload.discordUserId}`
       );
       invalidatePrefix("reader-targets:");
-      invalidatePrefix("raven-title:", "raven-titles:list");
+      invalidatePrefix("raven-title:", "raven-title-summary:", "raven-title-chapters:", "raven-titles:list");
       return result;
     },
     async markChapterRead(payload) {
@@ -343,7 +343,7 @@ export const createCachedStore = (
         `progress:${payload.discordUserId}`
       );
       invalidatePrefix("reader-targets:");
-      invalidatePrefix("raven-title:", "raven-titles:list");
+      invalidatePrefix("raven-title:", "raven-title-summary:", "raven-title-chapters:", "raven-titles:list");
       return result;
     },
     async markChapterUnread(payload) {
@@ -354,7 +354,7 @@ export const createCachedStore = (
         `progress:${payload.discordUserId}`
       );
       invalidatePrefix("reader-targets:");
-      invalidatePrefix("raven-title:", "raven-titles:list");
+      invalidatePrefix("raven-title:", "raven-title-summary:", "raven-title-chapters:", "raven-titles:list");
       return result;
     },
     async previewContentReset() {
@@ -369,6 +369,8 @@ export const createCachedStore = (
         "read-state:",
         "reader-targets:",
         "raven-title:",
+        "raven-title-summary:",
+        "raven-title-chapters:",
         "raven-title-cards:",
         "raven-titles:list",
         "raven-download-tasks:list",
@@ -393,16 +395,22 @@ export const createCachedStore = (
     async getRavenTitle(titleId) {
       return readThrough(`raven-title:${titleId}`, () => baseStore.getRavenTitle(titleId));
     },
+    async getRavenTitleSummary(titleId, filters = {}) {
+      return readThrough(makeListKey("raven-title-summary", {titleId, ...filters}), () => baseStore.getRavenTitleSummary(titleId, filters));
+    },
+    async listRavenTitleChapters(titleId, filters = {}) {
+      return readThrough(makeListKey("raven-title-chapters", {titleId, ...filters}), () => baseStore.listRavenTitleChapters(titleId, filters));
+    },
     async upsertRavenTitle(payload) {
       const title = await baseStore.upsertRavenTitle(payload);
       writeEntry(`raven-title:${title.id}`, title);
-      invalidatePrefix("raven-title-cards:");
+      invalidatePrefix("raven-title-cards:", "raven-title-summary:", "raven-title-chapters:");
       invalidate("raven-titles:list");
       return title;
     },
     async replaceRavenChapters(titleId, chapters) {
       const replaced = await baseStore.replaceRavenChapters(titleId, chapters);
-      invalidatePrefix("raven-title-cards:");
+      invalidatePrefix("raven-title-cards:", "raven-title-summary:", "raven-title-chapters:");
       invalidatePrefix("reader-targets:");
       invalidate("raven-titles:list", `raven-title:${titleId}`);
       return replaced;

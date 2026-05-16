@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""OpenAI-compatible chat completion wrapper for Oracle."""
+
 import json
 
 from openai import AsyncOpenAI
@@ -18,6 +20,7 @@ SYSTEM_PROMPT = (
 def _stringify_content(content: object) -> str:
     if isinstance(content, str):
         return content
+    # Some compatible providers can return structured content blocks instead of plain text.
     return json.dumps(content)
 
 
@@ -27,6 +30,7 @@ def _context_message(context: object) -> list[dict[str, str]]:
     return [{
         "role": "system",
         "content": (
+            # Context is advisory only; Oracle should not treat it as tool output or execution authority.
             "Use this Sage-curated context as background only. Do not reveal secrets, raw identifiers, "
             "or claim you executed an action:\n"
             f"{json.dumps(context, ensure_ascii=False)}"

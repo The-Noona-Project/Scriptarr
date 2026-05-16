@@ -1,3 +1,5 @@
+<!-- Oracle contributor notes. Keep public-facing behavior and setup guidance in README.md and ServerAdmin.md. -->
+
 # Oracle Agent Guide
 
 Read this before editing `services/oracle`.

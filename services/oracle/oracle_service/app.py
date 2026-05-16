@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""FastAPI entrypoint and route handlers for the Oracle service."""
+
 import asyncio
 import logging
 import re
@@ -39,6 +41,7 @@ OPENAI_INCOMPATIBLE_MODEL_TOKENS = (
 
 def _localai_models_url(base_url: str) -> str:
     normalized = base_url.rstrip("/")
+    # Admin settings may point at either the bare host or an OpenAI-style /v1 base.
     if normalized.endswith("/v1"):
         normalized = normalized[:-3]
     return f"{normalized}/v1/models"
@@ -259,6 +262,7 @@ def create_app(
             read_scriptarr_status(active_sage_client),
             resolve_oracle_runtime_settings(config=active_config, sage_client=active_sage_client)
         )
+        # Short-circuit obvious health/status prompts so Oracle can answer without an LLM round trip.
         if re.search(r"status|health|boot|callback|alive", message, re.IGNORECASE):
             return {
                 "ok": True,
@@ -307,6 +311,7 @@ def create_app(
                     "error": "LocalAI probe failed."
                 }
 
+            # Sage-curated context is background only; invoke_oracle_fn handles the guardrail prompt.
             if isinstance(context, dict) and context:
                 reply = await invoke_oracle_fn(runtime, active_config.noona_persona_name, message, context)
             else:
@@ -364,6 +369,7 @@ def create_app(
             deterministic = _short_string((body or {}).get("deterministicContent"))
             prompt = _short_string((body or {}).get("prompt"), 1200)
             context = (body or {}).get("context") if isinstance((body or {}).get("context"), dict) else {}
+            # Keep the assist prompts narrow so Oracle stays read-only and bounded.
             if task == "match-title":
                 message = (
                     "Decide whether a user's guess should be accepted for a title trivia game. "

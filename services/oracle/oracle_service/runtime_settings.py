@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""Runtime Oracle settings resolved from Sage/Vault with env fallbacks."""
+
 import asyncio
 from dataclasses import dataclass
 
@@ -49,6 +51,7 @@ async def resolve_oracle_runtime_settings(*, config: OracleConfig, sage_client) 
         sage_client.get_secret(ORACLE_OPENAI_API_KEY_SECRET)
     )
 
+    # Sage owns the persisted admin settings, while env config provides bootstrap defaults.
     settings = settings_response.get("value") if isinstance(settings_response, dict) else {}
     settings = settings if isinstance(settings, dict) else {}
     open_ai_api_key = _normalize_string(secret_response.get("value") if isinstance(secret_response, dict) else None, config.open_ai_api_key)
@@ -59,6 +62,7 @@ async def resolve_oracle_runtime_settings(*, config: OracleConfig, sage_client) 
         parsed_temperature = config.temperature
 
     normalized_provider = _normalize_string(settings.get("provider"), "openai")
+    # Keep the provider list closed so unexpected persisted values do not leak deeper.
     provider = normalized_provider if normalized_provider in {"openai", "localai"} else "openai"
 
     return OracleRuntimeSettings(

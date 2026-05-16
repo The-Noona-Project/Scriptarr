@@ -194,7 +194,7 @@ const createSageStub = ({requests = []} = {}) => Promise.resolve(http.createServ
         guildId: "guild-1",
         superuserId: "owner-1",
         onboarding: {channelId: "welcome-1", template: "Welcome {user_mention}"},
-        notifications: {releaseChannelId: "release-1"},
+        notifications: {releaseChannelId: "release-1", updateChannelId: "updates-1"},
         commands: {request: {enabled: true, roleId: "role-1"}}
       },
       runtime: {
@@ -230,7 +230,7 @@ const createSageStub = ({requests = []} = {}) => Promise.resolve(http.createServ
   }
 
   if (
-    ["/api/moon-v3/admin/discord/onboarding/test", "/api/moon-v3/admin/discord/release-notifications/test"].includes(requestUrl.pathname)
+    ["/api/moon-v3/admin/discord/onboarding/test", "/api/moon-v3/admin/discord/release-notifications/test", "/api/moon-v3/admin/discord/update-notifications/test"].includes(requestUrl.pathname)
     && request.method === "POST"
   ) {
     response.writeHead(200, {"Content-Type": "application/json"});
@@ -807,7 +807,9 @@ test("moon serves branded split entry documents, typed routes, PWA assets, and M
 
   const discordV3Response = await fetch(`${baseUrl}/api/moon/v3/admin/discord`);
   assert.equal(discordV3Response.status, 200);
-  assert.equal((await discordV3Response.json()).settings.notifications.releaseChannelId, "release-1");
+  const discordV3Payload = await discordV3Response.json();
+  assert.equal(discordV3Payload.settings.notifications.releaseChannelId, "release-1");
+  assert.equal(discordV3Payload.settings.notifications.updateChannelId, "updates-1");
 
   const tinyPng = Buffer.from(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
@@ -859,7 +861,7 @@ test("moon serves branded split entry documents, typed routes, PWA assets, and M
   const discordV3Save = await fetch(`${baseUrl}/api/moon/v3/admin/discord`, {
     method: "PUT",
     headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({guildId: "guild-2", notifications: {releaseChannelId: "release-2"}})
+    body: JSON.stringify({guildId: "guild-2", notifications: {releaseChannelId: "release-2", updateChannelId: "updates-2"}})
   });
   assert.equal(discordV3Save.status, 200);
 
@@ -869,6 +871,13 @@ test("moon serves branded split entry documents, typed routes, PWA assets, and M
     body: JSON.stringify({notifications: {releaseChannelId: "release-2"}})
   });
   assert.equal(discordReleaseTest.status, 200);
+
+  const discordUpdateTest = await fetch(`${baseUrl}/api/moon/v3/admin/discord/update-notifications/test`, {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({notifications: {updateChannelId: "updates-2"}})
+  });
+  assert.equal(discordUpdateTest.status, 200);
 
   const usersPayload = await fetch(`${baseUrl}/api/moon/v3/admin/users`).then((response) => response.json());
   assert.equal(usersPayload.groups[0].id, "member");
@@ -937,6 +946,7 @@ test("moon serves branded split entry documents, typed routes, PWA assets, and M
   assert.ok(requests.some((entry) => entry.method === "GET" && entry.url === "/api/moon-v3/admin/discord"));
   assert.ok(requests.some((entry) => entry.method === "PUT" && entry.url === "/api/moon-v3/admin/discord"));
   assert.ok(requests.some((entry) => entry.method === "POST" && entry.url === "/api/moon-v3/admin/discord/release-notifications/test"));
+  assert.ok(requests.some((entry) => entry.method === "POST" && entry.url === "/api/moon-v3/admin/discord/update-notifications/test"));
   assert.ok(requests.some((entry) => entry.method === "PUT" && entry.url === "/api/moon-v3/admin/settings/branding/logo"));
   assert.ok(requests.some((entry) => entry.method === "PUT" && entry.url === "/api/moon-v3/admin/settings/raven/metadata"));
   assert.ok(requests.some((entry) => entry.method === "PUT" && entry.url === "/api/moon-v3/admin/settings/raven/download-providers"));

@@ -23,8 +23,8 @@ and the Oracle chat bridge.
   publicly; split long replies; and return handled so trivia does not also process the same message.
 - Keep Discord workflow configuration behind the brokered `portal.discord` setting consumed from Moon admin instead of
   scattering guild, role, or onboarding logic across unrelated env vars.
-- Requester completion DMs should stay deduped by request id and acknowledgment state so restarts or retries do not
-  spam Discord users.
+- Requester completion DMs and channel notifications should stay deduped by stable Sage acknowledgment ids so restarts
+  or retries do not spam Discord users or channels.
 - `downloadall` should always use Sage's durable run path, including legacy raw DM text, and Portal should DM paused,
   completed, failed, or cancelled run summaries only once after Sage exposes a stable notification id.
 - Reuse the shared `coverUrl` and Moon public base URL in Portal embeds and DMs when they are available instead of
@@ -36,11 +36,11 @@ and the Oracle chat bridge.
   branches, notification polling, mention chat, and trivia timers in small modules instead of expanding a single gateway
   file.
 - Portal should persist and decide shared state through Sage routes only. Use brokered settings for guild, role,
-  onboarding, release-channel, Noona mention chat, trivia, and DM superuser configuration.
+  onboarding, release-channel, update-channel, Noona mention chat, trivia, and DM superuser configuration.
 - Mention chat memory and proposal decisions belong to Sage and Vault. Portal may keep only short rolling/runtime
   diagnostics such as last mention time or error.
 - Request and completion notifications should keep stable acknowledgment ids so retries or restarts do not duplicate
-  requester DMs or release posts.
+  requester DMs, release posts, or GitHub update-summary posts.
 - Trivia runtime must reconcile one Sage-backed active round clock. Refreshes, repeated starts, and settings reloads
   should not create duplicate clues, hints, timeouts, or leaderboards.
 - Prove Portal changes with `npm --workspace services/portal test`; use `npm run docker:healthcheck` when the change

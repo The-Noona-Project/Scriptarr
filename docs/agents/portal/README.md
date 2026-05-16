@@ -7,7 +7,7 @@
 - The live Discord command set is `/ding`, `/status`, `/chat`, `/search`, `/request`, `/subscribe`, `/trivia`, and
   owner-only DM `/downloadall`.
 - Portal should treat the brokered `portal.discord` setting as the source of truth for guild id, onboarding message or
-  channel, DM superuser id, release notification channel id, and per-command role gates.
+  channel, DM superuser id, release notification channel id, update notification channel id, and per-command role gates.
 - Portal should prefer a minimal Discord runtime over going fully dark when privileged intents are unavailable. Slash
   commands and DMs should remain online, while onboarding should degrade separately and surface the real runtime error
   or command-sync problem back through Moon admin.
@@ -15,6 +15,9 @@
   plus decision state, and reuse the shared `coverUrl` plus Moon public base URL when they are available.
 - Portal also owns release channel posts for completed Raven downloads. Poll Sage's release-notification queue, send
   to the configured channel with a Moon read or title link, and acknowledge only after Discord accepts the message.
+- Portal also owns update channel posts for Sage-created GitHub update digests. Poll Sage's update-notification queue,
+  post Noona's AI-written summary to the configured update channel, and acknowledge only after Discord accepts the
+  message. Portal must not call GitHub or Oracle directly for this workflow.
 - Portal owns Noona trivia runtime delivery. It should start/stop rounds through Sage, treat normal messages in the
   configured trivia channel as guesses, post quiet reactions for wrong guesses, announce the first correct winner, and
   acknowledge leaderboard posts only after Discord accepts the message.
@@ -23,7 +26,8 @@
   `/chat` command role gate; send typing; reply publicly to the triggering message; and split replies safely before
   Discord's message limit.
 - Mention chat must call Sage's `/api/internal/portal/noona-chat` route, not Oracle directly. Sage owns durable memory,
-  allowed read context, conservative proposal detection, and Oracle fallback behavior.
+  allowed read context, latest posted update digest context, conservative proposal detection, and Oracle fallback
+  behavior.
 - When mention chat handles a guild message, do not pass that same message into trivia guess handling. Unmentioned
   guild messages should still flow to trivia unchanged.
 - Keep one active trivia clock. Startup, settings reload, manual starts, wins, and timeouts should reconcile against
