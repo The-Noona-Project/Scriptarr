@@ -9,7 +9,7 @@ export const GITHUB_UPDATE_REPOSITORY = Object.freeze({
   repo: "Scriptarr"
 });
 
-const MAX_COMMITS_PER_DIGEST = 25;
+const MAX_COMMITS_PER_DIGEST = 8;
 
 const normalizeString = (value, fallback = "") => {
   const normalized = typeof value === "string" ? value.trim() : "";
@@ -128,8 +128,8 @@ const fetchCommitsSince = async ({fetchImpl, token, branch, baselineSha}) => {
 };
 
 const buildOracleMessage = ({branch, baseSha, compareUrl, commits, truncated}) => [
-  "Write a public Discord update announcement as Noona, Scriptarr's warm Big Sister AI.",
-  "Be concise, useful, and AI-written. Mention what changed and how people can use or ask about it.",
+  "Write a public Discord update announcement as Noona, Scriptarr's warm Big Sister AI. Keep it under 900 characters.",
+  "Use 3 short bullets: what changed, how to use it, and that people can ask Noona follow-up questions.",
   "Do not invent features beyond the commit titles. Do not mention secrets, private infrastructure, or internal logs.",
   `Repository: ${GITHUB_UPDATE_REPOSITORY.owner}/${GITHUB_UPDATE_REPOSITORY.repo}`,
   `Branch: ${branch}`,
@@ -151,8 +151,7 @@ const requestOracleSummary = async ({config, serviceJson, branch, baseSha, compa
         personaStyle: "Noona is warm, playful, and clear. For update summaries, she is practical and explains how to use what changed.",
         repository: GITHUB_UPDATE_REPOSITORY,
         branch,
-        compareUrl,
-        commits
+        compareUrl
       }
     }
   });
