@@ -103,13 +103,14 @@ const defaultIntakePayload = Object.freeze({
  * Create a small dependency stub for Sage's Raven, Warden, Portal, and Oracle
  * calls so the Moon v3 broker routes can be tested in isolation.
  *
- * @param {{libraryTitles?: Array<Record<string, unknown>>, downloadTasks?: Array<Record<string, unknown>>, downloadRuntimeReloadStatus?: number}} [options]
+ * @param {{libraryTitles?: Array<Record<string, unknown>>, downloadTasks?: Array<Record<string, unknown>>, downloadRuntimeReloadStatus?: number, syncLinkedRequestOnQueue?: boolean}} [options]
  * @returns {Promise<{server: http.Server, calls: Record<string, number>}>}
  */
 const createDependencyStub = ({
   libraryTitles = [defaultLibraryTitle],
   downloadTasks = [],
-  downloadRuntimeReloadStatus = 200
+  downloadRuntimeReloadStatus = 200,
+  syncLinkedRequestOnQueue = false
 } = {}) => {
   const calls = {
     health: 0,
@@ -759,18 +760,51 @@ const createDependencyStub = ({
       request.on("data", (chunk) => {
         body += chunk;
       });
-      request.on("end", () => {
-        calls.queue += 1;
-        const payload = JSON.parse(body || "{}");
-        response.writeHead(202, {"Content-Type": "application/json"});
-        response.end(JSON.stringify({
-          taskId: "task-queued-1",
-          jobId: "job-queued-1",
-          status: "queued",
-          titleName: payload.titleName,
-          titleUrl: payload.titleUrl,
-          requestId: payload.requestId || ""
-        }));
+      request.on("end", async () => {
+        try {
+          calls.queue += 1;
+          const payload = JSON.parse(body || "{}");
+          const taskId = "task-queued-1";
+          if (syncLinkedRequestOnQueue && payload.requestId) {
+            const syncResponse = await fetch(`${process.env.SCRIPTARR_VAULT_BASE_URL}/api/service/requests/${encodeURIComponent(payload.requestId)}`, {
+              method: "PATCH",
+              headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${process.env.SCRIPTARR_SERVICE_TOKEN}`
+              },
+              body: JSON.stringify({
+                status: "queued",
+                actor: "scriptarr-raven",
+                eventType: "queued",
+                eventMessage: "Queued for Raven download.",
+                detailsMerge: {
+                  availability: "available",
+                  selectedMetadata: payload.selectedMetadata || null,
+                  selectedDownload: payload.selectedDownload || null,
+                  jobId: taskId,
+                  taskId
+                }
+              })
+            });
+            if (!syncResponse.ok) {
+              throw new Error(`linked request sync failed: ${syncResponse.status}`);
+            }
+          }
+          response.writeHead(202, {"Content-Type": "application/json"});
+          response.end(JSON.stringify({
+            taskId,
+            jobId: taskId,
+            status: "queued",
+            titleName: payload.titleName,
+            titleUrl: payload.titleUrl,
+            requestId: payload.requestId || ""
+          }));
+        } catch (error) {
+          response.writeHead(500, {"Content-Type": "application/json"});
+          response.end(JSON.stringify({
+            error: error instanceof Error ? error.message : String(error)
+          }));
+        }
       });
       return;
     }
@@ -1394,6 +1428,90 @@ test("sage signs in the first owner through the Discord callback and moderates r
   await closeServer(dependencyStub.server);
 });
 
+test("sage treats Raven's immediate linked-request queue sync as approval success", async () => {
+  let vaultServer;
+  let sageServer;
+  let dependencyStub;
+  try {
+    const {app: vaultApp} = await createVaultApp();
+    vaultServer = vaultApp.listen(0);
+    const vaultPort = vaultServer.address().port;
+
+    dependencyStub = await createDependencyStub({
+      libraryTitles: [ownerSmokeLibraryTitle],
+      syncLinkedRequestOnQueue: true
+    });
+    dependencyStub.server.listen(0);
+    const dependencyPort = dependencyStub.server.address().port;
+
+    process.env.SCRIPTARR_VAULT_BASE_URL = `http://127.0.0.1:${vaultPort}`;
+    process.env.SCRIPTARR_WARDEN_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+    process.env.SCRIPTARR_PORTAL_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+    process.env.SCRIPTARR_ORACLE_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+    process.env.SCRIPTARR_RAVEN_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+    process.env.SCRIPTARR_PUBLIC_BASE_URL = "https://pax-kun.com";
+    process.env.SCRIPTARR_DISCORD_CLIENT_ID = "discord-client-id";
+    process.env.SCRIPTARR_DISCORD_CLIENT_SECRET = "discord-client-secret";
+
+    installDiscordFetchStub();
+
+    const {app: sageApp} = await createSageApp();
+    sageServer = sageApp.listen(0);
+    const sagePort = sageServer.address().port;
+    const baseUrl = `http://127.0.0.1:${sagePort}`;
+    const ownerClaim = await signInViaDiscord(baseUrl);
+    const headers = {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${ownerClaim.token}`
+    };
+
+    const request = await fetch(`${baseUrl}/api/moon-v3/user/requests`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        query: "dandadan",
+        requestType: "webtoon",
+        selectedMetadata: {
+          provider: "mangadex",
+          providerSeriesId: "md-race",
+          title: "Dandadan"
+        }
+      })
+    }).then((response) => response.json());
+
+    const reviewOptions = await fetch(`${baseUrl}/api/moon-v3/admin/requests/download-options`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        query: "dandadan",
+        selectedMetadata: request.details.selectedMetadata
+      })
+    }).then((response) => response.json());
+
+    const reviewedResponse = await fetch(`${baseUrl}/api/moon-v3/admin/requests/${request.id}/approve`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        comment: "Sent to Raven after moderation.",
+        expectedRevision: request.revision,
+        selectedMetadata: request.details.selectedMetadata,
+        selectedDownload: reviewOptions.results[0]
+      })
+    });
+    const reviewed = await reviewedResponse.json();
+
+    assert.equal(reviewedResponse.status, 202);
+    assert.equal(reviewed.request.status, "queued");
+    assert.equal(reviewed.request.details.taskId, "task-queued-1");
+    assert.equal(reviewed.request.details.selectedDownload.providerId, "weebcentral");
+    assert.equal(dependencyStub.calls.queue, 1);
+  } finally {
+    await closeServer(sageServer);
+    await closeServer(vaultServer);
+    await closeServer(dependencyStub?.server);
+  }
+});
+
 test("sage keeps Moon library routes empty when Raven has no imported titles", async () => {
   const {app: vaultApp} = await createVaultApp();
   const vaultServer = vaultApp.listen(0);
@@ -1892,7 +2010,46 @@ test("sage round-trips Moon branding and exposes typed Moon reader payloads", as
   assert.equal(readerChapter.manifest.title.libraryTypeSlug, "webtoon");
   assert.equal(readerChapter.manifest.title.libraryTypeLabel, "Webtoon");
   assert.equal(readerChapter.preferences.readingMode, "infinite");
+  assert.equal(readerChapter.preferences.layoutMode, "webtoon");
+  assert.equal(readerChapter.preferences.readingDirection, "ltr");
   assert.equal(readerChapter.pages[0].src, "/api/moon/v3/user/reader/title/dan-da-dan/chapter/dandadan-c166/page/0");
+
+  const savedReaderPreferences = await fetch(`${baseUrl}/api/moon-v3/user/reader/preferences`, {
+    method: "PUT",
+    headers,
+    body: JSON.stringify({
+      typeSlug: "webtoon",
+      titleId: "dan-da-dan",
+      layoutMode: "double",
+      readingDirection: "rtl",
+      pageFit: "contain",
+      showSidebar: true,
+      showPageNumbers: false
+    })
+  }).then((response) => response.json());
+  assert.equal(savedReaderPreferences.readingMode, "paged");
+  assert.equal(savedReaderPreferences.layoutMode, "double");
+  assert.equal(savedReaderPreferences.readingDirection, "rtl");
+  assert.equal(savedReaderPreferences.pageFit, "contain");
+  assert.equal(savedReaderPreferences.showSidebar, true);
+  assert.equal(savedReaderPreferences.showPageNumbers, false);
+
+  const typeDefaultPreferences = await fetch(`${baseUrl}/api/moon-v3/user/reader/preferences?typeSlug=webtoon`, {
+    headers: {
+      "Authorization": `Bearer ${ownerClaim.token}`
+    }
+  }).then((response) => response.json());
+  assert.equal(typeDefaultPreferences.layoutMode, "webtoon");
+  assert.equal(typeDefaultPreferences.readingMode, "infinite");
+
+  const readerChapterWithTitlePreferences = await fetch(`${baseUrl}/api/moon-v3/user/reader/title/dan-da-dan/chapter/dandadan-c166`, {
+    headers: {
+      "Authorization": `Bearer ${ownerClaim.token}`
+    }
+  }).then((response) => response.json());
+  assert.equal(readerChapterWithTitlePreferences.preferences.layoutMode, "double");
+  assert.equal(readerChapterWithTitlePreferences.preferences.readingDirection, "rtl");
+  assert.equal(readerChapterWithTitlePreferences.preferences.readingMode, "paged");
 
   const home = await fetch(`${baseUrl}/api/moon-v3/user/home`, {
     headers: {
@@ -2075,20 +2232,129 @@ test("sage persists user tag preferences and title or chapter read state into bo
   }).then((response) => response.json());
   assert.equal(homeAfterCompletion.continueReading.length, 0);
 
+  await fetch(`${baseUrl}/api/reader/progress`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      mediaId: "dan-da-dan",
+      chapterLabel: "Chapter 166",
+      positionRatio: 0.5,
+      bookmark: {
+        chapterId: "dandadan-c166",
+        pageIndex: 3
+      }
+    })
+  });
+
+  await fetch(`${baseUrl}/api/moon-v3/user/reader/bookmarks`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      id: "title-reset-bookmark",
+      titleId: "dan-da-dan",
+      chapterId: "dandadan-c166",
+      pageIndex: 3,
+      label: "Title reset bookmark"
+    })
+  });
+
   const markTitleUnread = await fetch(`${baseUrl}/api/moon-v3/user/title/dan-da-dan/unread`, {
     method: "POST",
     headers
   }).then((response) => response.json());
   assert.equal(markTitleUnread.title.userState.completed, false);
-  assert.equal(markTitleUnread.title.userState.bookshelf, true);
+  assert.equal(markTitleUnread.title.userState.bookshelf, false);
+  assert.equal(markTitleUnread.title.userState.started, false);
+  assert.equal(markTitleUnread.title.userState.readAvailableCount, 0);
 
   const homeAfterUnread = await fetch(`${baseUrl}/api/moon-v3/user/home`, {
     headers: {
       "Authorization": `Bearer ${ownerClaim.token}`
     }
   }).then((response) => response.json());
-  assert.equal(homeAfterUnread.continueReading.length, 1);
-  assert.equal(homeAfterUnread.continueReading[0].titleId, "dan-da-dan");
+  assert.equal(homeAfterUnread.continueReading.length, 0);
+
+  const bookmarksAfterTitleReset = await fetch(`${baseUrl}/api/moon-v3/user/reader/bookmarks`, {
+    headers: {
+      "Authorization": `Bearer ${ownerClaim.token}`
+    }
+  }).then((response) => response.json());
+  assert.equal(bookmarksAfterTitleReset.bookmarks.length, 0);
+
+  const bulkRead = await fetch(`${baseUrl}/api/moon-v3/user/title/dan-da-dan/chapters/bulk-read-state`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      action: "read",
+      chapterIds: ["dandadan-c166"]
+    })
+  }).then((response) => response.json());
+  assert.equal(bulkRead.title.userState.readAvailableCount, 1);
+  assert.equal(bulkRead.title.chapters.find((chapter) => chapter.id === "dandadan-c166")?.read, true);
+
+  const bulkUnread = await fetch(`${baseUrl}/api/moon-v3/user/title/dan-da-dan/chapters/bulk-read-state`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      action: "unread",
+      chapterIds: ["dandadan-c166"]
+    })
+  }).then((response) => response.json());
+  assert.equal(bulkUnread.title.userState.readAvailableCount, 0);
+  assert.equal(bulkUnread.title.chapters.find((chapter) => chapter.id === "dandadan-c166")?.read, false);
+
+  await fetch(`${baseUrl}/api/moon-v3/user/reader/bookmarks`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      id: "bulk-reset-bookmark",
+      titleId: "dan-da-dan",
+      chapterId: "dandadan-c167",
+      pageIndex: 1,
+      label: "Bulk reset bookmark"
+    })
+  });
+
+  await fetch(`${baseUrl}/api/reader/progress`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      mediaId: "dan-da-dan",
+      chapterLabel: "Chapter 167",
+      positionRatio: 0.75,
+      bookmark: {
+        chapterId: "dandadan-c167",
+        pageIndex: 1
+      }
+    })
+  });
+
+  const bulkReset = await fetch(`${baseUrl}/api/moon-v3/user/title/dan-da-dan/chapters/bulk-read-state`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      action: "reset",
+      chapterIds: ["dandadan-c167"]
+    })
+  }).then((response) => response.json());
+  assert.equal(bulkReset.clearedBookmarkCount, 1);
+  assert.equal(bulkReset.clearedProgress, true);
+  assert.equal(bulkReset.title.chapters.find((chapter) => chapter.id === "dandadan-c167")?.read, false);
+
+  const homeAfterBulkReset = await fetch(`${baseUrl}/api/moon-v3/user/home`, {
+    headers: {
+      "Authorization": `Bearer ${ownerClaim.token}`
+    }
+  }).then((response) => response.json());
+  assert.equal(homeAfterBulkReset.continueReading.length, 1);
+  assert.equal(homeAfterBulkReset.continueReading[0].titleId, "dan-da-dan");
+
+  const bookmarksAfterBulkReset = await fetch(`${baseUrl}/api/moon-v3/user/reader/bookmarks`, {
+    headers: {
+      "Authorization": `Bearer ${ownerClaim.token}`
+    }
+  }).then((response) => response.json());
+  assert.equal(bookmarksAfterBulkReset.bookmarks.length, 0);
 
   const chapterUnread = await fetch(`${baseUrl}/api/moon-v3/user/title/dan-da-dan/chapters/dandadan-c166/unread`, {
     method: "POST",

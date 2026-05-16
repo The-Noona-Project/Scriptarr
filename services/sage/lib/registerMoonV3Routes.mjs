@@ -51,6 +51,10 @@ import {
   setTagPreference
 } from "./moonUserState.mjs";
 import {
+  mergeReaderPreferences,
+  resolveReaderPreferences
+} from "./moonReaderPreferences.mjs";
+import {
   attachRequestWaitlistEntry,
   buildActiveRequestDuplicatePayload,
   buildLibraryDuplicatePayload,
@@ -68,12 +72,6 @@ import {
 } from "./portalDiscordSettings.mjs";
 import {createPortalTriviaService} from "./portalTrivia.mjs";
 
-const defaultReaderPreferences = Object.freeze({
-  readingMode: "infinite",
-  pageFit: "width",
-  showSidebar: false,
-  showPageNumbers: true
-});
 const RAVEN_VPN_KEY = "raven.vpn";
 const RAVEN_VPN_PASSWORD_SECRET = "raven.vpn.piaPassword";
 const RAVEN_METADATA_KEY = "raven.metadata.providers";
@@ -153,75 +151,6 @@ const parseIso = (value) => {
   }
   const parsed = Date.parse(normalized);
   return Number.isFinite(parsed) ? new Date(parsed).toISOString() : null;
-};
-
-const defaultReaderPreferencesForType = (typeSlug) => ({
-  ...defaultReaderPreferences,
-  readingMode: normalizeTypeSlug(typeSlug) === "webtoon" ? "infinite" : "infinite"
-});
-
-const normalizeStoredReaderPreferenceLeaf = (value = {}) => ({
-  ...(["paged", "webtoon", "infinite"].includes(normalizeString(value.readingMode))
-    ? {readingMode: normalizeString(value.readingMode)}
-    : {}),
-  ...(["width", "contain", "height"].includes(normalizeString(value.pageFit))
-    ? {pageFit: normalizeString(value.pageFit)}
-    : {}),
-  ...(typeof value.showSidebar === "boolean" ? {showSidebar: value.showSidebar} : {}),
-  ...(typeof value.showPageNumbers === "boolean" ? {showPageNumbers: value.showPageNumbers} : {})
-});
-
-const normalizeReaderPreferenceLeaf = (value = {}, typeSlug = "manga") => {
-  const defaults = defaultReaderPreferencesForType(typeSlug);
-  return {
-    readingMode: ["paged", "webtoon", "infinite"].includes(normalizeString(value.readingMode))
-      ? normalizeString(value.readingMode)
-      : defaults.readingMode,
-    pageFit: ["width", "contain", "height"].includes(normalizeString(value.pageFit))
-      ? normalizeString(value.pageFit)
-      : defaults.pageFit,
-    showSidebar: typeof value.showSidebar === "boolean" ? value.showSidebar : defaults.showSidebar,
-    showPageNumbers: typeof value.showPageNumbers === "boolean" ? value.showPageNumbers : defaults.showPageNumbers
-  };
-};
-
-const normalizeReaderPreferenceStore = (value = {}) => {
-  const legacy = value
-    && !value.defaultPreferences
-    && !value.typePreferences
-    && ["readingMode", "pageFit", "showSidebar", "showPageNumbers"].some((key) => key in value)
-    ? value
-    : null;
-  const rawTypePreferences = legacy ? {} : value?.typePreferences;
-  return {
-    defaultPreferences: normalizeStoredReaderPreferenceLeaf(legacy || value?.defaultPreferences || {}),
-    typePreferences: Object.fromEntries(Object.entries(rawTypePreferences || {}).map(([typeSlug, preferences]) => [
-      normalizeTypeSlug(typeSlug),
-      normalizeReaderPreferenceLeaf(preferences, typeSlug)
-    ]))
-  };
-};
-
-const resolveReaderPreferences = (value, typeSlug) => {
-  const store = normalizeReaderPreferenceStore(value);
-  const normalizedType = normalizeTypeSlug(typeSlug);
-  return {
-    ...defaultReaderPreferencesForType(normalizedType),
-    ...store.defaultPreferences,
-    ...(store.typePreferences[normalizedType] || {})
-  };
-};
-
-const mergeReaderPreferences = (currentValue, typeSlug, nextValue) => {
-  const store = normalizeReaderPreferenceStore(currentValue);
-  const normalizedType = normalizeTypeSlug(typeSlug);
-  return {
-    ...store,
-    typePreferences: {
-      ...store.typePreferences,
-      [normalizedType]: normalizeReaderPreferenceLeaf(nextValue, normalizedType)
-    }
-  };
 };
 
 const toTitleSummary = (title = {}) => ({
@@ -1165,6 +1094,69 @@ export const registerMoonV3Routes = (app, {
     };
   };
 
+  const requestReflectsQueuedDownload = (requestSummary, queueResult) => {
+    const status = normalizeString(requestSummary?.status).toLowerCase();
+    if (!["queued", "downloading", "failed", "completed"].includes(status)) {
+      return false;
+    }
+
+    const queuedTaskId = normalizeString(queueResult?.payload?.taskId);
+    const queuedJobId = normalizeString(queueResult?.payload?.jobId, queuedTaskId);
+    const details = normalizeObject(requestSummary?.details, {}) || {};
+    const requestTaskId = normalizeString(details.taskId);
+    const requestJobId = normalizeString(details.jobId, requestTaskId);
+    if (queuedTaskId && requestTaskId === queuedTaskId) {
+      return true;
+    }
+    if (queuedJobId && requestJobId === queuedJobId) {
+      return true;
+    }
+    return false;
+  };
+
+  const markRequestQueuedAfterRaven = async ({
+    requestId,
+    requestSummary,
+    queueResult,
+    expectedRevision,
+    eventMessage,
+    moderatorComment,
+    actor
+  }) => {
+    const update = {
+      status: "queued",
+      eventType: "approved",
+      eventMessage,
+      actor: normalizeString(actor),
+      expectedRevision: normalizeExpectedRequestRevision(expectedRevision),
+      appendStatusEvent: false,
+      ...(moderatorComment == null ? {} : {moderatorComment: normalizeString(moderatorComment)}),
+      detailsMerge: {
+        availability: "available",
+        selectedMetadata: requestSummary.details?.selectedMetadata || null,
+        selectedDownload: requestSummary.details?.selectedDownload || null,
+        sourceFoundAt: "",
+        sourceFoundOptions: [],
+        jobId: normalizeString(queueResult.payload?.jobId),
+        taskId: normalizeString(queueResult.payload?.taskId)
+      }
+    };
+
+    try {
+      await vaultClient.updateRequest(requestId, update);
+      return loadRequestById(requestId);
+    } catch (error) {
+      if (!isRequestRevisionConflictError(error)) {
+        throw error;
+      }
+      const refreshed = await loadRequestById(requestId);
+      if (requestReflectsQueuedDownload(refreshed, queueResult)) {
+        return refreshed;
+      }
+      throw error;
+    }
+  };
+
   const approveAndQueueRequest = async ({
     requestId,
     requestSummary,
@@ -1184,23 +1176,14 @@ export const registerMoonV3Routes = (app, {
       return queueResult;
     }
 
-    await vaultClient.updateRequest(requestId, {
-      status: "queued",
-      eventType: "approved",
+    const queuedRequest = await markRequestQueuedAfterRaven({
+      requestId,
+      requestSummary,
+      queueResult,
+      expectedRevision,
       eventMessage: normalizeString(eventMessage, normalizeString(comment, "Approved from Moon admin.")),
       moderatorComment: normalizeString(comment),
-      actor: normalizeString(actor),
-      expectedRevision: normalizeExpectedRequestRevision(expectedRevision),
-      appendStatusEvent: false,
-      detailsMerge: {
-        availability: "available",
-        selectedMetadata: requestSummary.details?.selectedMetadata || null,
-        selectedDownload: requestSummary.details?.selectedDownload || null,
-        sourceFoundAt: "",
-        sourceFoundOptions: [],
-        jobId: normalizeString(queueResult.payload?.jobId),
-        taskId: normalizeString(queueResult.payload?.taskId)
-      }
+      actor: normalizeString(actor)
     });
 
     await appendEvent({
@@ -1223,7 +1206,7 @@ export const registerMoonV3Routes = (app, {
       ok: true,
       status: 202,
       payload: {
-        request: await loadRequestById(requestId),
+        request: queuedRequest,
         queue: queueResult.payload
       }
     };
@@ -2274,22 +2257,16 @@ export const registerMoonV3Routes = (app, {
       return;
     }
 
+    let queuedRequest = null;
     try {
-      await vaultClient.updateRequest(req.params.id, {
-        status: "queued",
+      queuedRequest = await markRequestQueuedAfterRaven({
+        requestId: req.params.id,
+        requestSummary: refreshed,
+        queueResult,
         expectedRevision: refreshed?.revision,
-        eventType: "approved",
         eventMessage: "Unavailable request resolved and queued from Moon admin.",
-        actor: req.user.username,
-        appendStatusEvent: false,
-        detailsMerge: {
-          query: normalizeString(req.body?.query, existing.details?.query),
-          selectedMetadata,
-          selectedDownload,
-          availability: "available",
-          jobId: normalizeString(queueResult.payload?.jobId),
-          taskId: normalizeString(queueResult.payload?.taskId)
-        }
+        moderatorComment: "",
+        actor: req.user.username
       });
     } catch (error) {
       if (sendKnownRequestActionConflict(res, error)) {
@@ -2312,7 +2289,7 @@ export const registerMoonV3Routes = (app, {
     });
 
     res.status(202).json({
-      request: await vaultClient.getRequest(req.params.id),
+      request: queuedRequest,
       queue: queueResult.payload
     });
   }));
@@ -4224,18 +4201,23 @@ export const registerMoonV3Routes = (app, {
     }
     await vaultClient.markTitleUnread({
       discordUserId: req.user.discordUserId,
-      mediaId: titleState.title.id,
-      startedAt: new Date().toISOString()
+      mediaId: titleState.title.id
     });
+    const bookmarks = normalizeArray(await readUserScopedSetting(vaultClient, "moon.reader.bookmarks", req.user.discordUserId, []));
+    const nextBookmarks = bookmarks.filter((entry) => normalizeString(entry.titleId) !== normalizeString(titleState.title.id));
+    if (nextBookmarks.length !== bookmarks.length) {
+      await writeUserScopedSetting(vaultClient, "moon.reader.bookmarks", req.user.discordUserId, nextBookmarks);
+    }
     await appendEventForUser({
       domain: "reader",
-      eventType: "title-marked-unread",
+      eventType: "title-reset-off-shelf",
       user: req.user,
       targetType: "title",
       targetId: normalizeString(titleState.title.id),
-      message: `${req.user.username} put ${titleState.title.title} back on their bookshelf.`,
+      message: `${req.user.username} reset ${titleState.title.title} off their bookshelf.`,
       metadata: {
-        titleId: normalizeString(titleState.title.id)
+        titleId: normalizeString(titleState.title.id),
+        clearedBookmarkCount: bookmarks.length - nextBookmarks.length
       }
     });
     const refreshed = await loadUserTitleState(req.user.discordUserId, req.params.titleId);
@@ -4312,6 +4294,106 @@ export const registerMoonV3Routes = (app, {
     res.json({
       title: refreshed?.title || title,
       chapterId: normalizeString(chapter.id)
+    });
+  }));
+
+  app.post("/api/moon-v3/user/title/:titleId/chapters/bulk-read-state", withUser(requireUser, async (req, res) => {
+    const titleState = await loadUserTitleState(req.user.discordUserId, req.params.titleId);
+    const title = titleState?.title || null;
+    if (!title) {
+      res.status(404).json({error: "Title not found."});
+      return;
+    }
+    const action = normalizeString(req.body?.action).toLowerCase();
+    if (!["read", "unread", "reset"].includes(action)) {
+      res.status(400).json({error: "action must be read, unread, or reset."});
+      return;
+    }
+    const requestedIds = Array.from(new Set(normalizeArray(req.body?.chapterIds)
+      .map((chapterId) => normalizeString(chapterId))
+      .filter(Boolean)));
+    const chapters = normalizeArray(title.chapters);
+    const chapterById = new Map(chapters.map((chapter) => [normalizeString(chapter.id), chapter]));
+    const selectedIds = requestedIds.filter((chapterId) => chapterById.has(chapterId));
+    if (!selectedIds.length) {
+      res.status(400).json({error: "chapterIds must include at least one chapter on this title."});
+      return;
+    }
+
+    const availableCount = chapters.filter((entry) => entry.available !== false).length;
+    const selectedReadIds = new Set(normalizeArray(title.userState?.readChapterIds).map((entry) => normalizeString(entry)));
+    const now = new Date().toISOString();
+    let clearedBookmarkCount = 0;
+    let clearedProgress = false;
+
+    if (action === "read") {
+      for (const chapterId of selectedIds) {
+        selectedReadIds.add(chapterId);
+      }
+      const completedAt = selectedReadIds.size >= availableCount && availableCount > 0 ? now : null;
+      for (const chapterId of selectedIds) {
+        await vaultClient.markChapterRead({
+          discordUserId: req.user.discordUserId,
+          mediaId: title.id,
+          chapterId,
+          startedAt: title.userState?.startedAt || now,
+          completedAt
+        });
+      }
+    } else {
+      for (const chapterId of selectedIds) {
+        await vaultClient.markChapterUnread({
+          discordUserId: req.user.discordUserId,
+          mediaId: title.id,
+          chapterId,
+          startedAt: title.userState?.startedAt || now
+        });
+      }
+    }
+
+    if (action === "reset") {
+      const selectedSet = new Set(selectedIds);
+      const bookmarks = normalizeArray(await readUserScopedSetting(vaultClient, "moon.reader.bookmarks", req.user.discordUserId, []));
+      const nextBookmarks = bookmarks.filter((entry) =>
+        normalizeString(entry.titleId) !== normalizeString(title.id) || !selectedSet.has(normalizeString(entry.chapterId))
+      );
+      clearedBookmarkCount = bookmarks.length - nextBookmarks.length;
+      if (clearedBookmarkCount > 0) {
+        await writeUserScopedSetting(vaultClient, "moon.reader.bookmarks", req.user.discordUserId, nextBookmarks);
+      }
+      const progressEntry = normalizeArray(await vaultClient.getProgress(req.user.discordUserId))
+        .find((entry) => normalizeString(entry.mediaId) === normalizeString(title.id)) || null;
+      if (progressEntry?.bookmark && selectedSet.has(normalizeString(progressEntry.bookmark.chapterId))) {
+        await vaultClient.deleteProgress({
+          discordUserId: req.user.discordUserId,
+          mediaId: title.id
+        });
+        clearedProgress = true;
+      }
+    }
+
+    await appendEventForUser({
+      domain: "reader",
+      eventType: `chapter-bulk-${action}`,
+      user: req.user,
+      targetType: "title",
+      targetId: normalizeString(title.id),
+      message: `${req.user.username} updated ${selectedIds.length} chapter${selectedIds.length === 1 ? "" : "s"} on ${title.title}.`,
+      metadata: {
+        titleId: normalizeString(title.id),
+        action,
+        chapterIds: selectedIds,
+        clearedBookmarkCount,
+        clearedProgress
+      }
+    });
+    const refreshed = await loadUserTitleState(req.user.discordUserId, req.params.titleId);
+    res.json({
+      title: refreshed?.title || title,
+      action,
+      chapterIds: selectedIds,
+      clearedBookmarkCount,
+      clearedProgress
     });
   }));
 
@@ -4612,16 +4694,18 @@ export const registerMoonV3Routes = (app, {
 
   app.get("/api/moon-v3/user/reader/preferences", withUser(requireUser, async (req, res) => {
     const typeSlug = normalizeTypeSlug(req.query.typeSlug || req.query.type || "manga");
+    const titleId = normalizeString(req.query.titleId);
     const storedPreferences = await readUserScopedSetting(vaultClient, "moon.reader.preferences", req.user.discordUserId, {});
-    res.json(resolveReaderPreferences(storedPreferences, typeSlug));
+    res.json(resolveReaderPreferences(storedPreferences, typeSlug, titleId));
   }));
 
   app.put("/api/moon-v3/user/reader/preferences", withUser(requireUser, async (req, res) => {
     const typeSlug = normalizeTypeSlug(req.body.typeSlug || req.body.type || "manga");
+    const titleId = normalizeString(req.body.titleId);
     const storedPreferences = await readUserScopedSetting(vaultClient, "moon.reader.preferences", req.user.discordUserId, {});
-    const nextStore = mergeReaderPreferences(storedPreferences, typeSlug, req.body);
+    const nextStore = mergeReaderPreferences(storedPreferences, typeSlug, {...req.body, titleId});
     await writeUserScopedSetting(vaultClient, "moon.reader.preferences", req.user.discordUserId, nextStore);
-    res.json(resolveReaderPreferences(nextStore, typeSlug));
+    res.json(resolveReaderPreferences(nextStore, typeSlug, titleId));
   }));
 
   app.get("/api/moon-v3/user/reader/bookmarks", withUser(requireUser, async (req, res) => {
@@ -4811,7 +4895,7 @@ export const registerMoonV3Routes = (app, {
       })),
       progress: progressEntry || null,
       bookmarks: normalizeArray(bookmarks).filter((entry) => entry.titleId === req.params.titleId && entry.chapterId === req.params.chapterId),
-      preferences: resolveReaderPreferences(storedPreferences, typeSlug)
+      preferences: resolveReaderPreferences(storedPreferences, typeSlug, req.params.titleId)
     });
   }));
 

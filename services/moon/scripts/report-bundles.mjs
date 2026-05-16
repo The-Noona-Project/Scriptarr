@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * @file Print compact Moon user/admin route and chunk bundle summaries.
+ * @file Print compact Moon user/reader/admin route and chunk bundle summaries.
  */
 
 import fs from "node:fs";
@@ -12,6 +12,7 @@ const moonRoot = path.resolve(import.meta.dirname, "..");
 const selected = new Set(process.argv.slice(2).filter((arg) => !arg.startsWith("-")));
 const apps = [
   {id: "user", dir: "user-next"},
+  {id: "reader", dir: "reader-next"},
   {id: "admin", dir: "admin-next"}
 ].filter((app) => selected.size === 0 || selected.has(app.id));
 

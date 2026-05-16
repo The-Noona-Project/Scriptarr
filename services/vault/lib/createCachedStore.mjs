@@ -300,6 +300,11 @@ export const createCachedStore = (
       invalidate(`progress:${payload.discordUserId}`);
       return progress;
     },
+    async deleteProgress(payload) {
+      const result = await baseStore.deleteProgress(payload);
+      invalidate(`progress:${payload.discordUserId}`);
+      return result;
+    },
     async getProgressByUser(discordUserId) {
       return readThrough(`progress:${discordUserId}`, () => baseStore.getProgressByUser(discordUserId));
     },

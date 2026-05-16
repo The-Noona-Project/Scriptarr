@@ -1252,6 +1252,16 @@ const createMemoryStore = () => {
     async getProgressByUser(discordUserId) {
       return Array.from(state.progress.values()).filter((entry) => entry.discordUserId === discordUserId);
     },
+    async deleteProgress(payload = {}) {
+      const normalizedUserId = normalizeString(payload.discordUserId);
+      const normalizedMediaId = normalizeString(payload.mediaId);
+      const removed = state.progress.get(readStateKey(normalizedUserId, normalizedMediaId)) || null;
+      state.progress.delete(readStateKey(normalizedUserId, normalizedMediaId));
+      return {
+        removed: Boolean(removed),
+        progress: removed
+      };
+    },
     async getReadStateByUser(discordUserId, mediaId = "") {
       const normalizedUserId = normalizeString(discordUserId);
       const normalizedMediaId = normalizeString(mediaId);
@@ -1295,15 +1305,11 @@ const createMemoryStore = () => {
       const normalizedUserId = normalizeString(payload.discordUserId);
       const normalizedMediaId = normalizeString(payload.mediaId);
       clearMemoryChapterReadsForTitle(normalizedUserId, normalizedMediaId);
-      const titleState = setMemoryTitleState({
-        mediaId: normalizedMediaId,
-        discordUserId: normalizedUserId,
-        startedAt: payload.startedAt || nowIso(),
-        completedAt: null,
-        updatedAt: nowIso()
-      });
+      state.titleReadStates.delete(readStateKey(normalizedUserId, normalizedMediaId));
+      state.progress.delete(readStateKey(normalizedUserId, normalizedMediaId));
       return {
-        titleState,
+        titleState: null,
+        titleStates: [],
         chapterReads: []
       };
     },
@@ -2813,6 +2819,29 @@ const createMysqlStore = (config) => {
         updatedAt: row.updated_at.toISOString()
       }));
     },
+    async deleteProgress(payload = {}) {
+      const normalizedUserId = normalizeString(payload.discordUserId);
+      const normalizedMediaId = normalizeString(payload.mediaId);
+      const [existingRows] = await pool.query(
+        "SELECT * FROM media_progress WHERE discord_user_id = ? AND media_id = ?",
+        [normalizedUserId, normalizedMediaId]
+      );
+      await pool.query("DELETE FROM media_progress WHERE discord_user_id = ? AND media_id = ?", [normalizedUserId, normalizedMediaId]);
+      const row = existingRows[0] || null;
+      return {
+        removed: Boolean(row),
+        progress: row
+          ? {
+            mediaId: row.media_id,
+            discordUserId: row.discord_user_id,
+            chapterLabel: row.chapter_label,
+            positionRatio: Number(row.position_ratio),
+            bookmark: parseJsonColumn(row.bookmark_json, null),
+            updatedAt: row.updated_at.toISOString()
+          }
+          : null
+      };
+    },
     async getReadStateByUser(discordUserId, mediaId = "") {
       const normalizedMediaId = normalizeString(mediaId);
       const titleWhereSql = normalizedMediaId ? "WHERE discord_user_id = ? AND media_id = ?" : "WHERE discord_user_id = ?";
@@ -2872,18 +2901,10 @@ const createMysqlStore = (config) => {
     async markTitleUnread(payload = {}) {
       const normalizedUserId = normalizeString(payload.discordUserId);
       const normalizedMediaId = normalizeString(payload.mediaId);
-      const startedAt = payload.startedAt || nowIso();
       return withTransaction(async (connection) => {
         await connection.query("DELETE FROM media_chapter_reads WHERE discord_user_id = ? AND media_id = ?", [normalizedUserId, normalizedMediaId]);
-        await connection.query(`
-          INSERT INTO media_title_state (media_id, discord_user_id, started_at, completed_at, updated_at)
-          VALUES (?, ?, ?, NULL, NOW())
-          ON DUPLICATE KEY UPDATE started_at = VALUES(started_at), completed_at = NULL, updated_at = NOW()
-        `, [
-          normalizedMediaId,
-          normalizedUserId,
-          toMysqlDateTime(startedAt, toMysqlDateTime(nowIso()))
-        ]);
+        await connection.query("DELETE FROM media_title_state WHERE discord_user_id = ? AND media_id = ?", [normalizedUserId, normalizedMediaId]);
+        await connection.query("DELETE FROM media_progress WHERE discord_user_id = ? AND media_id = ?", [normalizedUserId, normalizedMediaId]);
         return this.getReadStateByUser(normalizedUserId, normalizedMediaId);
       });
     },

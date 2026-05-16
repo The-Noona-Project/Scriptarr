@@ -5,10 +5,12 @@
   "type": "module",
   "main": "server.mjs",
   "scripts": {
-    "build": "npm run build:user && npm run build:admin",
+    "build": "npm run build:user && npm run build:reader && npm run build:admin",
     "build:admin": "next build ./apps/admin-next",
     "bundle:report": "node scripts/report-bundles.mjs",
     "bundle:admin-report": "node scripts/report-bundles.mjs admin",
+    "bundle:reader-report": "node scripts/report-bundles.mjs reader",
+    "build:reader": "next build ./apps/reader-next",
     "build:user": "next build ./apps/user-next",
     "start": "node server.mjs",
     "test": "node --test tests/**/*.test.mjs"

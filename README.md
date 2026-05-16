@@ -74,10 +74,11 @@ Anime-Planet ahead of MangaUpdates as a scrape-based metadata source for aliases
 Moon admin also exposes a dedicated Discord page at `/admin/discord` for guild workflow settings, onboarding template
 or channel management, per-command role gates, release-channel posts, Noona trivia settings, and Portal runtime
 visibility without exposing Discord credentials.
-Moon's user app now runs as an embedded Next.js App Router frontend with Once UI shells, a megamenu header, avatar
-profile controls, a simple footer, and an immersive full-page reader.
-That reader now defaults to seamless infinite chapter scroll while keeping a secondary fit-width paged mode, and it
-still persists Moon-native progress plus bookmarks behind the same typed reader routes.
+Moon's user app now runs as an embedded Next.js App Router frontend with a megamenu header, avatar profile controls,
+and a simple footer, while the fullscreen reader runs as its own embedded `/reader` Next app.
+That reader supports webtoon, single-page, double-page, and manga-double layouts, LTR/RTL direction, page-fit controls,
+keyboard/touch/controller navigation, and still persists Moon-native progress plus bookmarks behind the same typed
+reader routes.
 Moon admin calendar is now backed by Raven chapter release dates captured from provider scrapes plus metadata
 enrichment, and completed catalog titles get a dated completion marker when chapter dates are missing so finished
 series are not silently dropped from the calendar.
@@ -190,7 +191,8 @@ For end-to-end Docker verification, use:
   admin review, browse/search, and personalization surfaces while preserving internal source attribution for debugging.
 - Moon home personalization now blends explicit tag likes or dislikes with inferred taste from read history, follows,
   and the active bookshelf. Bookshelf membership is driven by durable title and chapter read state, so readers can mark
-  a full title or one chapter read or unread and let completed series fall off the shelf until new chapters appear.
+  a full title or one chapter read/unread, reset a title off shelf, bulk-update selected chapters, and let completed
+  series fall off the shelf until new chapters appear.
 - Moon admin now exposes a root-only content reset preview plus execute flow under `/admin/system`. That reset clears
   requests, work locks, progress, follows, bookmarks, Raven catalog state, Raven task state, and managed
   `downloading/<type>` plus `downloaded/<type>` content while preserving users, permission groups, sessions, settings,
@@ -243,8 +245,8 @@ For end-to-end Docker verification, use:
   titles such as Tomb Raider King can recover earlier chapters instead of silently stopping at the visible subset.
 - Moon admin stays dark by default, serves versioned browser assets, and exposes the managed-service updates flow for
   Vault, Sage, Moon, Raven, Portal, and Oracle.
-- Moon's user app is now installable as a PWA, keeps HTML uncached, and uses a rolling recent-chapter reader cache on
-  the current device instead of bulk offline sync.
+- Moon's user and reader apps are installable as a PWA, keep HTML uncached, and use a rolling recent-chapter reader
+  cache on the current device instead of bulk offline sync.
 - Moon also serves trusted API surfaces under `/api/public/*` and selected `/api/moon-v3/*` routes. Search is public,
   protected calls use `X-Scriptarr-Api-Key`, Swagger lives at `/api/public/docs`, system keys inherit assigned
   permission-group grants, and user keys stay scoped to the owning reader's sync data and requests.

@@ -22,9 +22,14 @@
   direct role or flat-permission mutation flows for non-owner users.
 - The admin access model includes a `database` domain. Owners may bypass it, but non-owner admins need explicit
   database grants before Sage should serve DB explorer payloads or settings-table edits.
-- Sage now also brokers Moon's durable title/chapter read-state and tag-preference actions. Keep the user-facing Moon
-  routes browser-safe, write the durable state through Vault, and rebuild home/title/reader payloads from explicit tag
-  preferences plus inferred taste from read history, follows, and the active bookshelf.
+- Sage now also brokers Moon's durable title/chapter read-state, reader preference, and tag-preference actions. Keep
+  the user-facing Moon routes browser-safe, write durable read/progress state through Vault, and rebuild
+  home/title/reader payloads from explicit tag preferences plus inferred taste from read history, follows, and the
+  active bookshelf.
+- `POST /api/moon-v3/user/title/:titleId/unread` is a reset-off-shelf action. It must clear title read state, chapter
+  reads, title progress, and title bookmarks while preserving follows.
+- `POST /api/moon-v3/user/title/:titleId/chapters/bulk-read-state` supports `read`, `unread`, and `reset`. Keep
+  individual unread non-destructive; selected reset is the bookmark/progress-clearing action.
 - Keep `/api/moon-v3/user/profile` as the dedicated aggregate payload for Moon's tabbed `/profile` route. That
   response should stay focused on trusted identity, bookshelf/completion stats, request counts, and recent activity
   instead of forcing the browser to stitch several unrelated APIs together.

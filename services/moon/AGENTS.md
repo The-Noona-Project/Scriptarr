@@ -4,13 +4,15 @@ Read this before editing `services/moon`.
 
 ## Role
 
-Moon serves the forward-facing user app at `/` and the admin app at `/admin` from the same runtime.
+Moon serves the forward-facing user app at `/`, the dedicated reader app at `/reader`, and the admin app at `/admin`
+from the same runtime.
 
 ## Hard Rules
 
-- Preserve the same-origin split between the two Moon programs.
+- Preserve the same-origin split between the three Moon programs.
 - Keep Moon's browser traffic behind Moon-owned API routes that proxy into Sage.
-- The user app is the real library and reader surface.
+- The user app owns home, browse, library, title, requests, following, and profile surfaces.
+- The reader app owns fullscreen `/reader/<type>/<titleId>/<chapterId>` reading.
 - The admin app owns moderation, libraries, metadata repair, users, permissions, and service settings.
 - Add full JSDoc to Moon JS modules, exported functions, route handlers, page controllers, and important helpers.
 - Split Moon files before they grow into monoliths. If a file is approaching 2000 lines, break it into smaller modules when possible.
@@ -24,7 +26,7 @@ Moon serves the forward-facing user app at `/` and the admin app at `/admin` fro
 - Preserve the current performance shape: user card lists use compact projections, home shelves stay bounded, admin
   status starts lightweight, admin events share one provider stream, and admin routes should load leaf chunks only after
   auth/grant checks.
-- Preserve Moon's native reader flows. Do not reintroduce Kavita runtime handoff behavior.
+- Preserve Moon's native reader flows. Do not reintroduce Kavita runtime handoff behavior or browser-direct calls.
 - Keep user requests and admin add-title on the shared metadata-first intake flow. Moon should submit `query`,
   `selectedMetadata`, and nullable `selectedDownload` instead of regressing to free-text-only request payloads.
 - `/admin/requests` should keep showing the saved metadata or download snapshots, linked Raven job state, and the
@@ -48,6 +50,8 @@ Moon serves the forward-facing user app at `/` and the admin app at `/admin` fro
 
 - User pages live in `apps/user-next/components/pages`; shared user shell, chrome, navigation, cards, and local UI
   primitives live beside them under `apps/user-next/components`.
+- Reader pages live in `apps/reader-next`; it is a fullscreen app with its own loading/auth/error states and
+  `/reader/_next` assets.
 - Admin pages live in `apps/admin-next/components`; shared admin API helpers, access checks, routes, event streams, and
   formatting live in `apps/admin-next/lib`.
 - Same-origin runtime and proxy routes live in `lib`. Moon should proxy or compose through Sage instead of teaching the
@@ -62,12 +66,14 @@ Moon serves the forward-facing user app at `/` and the admin app at `/admin` fro
 
 ## Performance Navigation
 
-- User Next surfaces live under `apps/user-next`; admin Next surfaces live under `apps/admin-next`.
+- User Next surfaces live under `apps/user-next`; reader Next surfaces live under `apps/reader-next`; admin Next
+  surfaces live under `apps/admin-next`.
 - Same-origin Moon API and proxy helpers live under `lib`, while Sage owns the actual Moon v3 payload assembly.
 - Use `services/moon/scripts/report-bundles.mjs` when first-load JS/CSS size is part of the investigation.
 - Use `services/moon/tests/adminFrontendPerformance.test.mjs`, `tests/settingsDraft.test.mjs`, and `tests/moonApp.test.mjs`
   for narrow Moon regression coverage, then build the relevant Next app.
 - For cross-service speed fixes, run the narrow service tests first, then `npm run docker:healthcheck`.
-- For UI route changes, build the touched app with `npm --workspace services/moon run build:user` or
-  `npm --workspace services/moon run build:admin`. For bundle work, build both apps before running
+- For UI route changes, build the touched app with `npm --workspace services/moon run build:user`,
+  `npm --workspace services/moon run build:reader`, or `npm --workspace services/moon run build:admin`.
+  For bundle work, build the touched apps before running
   `npm --workspace services/moon run bundle:report`.

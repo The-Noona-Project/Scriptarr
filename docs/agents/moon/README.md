@@ -1,7 +1,8 @@
 # Moon AI Notes
 
-- Moon contains two distinct programs in one runtime: the user app and the admin app.
-- User-facing library and reader flows live at `/`.
+- Moon contains three distinct programs in one runtime: the user app, the dedicated reader app, and the admin app.
+- User-facing library, title, request, following, and profile flows live at `/`.
+- Fullscreen reading lives in the dedicated `/reader` app.
 - Admin moderation, health, metadata, and settings flows live at `/admin`.
 - Keep Raven VPN, Raven metadata, and Oracle or LocalAI controls behind Moon-owned admin routes.
 - Keep the Raven provider settings honest: WeebCentral first by default, MangaDex as a normal fallback download
@@ -29,10 +30,11 @@
   - `/browse`
   - `/library/:type`
   - `/title/:type/:titleId`
-  - `/reader/:type/:titleId/:chapterId`
   - `/myrequests`
   - `/following`
   - `/profile`
+- The supported reader route family is:
+  - `/reader/:type/:titleId/:chapterId`
 - The old untyped `/title/:id` and `/reader/:titleId/:chapterId` paths are compatibility shims only. New Moon links
   should emit the typed canonical paths.
 - Moon stays responsible for browser-safe proxying into Sage. Browsers should not call Raven, Warden, Vault, Portal, or Oracle directly.
@@ -65,6 +67,9 @@
 - The admin app now also runs through embedded Next at `apps/admin-next` for all `/admin` routes. The old plain-JS
   `apps/admin` fallback and `/admin-assets` route are gone, so new admin work should stay in `apps/admin-next` and
   continue using Moon same-origin APIs rather than direct internal service calls.
+- The reader app runs through embedded Next at `apps/reader-next` with `basePath: "/reader"` and isolated
+  `/reader/_next` assets. Keep it fullscreen, chrome-free, and same-origin through Moon -> Sage for payloads,
+  preferences, bookmarks, progress, and page images.
 - Keep the avatar dropdown intentionally small and anchored to the avatar trigger. It should only surface `Profile`,
   conditional `Admin`, and `Logout`, and it should close on outside click, Escape, and route changes.
 - `/profile` is now a tabbed account hub. Keep `Overview`, `Stats`, and `Preferences` fed from the dedicated
@@ -89,11 +94,12 @@
 - Bookshelf membership is no longer derived from `media_progress` alone. Moon should treat title/chapter read state as
   the source of truth for started vs completed bookshelf behavior while still keeping progress rows for the active
   reading position.
-- Title pages should keep the explicit reader actions visible: mark title read, mark title unread, mark chapter read,
-  mark chapter unread, and per-tag `Like`, `Hide`, or `Clear` actions.
-- Reader preferences are now centered on the new immersive reader. Seamless infinite scroll is the default mode,
-  fit-width paged mode is the secondary option, and progress, bookmarks, and typed route syncing should keep working
-  even as the shell evolves.
+- Title pages should keep the explicit reader actions visible: mark title read, reset title off shelf, mark chapter
+  read/unread, selected bulk read/unread/reset, and per-tag `Like`, `Hide`, or `Clear` actions. Resetting a title off
+  shelf clears read state, reader progress, and title bookmarks while preserving follows.
+- Reader preferences are now centered on the new immersive reader. Store type defaults plus title overrides for
+  layout mode, reading direction, page fit, page numbers, and pinned sidebar. Keep legacy `readingMode` accepted as a
+  compatibility input while emitting canonical layout fields.
 - `/admin/system/logs`, `/admin/system/events`, and `/admin/system/updates` are purpose-built Next pages, not generic
   record-card fallbacks. Keep their refreshes background-only so filters, drawers, and confirmation fields do not
   flash or reset.

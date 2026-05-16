@@ -261,14 +261,15 @@ sends arbitrary Discord broadcasts.
 
 ## Moon Route Model
 
-Moon now serves two distinct programs from one runtime:
+Moon now serves three distinct programs from one runtime:
 
 - the forward-facing user app at `/`
+- the fullscreen reader app at `/reader`
 - the admin app at `/admin`
 
-The admin program now runs through a separate Next.js App Router runtime with isolated `/admin/_next` assets. The
-legacy plain-JS admin bundle and `/admin-assets` fallback have been removed, and admin routes continue to use Moon
-same-origin APIs plus the Discord-backed admin guard.
+The reader and admin programs run through separate Next.js App Router runtimes with isolated `/reader/_next` and
+`/admin/_next` assets. The legacy plain-JS admin bundle and `/admin-assets` fallback have been removed, and browser
+routes continue to use Moon same-origin APIs plus the Discord-backed guard where needed.
 
 Common user routes:
 
@@ -283,12 +284,13 @@ Common user routes:
 Moon still accepts the older untyped `/title/<id>` and `/reader/<titleId>/<chapterId>` paths as compatibility shims,
 but the typed routes are the canonical links Moon now emits.
 
-Moon's user app also serves a same-origin `manifest.webmanifest` and `service-worker.js` so the reader can be
+Moon also serves a same-origin `manifest.webmanifest` and `service-worker.js` so the user and reader surfaces can be
 installed like an app and keep a rolling cache of recently opened chapters on the current device.
 That same user app now runs through an embedded Next.js App Router frontend with lightweight local shell primitives, a
 single-row megamenu header with plain site-name branding, a compact avatar dropdown for Profile, conditional Admin,
-and Logout, a dedicated `/profile` page for local StylePanel preferences and install actions, a simple footer, and an immersive
-reader that defaults to infinite chapter scroll while still exposing paged mode. `/profile` is now a tabbed account
+and Logout, a dedicated `/profile` page for local StylePanel preferences and install actions, and a simple footer.
+The dedicated reader app is fullscreen, has its own overlays and settings drawer, and supports webtoon, single,
+double, manga double, LTR/RTL, and page-fit controls. `/profile` is now a tabbed account
 hub with `Overview`, `Stats`, and `Preferences` instead of one long mixed settings panel. Library type links now live
 only inside the `Library` mega menu, and `/browse` now renders as A-Z shelf rows with the same lightweight scroller
 behavior used on the home page. It keeps a quick-jump letter rail on the left and tighter search against titles,
@@ -301,8 +303,10 @@ setup status; the Discord OAuth URL is fetched only when a signed-out page actua
 `/myrequests` is now both the request-creation surface and the personal status page. The top of the page runs the
 metadata-first request wizard, while the list below is split into `Active`, `Completed`, and `Closed` tabs. Readers
 can edit notes or cancel only while the request is still active.
-Title pages now also let readers mark a whole title or one chapter read or unread and set per-tag `Like`, `Hide`, or
-`Clear` preferences directly from the title metadata chips. Those actions update bookshelf membership immediately.
+Title pages now also expose a cover-led detail view, continue/read action strip, tabs, and a dense selectable chapter
+table. Marking a title unread now means reset it off the bookshelf: title read state, chapter reads, progress, and
+title bookmarks are cleared while follows stay. Individual chapter mark-unread is non-destructive, and selected
+chapter `reset` is the destructive bulk action that can clear bookmarks and current progress.
 
 Common admin routes:
 

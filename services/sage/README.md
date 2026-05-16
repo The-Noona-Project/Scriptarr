@@ -24,9 +24,12 @@ days if no stable source appears.
 Sage also owns the brokered `sage.requests.autoApproveAndDownload` setting. When that toggle is enabled, Sage may
 queue a request automatically only if Raven resolves one high-confidence source with no conflicting warnings; anything
 weaker stays in manual admin review.
-Sage now also brokers durable user read-state and tag-preference routes for Moon. Moon home, title, and reader payloads
-use those brokered title or chapter reads plus explicit tag likes or dislikes to build the active bookshelf and
-personalized tag shelves instead of relying only on progress rows.
+Sage now also brokers durable user read-state, reader preference, and tag-preference routes for Moon. Moon home,
+title, and reader payloads use brokered title or chapter reads plus explicit tag likes or dislikes to build the active
+bookshelf and personalized tag shelves instead of relying only on progress rows. Title unread now means reset off
+shelf: Sage asks Vault to clear title/chapter read state and progress, clears title bookmarks from Moon reader
+settings, and preserves follows. Selected chapter bulk actions support read, unread, and reset; reset clears selected
+bookmarks and clears current title progress only when it points into the selected chapters.
 Sage now also exposes a dedicated `/api/moon-v3/user/profile` aggregate payload so Moon's `/profile` route can render
 tabbed overview, stats, and preferences surfaces from one trusted response instead of fanning out across several
 browser calls.

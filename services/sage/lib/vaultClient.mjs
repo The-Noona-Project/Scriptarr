@@ -86,6 +86,7 @@ const requestJson = async (baseUrl, headers, path, {method = "GET", body, allowS
  *   reviewRequest: (id: string | number, payload: Record<string, unknown>) => Promise<any>,
  *   getProgress: (discordUserId: string) => Promise<any>,
  *   upsertProgress: (payload: Record<string, unknown>) => Promise<any>
+ *   deleteProgress: (payload: Record<string, unknown>) => Promise<any>
  * }}
  */
 export const createVaultClient = (config) => {
@@ -389,6 +390,13 @@ export const createVaultClient = (config) => {
         body: JSON.stringify(payload)
       });
       return json(response);
+    },
+    async deleteProgress(payload) {
+      return (await requestJson(baseUrl, headers, "/api/service/progress/delete", {
+        method: "POST",
+        body: payload,
+        context: "Failed to clear reader progress in Vault"
+      })).payload;
     },
     async getReadState(discordUserId, mediaId = "") {
       const suffix = mediaId ? `?mediaId=${encodeURIComponent(mediaId)}` : "";

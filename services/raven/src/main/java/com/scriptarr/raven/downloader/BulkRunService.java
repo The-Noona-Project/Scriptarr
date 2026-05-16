@@ -140,7 +140,7 @@ public class BulkRunService {
      * @return durable run status payload
      */
     public synchronized Map<String, Object> startRun(String runId) {
-        return scheduleRun(runId);
+        return scheduleRun(runId, false);
     }
 
     /**
@@ -150,7 +150,7 @@ public class BulkRunService {
      * @return durable run status payload
      */
     public synchronized Map<String, Object> resumeRun(String runId) {
-        return scheduleRun(runId);
+        return scheduleRun(runId, true);
     }
 
     /**
@@ -160,14 +160,17 @@ public class BulkRunService {
      * @return durable run status payload
      */
     public Map<String, Object> status(String runId) {
-        Map<String, Object> job = requireRun(runId);
-        List<Map<String, Object>> batches = loadBatchTasks(normalizeRunId(runId));
+        String normalizedRunId = normalizeRunId(runId);
+        Map<String, Object> job = requireRun(normalizedRunId);
+        maybeScheduleDetachedRunningRun(normalizedRunId, job);
+        job = requireRun(normalizedRunId);
+        List<Map<String, Object>> batches = loadBatchTasks(normalizedRunId);
         Map<String, Object> response = new LinkedHashMap<>();
-        response.put("runId", normalizeRunId(runId));
+        response.put("runId", normalizedRunId);
         response.put("status", stringValue(job.get("status")));
         response.put("message", stringValue(job.get("message")));
         response.put("requestedBy", stringValue(job.get("requestedBy")));
-        response.put("active", activeRunIds.contains(normalizeRunId(runId)));
+        response.put("active", activeRunIds.contains(normalizedRunId));
         response.put("filters", normalizeMap(job.get("payload")));
         Map<String, Object> summary = buildRunSummary(batches);
         response.put("summary", summary);
@@ -225,7 +228,7 @@ public class BulkRunService {
                 String runId = stringValue(job.get("jobId"));
                 String status = stringValue(job.get("status")).toLowerCase(Locale.ROOT);
                 if (STATUS_RUNNING.equals(status)) {
-                    scheduleRun(runId);
+                    tryScheduleRunWorker(runId);
                 }
             }
         } catch (IllegalStateException error) {
@@ -241,23 +244,25 @@ public class BulkRunService {
         worker.shutdownNow();
     }
 
-    private Map<String, Object> scheduleRun(String runId) {
+    private Map<String, Object> scheduleRun(String runId, boolean allowRecoverableFailedRun) {
         String normalizedRunId = normalizeRunId(runId);
         Map<String, Object> job = requireRun(normalizedRunId);
         String status = stringValue(job.get("status")).toLowerCase(Locale.ROOT);
-        if (STATUS_CANCELLED.equals(status) || STATUS_COMPLETED.equals(status) || STATUS_FAILED.equals(status)) {
+        boolean recoverableFailedRun = STATUS_FAILED.equals(status)
+            && allowRecoverableFailedRun
+            && isRecoverableFailedRun(normalizedRunId);
+        if (STATUS_CANCELLED.equals(status) || STATUS_COMPLETED.equals(status) || (STATUS_FAILED.equals(status) && !recoverableFailedRun)) {
             return status(normalizedRunId);
         }
-        if (activeRunIds.add(normalizedRunId)) {
-            cancelledRunIds.remove(normalizedRunId);
-            worker.execute(() -> {
-                try {
-                    processRun(normalizedRunId);
-                } finally {
-                    activeRunIds.remove(normalizedRunId);
-                }
-            });
+        if (recoverableFailedRun) {
+            updateRunStatus(
+                job,
+                STATUS_RUNNING,
+                "Recovering interrupted Raven mega downloadall run.",
+                buildRunSummary(loadBatchTasks(normalizedRunId))
+            );
         }
+        tryScheduleRunWorker(normalizedRunId);
         return status(normalizedRunId);
     }
 
@@ -291,6 +296,15 @@ public class BulkRunService {
             );
         } catch (BulkRunCancelledException ignored) {
             safelyUpdateRunAfterFailure(runId, STATUS_CANCELLED, "Cancelled by owner.", null);
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            logger.warn("DOWNLOAD", "Raven mega downloadall worker was interrupted.", interrupted.getMessage());
+            safelyUpdateRunAfterFailure(
+                runId,
+                STATUS_RUNNING,
+                "Raven interrupted downloadall before completion. It will resume when Raven is ready.",
+                interrupted
+            );
         } catch (Exception error) {
             logger.error("DOWNLOAD", "Raven mega downloadall run failed.", error);
             boolean brokerFailure = isDurableBrokerFailure(error);
@@ -313,6 +327,48 @@ public class BulkRunService {
             }
         }
         return null;
+    }
+
+    private void maybeScheduleDetachedRunningRun(String runId, Map<String, Object> job) {
+        String status = stringValue(job.get("status")).toLowerCase(Locale.ROOT);
+        if (STATUS_RUNNING.equals(status) && !activeRunIds.contains(runId)) {
+            tryScheduleRunWorker(runId);
+        }
+    }
+
+    private boolean tryScheduleRunWorker(String runId) {
+        if (worker.isShutdown() || !activeRunIds.add(runId)) {
+            return false;
+        }
+        cancelledRunIds.remove(runId);
+        try {
+            worker.execute(() -> {
+                try {
+                    processRun(runId);
+                } finally {
+                    activeRunIds.remove(runId);
+                }
+            });
+            return true;
+        } catch (RuntimeException error) {
+            activeRunIds.remove(runId);
+            logger.warn("DOWNLOAD", "Raven bulk-run worker could not accept a durable run.", "runId=" + runId + " error=" + error.getMessage());
+            return false;
+        }
+    }
+
+    private boolean isRecoverableFailedRun(String runId) {
+        boolean hasRunnableBatch = false;
+        for (Map<String, Object> batch : loadBatchTasks(runId)) {
+            String status = stringValue(batch.get("status")).toLowerCase(Locale.ROOT);
+            if (STATUS_FAILED.equals(status) || STATUS_CANCELLED.equals(status)) {
+                return false;
+            }
+            if (!isBatchTerminal(status)) {
+                hasRunnableBatch = true;
+            }
+        }
+        return hasRunnableBatch;
     }
 
     private void processBatch(String runId, Map<String, Object> batch) throws InterruptedException {

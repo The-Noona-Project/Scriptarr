@@ -8,13 +8,15 @@ import {registerMoonV3ProxyRoutes} from "./registerMoonV3ProxyRoutes.mjs";
 import {registerPageRoutes} from "./registerPageRoutes.mjs";
 import {registerPublicApiRoutes} from "./registerPublicApiRoutes.mjs";
 import {createAdminNextRuntime} from "./createAdminNextRuntime.mjs";
+import {createReaderNextRuntime} from "./createReaderNextRuntime.mjs";
 import {createUserNextRuntime} from "./createUserNextRuntime.mjs";
 
 /**
  * Build the Scriptarr Moon HTTP application.
  *
- * Moon remains a single runtime that serves two distinct browser programs:
- * the forward-facing reader UI at `/` and the Arr-style admin UI at `/admin`.
+ * Moon remains a single runtime that serves three distinct browser programs:
+ * the user library at `/`, the fullscreen reader at `/reader`, and the
+ * Arr-style admin UI at `/admin`.
  *
  * @param {{
  *   logger?: {info: Function, warn: Function}
@@ -28,6 +30,7 @@ export const createMoonApp = async ({logger = createLogger("MOON")} = {}) => {
   const config = resolveMoonConfig();
   const app = express();
   const adminNextRuntime = await createAdminNextRuntime({logger});
+  const readerNextRuntime = await createReaderNextRuntime({logger});
   const userNextRuntime = await createUserNextRuntime({logger});
 
   app.use(express.json());
@@ -44,7 +47,7 @@ export const createMoonApp = async ({logger = createLogger("MOON")} = {}) => {
     res.json({
       ok: true,
       service: "scriptarr-moon",
-      programs: ["/", "/admin"]
+      programs: ["/", "/reader", "/admin"]
     });
   });
 
@@ -52,7 +55,7 @@ export const createMoonApp = async ({logger = createLogger("MOON")} = {}) => {
   registerLegacyApiRoutes(app, {config, getSessionToken});
   registerMoonV3ProxyRoutes(app, {config, getSessionToken});
   registerPublicApiRoutes(app, {config});
-  registerPageRoutes(app, {adminNextRuntime, config, getSessionToken, userNextRuntime});
+  registerPageRoutes(app, {adminNextRuntime, config, getSessionToken, readerNextRuntime, userNextRuntime});
 
   logger.info("Moon app initialized.", {
     sageBaseUrl: config.sageBaseUrl

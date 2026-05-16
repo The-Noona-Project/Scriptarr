@@ -525,22 +525,27 @@ test("moon serves branded split entry documents, typed routes, PWA assets, and M
   const server = app.listen(0);
   const baseUrl = `http://127.0.0.1:${server.address().port}`;
 
-  const [userPageResponse, adminPageResponse, libraryRouteResponse, titleRouteResponse, readerRouteResponse, profileRouteResponse] = await Promise.all([
+  const [userPageResponse, adminPageResponse, libraryRouteResponse, titleRouteResponse, readerRouteResponse, untypedReaderRouteResponse, profileRouteResponse] = await Promise.all([
     fetch(`${baseUrl}/`),
     fetch(`${baseUrl}/admin`),
     fetch(`${baseUrl}/library/webtoon`),
     fetch(`${baseUrl}/title/webtoon/dan-da-dan`),
     fetch(`${baseUrl}/reader/webtoon/dan-da-dan/chapter-1`),
+    fetch(`${baseUrl}/reader/dan-da-dan/chapter-1`),
     fetch(`${baseUrl}/profile`)
   ]);
 
   const userPage = await userPageResponse.text();
   const adminPage = await adminPageResponse.text();
+  const readerPage = await readerRouteResponse.text();
+  const untypedReaderPage = await untypedReaderRouteResponse.text();
 
   assert.match(userPage, /Pax Library/);
   assert.doesNotMatch(userPage, /Scriptarr Moon/);
   assert.equal(adminPageResponse.status, 503);
   assert.match(adminPage, /Moon Admin unavailable/);
+  assert.match(readerPage, /Pax Library Reader unavailable/);
+  assert.match(untypedReaderPage, /Pax Library Reader unavailable/);
   assert.match(userPage, /manifest\.webmanifest/);
   assert.match(userPage, /icon\.svg/);
   assert.equal(userPageResponse.headers.get("cache-control"), "no-store");
@@ -548,14 +553,23 @@ test("moon serves branded split entry documents, typed routes, PWA assets, and M
   assert.equal(libraryRouteResponse.headers.get("cache-control"), "no-store");
   assert.equal(titleRouteResponse.headers.get("cache-control"), "no-store");
   assert.equal(readerRouteResponse.headers.get("cache-control"), "no-store");
+  assert.equal(untypedReaderRouteResponse.headers.get("cache-control"), "no-store");
   assert.equal(profileRouteResponse.headers.get("cache-control"), "no-store");
   assert.match(await libraryRouteResponse.text(), /manifest\.webmanifest/);
   assert.match(await titleRouteResponse.text(), /manifest\.webmanifest/);
-  assert.match(await readerRouteResponse.text(), /manifest\.webmanifest/);
+  assert.match(readerPage, /manifest\.webmanifest/);
+  assert.match(untypedReaderPage, /manifest\.webmanifest/);
   assert.match(await profileRouteResponse.text(), /manifest\.webmanifest/);
 
   const adminAppResponse = await fetch(`${baseUrl}/admin-assets/app.js`);
   assert.equal(adminAppResponse.status, 404);
+  const readerNextAssetResponse = await fetch(`${baseUrl}/reader/_next/static/chunks/app.js`);
+  assert.equal(readerNextAssetResponse.status, 503);
+  assert.match((await readerNextAssetResponse.json()).error, /reader assets/i);
+
+  const healthResponse = await fetch(`${baseUrl}/health`);
+  assert.equal(healthResponse.status, 200);
+  assert.deepEqual((await healthResponse.json()).programs, ["/", "/reader", "/admin"]);
 
   const manifestResponse = await fetch(`${baseUrl}/manifest.webmanifest`);
   assert.match(manifestResponse.headers.get("content-type") || "", /application\/manifest\+json/);

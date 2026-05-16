@@ -427,6 +427,10 @@ export const createVaultApp = async ({logger = createLogger("VAULT")} = {}) => {
     res.json(await store.upsertProgress(req.body));
   });
 
+  app.post("/api/service/progress/delete", requireJson, async (req, res) => {
+    res.json(await store.deleteProgress(req.body || {}));
+  });
+
   app.get("/api/service/progress/:discordUserId", async (req, res) => {
     res.json(await store.getProgressByUser(req.params.discordUserId));
   });

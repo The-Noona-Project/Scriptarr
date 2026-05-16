@@ -181,6 +181,31 @@ const renderUserFallbackHtml = ({siteName}) => `<!doctype html>
 </body>
 </html>`;
 
+const renderReaderFallbackHtml = ({siteName}) => `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>${siteName} Reader</title>
+  <meta name="theme-color" content="#050607">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <style>
+    html, body { min-height: 100%; margin: 0; background: #050607; color: #f6f1e8; font-family: Inter, system-ui, sans-serif; }
+    main { min-height: 100vh; display: grid; place-items: center; padding: 24px; text-align: center; }
+    a { color: #8ab9ff; }
+  </style>
+</head>
+<body>
+  <main>
+    <div>
+      <h1>${siteName} Reader unavailable</h1>
+      <p>The embedded reader runtime is not ready.</p>
+      <p><a href="/">Return to library</a></p>
+    </div>
+  </main>
+</body>
+</html>`;
+
 /**
  * Register Moon's static assets, compatibility redirects, and the embedded
  * Next entry points used by the admin and user apps.
@@ -190,11 +215,12 @@ const renderUserFallbackHtml = ({siteName}) => `<!doctype html>
  *   config?: {sageBaseUrl?: string},
  *   getSessionToken?: (request: import("express").Request) => string,
  *   adminNextRuntime?: {handle: (request: import("http").IncomingMessage, response: import("http").ServerResponse) => Promise<void>} | null,
+ *   readerNextRuntime?: {handle: (request: import("http").IncomingMessage, response: import("http").ServerResponse) => Promise<void>} | null,
  *   userNextRuntime?: {handle: (request: import("http").IncomingMessage, response: import("http").ServerResponse) => Promise<void>} | null
  * }} [options]
  * @returns {void}
  */
-export const registerPageRoutes = (app, {adminNextRuntime = null, config = {}, getSessionToken = () => "", userNextRuntime = null} = {}) => {
+export const registerPageRoutes = (app, {adminNextRuntime = null, config = {}, getSessionToken = () => "", readerNextRuntime = null, userNextRuntime = null} = {}) => {
   const userNextAppPath = path.join(process.cwd(), "apps", "user-next");
   const userIconPath = path.join(userNextAppPath, "app", "icon.svg");
   const userMaskableIconPath = path.join(userNextAppPath, "app", "icon-maskable.svg");
@@ -346,6 +372,38 @@ export const registerPageRoutes = (app, {adminNextRuntime = null, config = {}, g
       return;
     }
     res.status(503).type("html").send("<!doctype html><title>Moon Admin unavailable</title><main><h1>Moon Admin unavailable</h1><p>The embedded Next admin runtime is not ready.</p></main>");
+  });
+
+  app.all("/reader/_next/*splat", async (req, res) => {
+    if (readerNextRuntime) {
+      await readerNextRuntime.handle(req, res);
+      return;
+    }
+    res.status(503).json({error: "Moon reader assets are unavailable until the embedded reader runtime is ready."});
+  });
+
+  app.get("/reader", async (req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    if (readerNextRuntime) {
+      await readerNextRuntime.handle(req, res);
+      return;
+    }
+    const branding = await loadBranding();
+    res.type("html").send(renderReaderFallbackHtml({
+      siteName: normalizeSiteName(branding.siteName)
+    }));
+  });
+
+  app.get("/reader/*splat", async (req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    if (readerNextRuntime) {
+      await readerNextRuntime.handle(req, res);
+      return;
+    }
+    const branding = await loadBranding();
+    res.type("html").send(renderReaderFallbackHtml({
+      siteName: normalizeSiteName(branding.siteName)
+    }));
   });
 
   app.get("/", async (_req, res) => {

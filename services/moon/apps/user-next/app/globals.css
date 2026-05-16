@@ -445,13 +445,6 @@ a {
   display: block;
 }
 
-.moon-reader-page img,
-.moon-reader-paged-image {
-  width: 100%;
-  height: auto;
-  display: block;
-}
-
 .moon-title-card-fallback {
   width: 100%;
   height: 100%;
@@ -540,7 +533,6 @@ a {
 }
 
 .moon-list-row strong,
-.moon-reader-topbar h1,
 .moon-title-hero h1 {
   margin: 0;
   font-size: 1rem;
@@ -643,170 +635,332 @@ a {
   border-color: rgba(224, 93, 93, 0.35);
 }
 
-.moon-reader-layout {
-  min-height: calc(100vh - 140px);
+.moon-title-page {
   display: grid;
-  grid-template-columns: 360px minmax(0, 1fr);
   gap: 18px;
-  align-items: start;
 }
 
-.moon-reader-sidebar {
-  position: sticky;
-  top: 160px;
-  display: grid;
-  gap: 16px;
-}
-
-.moon-reader-sidebar .moon-panel,
-.moon-reader-canvas,
-.moon-reader-stage {
+.moon-title-detail-hero,
+.moon-title-chapter-surface,
+.moon-title-detail-panel {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: linear-gradient(180deg, rgba(17, 24, 31, 0.92), rgba(10, 16, 22, 0.88));
+  box-shadow: 0 32px 80px rgba(0, 0, 0, 0.2);
+  border-radius: 8px;
   overflow: hidden;
 }
 
-.moon-reader-sidebar-section {
-  padding: 18px;
-}
-
-.moon-reader-sidebar-section h2,
-.moon-reader-stage h2 {
-  margin: 0 0 8px;
-  font-size: 1rem;
-}
-
-.moon-reader-sidebar-section p {
-  margin: 0;
-}
-
-.moon-reader-chapter-nav,
-.moon-reader-bookmarks {
+.moon-title-detail-hero {
   display: grid;
-  gap: 10px;
-  max-height: 320px;
-  overflow: auto;
+  grid-template-columns: 280px minmax(0, 1fr);
+  gap: 24px;
+  padding: 24px;
 }
 
-.moon-reader-chapter-button,
-.moon-reader-bookmark-button {
-  width: 100%;
-  text-align: left;
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  background: rgba(255, 255, 255, 0.03);
-  color: inherit;
-  padding: 12px 14px;
-  border-radius: 16px;
-  cursor: pointer;
-}
-
-.moon-reader-canvas {
-  position: relative;
+.moon-title-cover-column {
   display: grid;
-  gap: 0;
+  gap: 14px;
+  align-content: start;
 }
 
-.moon-reader-topbar-shell {
-  position: sticky;
-  top: 122px;
-  z-index: 10;
-  padding-bottom: 16px;
-  background: linear-gradient(180deg, rgba(8, 14, 20, 0.98), rgba(8, 14, 20, 0.96) 76%, rgba(8, 14, 20, 0));
+.moon-title-cover-column .moon-title-cover {
+  border-radius: 8px;
 }
 
-.moon-reader-topbar {
-  position: relative;
+.moon-title-read-meter {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.moon-title-read-meter span {
+  color: rgba(245, 239, 234, 0.9);
+  font-weight: 800;
+}
+
+.moon-title-read-meter div {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.moon-title-read-meter i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, rgba(255, 176, 112, 0.94), rgba(112, 165, 255, 0.9));
+}
+
+.moon-title-detail-hero .moon-title-hero-copy h1 {
+  font-size: clamp(2.2rem, 5vw, 5rem);
+  line-height: 0.96;
+}
+
+.moon-title-action-strip,
+.moon-title-tabs,
+.moon-title-chapter-tools,
+.moon-title-bulk-toolbar {
   display: flex;
-  justify-content: space-between;
-  gap: 20px;
-  align-items: end;
-  padding: 18px 20px;
-  border-radius: 24px;
-  background: rgba(8, 14, 20, 0.84);
-  backdrop-filter: blur(18px);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-}
-
-.moon-reader-progress {
-  display: flex;
+  flex-wrap: wrap;
   gap: 10px;
   align-items: center;
-  flex-wrap: wrap;
 }
 
-.moon-reader-stage {
-  padding: 0;
-  min-height: 72vh;
+.moon-title-action-strip {
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  background: rgba(5, 9, 13, 0.46);
+}
+
+.moon-title-danger-button,
+.moon-title-tabs button,
+.moon-title-chapter-tools button,
+.moon-title-bulk-toolbar button {
+  min-height: 40px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.05);
+  color: rgba(245, 239, 234, 0.92);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 800;
+  padding: 9px 13px;
+}
+
+.moon-title-danger-button,
+.moon-title-bulk-toolbar button.is-danger {
+  border-color: rgba(224, 93, 93, 0.42);
+  color: rgba(255, 205, 205, 0.96);
+}
+
+.moon-title-danger-button:disabled,
+.moon-title-chapter-tools button:disabled,
+.moon-title-bulk-toolbar button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.moon-title-status-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.moon-title-status-grid > div,
+.moon-title-detail-panel {
+  padding: 16px;
+}
+
+.moon-title-status-grid > div {
+  display: grid;
+  gap: 6px;
+  min-height: 92px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.moon-title-status-grid strong {
+  font-size: 1.05rem;
+}
+
+.moon-title-notice {
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid rgba(84, 197, 127, 0.35);
+  border-radius: 8px;
+  background: rgba(84, 197, 127, 0.08);
+  color: rgba(226, 255, 236, 0.96);
+}
+
+.moon-pill.is-strong {
+  border-color: rgba(255, 176, 112, 0.36);
+  background: rgba(255, 176, 112, 0.12);
+}
+
+.moon-title-tabs {
+  position: sticky;
+  top: 87px;
+  z-index: 18;
+  padding: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  background: rgba(8, 14, 20, 0.94);
+  backdrop-filter: blur(18px);
+}
+
+.moon-title-tabs button.is-active {
+  border-color: rgba(112, 165, 255, 0.46);
+  background: rgba(112, 165, 255, 0.14);
+}
+
+.moon-title-chapter-surface {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+}
+
+.moon-title-chapter-tools {
+  align-items: end;
+}
+
+.moon-title-chapter-tools label {
+  display: grid;
+  flex: 1 1 180px;
+  gap: 6px;
+}
+
+.moon-title-chapter-tools label span {
+  color: rgba(132, 188, 255, 0.82);
+  font-size: 0.74rem;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.moon-title-chapter-tools input,
+.moon-title-chapter-tools select {
+  width: 100%;
+  min-height: 42px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  background: rgba(8, 14, 20, 0.88);
+  color: rgba(245, 239, 234, 0.92);
+  padding: 10px 12px;
+}
+
+.moon-title-bulk-toolbar {
+  position: sticky;
+  top: 147px;
+  z-index: 16;
+  justify-content: space-between;
+  padding: 12px;
+  border: 1px solid rgba(255, 176, 112, 0.3);
+  border-radius: 8px;
+  background: rgba(23, 18, 13, 0.94);
+  backdrop-filter: blur(18px);
+}
+
+.moon-title-table-wrap {
+  overflow: auto;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 8px;
+}
+
+.moon-chapter-table {
+  width: 100%;
+  min-width: 760px;
+  border-collapse: collapse;
+  text-align: left;
+}
+
+.moon-chapter-table th,
+.moon-chapter-table td {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  padding: 12px;
+  vertical-align: middle;
+}
+
+.moon-chapter-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: rgba(9, 14, 20, 0.98);
+  color: rgba(167, 191, 219, 0.82);
+  font-size: 0.76rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.moon-chapter-table tr:last-child td {
+  border-bottom: 0;
+}
+
+.moon-chapter-table tr.is-read {
+  color: rgba(245, 239, 234, 0.72);
+}
+
+.moon-chapter-table input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  accent-color: rgba(255, 176, 112, 0.94);
+}
+
+.moon-chapter-title-link {
+  display: grid;
+  gap: 3px;
+}
+
+.moon-chapter-title-link span {
+  color: rgba(240, 237, 232, 0.55);
+  font-size: 0.82rem;
+}
+
+.moon-title-state-chip {
+  display: inline-flex;
+  min-width: 72px;
+  justify-content: center;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+  padding: 5px 9px;
+  font-size: 0.78rem;
+}
+
+.moon-title-state-chip.is-read {
+  border-color: rgba(84, 197, 127, 0.34);
+  background: rgba(84, 197, 127, 0.1);
+}
+
+.moon-title-state-chip.is-unread {
+  border-color: rgba(255, 176, 112, 0.28);
+  background: rgba(255, 176, 112, 0.08);
+}
+
+.moon-title-detail-grid {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.8fr) minmax(0, 1.2fr);
+  gap: 18px;
+}
+
+.moon-title-detail-panel dl,
+.moon-title-request-list {
+  display: grid;
+  gap: 10px;
+  margin: 12px 0 0;
+}
+
+.moon-title-detail-panel dl > div,
+.moon-title-request-row {
+  display: grid;
+  gap: 4px;
+  padding: 12px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.moon-title-detail-panel dt,
+.moon-title-request-row span {
+  color: rgba(167, 191, 219, 0.82);
+  font-size: 0.76rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.moon-title-detail-panel dd,
+.moon-title-request-row p {
+  margin: 0;
+  color: rgba(240, 237, 232, 0.76);
 }
 
 .moon-reader-chapter-stack {
   display: grid;
   gap: 28px;
-}
-
-.moon-reader-chapter-section {
-  display: grid;
-  gap: 14px;
-}
-
-.moon-reader-chapter-section.is-lead {
-  gap: 0;
-}
-
-.moon-reader-chapter-section:not(.is-lead) {
-  margin-top: 24px;
-  padding-top: 20px;
-  border-top: 1px solid rgba(255, 255, 255, 0.06);
-}
-
-.moon-reader-chapter-header {
-  margin: 0;
-  padding: 0 20px;
-  display: grid;
-  gap: 4px;
-  background: transparent;
-  border: 0;
-}
-
-.moon-reader-pages {
-  display: grid;
-  gap: 0;
-}
-
-.moon-reader-page {
-  overflow: hidden;
-  background: transparent;
-  border: 0;
-}
-
-.moon-reader-page.is-active {
-  box-shadow: none;
-}
-
-.moon-reader-paged-surface {
-  display: grid;
-  gap: 0;
-  justify-items: center;
-  padding: 22px;
-}
-
-.moon-reader-paged-toolbar {
-  display: flex;
-  justify-content: space-between;
-  gap: 14px;
-  align-items: center;
-  padding: 14px 16px;
-  border-radius: 18px;
-  background: rgba(255, 255, 255, 0.03);
-}
-
-.moon-reader-paged-frame {
-  width: min(1100px, 100%);
-  border-radius: 0;
-  overflow: visible;
-  background: rgba(0, 0, 0, 0.18);
-}
-
-.moon-reader-drawer-toggle {
-  display: none;
 }
 
 .moon-profile-menu {
@@ -1582,7 +1736,8 @@ a {
 @media (max-width: 1080px) {
   .moon-hero,
   .moon-title-hero,
-  .moon-reader-layout {
+  .moon-title-detail-hero,
+  .moon-title-detail-grid {
     grid-template-columns: 1fr;
   }
 
@@ -1614,14 +1769,6 @@ a {
     border: 1px solid rgba(255, 255, 255, 0.08);
   }
 
-  .moon-reader-sidebar {
-    position: static;
-  }
-
-  .moon-reader-drawer-toggle {
-    display: inline-flex;
-  }
-
   .moon-profile-account {
     grid-template-columns: 1fr;
   }
@@ -1644,6 +1791,14 @@ a {
 
   .moon-request-search {
     grid-template-columns: 1fr;
+  }
+
+  .moon-title-tabs {
+    top: 84px;
+  }
+
+  .moon-title-bulk-toolbar {
+    top: 144px;
   }
 }
 
@@ -1684,5 +1839,28 @@ a {
     min-width: 176px;
     width: 176px;
     flex-basis: 176px;
+  }
+
+  .moon-title-detail-hero,
+  .moon-title-chapter-surface,
+  .moon-title-detail-panel {
+    padding: 14px;
+  }
+
+  .moon-title-status-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .moon-title-tabs,
+  .moon-title-bulk-toolbar {
+    position: static;
+  }
+
+  .moon-title-action-strip {
+    align-items: stretch;
+  }
+
+  .moon-title-action-strip > * {
+    flex: 1 1 160px;
   }
 }

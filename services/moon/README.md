@@ -1,7 +1,8 @@
 # Moon
 
-Moon serves Scriptarr's native user app at `/` and the admin app at `/admin`.
-The user app is now installable as a same-origin PWA with a rolling recent-chapter cache for reader pages.
+Moon serves Scriptarr's native user app at `/`, dedicated reader app at `/reader`, and admin app at `/admin`.
+The user and reader surfaces are installable through the same-origin PWA shell with a rolling recent-chapter cache for
+reader pages.
 
 The admin side now owns Raven VPN settings, Raven metadata provider order, and the dedicated `/admin/system/ai`
 surface for Oracle or LocalAI configuration while still proxying everything through Sage instead of sending the browser
@@ -57,12 +58,15 @@ cards clamp long copy until the reader opens the full title page. The home route
 starts with a personalized "Your Bookshelf" continue-reading shelf, then stacks cover-led scroller rows for recently
 added titles by library type and tag-driven suggestions based on explicit tag likes or hides plus inferred taste from
 read history, follows, and the active bookshelf.
-Moon's reader is now a full-page immersive workspace that defaults to seamless infinite chapter scroll while keeping
-fit-width paged mode as a secondary preference. It still uses Moon's typed reader routes plus the existing progress
-and bookmark APIs.
-Moon title pages now also let readers mark a title or one chapter read or unread and set per-tag `Like`, `Hide`, or
-`Clear` preferences directly from the canonical title tags. Bookshelf membership is now derived from durable read state
-instead of only from `media_progress`, so completed titles can fall off the shelf until new chapters appear.
+Moon's reader is now a dedicated fullscreen app at `/reader/<type>/<titleId>/<chapterId>` with isolated
+`/reader/_next` assets, own auth/loading/error states, overlay controls, progress controls, settings drawer, and
+layout preferences for webtoon, single page, double page, manga double, LTR/RTL direction, and width/height/contain
+fit. It still uses Moon's same-origin typed reader APIs for progress, bookmarks, preferences, manifest payloads, and
+page images.
+Moon title pages now expose a cover-led detail surface, a clear continue/read action strip, tabs, and a dense
+selectable chapter table. Marking a title unread is now a reset-off-shelf action: it clears title read state, chapter
+read state, reader progress, and title bookmarks while preserving follows. Individual chapter mark-unread remains
+non-destructive; selected chapter `reset` is the bookmark/progress-clearing bulk action.
 `/admin/system` now also exposes a root-only content reset preview plus execute flow. That maintenance action clears
 content-side requests, follows, bookmarks, progress, Raven catalog state, Raven task state, and managed Raven download
 folders while keeping users, permission groups, settings, secrets, sessions, and durable events.

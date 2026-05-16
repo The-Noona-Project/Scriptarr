@@ -954,6 +954,96 @@ test("vault exposes safe database explorer summaries, redaction, and settings ed
   server.close();
 });
 
+test("vault clears title read state, chapter reads, and progress when a title is reset unread", async () => {
+  const {app} = await createVaultApp();
+  const server = app.listen(0);
+  const {port} = server.address();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const headers = {
+    "Authorization": "Bearer sage-dev-token",
+    "Content-Type": "application/json"
+  };
+
+  await fetch(`${baseUrl}/api/service/progress`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      mediaId: "dan-da-dan",
+      discordUserId: "reader-reset",
+      chapterLabel: "Chapter 166",
+      positionRatio: 0.5,
+      bookmark: {
+        chapterId: "dandadan-c166",
+        pageIndex: 2
+      }
+    })
+  });
+
+  const titleRead = await fetch(`${baseUrl}/api/service/read-state/title/read`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      discordUserId: "reader-reset",
+      mediaId: "dan-da-dan",
+      chapterIds: ["dandadan-c166", "dandadan-c167"],
+      startedAt: "2026-04-23T00:00:00.000Z",
+      completedAt: "2026-04-23T01:00:00.000Z"
+    })
+  }).then((response) => response.json());
+  assert.equal(titleRead.titleState.mediaId, "dan-da-dan");
+  assert.equal(titleRead.chapterReads.length, 2);
+
+  const cachedProgressBefore = await fetch(`${baseUrl}/api/service/progress/reader-reset`, {headers}).then((response) => response.json());
+  assert.equal(cachedProgressBefore.length, 1);
+  const cachedReadStateBefore = await fetch(`${baseUrl}/api/service/read-state/reader-reset?mediaId=dan-da-dan`, {headers}).then((response) => response.json());
+  assert.equal(cachedReadStateBefore.titleStates.length, 1);
+  assert.equal(cachedReadStateBefore.chapterReads.length, 2);
+
+  const unreadResponse = await fetch(`${baseUrl}/api/service/read-state/title/unread`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      discordUserId: "reader-reset",
+      mediaId: "dan-da-dan"
+    })
+  });
+  const unread = await unreadResponse.json();
+  assert.equal(unreadResponse.status, 200);
+  assert.equal(unread.titleState, null);
+  assert.equal(unread.titleStates.length, 0);
+  assert.equal(unread.chapterReads.length, 0);
+
+  const progressAfterUnread = await fetch(`${baseUrl}/api/service/progress/reader-reset`, {headers}).then((response) => response.json());
+  assert.equal(progressAfterUnread.length, 0);
+  const readStateAfterUnread = await fetch(`${baseUrl}/api/service/read-state/reader-reset?mediaId=dan-da-dan`, {headers}).then((response) => response.json());
+  assert.equal(readStateAfterUnread.titleStates.length, 0);
+  assert.equal(readStateAfterUnread.chapterReads.length, 0);
+
+  await fetch(`${baseUrl}/api/service/progress`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      mediaId: "dan-da-dan",
+      discordUserId: "reader-reset",
+      chapterLabel: "Chapter 167",
+      positionRatio: 0.8
+    })
+  });
+  assert.equal((await fetch(`${baseUrl}/api/service/progress/reader-reset`, {headers}).then((response) => response.json())).length, 1);
+  const deletedProgress = await fetch(`${baseUrl}/api/service/progress/delete`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      discordUserId: "reader-reset",
+      mediaId: "dan-da-dan"
+    })
+  }).then((response) => response.json());
+  assert.equal(deletedProgress.removed, true);
+  assert.equal((await fetch(`${baseUrl}/api/service/progress/reader-reset`, {headers}).then((response) => response.json())).length, 0);
+
+  server.close();
+});
+
 test("vault persists read state and clears only content-side records during a content reset", async () => {
   const {app} = await createVaultApp();
   const server = app.listen(0);

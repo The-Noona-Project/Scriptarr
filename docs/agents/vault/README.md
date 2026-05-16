@@ -20,6 +20,8 @@
   text search, cursor, and limit so Moon admin pages do not fake filtering over incomplete payloads.
 - Vault now also owns `media_title_state` plus `media_chapter_reads`. Treat those records as the durable bookshelf and
   completion source of truth; `media_progress` stays focused on current reading position only.
+- Title unread/reset from Sage must delete the matching `media_title_state`, `media_chapter_reads`, and
+  `media_progress` rows. Do not reinsert a started unread title state for that reset path.
 - Vault now also owns API key records for Moon/Sage. Store only key hashes and metadata, preserve API keys through
   content reset, and expose resolve/list/update/revoke only through service-authenticated Vault routes for Sage.
 - Vault now exposes a service-only database explorer contract for Sage. Keep overview and table browsing allowlisted,

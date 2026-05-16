@@ -69,7 +69,8 @@ Read this before editing Scriptarr.
 
 - Start from the request path, not the file name. Browser work usually starts in Moon, flows through Sage, and then
   reaches Vault, Raven, Warden, Portal, Oracle, or LocalAI only through brokered server-side calls.
-- Moon UI edits belong in `services/moon/apps/user-next` for reader/user pages and
+- Moon UI edits belong in `services/moon/apps/user-next` for user pages,
+  `services/moon/apps/reader-next` for fullscreen reader pages, and
   `services/moon/apps/admin-next` for admin pages. Same-origin Moon route and proxy logic belongs in
   `services/moon/lib`.
 - Sage route assembly belongs in `services/sage/lib/registerMoonV3Routes.mjs` for Moon v3 payloads,
@@ -87,8 +88,9 @@ Read this before editing Scriptarr.
 
 ## Test Map
 
-- Moon UI/proxy changes: `npm --workspace services/moon test`, then `npm --workspace services/moon run build:user`
-  or `npm --workspace services/moon run build:admin` for touched Next apps.
+- Moon UI/proxy changes: `npm --workspace services/moon test`, then `npm --workspace services/moon run build:user`,
+  `npm --workspace services/moon run build:reader`, or `npm --workspace services/moon run build:admin` for touched
+  Next apps.
 - Sage route/broker changes: `npm --workspace services/sage test`.
 - Vault storage changes: `npm --workspace services/vault test`.
 - Portal Discord/runtime changes: `npm --workspace services/portal test`.
@@ -96,8 +98,8 @@ Read this before editing Scriptarr.
 - Raven Java changes: `npm run test:raven`.
 - Cross-service behavior: `npm run docker:healthcheck`. Use `npm run docker:test` only when the deeper flow is needed,
   and clean it with `npm run docker:test:teardown` if it is left running.
-- Moon performance work also needs `npm --workspace services/moon run bundle:report` after user/admin builds, and
-  bundle regressions should be compared against the current route first-load JS baseline.
+- Moon performance work also needs `npm --workspace services/moon run bundle:report` after the touched user, reader,
+  or admin builds, and bundle regressions should be compared against the current route first-load JS baseline.
 
 ## Workflow Notes
 
