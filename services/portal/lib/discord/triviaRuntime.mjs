@@ -167,7 +167,7 @@ export const createTriviaRuntime = ({
     const state = await withTimeout(
       sage.getTriviaState(),
       TRIVIA_STATE_TIMEOUT_MS,
-      "Sage trivia state"
+      "Trivia state"
     );
     const round = state.ok ? state.payload?.activeRound : null;
     rememberActiveRound(round);
@@ -429,7 +429,7 @@ export const createTriviaRuntime = ({
     const result = await withTimeout(
       sage.getTriviaState(),
       TRIVIA_STATE_TIMEOUT_MS,
-      "Sage trivia state"
+      "Trivia state"
     );
     return result.ok ? result.payload || {} : {};
   };
@@ -520,7 +520,7 @@ export const createTriviaRuntime = ({
           messageId: message?.id
         }),
         TRIVIA_GUESS_TIMEOUT_MS,
-        "Sage trivia guess"
+        "Trivia guess"
       );
       logger?.info?.("Trivia guess judged.", {
         messageId: normalizeString(message?.id),

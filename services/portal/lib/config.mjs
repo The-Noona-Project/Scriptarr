@@ -69,7 +69,7 @@ export const resolvePortalConfig = (env = process.env) => ({
       channelId: normalizeOptionalString(env.SCRIPTARR_DISCORD_ONBOARDING_CHANNEL_ID),
       template: normalizeString(
         env.SCRIPTARR_ONBOARDING_TEMPLATE,
-        "Welcome to Scriptarr, {username}. Requests are moderated, and Noona can answer read-only status questions."
+        "Welcome to {siteName}, {username}. Requests are moderated, and Noona can answer read-only status questions."
       )
     },
     notifications: {

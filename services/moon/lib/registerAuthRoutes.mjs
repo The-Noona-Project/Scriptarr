@@ -75,7 +75,7 @@ const renderAuthRelayPage = ({targetPath, publicOrigin}) => {
   </head>
   <body>
     <main>
-      <h1>Moon finished signing you in.</h1>
+      <h1>Scriptarr finished signing you in.</h1>
       <p>Returning you to Scriptarr…</p>
       <p><a href="${escapeHtml(targetPath)}">Continue now</a></p>
     </main>

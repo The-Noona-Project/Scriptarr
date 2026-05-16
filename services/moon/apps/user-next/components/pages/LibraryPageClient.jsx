@@ -19,7 +19,8 @@ import {AuthRequiredView, EmptyView, ErrorView, LoadingView} from "../StateView.
  * @returns {import("react").ReactNode}
  */
 export const LibraryPageClient = ({typeSlug = ""}) => {
-  const {auth, loginUrl, libraryTypes: chromeLibraryTypes = []} = useMoonChrome();
+  const {auth, branding, loginUrl, libraryTypes: chromeLibraryTypes = []} = useMoonChrome();
+  const siteName = branding?.siteName || "Scriptarr";
   const libraryUrl = useMemo(() => {
     const params = new URLSearchParams({view: "card", pageSize: "100"});
     if (typeSlug) {
@@ -68,7 +69,7 @@ export const LibraryPageClient = ({typeSlug = ""}) => {
   };
 
   if (loading) {
-    return <LoadingView label="Moon is building the type-scoped library index." />;
+    return <LoadingView label={`${siteName} is building the type-scoped library index.`} />;
   }
 
   if (status === 401 && !auth) {
@@ -76,7 +77,7 @@ export const LibraryPageClient = ({typeSlug = ""}) => {
       <AuthRequiredView
         loginUrl={loginUrl}
         title="Sign in to open your library"
-        detail="Your library shelves, type views, and reading history all live behind your Moon session."
+        detail={`Your library shelves, type views, and reading history all live behind your ${siteName} session.`}
       />
     );
   }
@@ -117,7 +118,7 @@ export const LibraryPageClient = ({typeSlug = ""}) => {
           ) : null}
         </section>
       ) : (
-        <EmptyView title="No titles in this shelf yet" detail="Raven will surface titles here once this type has imported chapters." />
+        <EmptyView title="No titles in this shelf yet" detail="Imported titles will appear here once this type has readable chapters." />
       )}
     </div>
   );

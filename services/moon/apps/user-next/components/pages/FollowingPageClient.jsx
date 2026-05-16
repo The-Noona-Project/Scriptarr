@@ -16,11 +16,12 @@ import {AuthRequiredView, EmptyView, ErrorView, LoadingView} from "../StateView.
  * @returns {import("react").ReactNode}
  */
 export const FollowingPageClient = () => {
-  const {auth, loginUrl} = useMoonChrome();
+  const {auth, branding, loginUrl} = useMoonChrome();
+  const siteName = branding?.siteName || "Scriptarr";
   const {loading, error, status, data} = useMoonJson("/api/moon-v3/user/following", {fallback: {following: []}});
 
   if (loading) {
-    return <LoadingView label="Moon is gathering the titles you asked it to surface first." />;
+    return <LoadingView label={`${siteName} is gathering the titles you asked it to surface first.`} />;
   }
 
   if (status === 401 && !auth) {
@@ -28,7 +29,7 @@ export const FollowingPageClient = () => {
       <AuthRequiredView
         loginUrl={loginUrl}
         title="Sign in to view followed titles"
-        detail="Moon uses your Discord session to keep followed series and chapter alerts tied to you."
+        detail={`${siteName} uses your Discord session to keep followed series and chapter alerts tied to you.`}
       />
     );
   }
@@ -58,7 +59,7 @@ export const FollowingPageClient = () => {
           ))}
         </div>
       ) : (
-        <EmptyView title="Nothing followed yet" detail="Follow a title from its detail page and Moon will keep it close." />
+        <EmptyView title="Nothing followed yet" detail={`Follow a title from its detail page and ${siteName} will keep it close.`} />
       )}
     </section>
   );

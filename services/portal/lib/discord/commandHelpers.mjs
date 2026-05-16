@@ -99,7 +99,7 @@ export const buildMoonTitleUrl = (publicBaseUrl, result = {}) => {
   return `${baseUrl}/title/${typeSlug || "manga"}/${encodeURIComponent(titleId)}`;
 };
 
-export const renderSearchResults = (title, results = [], publicBaseUrl) => {
+export const renderSearchResults = (title, results = [], publicBaseUrl, brandName = "Scriptarr") => {
   const visible = results.slice(0, MAX_VISIBLE_RESULTS);
   const lines = visible.map((entry, index) => {
     const url = buildMoonTitleUrl(publicBaseUrl, entry);
@@ -117,11 +117,11 @@ export const renderSearchResults = (title, results = [], publicBaseUrl) => {
   });
 
   if (!visible.length) {
-    return `No Scriptarr library titles found for "${title}".`;
+    return `No ${brandName} library titles found for "${title}".`;
   }
 
   return [
-    `Found ${results.length} Scriptarr ${results.length === 1 ? "match" : "matches"} for "${title}":`,
+    `Found ${results.length} ${brandName} ${results.length === 1 ? "match" : "matches"} for "${title}":`,
     ...lines,
     results.length > visible.length ? `Showing first ${visible.length} results.` : null
   ].filter(Boolean).join("\n");

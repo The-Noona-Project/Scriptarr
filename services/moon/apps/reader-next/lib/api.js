@@ -86,7 +86,7 @@ export const useMoonJson = (url, {enabled = true, fallback = /** @type {T} */ (n
     setLoading(true);
     const result = await requestJson(url);
     if (!result.ok) {
-      setError(result.payload?.error || "Moon could not finish loading the reader.");
+      setError(result.payload?.error || "Scriptarr could not finish loading the reader.");
       setStatus(result.status);
       setLoading(false);
       return;

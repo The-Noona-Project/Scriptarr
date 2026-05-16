@@ -1,21 +1,25 @@
 import {sendInteractionReply, truncate} from "../utils.mjs";
+import {createBrandNameGetter} from "../branding.mjs";
 
 const normalizeString = (value, fallback = "") => {
   const normalized = typeof value === "string" ? value.trim() : "";
   return normalized || fallback;
 };
 
-export const createStatusCommand = ({sage}) => ({
+export const createStatusCommand = ({sage, getBrandName}) => {
+  const brandName = createBrandNameGetter(getBrandName);
+  return {
   definition: {
     name: "status",
     description: "Read a Scriptarr status summary."
   },
   async execute(interaction) {
+    const siteName = brandName();
     await interaction.deferReply?.({flags: 64});
     const response = await sage.getStatusSummary();
     if (!response.ok) {
       await sendInteractionReply(interaction, {
-        content: response.payload?.error || "Scriptarr status is unavailable right now.",
+        content: response.payload?.error || `${siteName} status is unavailable right now.`,
         ephemeral: true
       });
       return;
@@ -33,7 +37,7 @@ export const createStatusCommand = ({sage}) => ({
       return `- ${name}: ${status}`;
     });
     const lines = [
-      "Scriptarr status summary:",
+      `${siteName} status summary:`,
       ...serviceLines,
       `Pending requests: ${Number(payload.requests?.pending || 0)}`,
       `Unavailable requests: ${Number(payload.requests?.unavailable || 0)}`,
@@ -47,4 +51,5 @@ export const createStatusCommand = ({sage}) => ({
       ephemeral: true
     });
   }
-});
+  };
+};

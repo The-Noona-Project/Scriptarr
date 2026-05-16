@@ -86,6 +86,9 @@ export const createSageClient = (config) => {
     getDiscordSettings() {
       return requestJson(config.sageBaseUrl, authHeader, "/api/internal/portal/discord/settings");
     },
+    getBranding() {
+      return requestJson(config.sageBaseUrl, authHeader, "/api/moon-v3/public/branding");
+    },
     getStatusSummary() {
       return requestJson(config.sageBaseUrl, authHeader, "/api/internal/portal/status");
     },

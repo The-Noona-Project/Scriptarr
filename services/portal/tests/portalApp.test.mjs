@@ -451,7 +451,7 @@ test("portal notifier delivers follow, approval, denial, and completion DMs once
   assert.ok(sent.some((entry) => entry.payload?.content.includes("Approved from Moon admin.")));
   assert.ok(sent.some((entry) => entry.payload?.content.includes("already tracking **Tomb Raider King**")));
   assert.ok(sent.some((entry) => entry.payload?.content.includes("**Absolute Duo**, is ready")));
-  assert.ok(sent.some((entry) => entry.payload?.content.includes("moved it back into admin review")));
+  assert.ok(sent.some((entry) => entry.payload?.content.includes("moved it back into staff review")));
   assert.ok(sent.some((entry) => entry.payload?.content.includes("expired after 90 days")));
   assert.ok(sent.some((entry) => entry.payload?.content.includes("LocalAI startup completed")));
   assert.ok(sent.some((entry) => entry.channelId === "updates-channel" && entry.payload?.content.includes("new update is ready")));

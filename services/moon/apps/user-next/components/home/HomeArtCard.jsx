@@ -101,7 +101,7 @@ export const HomeArtCard = ({item, shelfKind}) => {
     >
       <span className="moon-kicker">{item?.libraryTypeLabel || item?.mediaType || "Title"}</span>
       <h3>{item?.title || "Untitled"}</h3>
-      <p>{item?.summary || "Moon is still gathering a richer summary for this title."}</p>
+      <p>{item?.summary || "A richer summary is still being gathered for this title."}</p>
       <div className="moon-home-hover-meta">
         <span>{resolveStatusLine(item, shelfKind)}</span>
         <span>{resolveMetaLine(item, shelfKind)}</span>

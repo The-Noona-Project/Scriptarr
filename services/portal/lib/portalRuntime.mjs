@@ -2,6 +2,7 @@ import {createDiscordClient} from "./discord/client.mjs";
 import {buildCommandInventory} from "./discord/commandCatalog.mjs";
 import {createPortalCommands} from "./discord/commands/index.mjs";
 import {createDirectMessageHandler} from "./discord/directMessageRouter.mjs";
+import {normalizeBrandName} from "./discord/branding.mjs";
 import {createNoonaMentionHandler} from "./discord/noonaMentionChat.mjs";
 import {createRoleManager} from "./discord/roleManager.mjs";
 import {normalizePortalDiscordSettings} from "./discord/settings.mjs";
@@ -231,10 +232,12 @@ export const createPortalRuntime = ({
     lastNoonaMentionUserId: null,
     lastNoonaMentionError: null
   };
+  let brandName = "Scriptarr";
 
   const commands = createPortalCommands({
     sage,
     publicBaseUrl: config.publicBaseUrl,
+    getBrandName: () => brandName,
     getSettings: () => settings,
     logger,
     onRuntimeEvent: (event) => recordRuntimeEvent(event),
@@ -356,9 +359,15 @@ export const createPortalRuntime = ({
   };
 
   const refreshSettings = async () => {
-    const response = await sage.getDiscordSettings();
-    if (response.ok) {
-      settings = normalizePortalDiscordSettings(response.payload, config.discordDefaults);
+    const [settingsResponse, brandingResponse] = await Promise.allSettled([
+      sage.getDiscordSettings(),
+      typeof sage.getBranding === "function" ? sage.getBranding() : Promise.resolve({ok: false, payload: null})
+    ]);
+    if (settingsResponse.status === "fulfilled" && settingsResponse.value.ok) {
+      settings = normalizePortalDiscordSettings(settingsResponse.value.payload, config.discordDefaults);
+    }
+    if (brandingResponse.status === "fulfilled" && brandingResponse.value.ok) {
+      brandName = normalizeBrandName(brandingResponse.value.payload?.siteName);
     }
     state = {
       ...state,
@@ -518,6 +527,7 @@ export const createPortalRuntime = ({
           discord,
           logger,
           publicBaseUrl: config.publicBaseUrl,
+          getBrandName: () => brandName,
           requestCommand: commands.get("request")
         });
         followNotifier.start();
@@ -601,7 +611,7 @@ export const createPortalRuntime = ({
   const renderOnboarding = (payload = {}) => renderTemplate(
     normalizeString(payload.template || payload.settings?.onboarding?.template, settings.onboarding.template),
     {
-      siteName: payload.siteName || payload.branding?.siteName || "Scriptarr",
+      siteName: normalizeBrandName(payload.siteName || payload.branding?.siteName, brandName),
       username: payload.username || "reader",
       user_mention: payload.userMention || payload.user_mention || "",
       guild_name: payload.guildName || payload.guild_name || "",

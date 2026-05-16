@@ -2791,7 +2791,7 @@ export const registerMoonV3Routes = (app, {
       username,
       userMention: body.userMention,
       siteName: branding.siteName,
-      guildName: normalizeString(body.guildName, "Moon Admin Preview"),
+      guildName: normalizeString(body.guildName, "Scriptarr Admin Preview"),
       guildId: previewSettings.guildId,
       moonUrl: config.publicBaseUrl
     });

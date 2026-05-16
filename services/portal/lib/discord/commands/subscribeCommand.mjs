@@ -6,6 +6,7 @@ import {
 import {REQUEST_SESSION_TTL_MS} from "../constants.mjs";
 import {createSessionStore} from "../sessionStore.mjs";
 import {normalizeString, sendInteractionReply} from "../utils.mjs";
+import {createBrandNameGetter} from "../branding.mjs";
 
 const option = (name, description, required = false) => ({
   type: 3,
@@ -14,8 +15,9 @@ const option = (name, description, required = false) => ({
   required
 });
 
-export const createSubscribeCommand = ({sage}) => {
+export const createSubscribeCommand = ({sage, getBrandName}) => {
   const store = createSessionStore({ttlMs: REQUEST_SESSION_TTL_MS});
+  const brandName = createBrandNameGetter(getBrandName);
 
   return {
     definition: {
@@ -63,8 +65,9 @@ export const createSubscribeCommand = ({sage}) => {
         query,
         results
       });
+      const siteName = brandName();
       await sendInteractionReply(interaction, createPickerMessage({
-        heading: `Select the Scriptarr title to follow for "${query}":`,
+        heading: `Select the ${siteName} title to follow for "${query}":`,
         sessionId,
         action: "subscribe",
         results: results.map((entry) => ({...entry, availability: "available"})),
@@ -102,7 +105,7 @@ export const createSubscribeCommand = ({sage}) => {
 
           await sendInteractionReply(component, {
             content: response.ok
-              ? `Following **${normalizeString(choice.title, "Untitled")}** for Discord updates.`
+              ? `Following **${normalizeString(choice.title, "Untitled")}** for ${brandName()} Discord updates.`
               : response.payload?.error || "Unable to follow that title right now.",
             ephemeral: true,
             components: []

@@ -119,7 +119,7 @@ const compactRunId = (runId) => {
   return normalized.length > 26 ? `${normalized.slice(0, 18)}...${normalized.slice(-6)}` : normalized;
 };
 
-export const buildDownloadAllDirectMessagePayload = (notification = {}, publicBaseUrl = "") => {
+export const buildDownloadAllDirectMessagePayload = (notification = {}, publicBaseUrl = "", brandName = "Scriptarr") => {
   const linkUrl = resolveNotificationLink(notification, "downloadall", publicBaseUrl);
   const runId = normalizeString(notification.runId || notification.jobId);
   const status = normalizeString(notification.status || notification.decisionType, "updated").toLowerCase();
@@ -167,7 +167,7 @@ export const buildDownloadAllDirectMessagePayload = (notification = {}, publicBa
       actionLine
     ].filter(Boolean).join("\n"),
     embeds: [{
-      title: `Scriptarr downloadall ${titleCase(status)}`,
+      title: `${brandName} downloadall ${titleCase(status)}`,
       description: runId ? `Run \`${displayRunId}\`` : "Durable downloadall run",
       url: linkUrl || undefined,
       color: resolveDownloadAllColor(status),
@@ -216,7 +216,7 @@ export const buildDownloadAllDirectMessagePayload = (notification = {}, publicBa
           inline: false
         } : null,
         queueLink ? {
-          name: "Scriptarr",
+          name: brandName,
           value: queueLink,
           inline: false
         } : null
@@ -228,20 +228,20 @@ export const buildDownloadAllDirectMessagePayload = (notification = {}, publicBa
   };
 };
 
-const buildDirectMessagePayload = (notification, kind, publicBaseUrl, requestCommand) => {
+const buildDirectMessagePayload = (notification, kind, publicBaseUrl, requestCommand, brandName = "Scriptarr") => {
   if (kind === "downloadall") {
-    return buildDownloadAllDirectMessagePayload(notification, publicBaseUrl);
+    return buildDownloadAllDirectMessagePayload(notification, publicBaseUrl, brandName);
   }
 
   if (kind === "system") {
-    const titleName = normalizeString(notification?.titleName, "Scriptarr system task");
+    const titleName = normalizeString(notification?.titleName, `${brandName} system task`);
     const message = normalizeString(notification?.message, `${titleName} changed state.`);
     const linkUrl = resolveNotificationLink(notification, kind, publicBaseUrl);
     const error = normalizeString(notification?.error);
     const image = normalizeString(notification?.image);
     const errorLine = error ? `\nError: ${error}` : "";
     const imageLine = image ? `\nImage: ${image}` : "";
-    const linkLine = linkUrl ? `\nOpen in Scriptarr: ${linkUrl}` : "";
+    const linkLine = linkUrl ? `\nOpen in ${brandName}: ${linkUrl}` : "";
 
     return {
       content: `${message}${errorLine}${imageLine}${linkLine}`,
@@ -257,7 +257,7 @@ const buildDirectMessagePayload = (notification, kind, publicBaseUrl, requestCom
     };
   }
 
-  const titleName = normalizeString(notification?.titleName || notification?.title || "your Scriptarr title");
+  const titleName = normalizeString(notification?.titleName || notification?.title || `your ${brandName} title`);
   const titleUrl = resolveNotificationLink(notification, kind, publicBaseUrl);
   const coverUrl = normalizeString(notification?.coverUrl);
   const moderatorNote = normalizeString(notification?.moderatorNote || notification?.note || notification?.comment);
@@ -266,24 +266,24 @@ const buildDirectMessagePayload = (notification, kind, publicBaseUrl, requestCom
     ? (() => {
       switch (requestEventType) {
         case "approved":
-          return `Your Scriptarr request for **${titleName}** was approved.`;
+          return `Your ${brandName} request for **${titleName}** was approved.`;
         case "denied":
-          return `Your Scriptarr request for **${titleName}** was denied.`;
+          return `Your ${brandName} request for **${titleName}** was denied.`;
         case "blocked":
-          return `Scriptarr is already tracking **${titleName}**.`;
+          return `${brandName} is already tracking **${titleName}**.`;
         case "ready":
-          return `The Scriptarr title you asked to be notified about, **${titleName}**, is ready.`;
+          return `The ${brandName} title you asked to be notified about, **${titleName}**, is ready.`;
         case "source-found":
-          return `Scriptarr found a source for your unavailable request **${titleName}** and moved it back into admin review.`;
+          return `${brandName} found a source for your unavailable request **${titleName}** and moved it back into staff review.`;
         case "expired":
-          return `Your Scriptarr request for **${titleName}** expired after 90 days without a stable source.`;
+          return `Your ${brandName} request for **${titleName}** expired after 90 days without a stable source.`;
         default:
-          return `Your Scriptarr request for **${titleName}** is ready.`;
+          return `Your ${brandName} request for **${titleName}** is ready.`;
       }
     })()
-    : `New Scriptarr download completed for **${titleName}**.`;
+    : `New ${brandName} download completed for **${titleName}**.`;
   const noteLine = moderatorNote ? `\nModerator note: ${moderatorNote}` : "";
-  const linkLine = titleUrl ? `\nOpen in Scriptarr: ${titleUrl}` : "";
+  const linkLine = titleUrl ? `\nOpen in ${brandName}: ${titleUrl}` : "";
   const helperLine = kind === "request" && requestEventType === "blocked"
     ? "\nYou were added to the waitlist and will get another Discord DM when the title is ready."
     : "";
@@ -304,7 +304,7 @@ const buildDirectMessagePayload = (notification, kind, publicBaseUrl, requestCom
           case "ready":
             return "Requested title is now ready.";
           case "source-found":
-            return "A new download source was found and the request is back in admin review.";
+            return "A new download source was found and the request is back in staff review.";
           case "expired":
             return "Unavailable request expired.";
           default:
@@ -329,8 +329,8 @@ const buildDirectMessagePayload = (notification, kind, publicBaseUrl, requestCom
   return payload;
 };
 
-export const buildReleaseChannelPayload = (notification = {}, publicBaseUrl = "") => {
-  const titleName = normalizeString(notification.titleName || notification.title, "Scriptarr title");
+export const buildReleaseChannelPayload = (notification = {}, publicBaseUrl = "", brandName = "Scriptarr") => {
+  const titleName = normalizeString(notification.titleName || notification.title, `${brandName} title`);
   const chapterLabel = normalizeString(notification.chapterLabel || notification.latestChapter, "Latest chapter");
   const linkUrl = normalizeString(notification.linkUrl || notification.readerUrl || notification.titleUrl)
     || (normalizeString(publicBaseUrl) ? normalizeString(publicBaseUrl).replace(/\/+$/g, "") : "");
@@ -338,7 +338,7 @@ export const buildReleaseChannelPayload = (notification = {}, publicBaseUrl = ""
   const linkLine = linkUrl ? `\nRead it here: ${linkUrl}` : "";
   const description = `**${titleName}** downloaded ${chapterLabel}.${linkLine}`;
   return {
-    content: `New Scriptarr release: ${titleName} - ${chapterLabel}${linkLine}`,
+    content: `New ${brandName} release: ${titleName} - ${chapterLabel}${linkLine}`,
     embeds: [{
       title: titleName,
       description,
@@ -351,10 +351,10 @@ export const buildReleaseChannelPayload = (notification = {}, publicBaseUrl = ""
   };
 };
 
-export const buildUpdateChannelPayload = (notification = {}, publicBaseUrl = "") => {
+export const buildUpdateChannelPayload = (notification = {}, publicBaseUrl = "", brandName = "Scriptarr") => {
   const repository = normalizeString(notification.repository, "The-Noona-Project/Scriptarr");
   const branch = normalizeString(notification.branch, "main");
-  const summary = normalizeString(notification.summary, "Noona found a Scriptarr update.");
+  const summary = normalizeString(notification.summary, `Noona found a ${brandName} update.`);
   const compareUrl = normalizeString(notification.compareUrl);
   const adminUrl = normalizeString(publicBaseUrl) ? `${normalizeString(publicBaseUrl).replace(/\/+$/g, "")}/admin/system/updates` : "";
   const commitCount = toCount(notification.commitCount, normalizeArray(notification.commits).length);
@@ -371,7 +371,7 @@ export const buildUpdateChannelPayload = (notification = {}, publicBaseUrl = "")
   return {
     content: truncate(`${summary}${linkLine}`, 1900),
     embeds: [{
-      title: "Scriptarr update from Noona",
+      title: `${brandName} update from Noona`,
       description: summary,
       url: compareUrl || adminUrl || undefined,
       color: 0x8b5cf6,
@@ -385,7 +385,7 @@ export const buildUpdateChannelPayload = (notification = {}, publicBaseUrl = "")
           inline: false
         } : null,
         adminUrl ? {
-          name: "Scriptarr",
+          name: brandName,
           value: `[Open updates](${adminUrl})`,
           inline: false
         } : null
@@ -403,7 +403,8 @@ const deliverNotifications = async ({
   sage,
   logger,
   publicBaseUrl,
-  requestCommand
+  requestCommand,
+  getBrandName = () => "Scriptarr"
 }) => {
   if (typeof list !== "function" || typeof acknowledge !== "function") {
     return;
@@ -428,7 +429,7 @@ const deliverNotifications = async ({
         sage,
         kind,
         notification,
-        payload: buildDirectMessagePayload(notification, kind, publicBaseUrl, requestCommand),
+        payload: buildDirectMessagePayload(notification, kind, publicBaseUrl, requestCommand, getBrandName()),
         logger
       });
       const sentMessage = await discord.sendDirectMessage(
@@ -465,7 +466,8 @@ const deliverReleaseChannelNotifications = async ({
   discord,
   sage,
   logger,
-  publicBaseUrl
+  publicBaseUrl,
+  getBrandName = () => "Scriptarr"
 }) => {
   if (typeof list !== "function" || typeof acknowledge !== "function") {
     return;
@@ -488,7 +490,7 @@ const deliverReleaseChannelNotifications = async ({
         sage,
         kind: "release",
         notification,
-        payload: buildReleaseChannelPayload(notification, publicBaseUrl),
+        payload: buildReleaseChannelPayload(notification, publicBaseUrl, getBrandName()),
         logger
       });
       await discord.sendChannelMessage(
@@ -508,7 +510,8 @@ const deliverUpdateChannelNotifications = async ({
   acknowledge,
   discord,
   logger,
-  publicBaseUrl
+  publicBaseUrl,
+  getBrandName = () => "Scriptarr"
 }) => {
   if (typeof list !== "function" || typeof acknowledge !== "function") {
     return;
@@ -529,7 +532,7 @@ const deliverUpdateChannelNotifications = async ({
     try {
       await discord.sendChannelMessage(
         channelId,
-        buildUpdateChannelPayload(notification, publicBaseUrl)
+        buildUpdateChannelPayload(notification, publicBaseUrl, getBrandName())
       );
       deliveredIds.add(notificationId);
       await acknowledge(notificationId);
@@ -585,6 +588,7 @@ export const createFollowNotifier = ({
   logger,
   publicBaseUrl,
   requestCommand,
+  getBrandName,
   pollMs = FOLLOW_NOTIFICATION_POLL_MS
 } = {}) => {
   let timer = null;
@@ -603,7 +607,8 @@ export const createFollowNotifier = ({
         discord,
         sage,
         logger,
-        publicBaseUrl
+        publicBaseUrl,
+        getBrandName
       });
       await deliverNotifications({
         list: () => sage?.listRequestNotifications?.(),
@@ -613,7 +618,8 @@ export const createFollowNotifier = ({
         sage,
         logger,
         publicBaseUrl,
-        requestCommand
+        requestCommand,
+        getBrandName
       });
       await deliverReleaseChannelNotifications({
         list: () => sage?.listReleaseNotifications?.(),
@@ -621,14 +627,16 @@ export const createFollowNotifier = ({
         discord,
         sage,
         logger,
-        publicBaseUrl
+        publicBaseUrl,
+        getBrandName
       });
       await deliverUpdateChannelNotifications({
         list: () => sage?.listUpdateNotifications?.(),
         acknowledge: (id) => sage?.acknowledgeUpdateNotification?.(id),
         discord,
         logger,
-        publicBaseUrl
+        publicBaseUrl,
+        getBrandName
       });
       await deliverNotifications({
         list: () => sage?.listSystemNotifications?.(),
@@ -637,7 +645,8 @@ export const createFollowNotifier = ({
         discord,
         sage,
         logger,
-        publicBaseUrl
+        publicBaseUrl,
+        getBrandName
       });
       await deliverNotifications({
         list: () => sage?.listDownloadAllNotifications?.(),
@@ -646,7 +655,8 @@ export const createFollowNotifier = ({
         discord,
         sage,
         logger,
-        publicBaseUrl
+        publicBaseUrl,
+        getBrandName
       });
     } catch (error) {
       logger?.error?.("Portal notifier poll failed.", {error});

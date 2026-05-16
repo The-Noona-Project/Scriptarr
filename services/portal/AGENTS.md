@@ -23,6 +23,9 @@ and the Oracle chat bridge.
   publicly; split long replies; and return handled so trivia does not also process the same message.
 - Keep Discord workflow configuration behind the brokered `portal.discord` setting consumed from Moon admin instead of
   scattering guild, role, or onboarding logic across unrelated env vars.
+- Keep public Discord copy branded. Normal slash-command replies, requester DMs, release posts, and update posts should
+  use the configured site name or Noona instead of internal service codenames; owner-only diagnostics may name services
+  when that helps operate the stack.
 - Requester completion DMs and channel notifications should stay deduped by stable Sage acknowledgment ids so restarts
   or retries do not spam Discord users or channels.
 - `downloadall` should always use Sage's durable run path, including legacy raw DM text, and Portal should DM paused,

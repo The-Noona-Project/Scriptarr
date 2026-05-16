@@ -134,7 +134,7 @@ export const registerMoonV3ProxyRoutes = (app, {config, getSessionToken}) => {
         signal: controller.signal,
         headers: {
           "Accept": "image/avif,image/webp,image/png,image/jpeg;q=0.9,*/*;q=0.2",
-          "User-Agent": "Scriptarr Moon cover cache"
+          "User-Agent": "Scriptarr cover cache"
         }
       });
       if (!response.ok) {
@@ -216,7 +216,7 @@ export const registerMoonV3ProxyRoutes = (app, {config, getSessionToken}) => {
       res.send(output);
     } catch (error) {
       res.status(error?.status || 502).json({
-        error: error instanceof Error ? error.message : "Moon could not load that cover."
+        error: error instanceof Error ? error.message : "Scriptarr could not load that cover."
       });
     }
   };
@@ -242,7 +242,7 @@ export const registerMoonV3ProxyRoutes = (app, {config, getSessionToken}) => {
   const handleCoverCacheOptimize = async (req, res) => {
     const auth = await fetchSageJson(req, "/api/moon-v3/admin/system/tasks");
     if (!auth.ok) {
-      res.status(auth.status).json(auth.payload || {error: "Moon could not verify admin task access."});
+      res.status(auth.status).json(auth.payload || {error: "Scriptarr could not verify admin task access."});
       return;
     }
 
@@ -260,7 +260,7 @@ export const registerMoonV3ProxyRoutes = (app, {config, getSessionToken}) => {
       }
       const page = await fetchSageJson(req, `/api/moon-v3/user/library?${params.toString()}`);
       if (!page.ok) {
-        res.status(page.status).json(page.payload || {error: "Moon could not load library cards."});
+        res.status(page.status).json(page.payload || {error: "Scriptarr could not load library cards."});
         return;
       }
       const titles = Array.isArray(page.payload?.titles) ? page.payload.titles : [];
@@ -376,7 +376,7 @@ export const registerMoonV3ProxyRoutes = (app, {config, getSessionToken}) => {
       res.send(response.body);
     } catch (error) {
       res.status(400).json({
-        error: error instanceof Error ? error.message : "Moon could not process that logo."
+        error: error instanceof Error ? error.message : "Scriptarr could not process that logo."
       });
     }
   });

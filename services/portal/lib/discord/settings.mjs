@@ -149,7 +149,7 @@ export const normalizePortalDiscordSettings = (value = {}, defaults = {}) => {
       channelId: normalizeOptionalString(source?.onboarding?.channelId ?? normalizedDefaults?.onboarding?.channelId),
       template: normalizeString(
         source?.onboarding?.template,
-        normalizedDefaults?.onboarding?.template || "Welcome to Scriptarr, {username}."
+        normalizedDefaults?.onboarding?.template || "Welcome to {siteName}, {username}."
       )
     },
     notifications: {

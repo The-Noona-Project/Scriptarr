@@ -1,7 +1,9 @@
 # Scriptarr
 
 Scriptarr is a self-hosted manga and comics stack rebuilt for 3.0. `Noona` now only refers to the Discord bot and AI
-persona while the product, services, storage, images, and docs all use Scriptarr naming.
+persona while the product, services, storage, images, and docs all use Scriptarr naming. Reader-facing screens and
+public Discord messages use the configured site branding; service codenames stay for admins, diagnostics, and
+architecture notes.
 
 Warden bootstraps the stack, Moon is the user and admin surface, Sage is the browser-safe and first-party internal
 broker, Vault owns shared MySQL-backed state plus cache or job brokerage, Raven handles downloads plus metadata, Portal
@@ -40,8 +42,8 @@ Portal, Oracle, and optional managed MySQL for you. On Linux and Unraid hosts, a
 directly while it reconciles the sibling containers. See [ServerAdmin.md](ServerAdmin.md) for the full container
 contract and the recommended `docker run` shape.
 
-Fresh installs no longer seed demo titles into Moon or Raven. The user and admin library views stay empty until Raven
-has real imported titles to surface.
+Fresh installs no longer seed demo titles into the reader library or download catalog. The user and admin library views
+stay empty until the library importer has real titles to surface.
 Moon admin now uses a denser Arr-style series index at `/admin/library` and exposes a dedicated
 `/admin/mediamanagement` page for Raven naming profiles instead of burying file-management controls inside the generic
 settings screen.
@@ -57,7 +59,7 @@ approval unless Sage auto-approves a high-confidence match.
 That intake is now edition-aware and grouped by concrete download target, so duplicate metadata rows collapse into one
 requestable result while real variants such as plain vs colored editions stay separate when the provider exposes
 different series URLs.
-Moon web request creation now lives only in `/myrequests`, where signed-in readers search raw metadata rows, pick the
+Web request creation now lives only in `/myrequests`, where signed-in readers search raw metadata rows, pick the
 exact metadata result they want, optionally leave notes, and submit a moderated full-title request. Admins then choose
 the concrete download source from `/admin/requests`, unless the optional `auto approve and download` setting lets Sage
 queue one high-confidence source automatically. If Scriptarr cannot find a source yet, it saves the request as
@@ -72,11 +74,11 @@ access-control console with search, filters, a protected owner state, group assi
 editor instead of a generic records view.
 Raven now keeps WeebCentral first by default, exposes MangaDex as a second normal download-provider option, and enables
 Anime-Planet ahead of MangaUpdates as a scrape-based metadata source for aliases, summaries, and lifecycle hints.
-Moon admin also exposes a dedicated Discord page at `/admin/discord` for guild workflow settings, onboarding template
+The admin app also exposes a dedicated Discord page at `/admin/discord` for guild workflow settings, onboarding template
 or channel management, per-command role gates, release-channel posts, GitHub update-summary posts, Noona trivia, public mention-chat settings,
 Noona memory review or clears, and Portal runtime visibility without exposing Discord credentials.
-Moon's user app now runs as an embedded Next.js App Router frontend with a megamenu header, avatar profile controls,
-and a simple footer, while the fullscreen reader runs as its own embedded `/reader` Next app.
+Scriptarr's user app now runs as an embedded Next.js App Router frontend with a megamenu header, avatar profile
+controls, and a simple footer, while the fullscreen reader runs as its own embedded `/reader` Next app.
 That reader supports webtoon, single-page, double-page, and manga-double layouts, LTR/RTL direction, page-fit controls,
 keyboard/touch/controller navigation, and still persists Moon-native progress plus bookmarks behind the same typed
 reader routes.
@@ -121,11 +123,11 @@ For end-to-end Docker verification, use:
 5. Watch the Warden logs while it reconciles the sibling containers. First boot now surfaces when Docker is creating or
    downloading the managed images.
    Docker health checks now report `healthy` for Warden plus the managed services once each container settles.
-6. Open Moon, confirm the bootstrap surface shows the configured first owner id, and use Discord login to claim the
-   first owner session.
-7. Copy the callback URL surfaced by Warden or Moon into the Discord developer portal.
-8. Finish branding, logo, notification, integrations, library, metadata, Raven download-provider, VPN, Oracle,
-   moderation, and managed-service update settings in Moon admin.
+6. Open the Scriptarr web app, confirm the bootstrap surface shows the configured first owner id, and use Discord login
+   to claim the first owner session.
+7. Copy the callback URL surfaced by the stack into the Discord developer portal.
+8. Finish branding, logo, notification, integrations, library, metadata, download-provider, VPN, Oracle, moderation,
+   and managed-service update settings in the admin app.
    If you use the Discord bot runtime, finish the guild id, onboarding, superuser id, and per-command role mapping in
    `/admin/discord` before syncing slash commands. Enable the Discord application Message Content intent too when you
    want Noona mention chat or trivia guesses to work; the code can request the intent, but Discord must allow it.

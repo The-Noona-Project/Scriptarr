@@ -122,7 +122,8 @@ const ChapterRowsSkeleton = () => (
  */
 export const TitlePageClient = ({titleId, typeSlug = ""}) => {
   const router = useRouter();
-  const {auth, loginUrl} = useMoonChrome();
+  const {auth, branding, loginUrl} = useMoonChrome();
+  const siteName = branding?.siteName || "Scriptarr";
   const {
     loading: summaryLoading,
     error: summaryError,
@@ -220,7 +221,7 @@ export const TitlePageClient = ({titleId, typeSlug = ""}) => {
     setChaptersLoading(false);
     setChaptersLoaded(true);
     if (!result.ok) {
-      setChaptersError(result.payload?.error || "Moon could not load chapters for this title.");
+      setChaptersError(result.payload?.error || `${siteName} could not load chapters for this title.`);
       return false;
     }
     const nextRows = Array.isArray(result.payload?.chapters) ? result.payload.chapters : [];
@@ -239,7 +240,7 @@ export const TitlePageClient = ({titleId, typeSlug = ""}) => {
     });
     setChapterPageInfo(nextPageInfo);
     return Boolean(nextPageInfo.hasMore);
-  }, [chapterFilter, chapterSort, debouncedChapterSearch, title?.id]);
+  }, [chapterFilter, chapterSort, debouncedChapterSearch, siteName, title?.id]);
 
   const refreshLoadedChapters = useCallback(async () => {
     const targetPageSize = Math.min(CHAPTER_PAGE_SIZE_MAX, Math.max(CHAPTER_PAGE_SIZE, loadedChapters.length || 0));
@@ -280,11 +281,11 @@ export const TitlePageClient = ({titleId, typeSlug = ""}) => {
     setRequestsLoading(false);
     setRequestsLoaded(true);
     if (!result.ok) {
-      setRequestsError(result.payload?.error || "Moon could not load request history for this title.");
+      setRequestsError(result.payload?.error || `${siteName} could not load request history for this title.`);
       return;
     }
     setRequestsData({requests: Array.isArray(result.payload?.requests) ? result.payload.requests : []});
-  }, [requestsLoaded, requestsLoading, title?.id]);
+  }, [requestsLoaded, requestsLoading, siteName, title?.id]);
 
   useEffect(() => {
     if (activeTab === "requests") {
@@ -307,7 +308,7 @@ export const TitlePageClient = ({titleId, typeSlug = ""}) => {
   }
 
   if (!title && !summaryLoading) {
-    return <EmptyView title="Title unavailable" detail="Moon could not find this series in the current library." />;
+    return <EmptyView title="Title unavailable" detail={`${siteName} could not find this series in the current library.`} />;
   }
 
   const syncSummaryFromPayload = async (result) => {
@@ -559,7 +560,7 @@ export const TitlePageClient = ({titleId, typeSlug = ""}) => {
           <div className="moon-title-hero-copy">
             <span className="moon-kicker">{title.libraryTypeLabel || title.mediaType || "Title"}</span>
             <h1>{title.title}</h1>
-            <p className="moon-support-copy">{title.summary || "Moon has not matched a richer description for this title yet."}</p>
+            <p className="moon-support-copy">{title.summary || "A richer description has not been matched for this title yet."}</p>
             <div className="moon-pill-row">
               <span className="moon-pill is-strong">{statePillCopy(title, following)}</span>
               <span className="moon-pill">{title.userState?.readAvailableCount || 0}/{title.userState?.totalAvailableChapters || 0} read</span>
@@ -772,7 +773,7 @@ export const TitlePageClient = ({titleId, typeSlug = ""}) => {
               ))}
             </div>
           ) : (
-            <p className="moon-muted">No Moon requests are tied to this title for your account.</p>
+            <p className="moon-muted">No {siteName} requests are tied to this title for your account.</p>
           )}
         </section>
       ) : null}

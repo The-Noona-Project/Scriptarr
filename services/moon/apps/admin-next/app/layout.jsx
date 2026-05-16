@@ -11,7 +11,7 @@ import AdminShell from "../components/AdminShell.jsx";
 
 export const metadata = {
   title: "Scriptarr Admin",
-  description: "Moon's Arr-style admin surface for Scriptarr."
+  description: "Scriptarr's Arr-style admin surface."
 };
 
 /**

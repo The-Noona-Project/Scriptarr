@@ -14,6 +14,9 @@ Read this before editing Scriptarr.
   nearest public README and [ServerAdmin.md](ServerAdmin.md) in the same change.
 - If invariants, file ownership, or internal workflows change, update the matching files under `docs/agents/`.
 - Scriptarr is the product name. `Noona` should only be used for the Discord bot or AI persona.
+- Moon, Raven, Sage, Vault, Portal, Warden, Oracle, and LocalAI are internal service codenames. Normal reader-facing
+  UI, public API labels, and public Discord copy should use the configured branding site name or Noona instead, while
+  admin diagnostics and developer docs may keep codenames where they carry operational meaning.
 
 ## Start Here
 

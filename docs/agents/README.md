@@ -71,6 +71,9 @@ Coding rules that avoid hidden drift:
   route has a strong isolated reason.
 - Keep stale product language out of code and docs. Scriptarr is the product, Noona is only the Discord bot/persona,
   and Kavita/Komf/old Noona Raven should appear only as explicit historical reference.
+- Treat Moon, Raven, Sage, Vault, Portal, Warden, Oracle, and LocalAI as internal/admin codenames. Normal reader UI,
+  public API labels, and public Discord copy should use the configured branding site name or Noona unless the surface is
+  explicitly diagnostic.
 - When a settings page saves durable state and runtime reload fails, preserve the saved state and surface an apply or
   restart warning instead of discarding the admin's change.
 

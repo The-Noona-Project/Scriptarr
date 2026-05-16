@@ -10,7 +10,7 @@ import MoonShell from "../components/MoonShell.jsx";
 
 export const metadata = {
   title: "Scriptarr",
-  description: "Moon's reading-first user surface."
+  description: "Scriptarr's reading-first user surface."
 };
 
 /**

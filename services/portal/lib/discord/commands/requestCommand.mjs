@@ -6,6 +6,7 @@ import {
   handleSessionButton
 } from "../commandHelpers.mjs";
 import {normalizeString, sendInteractionReply, truncate} from "../utils.mjs";
+import {createBrandNameGetter} from "../branding.mjs";
 
 const option = (name, description, required = false) => ({
   type: 3,
@@ -73,27 +74,27 @@ const buildMetadataPickerMessage = ({query, results, sessionId}) => {
   );
 };
 
-const formatRequestResultMessage = (response, fallbackTitle) => {
+const formatRequestResultMessage = (response, fallbackTitle, brandName = "Scriptarr") => {
   const payload = response?.payload || {};
   const title = normalizeString(payload.title, fallbackTitle || "Untitled");
   if (response?.ok) {
     return payload.status === "unavailable"
-      ? `Saved **${title}** as **unavailable**. Scriptarr will keep re-checking for a source every 4 hours and DM you if one appears.`
+      ? `Saved **${title}** as **unavailable**. ${brandName} will keep re-checking for a source every 4 hours and DM you if one appears.`
       : `Request saved as **${normalizeString(payload.status, "pending")}** for **${title}**.`;
   }
 
   if (payload?.code === "REQUEST_ALREADY_IN_LIBRARY") {
     const link = normalizeString(payload.libraryTitle?.linkUrl);
     return link
-      ? `**${normalizeString(payload.libraryTitle?.title, title)}** is already in the Scriptarr library.\nOpen it here: ${link}`
-      : `${title} is already in the Scriptarr library.`;
+      ? `**${normalizeString(payload.libraryTitle?.title, title)}** is already in the ${brandName} library.\nOpen it here: ${link}`
+      : `${title} is already in the ${brandName} library.`;
   }
 
   if (payload?.code === "REQUEST_ALREADY_QUEUED") {
     const link = normalizeString(payload.linkUrl);
     return link
-      ? `Scriptarr is already tracking **${normalizeString(payload.title, title)}**. You were attached to the notification waitlist and will get a Discord DM when it is ready.\nTrack it here: ${link}`
-      : `Scriptarr is already tracking **${normalizeString(payload.title, title)}**. You were attached to the notification waitlist and will get a Discord DM when it is ready.`;
+      ? `${brandName} is already tracking **${normalizeString(payload.title, title)}**. You were attached to the notification waitlist and will get a Discord DM when it is ready.\nTrack it here: ${link}`
+      : `${brandName} is already tracking **${normalizeString(payload.title, title)}**. You were attached to the notification waitlist and will get a Discord DM when it is ready.`;
   }
 
   return payload?.error || "Unable to save that request right now.";
@@ -105,7 +106,8 @@ const finalizeDiscordRequest = async ({
   query,
   notes,
   selectedMetadata,
-  selectedDownload = null
+  selectedDownload = null,
+  brandName = "Scriptarr"
 }) => {
   const identity = await ensureDiscordIdentity({
     sage,
@@ -135,14 +137,15 @@ const finalizeDiscordRequest = async ({
   });
 
   await sendInteractionReply(interaction, {
-    content: formatRequestResultMessage(response, selectedMetadata?.title || selectedDownload?.titleName),
+    content: formatRequestResultMessage(response, selectedMetadata?.title || selectedDownload?.titleName, brandName),
     ephemeral: true,
     components: []
   });
 };
 
-export const createRequestCommand = ({sage}) => {
+export const createRequestCommand = ({sage, getBrandName}) => {
   const metadataStore = createSessionStore({ttlMs: REQUEST_SESSION_TTL_MS});
+  const brandName = createBrandNameGetter(getBrandName);
 
   return {
     definition: {
@@ -208,7 +211,8 @@ export const createRequestCommand = ({sage}) => {
             sage,
             query: session.query,
             notes: session.notes,
-            selectedMetadata
+            selectedMetadata,
+            brandName: brandName()
           });
         }
       });

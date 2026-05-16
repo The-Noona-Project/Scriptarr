@@ -126,7 +126,8 @@ const renderActivityEntry = (entry) => (
  * @returns {import("react").ReactNode}
  */
 export const ProfilePageClient = () => {
-  const {auth, installAvailable, loginUrl, promptInstall} = useMoonChrome();
+  const {auth, branding, installAvailable, loginUrl, promptInstall} = useMoonChrome();
+  const siteName = branding?.siteName || "Scriptarr";
   const [activeTab, setActiveTab] = useState("overview");
   const [installPending, setInstallPending] = useState(false);
   const [apiKeyName, setApiKeyName] = useState("");
@@ -148,19 +149,19 @@ export const ProfilePageClient = () => {
   if (!auth) {
     return (
       <AuthRequiredView
-        title="Sign in to manage your Moon profile"
-        detail="Profile stats, reading shortcuts, and local presentation controls need a signed-in Moon session."
+        title={`Sign in to manage your ${siteName} profile`}
+        detail={`Profile stats, reading shortcuts, and local presentation controls need a signed-in ${siteName} session.`}
         loginUrl={loginUrl}
       />
     );
   }
 
   if (loading) {
-    return <LoadingView label="Moon is loading your profile, reading stats, and quick access routes." />;
+    return <LoadingView label={`${siteName} is loading your profile, reading stats, and quick access routes.`} />;
   }
 
   if (error) {
-    return <ErrorView detail={status ? error : "Moon could not load your profile right now."} />;
+    return <ErrorView detail={status ? error : `${siteName} could not load your profile right now.`} />;
   }
 
   const profile = data || emptyProfile;
@@ -183,7 +184,7 @@ export const ProfilePageClient = () => {
     });
     setApiBusy("");
     if (!result.ok) {
-      setApiFlash(normalizeString(result.payload?.error, "Moon could not create that API key."));
+      setApiFlash(normalizeString(result.payload?.error, `${siteName} could not create that API key.`));
       return;
     }
     setApiSecret(normalizeString(result.payload?.secret));
@@ -201,7 +202,7 @@ export const ProfilePageClient = () => {
     });
     setApiBusy("");
     if (!result.ok) {
-      setApiFlash(normalizeString(result.payload?.error, "Moon could not update that API key."));
+      setApiFlash(normalizeString(result.payload?.error, `${siteName} could not update that API key.`));
       return;
     }
     await apiKeysState.refresh();
@@ -215,7 +216,7 @@ export const ProfilePageClient = () => {
     });
     setApiBusy("");
     if (!result.ok) {
-      setApiFlash(normalizeString(result.payload?.error, "Moon could not revoke that API key."));
+      setApiFlash(normalizeString(result.payload?.error, `${siteName} could not revoke that API key.`));
       return;
     }
     setApiFlash("API key revoked.");
@@ -226,7 +227,7 @@ export const ProfilePageClient = () => {
     <div className="moon-profile-tab-grid">
       <section className="moon-profile-card">
         <h3>Quick routes</h3>
-        <p className="moon-muted">Fast jumps back into the parts of Moon you use most, plus install and admin shortcuts when they make sense.</p>
+        <p className="moon-muted">Fast jumps back into the parts of {siteName} you use most, plus install and admin shortcuts when they make sense.</p>
         <Flex gap="10" wrap>
           <Link className="moon-profile-inline-link" href="/library">Library</Link>
           <Link className="moon-profile-inline-link" href="/myrequests">Requests</Link>
@@ -253,7 +254,7 @@ export const ProfilePageClient = () => {
       </section>
       <section className="moon-profile-card">
         <h3>Pick up where you left off</h3>
-        <p className="moon-muted">Your active bookshelf is driven by Moon's read state, so finished titles quietly fall away until new chapters land.</p>
+        <p className="moon-muted">Your active bookshelf is driven by {siteName}'s read state, so finished titles quietly fall away until new chapters land.</p>
         <div className="moon-list">
           {normalizeArray(overview.bookshelfPreview).length
             ? normalizeArray(overview.bookshelfPreview).map((title) => renderTitlePreview(title, "Continue"))
@@ -313,7 +314,7 @@ export const ProfilePageClient = () => {
         <div className="moon-list">
           {normalizeArray(panels.recentActivity).length
             ? normalizeArray(panels.recentActivity).map(renderActivityEntry)
-            : <p className="moon-muted">Moon will start filling this in as you read, follow, and request titles.</p>}
+            : <p className="moon-muted">{siteName} will start filling this in as you read, follow, and request titles.</p>}
         </div>
       </section>
       <section className="moon-profile-card">
@@ -334,7 +335,7 @@ export const ProfilePageClient = () => {
       </section>
       <section className="moon-profile-card">
         <h3>Taste signals</h3>
-        <p className="moon-muted">These feed Moon's tag-driven shelves on the home page.</p>
+        <p className="moon-muted">These feed {siteName}'s tag-driven shelves on the home page.</p>
         <div className="moon-pill-row">
           {normalizeArray(tagPreferences.likedTags).length
             ? normalizeArray(tagPreferences.likedTags).map((tag) => <span key={`like:${tag}`} className="moon-pill">Like: {tag}</span>)
@@ -360,7 +361,7 @@ export const ProfilePageClient = () => {
         <section className="moon-profile-card">
           <h3>Install app</h3>
           <p className="moon-muted">
-            Install Moon as a desktop-style app so the reader feels closer to a dedicated library client.
+            Install {siteName} as a desktop-style app so the reader feels closer to a dedicated library client.
           </p>
           <Button
             variant="secondary"
@@ -381,7 +382,7 @@ export const ProfilePageClient = () => {
       ) : null}
       <section className="moon-profile-card">
         <h3>Reading routes</h3>
-        <p className="moon-muted">Jump back into the parts of Moon you use most often without digging through the header.</p>
+        <p className="moon-muted">Jump back into the parts of {siteName} you use most often without digging through the header.</p>
         <Flex gap="10" wrap>
           <Link className="moon-profile-inline-link" href="/library">Library</Link>
           <Link className="moon-profile-inline-link" href="/myrequests">Requests</Link>
@@ -492,7 +493,7 @@ export const ProfilePageClient = () => {
           <Column gap="8">
             <h1 className="moon-profile-heading">{effectiveUser.username || "Reader"}</h1>
             <p className="moon-support-copy">
-              Moon keeps your reading state, request activity, follows, and local presentation settings together in one tabbed account hub.
+              {siteName} keeps your reading state, request activity, follows, and local presentation settings together in one tabbed account hub.
             </p>
             <div className="moon-pill-row">
               <span className="moon-pill">{effectiveUser.role || "reader"}</span>

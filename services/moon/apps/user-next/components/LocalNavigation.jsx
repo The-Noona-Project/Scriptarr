@@ -13,7 +13,7 @@ import Link from "next/link";
  * @returns {import("react").ReactNode}
  */
 export const DesktopNavigation = ({menuGroups = []}) => (
-  <nav className="moon-local-nav" aria-label="Moon navigation">
+  <nav className="moon-local-nav" aria-label="Primary navigation">
     {menuGroups.map((group) => (
       <div className="moon-local-nav-item" key={group.id || group.href || group.label}>
         <Link className={group.selected ? "is-active" : ""} href={group.href || "/"}>
@@ -46,7 +46,7 @@ export const DesktopNavigation = ({menuGroups = []}) => (
  * @returns {import("react").ReactNode}
  */
 export const MobileNavigation = ({menuGroups = [], onClose}) => (
-  <nav className="moon-local-mobile-nav" aria-label="Moon mobile navigation">
+  <nav className="moon-local-mobile-nav" aria-label="Mobile navigation">
     {menuGroups.map((group) => (
       <div className="moon-local-mobile-group" key={group.id || group.href || group.label}>
         <Link

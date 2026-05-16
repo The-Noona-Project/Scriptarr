@@ -5,7 +5,7 @@
 export const portalCommandCatalog = Object.freeze([
   {name: "ding", label: "/ding", description: "Quick bot health reply.", scope: "Guild slash command", mode: "slash", roleManaged: true, registrationScope: "guild"},
   {name: "status", label: "/status", description: "Read-only Scriptarr runtime summary.", scope: "Guild slash command", mode: "slash", roleManaged: true, registrationScope: "guild"},
-  {name: "chat", label: "/chat", description: "Portal chat bridge into Oracle.", scope: "Guild slash command", mode: "slash", roleManaged: true, registrationScope: "guild"},
+  {name: "chat", label: "/chat", description: "Talk to Noona.", scope: "Guild slash command", mode: "slash", roleManaged: true, registrationScope: "guild"},
   {name: "search", label: "/search", description: "Search the current Scriptarr library.", scope: "Guild slash command", mode: "slash", roleManaged: true, registrationScope: "guild"},
   {name: "request", label: "/request", description: "Search intake matches and file a moderated request.", scope: "Guild slash command", mode: "slash", roleManaged: true, registrationScope: "guild"},
   {name: "subscribe", label: "/subscribe", description: "Follow a library title for Discord notifications.", scope: "Guild slash command", mode: "slash", roleManaged: true, registrationScope: "guild"},

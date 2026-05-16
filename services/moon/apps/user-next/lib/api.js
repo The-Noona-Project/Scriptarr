@@ -55,7 +55,7 @@ export const requestJson = async (url, options = {}) => {
         status: 0,
         payload: {
           aborted: true,
-          error: "Moon cancelled this request because a newer one started."
+          error: "This request was cancelled because a newer one started."
         }
       };
     }
@@ -190,7 +190,7 @@ export const useMoonJson = (url, {enabled = true, fallback = /** @type {T} */ (n
         setRefreshing(false);
         return;
       }
-      setError(result.payload?.error || "Moon could not finish loading this page.");
+      setError(result.payload?.error || "Scriptarr could not finish loading this page.");
       setStatus(result.status);
       if ([401, 403].includes(result.status)) {
         setData(fallbackRef.current);

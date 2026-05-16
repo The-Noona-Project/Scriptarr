@@ -14,7 +14,7 @@ export const SiteFooter = ({siteName}) => (
   <footer className="moon-footer">
     <div>
       <strong>{siteName}</strong>
-      <p>Moon keeps reading, requests, follows, and Discord-driven library discovery in one place.</p>
+      <p>{siteName} keeps reading, requests, follows, and Discord-driven library discovery in one place.</p>
     </div>
     <nav aria-label="Footer">
       <Link href="/">Home</Link>

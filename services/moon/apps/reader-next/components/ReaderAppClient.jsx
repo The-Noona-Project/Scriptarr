@@ -94,6 +94,7 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = ""}) => {
 
   const manifest = useMemo(() => sortManifest(data?.manifest?.chapters), [data?.manifest?.chapters]);
   const title = data?.title || null;
+  const siteName = chrome.branding?.siteName || "Scriptarr";
   const isPaged = layoutMode !== "webtoon";
 
   useEffect(() => {
@@ -488,7 +489,7 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = ""}) => {
         <section className="reader-empty-panel">
           <span className="reader-eyebrow">Reader</span>
           <h1>Sign in to read.</h1>
-          <p>Moon needs your Discord session to load chapters, progress, and bookmarks.</p>
+          <p>{siteName} needs your Discord session to load chapters, progress, and bookmarks.</p>
           {chrome.loginUrl ? <a href={chrome.loginUrl}>Sign in with Discord</a> : null}
         </section>
       </main>

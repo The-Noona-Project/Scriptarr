@@ -15,7 +15,8 @@ import {AuthRequiredView, EmptyView, ErrorView, LoadingView} from "../StateView.
  * @returns {import("react").ReactNode}
  */
 export const HomePageClient = () => {
-  const {auth, loginUrl} = useMoonChrome();
+  const {auth, branding, loginUrl} = useMoonChrome();
+  const siteName = branding?.siteName || "Scriptarr";
   const {loading, error, status, data} = useMoonJson("/api/moon-v3/user/home", {
     fallback: {
       latestTitles: [],
@@ -28,7 +29,7 @@ export const HomePageClient = () => {
   });
 
   if (loading) {
-    return <LoadingView label="Moon is building your shelves, recent arrivals, and reading-pattern rows." />;
+    return <LoadingView label={`${siteName} is building your shelves, recent arrivals, and reading-pattern rows.`} />;
   }
 
   if (status === 401 && !auth) {
@@ -62,7 +63,7 @@ export const HomePageClient = () => {
           </div>
           <EmptyView
             title="Your bookshelf is waiting"
-            detail="Open any chapter and Moon will turn this into a continue-reading row for the titles you are actively reading."
+            detail={`Open any chapter and ${siteName} will turn this into a continue-reading row for the titles you are actively reading.`}
           />
         </section>
       )}
@@ -74,8 +75,8 @@ export const HomePageClient = () => {
       {!bookshelf && !secondaryShelves.length ? (
         <section className="moon-panel moon-section">
           <EmptyView
-            title="Moon is still empty"
-            detail="Once Raven imports real titles, the home screen will light up with recent rows and personalized tag shelves."
+            title={`${siteName} is still empty`}
+            detail="Once the library importer brings in real titles, the home screen will light up with recent rows and personalized tag shelves."
           />
         </section>
       ) : null}

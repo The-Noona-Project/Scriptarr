@@ -41,7 +41,8 @@ const resultTitle = ({query, type, letter}) => {
  * @returns {import("react").ReactNode}
  */
 export const BrowsePageClient = ({initialSearchParams = {}} = {}) => {
-  const {auth, loginUrl} = useMoonChrome();
+  const {auth, branding, loginUrl} = useMoonChrome();
+  const siteName = branding?.siteName || "Scriptarr";
   const initialFilters = useMemo(() => normalizeBrowseSearchParams(initialSearchParams), [initialSearchParams]);
   const [search, setSearch] = useState(initialFilters.query);
   const [activeType, setActiveType] = useState(initialFilters.type);
@@ -163,7 +164,7 @@ export const BrowsePageClient = ({initialSearchParams = {}} = {}) => {
   };
 
   if (loading && !pageTitles.length) {
-    return <LoadingView label="Moon is loading the compact browse catalogue." />;
+    return <LoadingView label={`${siteName} is loading the compact browse catalogue.`} />;
   }
 
   if (status === 401 && !auth) {
@@ -171,7 +172,7 @@ export const BrowsePageClient = ({initialSearchParams = {}} = {}) => {
       <AuthRequiredView
         loginUrl={loginUrl}
         title="Sign in to browse the library"
-        detail="Moon keeps the full library and metadata surfaces behind your Discord session."
+        detail={`${siteName} keeps the full library and metadata surfaces behind your Discord session.`}
       />
     );
   }

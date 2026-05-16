@@ -10,7 +10,7 @@ const docsHtml = () => `<!doctype html>
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Scriptarr Moon Public API</title>
+    <title>Scriptarr Public API</title>
     <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css">
     <style>
       body { margin: 0; background: #fff; }
@@ -32,7 +32,7 @@ const docsHtml = () => `<!doctype html>
 </html>`;
 
 /**
- * Register Moon-owned public API proxy routes and the same-origin Swagger page.
+ * Register public API proxy routes and the same-origin Swagger page.
  *
  * @param {import("express").Express} app
  * @param {{config: {sageBaseUrl: string}}} options

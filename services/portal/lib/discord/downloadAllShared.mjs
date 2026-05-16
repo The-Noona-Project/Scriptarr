@@ -243,7 +243,7 @@ const resolveBulkQueueFailure = (result) => {
   }
   return normalizeString(result.payload?.error)
     || normalizeString(result.payload?.message)
-    || `Sage returned ${normalizeString(result.status, "an error")}.`;
+    || `The service returned ${normalizeString(result.status, "an error")}.`;
 };
 
 export const resolveDownloadAllAccess = ({

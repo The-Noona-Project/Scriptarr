@@ -1,5 +1,5 @@
 /**
- * Poll Sage for completed Raven downloads that should fan out to Discord DMs
+ * Poll Sage for completed downloads that should fan out to Discord DMs
  * for users following the affected titles.
  */
 
@@ -37,7 +37,7 @@ export const createFollowNotificationPoller = ({
           const titleName = notification?.titleName || "your followed title";
           const titleUrl = notification?.titleUrl ? `\nOpen in Scriptarr: ${notification.titleUrl}` : "";
           await discordClient.sendDirectMessage(notification.discordUserId, {
-            content: `New Scriptarr download completed for **${titleName}**.${titleUrl}`
+            content: `New Scriptarr title completed for **${titleName}**.${titleUrl}`
           });
           await sage.acknowledgeFollowNotification(notification.id);
         } catch (error) {

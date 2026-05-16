@@ -473,7 +473,7 @@ const createSageStub = ({requests = []} = {}) => Promise.resolve(http.createServ
     response.writeHead(200, {"Content-Type": "application/json"});
     response.end(JSON.stringify({
       openapi: "3.1.0",
-      info: {title: "Scriptarr Moon Public API"}
+      info: {title: "Scriptarr Public API"}
     }));
     return;
   }
@@ -576,7 +576,7 @@ test("moon serves branded split entry documents, typed routes, PWA assets, and M
   assert.match(userPage, /Pax Library/);
   assert.doesNotMatch(userPage, /Scriptarr Moon/);
   assert.equal(adminPageResponse.status, 503);
-  assert.match(adminPage, /Moon Admin unavailable/);
+  assert.match(adminPage, /Pax Library Admin unavailable/);
   assert.match(readerPage, /Pax Library Reader unavailable/);
   assert.match(untypedReaderPage, /Pax Library Reader unavailable/);
   assert.match(userPage, /manifest\.webmanifest/);
@@ -628,12 +628,12 @@ test("moon serves branded split entry documents, typed routes, PWA assets, and M
   const iconResponse = await fetch(`${baseUrl}/icon.svg`);
   assert.equal(iconResponse.status, 200);
   assert.match(iconResponse.headers.get("content-type") || "", /image\/svg\+xml/);
-  assert.match(await iconResponse.text(), /Moon icon/);
+  assert.match(await iconResponse.text(), /Scriptarr icon/);
 
   const maskableIconResponse = await fetch(`${baseUrl}/icon-maskable.svg`);
   assert.equal(maskableIconResponse.status, 200);
   assert.match(maskableIconResponse.headers.get("content-type") || "", /image\/svg\+xml/);
-  assert.match(await maskableIconResponse.text(), /Moon icon/);
+  assert.match(await maskableIconResponse.text(), /Scriptarr icon/);
 
   const serviceWorkerResponse = await fetch(`${baseUrl}/service-worker.js`);
   assert.match(serviceWorkerResponse.headers.get("content-type") || "", /javascript/);
@@ -750,7 +750,7 @@ test("moon serves branded split entry documents, typed routes, PWA assets, and M
   assert.equal(openApiResponse.status, 200);
   assert.deepEqual(await openApiResponse.json(), {
     openapi: "3.1.0",
-    info: {title: "Scriptarr Moon Public API"}
+    info: {title: "Scriptarr Public API"}
   });
 
   const libraryResponse = await fetch(`${baseUrl}/api/moon/v3/user/library`);
@@ -993,7 +993,7 @@ test("moon redirects signed-in non-admin sessions away from admin while allowing
     headers: {cookie: "scriptarr_session=admin-token"}
   });
   assert.equal(adminResponse.status, 503);
-  assert.match(await adminResponse.text(), /Moon Admin unavailable/);
+  assert.match(await adminResponse.text(), /Pax Library Admin unavailable/);
 
   const memberAuthLookups = requests.filter((entry) => entry.url === "/api/auth/status").length;
   assert.ok(memberAuthLookups >= 2);

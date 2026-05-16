@@ -24,26 +24,26 @@ const tabs = [
   {id: "closed", label: "Closed"}
 ];
 
-const buildRequestStatusCopy = (request) => {
+const buildRequestStatusCopy = (request, siteName = "Scriptarr") => {
   if (request.status === "pending" && !request.details?.selectedDownload?.titleUrl) {
     return request.details?.sourceFoundOptions?.length
-      ? "Scriptarr found download candidates and moved this request back into admin review."
+      ? `${siteName} found download candidates and moved this request back into staff review.`
       : "Waiting for an admin to review the metadata match and choose a download source.";
   }
   if (request.status === "unavailable") {
-    return "No enabled download provider has a source for this metadata match yet. Sage will keep checking every 4 hours.";
+    return "No enabled download provider has a source for this metadata match yet. Source checks will run every 4 hours.";
   }
   if (request.status === "queued") {
-    return "Approved and queued for Raven.";
+    return "Approved and queued for download.";
   }
   if (request.status === "downloading") {
-    return "Raven is downloading this title now.";
+    return "The download queue is working on this title now.";
   }
   if (request.status === "failed") {
     return "The download failed. Staff can retry or choose a different source.";
   }
   if (request.status === "completed") {
-    return "Completed and available in Moon.";
+    return `Completed and available in ${siteName}.`;
   }
   if (request.status === "denied") {
     return "Closed by staff.";
@@ -57,7 +57,7 @@ const buildRequestStatusCopy = (request) => {
   return "Request updated.";
 };
 
-const RequestWizardNotice = ({notice}) => {
+const RequestWizardNotice = ({notice, siteName = "Scriptarr"}) => {
   if (!notice?.message) {
     return null;
   }
@@ -67,7 +67,7 @@ const RequestWizardNotice = ({notice}) => {
       <p>{notice.message}</p>
       {notice.linkUrl ? (
         <Link href={notice.linkUrl}>
-          {notice.linkLabel || "Open it in Moon"}
+          {notice.linkLabel || `Open it in ${siteName}`}
         </Link>
       ) : null}
     </div>
@@ -119,7 +119,7 @@ const MetadataChoiceCard = ({entry, isSelected, onSelect}) => (
   </article>
 );
 
-const RequestRow = ({request, onEditNotes, onCancel}) => {
+const RequestRow = ({request, siteName, onEditNotes, onCancel}) => {
   const metadata = request.details?.selectedMetadata || {};
   const download = request.details?.selectedDownload || {};
 
@@ -140,7 +140,7 @@ const RequestRow = ({request, onEditNotes, onCancel}) => {
       {request.notes || request.details?.query ? (
         <p className="moon-request-row-notes">{request.notes || request.details?.query}</p>
       ) : null}
-      <p className="moon-request-row-hint">{buildRequestStatusCopy(request)}</p>
+      <p className="moon-request-row-hint">{buildRequestStatusCopy(request, siteName)}</p>
       {metadata.url ? (
         <div className="moon-request-row-links">
           <MetadataLink href={metadata.url} label="Review metadata" />
@@ -170,7 +170,8 @@ const RequestRow = ({request, onEditNotes, onCancel}) => {
  * @returns {import("react").ReactNode}
  */
 export const RequestsPageClient = () => {
-  const {auth, loginUrl} = useMoonChrome();
+  const {auth, branding, loginUrl} = useMoonChrome();
+  const siteName = branding?.siteName || "Scriptarr";
   const {loading, error, status, data, refresh} = useMoonJson("/api/moon-v3/user/requests", {
     fallback: {
       requests: [],
@@ -206,7 +207,7 @@ export const RequestsPageClient = () => {
     event.preventDefault();
     const normalizedQuery = normalizeString(query);
     if (!normalizedQuery) {
-      setNotice({tone: "bad", message: "Enter a title before you search Scriptarr metadata."});
+      setNotice({tone: "bad", message: `Enter a title before you search ${siteName} metadata.`});
       return;
     }
 
@@ -218,7 +219,7 @@ export const RequestsPageClient = () => {
 
     if (!result.ok) {
       setMetadataResults([]);
-      setNotice({tone: "bad", message: result.payload?.error || "Moon could not search metadata right now."});
+      setNotice({tone: "bad", message: result.payload?.error || `${siteName} could not search metadata right now.`});
       return;
     }
 
@@ -260,7 +261,7 @@ export const RequestsPageClient = () => {
       setNotice({
         tone: "good",
         message: nextRequest?.status === "unavailable"
-          ? `Saved "${nextRequest.title}" as unavailable. Sage will keep checking for a source every 4 hours and staff will review it once one appears.`
+          ? `Saved "${nextRequest.title}" as unavailable. Source checks will keep running every 4 hours and staff will review it once one appears.`
           : `Saved "${nextRequest?.title || selectedMetadata.title}" for review. Staff will pick the download source during approval.`
       });
       setQuery("");
@@ -273,7 +274,7 @@ export const RequestsPageClient = () => {
     if (result.payload?.code === "REQUEST_ALREADY_IN_LIBRARY") {
       setNotice({
         tone: "info",
-        message: `${result.payload?.libraryTitle?.title || selectedMetadata.title} is already in the Scriptarr library.`,
+        message: `${result.payload?.libraryTitle?.title || selectedMetadata.title} is already in the ${siteName} library.`,
         linkUrl: result.payload?.libraryTitle?.linkUrl,
         linkLabel: "Open the title page"
       });
@@ -283,7 +284,7 @@ export const RequestsPageClient = () => {
     if (result.payload?.code === "REQUEST_ALREADY_QUEUED") {
       setNotice({
         tone: "info",
-        message: `Scriptarr is already tracking ${result.payload?.title || selectedMetadata.title}. You were added to the waitlist and will get a Discord DM when it is ready.`,
+        message: `${siteName} is already tracking ${result.payload?.title || selectedMetadata.title}. You were added to the waitlist and will get a Discord DM when it is ready.`,
         linkUrl: result.payload?.linkUrl,
         linkLabel: "Open My Requests"
       });
@@ -294,7 +295,7 @@ export const RequestsPageClient = () => {
 
     setNotice({
       tone: "bad",
-      message: result.payload?.error || "Moon could not save that request."
+      message: result.payload?.error || `${siteName} could not save that request.`
     });
   };
 
@@ -313,7 +314,7 @@ export const RequestsPageClient = () => {
       tone: result.ok ? "good" : "bad",
       message: result.ok
         ? "Request notes updated."
-        : result.payload?.error || "Moon could not update those notes."
+        : result.payload?.error || `${siteName} could not update those notes.`
     });
     if (result.ok) {
       await clearCachedProfilePayloads();
@@ -332,7 +333,7 @@ export const RequestsPageClient = () => {
       tone: result.ok ? "good" : "bad",
       message: result.ok
         ? "Request canceled."
-        : result.payload?.error || "Moon could not cancel that request."
+        : result.payload?.error || `${siteName} could not cancel that request.`
     });
     if (result.ok) {
       await clearCachedProfilePayloads();
@@ -341,7 +342,7 @@ export const RequestsPageClient = () => {
   };
 
   if (loading) {
-    return <LoadingView label="Moon is loading your request wizard, request tabs, and Discord-backed moderation history." />;
+    return <LoadingView label={`${siteName} is loading your request wizard, request tabs, and Discord-backed moderation history.`} />;
   }
 
   if (status === 401 && !auth) {
@@ -364,7 +365,7 @@ export const RequestsPageClient = () => {
         <div className="moon-section-head">
           <div>
             <span className="moon-kicker">Requests</span>
-            <h2>Ask Moon to track a full title</h2>
+            <h2>Ask {siteName} to track a full title</h2>
             <p>Search metadata first, inspect the provider details, and submit the exact title you want staff to review.</p>
           </div>
         </div>
@@ -391,7 +392,7 @@ export const RequestsPageClient = () => {
           />
         </label>
 
-        <RequestWizardNotice notice={notice} />
+        <RequestWizardNotice notice={notice} siteName={siteName} />
 
         {metadataResults.length ? (
           <div className="moon-request-step">
@@ -445,7 +446,7 @@ export const RequestsPageClient = () => {
         <div className="moon-section-head">
           <div>
             <span className="moon-kicker">History</span>
-            <h2>Everything you have asked Moon to track</h2>
+            <h2>Everything you have asked {siteName} to track</h2>
           </div>
         </div>
         <div className="moon-request-tabs" role="tablist" aria-label="Request status tabs">
@@ -467,6 +468,7 @@ export const RequestsPageClient = () => {
               <RequestRow
                 key={request.id}
                 request={request}
+                siteName={siteName}
                 onEditNotes={handleEditNotes}
                 onCancel={handleCancel}
               />
@@ -476,8 +478,8 @@ export const RequestsPageClient = () => {
           <EmptyView
             title={`No ${activeTab} requests yet`}
             detail={activeTab === "active"
-              ? "Search a title above and submit the exact metadata result you want Scriptarr staff to review."
-              : "Your request history for this tab will show up here once you start using Moon requests."}
+              ? `Search a title above and submit the exact metadata result you want ${siteName} staff to review.`
+              : `Your request history for this tab will show up here once you start using ${siteName} requests.`}
           />
         )}
       </section>

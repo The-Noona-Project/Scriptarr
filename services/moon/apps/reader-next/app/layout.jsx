@@ -7,7 +7,7 @@ import ReaderProviders from "../components/ReaderProviders.jsx";
 
 export const metadata = {
   title: "Scriptarr Reader",
-  description: "Moon's fullscreen reader application."
+  description: "Scriptarr's fullscreen reader application."
 };
 
 /**

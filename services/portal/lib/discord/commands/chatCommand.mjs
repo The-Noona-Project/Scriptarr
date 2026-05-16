@@ -10,7 +10,7 @@ const option = (name, description, required = false) => ({
 export const createChatCommand = ({sage}) => ({
   definition: {
     name: "chat",
-    description: "Talk to Noona through Oracle.",
+    description: "Talk to Noona.",
     options: [
       option("message", "What you want to ask Noona.", true)
     ]

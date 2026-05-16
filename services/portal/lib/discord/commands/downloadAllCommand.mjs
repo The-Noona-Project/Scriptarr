@@ -6,6 +6,7 @@ import {
   formatDownloadAllUsage
 } from "../downloadAllShared.mjs";
 import {sendInteractionReply} from "../utils.mjs";
+import {createBrandNameGetter} from "../branding.mjs";
 
 const SUBCOMMAND_TYPE = 1;
 const STRING_OPTION_TYPE = 3;
@@ -53,10 +54,13 @@ const subcommand = (name, description, options = []) => ({
 
 export const createDownloadAllCommand = ({
   sage,
+  getBrandName,
   getSettings,
   logger,
   onRuntimeEvent
-}) => ({
+}) => {
+  const brandName = createBrandNameGetter(getBrandName);
+  return {
   definition: {
     name: "downloadall",
     description: "Owner-only DM downloadall runs for WeebCentral titles.",
@@ -117,7 +121,7 @@ export const createDownloadAllCommand = ({
           action: subcommandName
         });
         const failure = result?.ok === false
-          ? result.payload?.error || result.payload?.message || `Sage returned ${result.status || "an error"}.`
+          ? result.payload?.error || result.payload?.message || `The service returned ${result.status || "an error"}.`
           : "";
         if (failure) {
           throw new Error(failure);
@@ -128,7 +132,7 @@ export const createDownloadAllCommand = ({
         });
       } catch (error) {
         await sendInteractionReply(interaction, {
-          content: `Scriptarr downloadall ${subcommandName} failed: ${error?.message || String(error)}`,
+          content: `${brandName()} downloadall ${subcommandName} failed: ${error?.message || String(error)}`,
           ephemeral: true
         });
       }
@@ -160,11 +164,12 @@ export const createDownloadAllCommand = ({
       });
     } catch (error) {
       await sendInteractionReply(interaction, {
-        content: `Scriptarr downloadall run failed: ${error?.message || String(error)}`,
+        content: `${brandName()} downloadall run failed: ${error?.message || String(error)}`,
         ephemeral: true
       });
     }
   }
-});
+  };
+};
 
 export default createDownloadAllCommand;

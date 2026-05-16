@@ -93,8 +93,8 @@ is finished in Moon admin. Warden's first-boot logs now call out when it creates
 service images so you can follow reconciliation progress from one place. Warden and the managed containers also publish
 Docker health checks so Docker Desktop, `docker ps`, and Unraid can show `healthy` once each service finishes booting.
 
-Fresh installs no longer include seeded demo series. Moon's user and admin library views stay empty until Raven has
-real imported titles to expose.
+Fresh installs no longer include seeded demo series. Scriptarr's user and admin library views stay empty until the
+library importer has real titles to expose.
 Vault now fronts shared MySQL state with its own cache-first broker layer, and first-party service-to-service HTTP is
 expected to flow through Sage instead of bypassing the broker topology.
 Moon requests and admin add-title now run through one intake flow: search query, enabled metadata providers, saved
@@ -102,7 +102,7 @@ metadata snapshot, then either admin source approval or immediate queueing depen
 That intake is now grouped by concrete provider target so duplicate metadata rows that land on the same download URL
 only create one requestable result, while real separate variants such as plain vs colored editions stay distinct when
 the provider exposes different series URLs.
-Moon web request creation now lives in `/myrequests` as an inline wizard. Readers pick an exact metadata match,
+Web request creation now lives in `/myrequests` as an inline wizard. Readers pick an exact metadata match,
 review the upstream metadata site if needed, optionally leave notes, and submit a moderated full-title request.
 Admins then choose the concrete download-provider target from `/admin/requests`, unless the optional `Auto approve and
 download` setting lets Sage queue one high-confidence source automatically. If no source exists yet, Sage stores the
@@ -139,12 +139,12 @@ Example callback shape:
 
 `https://your-scriptarr-host.example.com/api/moon/auth/discord/callback`
 
-Moon's bootstrap surface should also show the configured first-owner Discord id before the first claim. If it does not,
-double-check that `SUPERUSER_ID` was passed into Warden correctly.
-Moon no longer exposes a dev-session claim path, so Discord login is the supported bootstrap and admin sign-in flow.
-When login starts from a same-origin Moon page, Scriptarr now remembers that route and returns the user there after
-Discord OAuth completes. If the original route is missing, invalid, or no longer allowed for the signed-in user,
-Moon falls back to the user home page at `/`.
+Scriptarr's bootstrap surface should also show the configured first-owner Discord id before the first claim. If it does
+not, double-check that `SUPERUSER_ID` was passed into Warden correctly.
+Scriptarr no longer exposes a dev-session claim path, so Discord login is the supported bootstrap and admin sign-in
+flow. When login starts from a same-origin Scriptarr page, Scriptarr now remembers that route and returns the user there
+after Discord OAuth completes. If the original route is missing, invalid, or no longer allowed for the signed-in user,
+Scriptarr falls back to the user home page at `/`.
 
 ## Network Topology
 

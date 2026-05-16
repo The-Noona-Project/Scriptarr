@@ -790,7 +790,7 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
   const publicOpenApiDocument = () => ({
     openapi: "3.1.0",
     info: {
-      title: "Scriptarr Moon Public API",
+      title: "Scriptarr Public API",
       version: "1.0.0",
       description: "Trusted automation API for safe Scriptarr search and queued title requests."
     },
@@ -1535,7 +1535,7 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
       username,
       userMention: req.body?.userMention,
       siteName: branding.siteName,
-      guildName: normalizeString(req.body?.guildName, "Moon Admin Preview"),
+      guildName: normalizeString(req.body?.guildName, "Scriptarr Admin Preview"),
       guildId: previewSettings.guildId,
       moonUrl: config.publicBaseUrl
     });

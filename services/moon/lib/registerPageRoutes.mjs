@@ -176,7 +176,7 @@ const renderUserFallbackHtml = ({siteName}) => `<!doctype html>
 <body>
   <main>
     <h1>${siteName}</h1>
-    <p>Moon's user app now runs through the embedded Next runtime.</p>
+    <p>The reading app is starting. Refresh in a moment if this page does not update.</p>
   </main>
 </body>
 </html>`;
@@ -359,7 +359,9 @@ export const registerPageRoutes = (app, {adminNextRuntime = null, config = {}, g
       await adminNextRuntime.handle(req, res);
       return;
     }
-    res.status(503).type("html").send("<!doctype html><title>Moon Admin unavailable</title><main><h1>Moon Admin unavailable</h1><p>The embedded Next admin runtime is not ready.</p></main>");
+    const branding = await loadBranding();
+    const siteName = normalizeSiteName(branding.siteName);
+    res.status(503).type("html").send(`<!doctype html><title>${siteName} Admin unavailable</title><main><h1>${siteName} Admin unavailable</h1><p>The embedded admin runtime is not ready.</p></main>`);
   });
 
   app.get("/admin/*splat", async (req, res) => {
@@ -371,7 +373,9 @@ export const registerPageRoutes = (app, {adminNextRuntime = null, config = {}, g
       await adminNextRuntime.handle(req, res);
       return;
     }
-    res.status(503).type("html").send("<!doctype html><title>Moon Admin unavailable</title><main><h1>Moon Admin unavailable</h1><p>The embedded Next admin runtime is not ready.</p></main>");
+    const branding = await loadBranding();
+    const siteName = normalizeSiteName(branding.siteName);
+    res.status(503).type("html").send(`<!doctype html><title>${siteName} Admin unavailable</title><main><h1>${siteName} Admin unavailable</h1><p>The embedded admin runtime is not ready.</p></main>`);
   });
 
   app.all("/reader/_next/*splat", async (req, res) => {
@@ -379,7 +383,7 @@ export const registerPageRoutes = (app, {adminNextRuntime = null, config = {}, g
       await readerNextRuntime.handle(req, res);
       return;
     }
-    res.status(503).json({error: "Moon reader assets are unavailable until the embedded reader runtime is ready."});
+    res.status(503).json({error: "Reader assets are unavailable until the embedded reader runtime is ready."});
   });
 
   app.get("/reader", async (req, res) => {

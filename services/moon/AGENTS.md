@@ -20,6 +20,9 @@ from the same runtime.
 - Keep `/admin` aligned with Arr-style admin density and `/` aligned with Moon's native reading-first UX.
 - Keep Discord login as Moon's only first-owner and admin sign-in path. Do not reintroduce dev-session claim flows.
 - Keep Moon HTML uncacheable and its static CSS or JS assets versioned so publishes invalidate stale browser bundles cleanly.
+- Keep normal reader-facing copy branded. The user app, reader app, PWA metadata, public fallback HTML, and public API
+  labels should use the configured site name or neutral product wording instead of service codenames; keep codenames for
+  admin diagnostics and internal code paths.
 - For Moon speed work, measure before editing. Compare document and Next asset load, chrome/bootstrap requests, main
   route payloads, event-stream calls, and payload sizes for user home, browse/library, reader/title, admin settings,
   admin status, and admin queue or requests.

@@ -10,6 +10,7 @@ import {createTriviaCommand} from "./triviaCommand.mjs";
 export const createPortalCommands = ({
   sage,
   publicBaseUrl,
+  getBrandName,
   getSettings,
   logger,
   onRuntimeEvent,
@@ -18,14 +19,15 @@ export const createPortalCommands = ({
   onTriviaLeaderboard
 }) => {
   const commands = new Map();
-  commands.set("ding", createDingCommand());
-  commands.set("status", createStatusCommand({sage}));
+  commands.set("ding", createDingCommand({getBrandName}));
+  commands.set("status", createStatusCommand({sage, getBrandName}));
   commands.set("chat", createChatCommand({sage}));
-  commands.set("search", createSearchCommand({sage, publicBaseUrl}));
-  commands.set("request", createRequestCommand({sage}));
-  commands.set("subscribe", createSubscribeCommand({sage}));
+  commands.set("search", createSearchCommand({sage, publicBaseUrl, getBrandName}));
+  commands.set("request", createRequestCommand({sage, getBrandName}));
+  commands.set("subscribe", createSubscribeCommand({sage, getBrandName}));
   commands.set("downloadall", createDownloadAllCommand({
     sage,
+    getBrandName,
     getSettings,
     logger,
     onRuntimeEvent

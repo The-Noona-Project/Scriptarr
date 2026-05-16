@@ -91,7 +91,7 @@ export const AdminShell = ({children}) => {
         <a className="admin-brand" href="/admin">
           <span className="admin-brand-mark">{logoUrl ? <img src={logoUrl} alt="" /> : "S"}</span>
           <span>
-            <small>Moon Admin</small>
+            <small>{siteName} Admin</small>
             <strong>{siteName}</strong>
           </span>
         </a>
