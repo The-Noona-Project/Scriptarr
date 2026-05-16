@@ -15,6 +15,12 @@ Oracle preserves the same internal contract used elsewhere in Scriptarr:
 - `GET /api/status`
 - `POST /api/chat`
 
+`POST /api/chat` still accepts the existing `{ "message": "..." }` payload. Sage may also include an optional
+`context` object for brokered surfaces such as public Discord mention chat. That context can carry persona hints,
+summarized Noona memory, user display information, and read-only status/library/trivia context. Oracle treats it as
+background only; it does not store memory, execute tools, mutate Scriptarr, or reveal raw identifiers/secrets back to
+Discord.
+
 Moon admin now manages Oracle from `/admin/system/ai` through Sage. That page saves provider, model, temperature, and
 masked OpenAI key state, shows Oracle health, and sends a small brokered test prompt without exposing Oracle directly
 to the browser.

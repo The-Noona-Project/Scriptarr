@@ -70,6 +70,7 @@ import {
   normalizePortalDiscordSettings,
   renderPortalOnboardingTemplate
 } from "./portalDiscordSettings.mjs";
+import {buildNoonaMemoryAdminPayload, clearNoonaMemory} from "./noonaChatMemory.mjs";
 import {createPortalTriviaService} from "./portalTrivia.mjs";
 
 const RAVEN_VPN_KEY = "raven.vpn";
@@ -2592,14 +2593,16 @@ export const registerMoonV3Routes = (app, {
   const buildDiscordPayload = async (adminUser = null) => {
     const settings = normalizePortalDiscordSettings(await readPortalDiscordSettings());
     const canRevealTriviaAnswer = hasDomainAccess(adminUser, "discord", "root");
-    const [runtime, triviaRuntime] = await Promise.all([
+    const [runtime, triviaRuntime, noonaMemory] = await Promise.all([
       loadPortalDiscordRuntime(settings),
-      triviaService.getAdminState({includeActiveAnswer: canRevealTriviaAnswer})
+      triviaService.getAdminState({includeActiveAnswer: canRevealTriviaAnswer}),
+      buildNoonaMemoryAdminPayload(vaultClient)
     ]);
     return {
       settings,
       runtime,
       triviaRuntime,
+      noonaMemory,
       commandCatalog: knownPortalDiscordCommands
     };
   };
@@ -2623,6 +2626,10 @@ export const registerMoonV3Routes = (app, {
         guildId: nextSettings.guildId,
         onboardingChannelId: nextSettings.onboarding.channelId,
         releaseChannelId: nextSettings.notifications.releaseChannelId,
+        noonaChatEnabled: nextSettings.noonaChat.enabled,
+        noonaChatChannelCount: normalizeArray(nextSettings.noonaChat.allowedChannelIds).length,
+        noonaChatMemoryEnabled: nextSettings.noonaChat.memoryEnabled,
+        noonaChatProposalMode: nextSettings.noonaChat.proposalMode,
         triviaEnabled: nextSettings.trivia.enabled,
         triviaChannelId: nextSettings.trivia.channelId
       }
@@ -2684,6 +2691,7 @@ export const registerMoonV3Routes = (app, {
         reload: reload.payload || reload
       },
       triviaRuntime: await triviaService.getAdminState({includeActiveAnswer: hasDomainAccess(req.user, "discord", "root")}),
+      noonaMemory: await buildNoonaMemoryAdminPayload(vaultClient),
       commandCatalog: knownPortalDiscordCommands
     });
   }));
@@ -2794,6 +2802,30 @@ export const registerMoonV3Routes = (app, {
       return;
     }
     res.json(portal.payload || portal);
+  }));
+
+  app.delete("/api/moon-v3/admin/discord/noona-memory", requireDiscordWrite(async (req, res) => {
+    const cleared = await clearNoonaMemory(vaultClient, {
+      scope: req.body?.scope || req.query?.scope || "all",
+      discordUserId: req.body?.discordUserId || req.query?.discordUserId || ""
+    });
+    await appendEventForUser({
+      domain: "discord",
+      eventType: "discord-noona-memory-cleared",
+      user: req.user,
+      targetType: "setting",
+      targetId: "portal.noonaChat.memory",
+      message: `${req.user.username} cleared Noona mention-chat memory.`,
+      metadata: {
+        scope: normalizeString(req.body?.scope || req.query?.scope, "all"),
+        discordUserId: normalizeString(req.body?.discordUserId || req.query?.discordUserId)
+      }
+    });
+    res.json({
+      ok: true,
+      memory: await buildNoonaMemoryAdminPayload(vaultClient),
+      raw: cleared
+    });
   }));
 
   const runPortalTriviaAction = async (req, res, action, path, body = {}) => {

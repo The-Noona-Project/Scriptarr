@@ -6,6 +6,9 @@
 - Oracle now runs as a FastAPI Python service while preserving the existing `/health`, `/api/status`, and `/api/chat`
   contract for the rest of Scriptarr, plus `/api/assist` for Sage-brokered planning, trivia matching advice, and
   concise message assistance.
+- `/api/chat` accepts optional Sage-curated context while preserving the message-only contract. Use context for
+  persona, summarized memory, and read-only status/library/trivia background only; do not store it, expose raw ids or
+  secrets, or treat it as permission to mutate anything.
 - It still uses OpenAI-compatible wiring so LocalAI can be swapped in later.
 - It should gracefully return disabled or degraded responses when OpenAI or LocalAI is unavailable.
 - Keep degraded replies provider-specific so OpenAI failures are not reported as LocalAI outages, and keep the

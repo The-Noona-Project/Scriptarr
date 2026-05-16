@@ -61,3 +61,31 @@ test("AI operation prompts create confirmable proposals only when enabled", asyn
   const cancelled = await updateProposalStatus(vault, stored.id, "cancelled", {result: {ok: true}});
   assert.equal(cancelled.status, "cancelled");
 });
+
+test("AI operation proposals can be restricted to a surface allowlist", async () => {
+  const vault = createMemoryVault();
+  await writeAiToolSettings(vault, {
+    toggles: {
+      trivia_start: true,
+      localai_install: true
+    }
+  });
+
+  const blocked = await proposeAiAction({
+    vaultClient: vault,
+    prompt: "run localai install",
+    user: {username: "Noona"},
+    allowedToolIds: ["trivia_start", "trivia_stop"]
+  });
+  assert.equal(blocked.ok, false);
+  assert.equal(blocked.status, 403);
+
+  const allowed = await proposeAiAction({
+    vaultClient: vault,
+    prompt: "start trivia",
+    user: {username: "Noona"},
+    allowedToolIds: ["trivia_start", "trivia_stop"]
+  });
+  assert.equal(allowed.ok, true);
+  assert.equal(allowed.proposal.toolId, "trivia_start");
+});

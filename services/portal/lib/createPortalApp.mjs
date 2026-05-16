@@ -82,6 +82,10 @@ export const createPortalApp = async ({
         lastDownloadAllHandledAt: state.lastDownloadAllHandledAt,
         lastDownloadAllError: state.lastDownloadAllError,
         lastDownloadAllSource: state.lastDownloadAllSource,
+        lastNoonaMentionAt: state.lastNoonaMentionAt,
+        lastNoonaMentionChannelId: state.lastNoonaMentionChannelId,
+        lastNoonaMentionUserId: state.lastNoonaMentionUserId,
+        lastNoonaMentionError: state.lastNoonaMentionError,
         capabilities: state.capabilities
       },
       commands: state.commands

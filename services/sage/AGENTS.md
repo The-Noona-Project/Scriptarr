@@ -23,6 +23,9 @@ HTTP broker.
   admin recovery actions.
 - Keep Portal trivia brokered through Sage. Sage owns Vault-backed trivia rounds, guesses, score events, leaderboard
   acknowledgments, and optional Oracle borderline matching.
+- Keep public Noona mention chat brokered through Sage. Portal should call `/api/internal/portal/noona-chat`; Sage owns
+  capped memory summaries, conservative read-context loading, public proposal allowlisting, and Oracle fallback. Do not
+  let Portal call Oracle or Vault directly for mention chat.
 - Keep AI tool execution Sage-governed. Oracle can assist planning, but Sage must enforce the `ai` domain, enabled
   toggles, grant checks, proposal confirmation, expiry, and durable events.
 - Portal-facing downloadall notifications should use stable ack ids and only acknowledge after Portal confirms the
@@ -42,6 +45,9 @@ HTTP broker.
   `sort`, and optional exact `ids`; do not ask Moon browsers to hydrate full title/chapter arrays for list pages.
 - First-party service broker routes live in `lib/registerInternalBrokerRoutes.mjs`. Portal, Raven, Warden, and Oracle
   should call those internal routes instead of talking directly to Vault or each other.
+- Public Noona chat helpers live in `lib/noonaChatService.mjs` and `lib/noonaChatMemory.mjs`. Keep durable memory
+  summarized in Vault settings, reject obvious secrets, and keep the public proposal allowlist stricter than the admin
+  AI page.
 - Durable state reads and writes go through `lib/vaultClient.mjs`, which is the Sage-side client for Vault's service
   API. Do not add MySQL access here.
 - Reader target lookups belong in `vaultClient.mjs` plus focused Moon v3 helpers. Precedence is saved progress/bookmark,

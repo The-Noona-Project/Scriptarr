@@ -250,6 +250,7 @@ def create_app(
         except Exception:  # noqa: BLE001
             body = {}
         message = str((body or {}).get("message") or "").strip()
+        context = (body or {}).get("context") if isinstance(body, dict) else None
         if not message:
             active_logger.warning("Oracle chat request was missing a message.")
             return JSONResponse(status_code=400, content={"error": "message is required."})
@@ -258,7 +259,7 @@ def create_app(
             read_scriptarr_status(active_sage_client),
             resolve_oracle_runtime_settings(config=active_config, sage_client=active_sage_client)
         )
-        if re.search(r"status|health|boot|callback", message, re.IGNORECASE):
+        if re.search(r"status|health|boot|callback|alive", message, re.IGNORECASE):
             return {
                 "ok": True,
                 "reply": (
@@ -306,7 +307,10 @@ def create_app(
                     "error": "LocalAI probe failed."
                 }
 
-            reply = await invoke_oracle_fn(runtime, active_config.noona_persona_name, message)
+            if isinstance(context, dict) and context:
+                reply = await invoke_oracle_fn(runtime, active_config.noona_persona_name, message, context)
+            else:
+                reply = await invoke_oracle_fn(runtime, active_config.noona_persona_name, message)
             return {
                 "ok": True,
                 "reply": reply,

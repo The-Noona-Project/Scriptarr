@@ -267,6 +267,13 @@ export const createSageClient = (config) => {
         body: payload
       });
     },
+    noonaChat(payload) {
+      return requestJson(config.sageBaseUrl, jsonHeaders, "/api/internal/portal/noona-chat", {
+        method: "POST",
+        body: payload,
+        timeoutMs: 30000
+      });
+    },
     assistOracle(payload) {
       return requestJson(config.sageBaseUrl, jsonHeaders, "/api/internal/oracle/assist", {
         method: "POST",

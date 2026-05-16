@@ -12,10 +12,11 @@ enabled as more providers land later. WeebCentral stays first by default, MangaD
 download provider, and the Discord `downloadall` command remains intentionally pinned to WeebCentral for the
 configured owner account.
 Moon admin now also includes a dedicated Discord page at `/admin/discord` for guild workflow settings, slash-command
-role gates, onboarding template or channel management, release-channel posts, and Portal runtime visibility without
-exposing Discord credentials in the browser.
+role gates, onboarding template or channel management, release-channel posts, Noona mention chat, Noona memory review
+or clear actions, and Portal runtime visibility without exposing Discord credentials in the browser.
 That Discord page now distinguishes connected command runtime, command-sync health, onboarding capability, and the last
-meaningful Portal runtime error instead of collapsing everything into one disconnected status.
+meaningful Portal runtime error instead of collapsing everything into one disconnected status. It also surfaces the
+last Noona mention-chat time or error so public chat problems can be diagnosed without reading Portal logs.
 
 Moon 3.0 also includes a native reader flow with:
 

@@ -6,6 +6,7 @@ import {knownPortalDiscordCommands, readPortalDiscordSettings} from "./portalDis
 import {createPortalTriviaService} from "./portalTrivia.mjs";
 import {buildIntakeSelection, evaluateSelectionAgainstGuardState} from "./requestSelectionGuards.mjs";
 import {buildRequestWorkConflictPayload, isRequestWorkConflictError} from "./requestConflict.mjs";
+import {createNoonaChatService} from "./noonaChatService.mjs";
 import {
   attachRequestWaitlistEntry,
   buildActiveRequestDuplicatePayload,
@@ -1159,6 +1160,13 @@ export const registerInternalBrokerRoutes = (app, {
     serviceJson,
     readPortalDiscordSettings: () => readPortalDiscordSettings(vaultClient)
   });
+  const noonaChatService = createNoonaChatService({
+    config,
+    vaultClient,
+    serviceJson,
+    triviaService,
+    readPortalDiscordSettings: () => readPortalDiscordSettings(vaultClient)
+  });
   const appendServiceEvent = (serviceName, payload) => appendDurableEvent(vaultClient, {
     ...buildServiceActor(serviceName),
     ...payload
@@ -1789,6 +1797,11 @@ export const registerInternalBrokerRoutes = (app, {
       method: "POST",
       body: req.body || {}
     }));
+  }));
+
+  app.post("/api/internal/portal/noona-chat", withService(requireService, ["scriptarr-portal"], async (req, res) => {
+    const result = await noonaChatService.handlePortalMention(req.body || {});
+    res.status(result.status || (result.ok === false ? 400 : 200)).json(result);
   }));
 
   app.post("/api/internal/oracle/assist", withService(requireService, ["scriptarr-portal"], async (req, res) => {

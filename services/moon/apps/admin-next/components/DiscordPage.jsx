@@ -13,6 +13,13 @@ import {AdminActionBanner, AdminDenseTable, AdminStatusBadge} from "./AdminUi.js
 
 const normalizeArray = (value) => Array.isArray(value) ? value : [];
 
+const parseChannelIds = (value) => normalizeString(value)
+  .split(/[\s,]+/g)
+  .map((entry) => normalizeString(entry))
+  .filter(Boolean);
+
+const formatChannelIds = (value) => normalizeArray(value).map((entry) => normalizeString(entry)).filter(Boolean).join("\n");
+
 const patchNested = (source, key, patch) => ({
   ...source,
   [key]: {
@@ -71,6 +78,7 @@ export const DiscordPage = ({user}) => {
   const setField = (patch) => setDraft((current) => ({...current, ...patch}));
   const setOnboarding = (patch) => setDraft((current) => patchNested(current, "onboarding", patch));
   const setNotifications = (patch) => setDraft((current) => patchNested(current, "notifications", patch));
+  const setNoonaChat = (patch) => setDraft((current) => patchNested(current, "noonaChat", patch));
   const setTrivia = (patch) => setDraft((current) => patchNested(current, "trivia", patch));
   const setCommand = (id, patch) => setDraft((current) => ({
     ...current,
@@ -146,6 +154,16 @@ export const DiscordPage = ({user}) => {
     {method: "POST", json: draft}
   );
 
+  const clearNoonaMemory = (scope = "all", discordUserId = "") => runAction(
+    scope === "user" ? "Clear Noona user memory" : scope === "server" ? "Clear Noona server memory" : "Clear Noona memory",
+    "/api/moon/v3/admin/discord/noona-memory",
+    {method: "DELETE", json: {scope, discordUserId}},
+    (payload) => setData((current) => ({
+      ...(current || {}),
+      noonaMemory: payload?.memory || current?.noonaMemory
+    }))
+  );
+
   const startTrivia = () => {
     if (!draft.trivia.enabled) {
       setFailure("Enable trivia before starting a round.");
@@ -214,6 +232,8 @@ export const DiscordPage = ({user}) => {
 
   const runtime = data?.runtime || {};
   const triviaRuntime = data?.triviaRuntime || {};
+  const noonaMemory = data?.noonaMemory || {};
+  const noonaUsers = normalizeArray(noonaMemory.users);
   const activeTriviaRound = triviaRuntime.activeRound || null;
   const latestTriviaRound = triviaRuntime.latestRound || activeTriviaRound || null;
   const triviaAnswer = normalizeString(activeTriviaRound?.answer || latestTriviaRound?.answer);
@@ -228,7 +248,7 @@ export const DiscordPage = ({user}) => {
           <div>
             <div className="admin-kicker">System</div>
             <h2>Discord</h2>
-            <p className="admin-muted">Guild workflow settings, slash-command access, onboarding, and release posts.</p>
+            <p className="admin-muted">Guild workflow settings, slash-command access, onboarding, release posts, and Noona chat.</p>
           </div>
           <AdminStatusBadge tone={runtime.connected ? "good" : "warning"}>
             {refreshing ? "refreshing" : runtime.connected ? "connected" : formatDisplayValue(runtime.connectionState, "degraded")}
@@ -245,6 +265,7 @@ export const DiscordPage = ({user}) => {
         <div className="admin-log-meta">
           <span>Live stream: {live.state}</span>
           <span>Last sync: {formatDate(runtime.portal?.runtime?.lastSyncAt || runtime.lastSyncAt)}</span>
+          <span>Last Noona mention: {formatDate(runtime.lastNoonaMentionAt)}</span>
           <span>Warning: {formatDisplayValue(runtime.warning || runtime.syncError || runtime.error, "none")}</span>
         </div>
       </section>
@@ -276,6 +297,93 @@ export const DiscordPage = ({user}) => {
             <button className="admin-button ghost" type="button" disabled={!canWrite || busy !== ""} onClick={reload}>Reload runtime</button>
             <button className="admin-button ghost" type="button" disabled={!canWrite || busy !== "" || !draft.notifications.releaseChannelId} onClick={testRelease}>Test release post</button>
           </div>
+        </article>
+
+        <article className="admin-panel">
+          <div className="admin-section-heading">
+            <div>
+              <div className="admin-kicker">Noona Chat</div>
+              <h2>Mention replies</h2>
+              <p className="admin-muted">Public replies use the `/chat` role gate, Sage-curated memory, and conservative admin proposals.</p>
+            </div>
+            <AdminStatusBadge tone={draft.noonaChat.enabled ? "good" : "queued"}>
+              {draft.noonaChat.enabled ? "enabled" : "disabled"}
+            </AdminStatusBadge>
+          </div>
+          <div className="admin-task-form">
+            <label>
+              <span>Enabled</span>
+              <select disabled={!canWrite} value={draft.noonaChat.enabled ? "true" : "false"} onChange={(event) => setNoonaChat({enabled: event.target.value === "true"})}>
+                <option value="true">Enabled</option>
+                <option value="false">Disabled</option>
+              </select>
+            </label>
+            <label>
+              <span>Proposal mode</span>
+              <select disabled={!canWrite} value={draft.noonaChat.proposalMode} onChange={(event) => setNoonaChat({proposalMode: event.target.value})}>
+                <option value="conservative">Conservative</option>
+                <option value="off">Off</option>
+              </select>
+            </label>
+            <label>
+              <span>Allowed channel ids</span>
+              <textarea
+                disabled={!canWrite}
+                rows={4}
+                placeholder="Empty means any guild channel"
+                value={formatChannelIds(draft.noonaChat.allowedChannelIds)}
+                onChange={(event) => setNoonaChat({allowedChannelIds: parseChannelIds(event.target.value)})}
+              />
+            </label>
+          </div>
+          <div className="admin-checkbox-grid">
+            <label><input disabled={!canWrite} type="checkbox" checked={draft.noonaChat.memoryEnabled} onChange={(event) => setNoonaChat({memoryEnabled: event.target.checked})} /> Memory enabled</label>
+            <label><input disabled type="checkbox" checked={draft.noonaChat.publicReplies} readOnly /> Public replies</label>
+          </div>
+          <div className="admin-detail-grid">
+            <span><strong>Users remembered</strong>{noonaMemory.userCount || 0}</span>
+            <span><strong>User facts</strong>{noonaMemory.userFactCount || 0}</span>
+            <span><strong>Server lore</strong>{noonaMemory.serverFactCount || 0}</span>
+            <span><strong>Last error</strong>{formatDisplayValue(runtime.lastNoonaMentionError, "none")}</span>
+          </div>
+          {normalizeArray(noonaMemory.serverFacts).length ? (
+            <div className="admin-log-box">
+              <div className="admin-kicker">Server lore</div>
+              <p>{normalizeArray(noonaMemory.serverFacts).join("; ")}</p>
+            </div>
+          ) : null}
+          <AdminDenseTable
+            rows={noonaUsers}
+            getKey={(row) => row.discordUserId}
+            empty="No durable Noona memory has been saved yet."
+            columns={[
+              {key: "user", label: "User", render: (row) => (
+                <span>
+                  <strong>{formatDisplayValue(row.username, "Discord user")}</strong>
+                  <br />
+                  <span className="admin-muted">{formatDisplayValue(row.discordUserId, "unknown id")}</span>
+                </span>
+              )},
+              {key: "facts", label: "Facts", render: (row) => `${row.factCount || 0}`},
+              {key: "updated", label: "Updated", render: (row) => formatDate(row.updatedAt)},
+              {key: "actions", label: "Actions", render: (row) => (
+                <button
+                  className="admin-button ghost"
+                  type="button"
+                  disabled={!canWrite || busy !== ""}
+                  onClick={() => clearNoonaMemory("user", row.discordUserId)}
+                >
+                  Clear
+                </button>
+              )}
+            ]}
+          />
+          <div className="admin-action-row">
+            <button className="admin-button solid" type="button" disabled={!canWrite || busy !== ""} onClick={save}>Save settings</button>
+            <button className="admin-button ghost" type="button" disabled={!canWrite || busy !== "" || !noonaMemory.serverFactCount} onClick={() => clearNoonaMemory("server")}>Clear server lore</button>
+            <button className="admin-button ghost" type="button" disabled={!canWrite || busy !== "" || (!noonaMemory.userCount && !noonaMemory.serverFactCount)} onClick={() => clearNoonaMemory("all")}>Clear all memory</button>
+          </div>
+          <p className="admin-muted">Message Content intent must be enabled in the Discord developer portal for mentions and trivia guesses to arrive.</p>
         </article>
 
         <article className="admin-panel">

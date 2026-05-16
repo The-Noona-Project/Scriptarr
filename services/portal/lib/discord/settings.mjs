@@ -63,6 +63,14 @@ const defaultTriviaSettings = Object.freeze({
   }
 });
 
+const defaultNoonaChatSettings = Object.freeze({
+  enabled: false,
+  allowedChannelIds: [],
+  memoryEnabled: true,
+  publicReplies: true,
+  proposalMode: "conservative"
+});
+
 const normalizeTriviaSettings = (value = {}, fallback = {}) => {
   const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
   const defaults = {
@@ -103,6 +111,25 @@ const normalizeTriviaSettings = (value = {}, fallback = {}) => {
   };
 };
 
+const normalizeNoonaChatSettings = (value = {}, fallback = {}) => {
+  const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  const defaults = {
+    ...defaultNoonaChatSettings,
+    ...(fallback && typeof fallback === "object" && !Array.isArray(fallback) ? fallback : {})
+  };
+  const proposalMode = normalizeString(source.proposalMode, defaults.proposalMode).toLowerCase();
+  return {
+    enabled: normalizeBoolean(source.enabled, defaults.enabled),
+    allowedChannelIds: (Array.isArray(source.allowedChannelIds) ? source.allowedChannelIds : defaults.allowedChannelIds)
+      .map((entry) => normalizeString(entry))
+      .filter(Boolean)
+      .slice(0, 25),
+    memoryEnabled: normalizeBoolean(source.memoryEnabled, defaults.memoryEnabled),
+    publicReplies: true,
+    proposalMode: proposalMode === "off" ? "off" : "conservative"
+  };
+};
+
 export const normalizePortalDiscordSettings = (value = {}, defaults = {}) => {
   const nextCommands = {};
   const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
@@ -129,6 +156,7 @@ export const normalizePortalDiscordSettings = (value = {}, defaults = {}) => {
       releaseChannelId: normalizeOptionalString(source?.notifications?.releaseChannelId ?? normalizedDefaults?.notifications?.releaseChannelId)
     },
     trivia: normalizeTriviaSettings(source?.trivia, normalizedDefaults?.trivia),
+    noonaChat: normalizeNoonaChatSettings(source?.noonaChat, normalizedDefaults?.noonaChat),
     commands: nextCommands
   };
 };

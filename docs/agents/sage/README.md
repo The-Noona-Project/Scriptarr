@@ -61,6 +61,12 @@
 - Broker Portal's Discord workflow settings through the shared `portal.discord` setting, and keep Portal-facing broker
   routes for intake search, request creation, library search, follow updates, onboarding tests, release channel tests,
   and Raven durable downloadall runs.
+- Broker public Noona mention chat through `/api/internal/portal/noona-chat`. Sage should own the capped
+  `portal.noonaChat.memory` settings payload, natural memory commands, secret rejection, conservative read-context
+  loading, public proposal filtering, Oracle fallback, and admin-safe memory review/clear payloads. Portal must not
+  call Oracle or Vault directly for this flow.
+- Public mention chat proposals are stricter than `/admin/system/ai`: allow only low-risk status-check and trivia
+  start/stop proposals, even when broader LocalAI, root/system, or destructive tools are enabled for admins.
 - `portal.discord.trivia` is the source of truth for Noona trivia channels, scoring, hints, schedules, and AI
   borderline matching. Sage owns trivia round, guess, score, leaderboard, and ack state through Vault-backed settings.
   Keep active round and `nextRoundAfter` state precise enough for Portal to reconcile one runtime clock after reloads

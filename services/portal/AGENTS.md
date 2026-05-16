@@ -4,7 +4,8 @@ Read this before editing `services/portal`.
 
 ## Role
 
-Portal handles Discord onboarding, requests, notifications, subscriptions, Noona trivia, and the Oracle chat bridge.
+Portal handles Discord onboarding, requests, notifications, subscriptions, Noona trivia, public Noona mention chat,
+and the Oracle chat bridge.
 
 ## Hard Rules
 
@@ -17,6 +18,9 @@ Portal handles Discord onboarding, requests, notifications, subscriptions, Noona
   `/chat`, `/search`, `/request`, `/subscribe`, `/trivia`, and DM-only `downloadall`.
 - Noona trivia guesses are normal guild messages in the configured channel. Portal should ignore bots, wrong channels,
   and inactive rounds; Sage owns the round, guess, score, and leaderboard state.
+- Public Noona mention chat should detect the real bot mention by Discord user id, not display name. It must ignore
+  bots, wrong guilds, empty prompts, disallowed channels, and unmentioned chatter; reuse the `/chat` role gate; reply
+  publicly; split long replies; and return handled so trivia does not also process the same message.
 - Keep Discord workflow configuration behind the brokered `portal.discord` setting consumed from Moon admin instead of
   scattering guild, role, or onboarding logic across unrelated env vars.
 - Requester completion DMs should stay deduped by request id and acknowledgment state so restarts or retries do not
@@ -29,9 +33,12 @@ Portal handles Discord onboarding, requests, notifications, subscriptions, Noona
 ## Coding Map
 
 - Discord command handlers and runtime helpers live under `lib/discord`. Keep slash command parsing, DM-only command
-  branches, notification polling, and trivia timers in small modules instead of expanding a single gateway file.
+  branches, notification polling, mention chat, and trivia timers in small modules instead of expanding a single gateway
+  file.
 - Portal should persist and decide shared state through Sage routes only. Use brokered settings for guild, role,
-  onboarding, release-channel, trivia, and DM superuser configuration.
+  onboarding, release-channel, Noona mention chat, trivia, and DM superuser configuration.
+- Mention chat memory and proposal decisions belong to Sage and Vault. Portal may keep only short rolling/runtime
+  diagnostics such as last mention time or error.
 - Request and completion notifications should keep stable acknowledgment ids so retries or restarts do not duplicate
   requester DMs or release posts.
 - Trivia runtime must reconcile one Sage-backed active round clock. Refreshes, repeated starts, and settings reloads

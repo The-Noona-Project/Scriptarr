@@ -218,6 +218,11 @@ Operational prompts in `/admin/system/ai` create proposals first. A permitted ad
 executes the allowlisted action. Oracle may help summarize or plan the request, but Oracle never performs mutations or
 sends arbitrary Discord broadcasts.
 
+Public Noona mention chat uses a separate conservative Sage allowlist. From Discord, Noona can only read lightweight
+stack, Discord, trivia, and library context, and can only draft low-risk proposals such as status checks or trivia
+start/stop. Root/system, LocalAI lifecycle, destructive, and arbitrary broadcast actions stay excluded from public
+chat even if an admin enabled them on the AI page.
+
 ## Core Admin Tasks In Moon
 
 - sign in as the first admin through Discord
@@ -228,7 +233,8 @@ sends arbitrary Discord broadcasts.
 - manage reusable permission groups, user-group assignments, protected-owner visibility, and access audit feeds in
   `/admin/users`
 - manage the Discord bot workflow in `/admin/discord`, including guild id, onboarding channel or template, DM
-  superuser id, release notification channel, trivia channel and scoring, and per-command role mapping
+  superuser id, release notification channel, Noona mention chat, Noona memory controls, trivia channel and scoring,
+  and per-command role mapping
 - configure Raven VPN credentials and region for PIA/OpenVPN-backed downloads
 - review Raven metadata providers, with MangaDex enabled by default, Anime-Planet enabled ahead of MangaUpdates, and
   AniList, MyAnimeList, or ComicVine available for wider coverage
@@ -398,8 +404,21 @@ Moon admin now owns the Discord workflow settings that Portal uses at runtime:
 - guild id for slash-command scoping
 - DM superuser id for the private `downloadall` command
 - onboarding channel id and message template
+- Noona public mention-chat enable state, allowed channels, memory toggle, conservative proposal mode, and memory clear
+  actions
 - trivia channel id, optional leaderboard channel id, scoring, cooldowns, hints, and AI borderline matching
 - per-command enable toggles and required Discord role ids
+
+Noona mention chat is public by design in this version. With it enabled, users can mention the real bot user id in any
+allowed guild channel, for example `@Noona Ai are you alive?`, and Portal replies to that message after sending the
+request through Sage. Portal ignores bots, wrong guilds, empty mentions, channels outside the allowlist, and unmentioned
+chatter. It also reuses the `/chat` command gate, so setting a required role on `/chat` applies to natural mentions
+too. Leave the allowed-channel list blank to allow every channel in the configured guild, or restrict it to known safe
+channel ids for a quieter rollout.
+
+Discord's Message Content intent must be enabled in the Discord developer portal for mention chat, trivia guesses, and
+legacy DM text fallback handling. Scriptarr requests the intent in code, but Discord will not deliver message content
+unless the application setting allows it.
 
 The current Discord command set is:
 
@@ -420,6 +439,11 @@ leaderboards can be posted after each round plus daily, weekly, and monthly at t
 Portal reconciles trivia timers through Sage so reloads, repeated `/trivia start`, and settings refreshes keep one
 active round clock. If a round is already active, the command reports that active round instead of reposting the clue
 or arming duplicate hints and timeouts.
+Noona memory for public chat is intentionally summarized. Durable memory lives in the `portal.noonaChat.memory` Vault
+setting as capped user facts and server lore, not raw transcripts. Users can say `remember that ...`, `forget that`,
+`forget me`, or `what do you remember about me?`; admins can review memory counts and clear one user, server lore, or
+all Noona memory from `/admin/discord`. The memory helper rejects obvious tokens, secrets, passwords, API keys,
+sessions, cookies, and credentials.
 Use `/downloadall run type:<type> nsfw:<true|false> titlegroup:<prefix> groupsize:<count>` in a DM with Noona as the supported bulk path.
 Every `downloadall` request creates a durable Raven run now, including single concrete type plus single `titlegroup`
 requests, so Portal can deliver delayed summaries even if the batch takes hours. `type:all` or `titlegroup:all`
@@ -461,7 +485,8 @@ Portal now prefers a minimal Discord runtime when privileged intents are unavail
 can stay online while onboarding is marked degraded, and `/admin/discord` will show the last meaningful runtime or
 command-sync error instead of only a generic disconnected state.
 That runtime view now also surfaces the requested intents or partials, the most recent DM receive timestamp, the last
-handled `downloadall`, and the last `downloadall` error so owner-only DM failures are easier to trace.
+handled `downloadall`, the last `downloadall` error, and the last Noona mention-chat time or error so owner-only DM and
+public chat failures are easier to trace.
 
 ## Public Moon API
 

@@ -18,6 +18,28 @@ const normalizeInteger = (value, fallback, min = 0, max = Number.MAX_SAFE_INTEGE
   return Math.min(max, Math.max(min, parsed));
 };
 
+/**
+ * Normalize the public Noona mention-chat settings edited from `/admin/discord`.
+ *
+ * The server keeps `publicReplies` fixed for this version, so Moon renders the
+ * value but never lets the browser switch to private replies.
+ *
+ * @param {unknown} value
+ * @returns {{enabled: boolean, allowedChannelIds: string[], memoryEnabled: boolean, publicReplies: true, proposalMode: string}}
+ */
+export const normalizeNoonaChatSettings = (value = {}) => {
+  const source = normalizeObject(value);
+  return {
+    enabled: normalizeBoolean(source.enabled, false),
+    allowedChannelIds: normalizeArray(source.allowedChannelIds)
+      .map((entry) => normalizeString(entry))
+      .filter(Boolean),
+    memoryEnabled: normalizeBoolean(source.memoryEnabled, true),
+    publicReplies: true,
+    proposalMode: normalizeString(source.proposalMode, "conservative") === "off" ? "off" : "conservative"
+  };
+};
+
 export const normalizeTriviaSettings = (value = {}) => {
   const source = normalizeObject(value);
   const schedules = normalizeObject(source.leaderboardSchedules);
@@ -73,6 +95,7 @@ export const normalizeDiscordSettings = (value = {}) => {
     notifications: {
       releaseChannelId: normalizeString(notifications.releaseChannelId)
     },
+    noonaChat: normalizeNoonaChatSettings(source.noonaChat),
     trivia: normalizeTriviaSettings(source.trivia),
     commands: Object.fromEntries(Array.from(commandIds).map((id) => {
       const command = normalizeObject(commands[id]);
@@ -140,5 +163,6 @@ export const buildDiscordCommandRows = (settings = {}, catalog = [], inventory =
 
 export default {
   buildDiscordCommandRows,
+  normalizeNoonaChatSettings,
   normalizeDiscordSettings
 };

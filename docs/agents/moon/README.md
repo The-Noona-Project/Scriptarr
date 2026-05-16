@@ -155,8 +155,12 @@
   same-origin, and honest about what will be deleted: content-side requests, progress, read state, follows, bookmarks,
   Raven catalog state, Raven task state, and managed Raven download folders only.
 - `/admin/discord` should surface Portal capability state honestly: command runtime, command sync, onboarding
-  availability, release notification channel id, Noona trivia channel/scoring/schedule settings, and the last
+  availability, release notification channel id, Noona mention-chat enable state, allowed channel ids, memory counts
+  and clear actions, Noona trivia channel/scoring/schedule settings, last mention-chat time/error, and the last
   meaningful runtime error should all be visible without forcing the admin to read logs.
+- Keep Noona mention-chat controls operational rather than decorative: the page should save the `portal.discord.noonaChat`
+  settings object, make `publicReplies` visible but fixed, keep memory review counts clear, and call the Sage memory
+  clear route through Moon's same-origin API. Do not call Portal, Vault, or Oracle directly from the browser.
 - `/admin/library` should stay dense and operational, closer to Sonarr's series index than to a marketing gallery.
   Favor sortable status, release, coverage, and path information over oversized cards.
 - `/admin/library/:type/:titleId` is the admin drill-down companion to that dense index. Keep it operational and

@@ -19,6 +19,9 @@ Oracle is the Noona AI persona for Scriptarr, backed by FastAPI with OpenAI-firs
   - `GET /api/status`
   - `POST /api/chat`
   - `POST /api/assist`
+- `POST /api/chat` may receive an optional Sage-curated `context` object. Treat it as read-only background for
+  response quality, preserve the old message-only contract, and never use context to execute tools or reveal secrets,
+  raw Discord ids, credentials, or admin-only internals.
 
 ## Coding Map
 

@@ -77,6 +77,19 @@ export const defaultPortalTriviaSettings = () => ({
 });
 
 /**
+ * Build default Noona public mention-chat settings.
+ *
+ * @returns {Record<string, unknown>}
+ */
+export const defaultPortalNoonaChatSettings = () => ({
+  enabled: false,
+  allowedChannelIds: [],
+  memoryEnabled: true,
+  publicReplies: true,
+  proposalMode: "conservative"
+});
+
+/**
  * Normalize persisted Discord trivia settings for Portal.
  *
  * @param {Record<string, unknown>} value
@@ -122,6 +135,28 @@ export const normalizePortalTriviaSettings = (value = {}) => {
 };
 
 /**
+ * Normalize Noona mention-chat settings from the shared Discord settings row.
+ *
+ * @param {unknown} value
+ * @returns {ReturnType<typeof defaultPortalNoonaChatSettings>}
+ */
+export const normalizePortalNoonaChatSettings = (value = {}) => {
+  const defaults = defaultPortalNoonaChatSettings();
+  const source = normalizeObject(value, {}) || {};
+  const proposalMode = normalizeString(source.proposalMode, defaults.proposalMode).toLowerCase();
+  return {
+    enabled: normalizeBoolean(source.enabled, defaults.enabled),
+    allowedChannelIds: (Array.isArray(source.allowedChannelIds) ? source.allowedChannelIds : defaults.allowedChannelIds)
+      .map((entry) => normalizeString(entry))
+      .filter(Boolean)
+      .slice(0, 25),
+    memoryEnabled: normalizeBoolean(source.memoryEnabled, defaults.memoryEnabled),
+    publicReplies: true,
+    proposalMode: proposalMode === "off" ? "off" : "conservative"
+  };
+};
+
+/**
  * Build the default brokered Discord settings used by Portal and Moon admin.
  *
  * @returns {{
@@ -136,6 +171,7 @@ export const normalizePortalTriviaSettings = (value = {}) => {
  *     releaseChannelId: string
  *   },
  *   trivia: ReturnType<typeof defaultPortalTriviaSettings>,
+ *   noonaChat: ReturnType<typeof defaultPortalNoonaChatSettings>,
  *   commands: Record<string, {enabled: boolean, roleId: string}>
  * }}
  */
@@ -151,6 +187,7 @@ export const defaultPortalDiscordSettings = () => ({
     releaseChannelId: ""
   },
   trivia: defaultPortalTriviaSettings(),
+  noonaChat: defaultPortalNoonaChatSettings(),
   commands: Object.fromEntries(knownPortalDiscordCommands.map((command) => [
     command.id,
     {
@@ -186,6 +223,7 @@ export const normalizePortalDiscordSettings = (value) => {
       releaseChannelId: normalizeString(notifications.releaseChannelId)
     },
     trivia: normalizePortalTriviaSettings(source.trivia),
+    noonaChat: normalizePortalNoonaChatSettings(source.noonaChat),
     commands: Object.fromEntries(knownPortalDiscordCommands.map((command) => {
       const requested = normalizeObject(requestedCommands[command.id], {}) || {};
       return [command.id, {

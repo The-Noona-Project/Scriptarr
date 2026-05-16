@@ -347,6 +347,60 @@ def test_successful_chat_returns_llm_reply():
     assert payload["status"]["ok"] is True
 
 
+def test_chat_accepts_optional_context_without_breaking_existing_contract():
+    sage = FakeSageClient(
+        settings={
+            "enabled": True,
+            "provider": "openai",
+            "model": "gpt-4.1-mini",
+            "temperature": 0.2
+        },
+        secret="sk-test"
+    )
+    seen = {}
+
+    async def fake_invoke(_runtime, _persona_name, message, context):
+        seen["message"] = message
+        seen["context"] = context
+        return f"Noona used context for {context['source']}"
+
+    app = create_app(config=build_config(), sage_client=sage, invoke_oracle_fn=fake_invoke)
+
+    with TestClient(app) as client:
+        response = client.post("/api/chat", json={
+            "message": "Tell me a short update",
+            "context": {
+                "source": "discord-mention",
+                "memory": {"userFacts": ["likes late-night reading"]}
+            }
+        })
+
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["reply"] == "Noona used context for discord-mention"
+    assert seen["message"] == "Tell me a short update"
+    assert seen["context"]["memory"]["userFacts"] == ["likes late-night reading"]
+
+
+def test_alive_keyword_returns_read_only_status_reply_without_llm_call():
+    sage = FakeSageClient()
+    invoked = {"count": 0}
+
+    async def fake_invoke(*_args):
+        invoked["count"] += 1
+        return "should not happen"
+
+    app = create_app(config=build_config(), sage_client=sage, invoke_oracle_fn=fake_invoke)
+
+    with TestClient(app) as client:
+        response = client.post("/api/chat", json={"message": "are you alive?"})
+
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["reply"] == "Noona checked Scriptarr. The stack responded. Oracle is currently off."
+    assert invoked["count"] == 0
+
+
 def test_structured_assist_returns_bounded_text_without_status_lookup():
     sage = FakeSageClient(
         settings={

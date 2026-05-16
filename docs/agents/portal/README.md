@@ -1,6 +1,7 @@
 # Portal AI Notes
 
-- Portal owns Discord-facing request creation, moderation messaging, subscriptions, onboarding, and Oracle chat entry.
+- Portal owns Discord-facing request creation, moderation messaging, subscriptions, onboarding, public Noona mention
+  chat, and Oracle chat entry.
 - It no longer bridges Kavita or Komf.
 - Portal is not allowed to call Vault or Oracle directly. First-party internal traffic must go through Sage's token-authenticated broker routes.
 - The live Discord command set is `/ding`, `/status`, `/chat`, `/search`, `/request`, `/subscribe`, `/trivia`, and
@@ -17,12 +18,23 @@
 - Portal owns Noona trivia runtime delivery. It should start/stop rounds through Sage, treat normal messages in the
   configured trivia channel as guesses, post quiet reactions for wrong guesses, announce the first correct winner, and
   acknowledge leaderboard posts only after Discord accepts the message.
+- Portal owns only the Discord delivery side of natural Noona mention chat. Detect mentions by bot user id, not
+  display name; ignore bots, wrong guilds, disallowed channels, empty prompts, and unmentioned chatter; reuse the
+  `/chat` command role gate; send typing; reply publicly to the triggering message; and split replies safely before
+  Discord's message limit.
+- Mention chat must call Sage's `/api/internal/portal/noona-chat` route, not Oracle directly. Sage owns durable memory,
+  allowed read context, conservative proposal detection, and Oracle fallback behavior.
+- When mention chat handles a guild message, do not pass that same message into trivia guess handling. Unmentioned
+  guild messages should still flow to trivia unchanged.
 - Keep one active trivia clock. Startup, settings reload, manual starts, wins, and timeouts should reconcile against
   Sage state, schedule either the active round followups or the next round, and ignore stale timers from older runtime
   generations. Repeated `/trivia start` during an active round should report the existing round without reposting the
   clue.
 - Portal may ask Sage -> Oracle for bounded message assistance, but deterministic notification templates stay
   authoritative and acknowledgments still happen only after a Discord send succeeds.
+- Durable Noona memory is a capped Vault settings summary, not raw transcript storage. Portal may surface runtime
+  diagnostics such as last mention time/error, while Sage handles `remember that`, `forget that`, `forget me`, and
+  `what do you remember about me?`.
 - Portal also sends deduped system DMs for LocalAI lifecycle jobs exposed by Sage, including install, start, and
   remove completion or failure notices for the Discord-backed admin who requested the action.
 - Portal-originated async request and Discord-runtime state that matters to operators should now be mirrored into the
@@ -55,4 +67,5 @@
   prompts.
 - Preserve `groupsize` across slash-command and legacy DM parsing as `batchesPerApproval` with bounds `1-25`.
 - Portal runtime state should keep enough DM diagnostics to explain silent failures quickly: requested intents,
-  requested partials, last DM receive timestamp, last handled `downloadall`, and last `downloadall` error.
+  requested partials, last DM receive timestamp, last handled `downloadall`, last `downloadall` error, and last Noona
+  mention-chat time/error.

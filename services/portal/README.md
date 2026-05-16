@@ -1,6 +1,7 @@
 # Portal
 
-Portal handles Discord onboarding, requests, notifications, subscriptions, and Oracle chat routing.
+Portal handles Discord onboarding, requests, notifications, subscriptions, Noona trivia, public Noona mention chat,
+and Oracle chat routing.
 
 Portal can run in full Discord mode or in API-only degraded mode when Discord auth is missing or fails.
 When Discord rejects privileged intents, Portal now falls back to a minimal slash-command and DM runtime instead of
@@ -8,8 +9,8 @@ taking the whole bot offline. In that mode `/ding`, the rest of the slash-comman
 stay online while guild-member onboarding is marked degraded until the Server Members intent is available.
 
 Portal does not call other first-party services directly. Discord request creation, library search, follow updates,
-durable downloadall runs, onboarding settings, and Oracle chat traffic are brokered through Sage's internal service
-routes.
+durable downloadall runs, onboarding settings, public Noona mention chat, and Oracle chat traffic are brokered through
+Sage's internal service routes.
 
 Portal's supported Discord command set is:
 
@@ -43,12 +44,41 @@ already-current, appended, adult-content, no-metadata, ambiguous-metadata, inval
 DM summary. For `nsfw:false`, Raven only queues titles whose WeebCentral detail page explicitly says
 `Adult Content: No`; adult or unverified titles are skipped.
 
-Guild id, onboarding settings, release notification channel id, DM superuser id, and per-command role gates are
-managed from Moon admin at `/admin/discord`. Discord bot credentials remain env-managed.
+Guild id, onboarding settings, release notification channel id, DM superuser id, Noona mention-chat settings, and
+per-command role gates are managed from Moon admin at `/admin/discord`. Discord bot credentials remain env-managed.
 
 Moon admin also surfaces the live Discord runtime state from Portal, including command-sync health, onboarding
 capability, requested intents or partials, the most recent DM receive timestamp, the last handled `downloadall`
-timestamp, the last `downloadall` error text, and the last meaningful Discord runtime error when the bot disconnects.
+timestamp, the last `downloadall` error text, last Noona mention-chat time or error, and the last meaningful Discord
+runtime error when the bot disconnects.
+
+Noona mention chat lets guild users talk naturally to the real bot user id, such as `@Noona Ai are you alive?`. Portal
+detects the bot mention by Discord user id, removes the mention from the prompt, checks the same `/chat` role gate used
+by the slash command, sends typing, asks Sage, and replies publicly to the triggering message. It ignores bots, wrong
+guilds, empty prompts, disallowed channels, and ordinary unmentioned chatter. Mention chat returns `true` to the guild
+message pipeline when it handles a message, so trivia does not also process the same message as a guess.
+
+The `portal.discord.noonaChat` setting owns the rollout shape:
+
+- `enabled`: defaults to `false` on fresh installs
+- `allowedChannelIds`: empty means every channel in the configured guild
+- `memoryEnabled`: defaults to `true` once mention chat is enabled
+- `publicReplies`: fixed `true` for this version
+- `proposalMode`: `conservative` or `off`
+
+Discord's Message Content intent must be enabled in the Discord developer portal for mention chat, trivia guesses, and
+legacy DM text fallback handling. Portal requests the gateway intent, but Discord will not deliver message content
+until the application setting allows it.
+
+Durable Noona memory is summarized through Sage and Vault, not stored as raw Discord transcripts. Users can say
+`remember that ...`, `forget that`, `forget me`, or `what do you remember about me?`. Server lore such as `LONG LIVE
+NOONA` is capped separately from user facts. Admins can review memory counts and clear one user, server lore, or all
+Noona memory from `/admin/discord`.
+
+Public chat never executes mutations. Sage gives it a conservative read context for status, Discord runtime, trivia,
+and library search, and can draft only low-risk proposals such as status checks or trivia start/stop for later admin
+confirmation. LocalAI lifecycle, root/system, destructive, and arbitrary broadcast actions stay out of the public-chat
+allowlist even if the admin AI page has them enabled.
 
 Portal also watches request-linked moderation, Raven completion state, and Sage system notifications. When a request is
 approved, denied, or finished and the requester has a Discord id, Portal sends one deduped DM with the shared title art

@@ -162,3 +162,43 @@ test("bulk run helpers call the Sage async downloadall broker routes", async () 
     });
   }
 });
+
+test("noonaChat calls the Sage-brokered public mention route", async () => {
+  const seen = [];
+  const server = http.createServer(async (req, res) => {
+    const chunks = [];
+    for await (const chunk of req) {
+      chunks.push(chunk);
+    }
+    const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    seen.push({method: req.method, url: req.url, authorization: req.headers.authorization, body});
+    res.writeHead(200, {"Content-Type": "application/json"});
+    res.end(JSON.stringify({reply: "LONG LIVE NOONA."}));
+  });
+
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const baseUrl = `http://127.0.0.1:${server.address().port}`;
+  const sage = createSageClient({
+    sageBaseUrl: baseUrl,
+    serviceToken: "portal-service-token"
+  });
+
+  try {
+    const response = await sage.noonaChat({
+      message: "are you alive?",
+      guildId: "guild-1",
+      channelId: "general",
+      user: {discordUserId: "user-1"}
+    });
+
+    assert.equal(response.ok, true);
+    assert.equal(seen[0].method, "POST");
+    assert.equal(seen[0].url, "/api/internal/portal/noona-chat");
+    assert.equal(seen[0].authorization, "Bearer portal-service-token");
+    assert.equal(seen[0].body.message, "are you alive?");
+  } finally {
+    await new Promise((resolve, reject) => {
+      server.close((error) => error ? reject(error) : resolve());
+    });
+  }
+});

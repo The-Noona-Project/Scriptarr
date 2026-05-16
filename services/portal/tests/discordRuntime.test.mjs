@@ -11,7 +11,7 @@ const {createTriviaRuntime} = await import("../lib/discord/triviaRuntime.mjs");
 class FakeDiscordClient extends EventEmitter {
   constructor() {
     super();
-    this.user = {tag: "Portal#0001"};
+    this.user = {id: "bot-1", tag: "Portal#0001"};
     this.destroyed = false;
     this.application = {
       commands: {
@@ -621,6 +621,102 @@ test("portal runtime forwards configured guild messages into trivia handling", a
 
     assert.equal(calls.guess, 1);
     assert.deepEqual(reactions, ["\u{1F440}", "\u274C"]);
+  } finally {
+    await runtime.stop();
+  }
+});
+
+test("portal runtime handles Noona mentions publicly before trivia processing", async () => {
+  const fakeClient = new FakeDiscordClient();
+  const calls = {guess: 0, noonaChat: 0};
+  const replies = [];
+  const sage = {
+    async getDiscordSettings() {
+      return {
+        ok: true,
+        payload: {
+          guildId: "guild-1",
+          noonaChat: {
+            enabled: true,
+            memoryEnabled: true,
+            proposalMode: "conservative",
+            allowedChannelIds: []
+          },
+          commands: {
+            chat: {enabled: true, roleId: "role-chat"}
+          },
+          trivia: {
+            enabled: true,
+            channelId: "trivia-channel",
+            leaderboardAfterRound: false
+          }
+        }
+      };
+    },
+    async listFollowNotifications() {
+      return {ok: true, payload: {notifications: []}};
+    },
+    async getTriviaState() {
+      return {
+        ok: true,
+        payload: {
+          activeRound: {id: "round-1", prompt: "clue", status: "open"}
+        }
+      };
+    },
+    async submitTriviaGuess() {
+      calls.guess += 1;
+      return {
+        ok: true,
+        payload: {ok: true, correct: false, close: false}
+      };
+    },
+    async noonaChat(payload) {
+      calls.noonaChat += 1;
+      assert.equal(payload.message, "are you alive?");
+      assert.equal(payload.guildId, "guild-1");
+      assert.equal(payload.memoryEnabled, true);
+      return {ok: true, payload: {reply: "LONG LIVE NOONA."}};
+    }
+  };
+
+  const runtime = createPortalRuntime({
+    config: baseConfig,
+    sage,
+    logger: createLogger(),
+    clientFactory: async (options = {}) => {
+      fakeClient.options = options;
+      return fakeClient;
+    }
+  });
+
+  try {
+    await runtime.start();
+    fakeClient.emit("messageCreate", {
+      id: "guild-message-mention-1",
+      guildId: "guild-1",
+      channelId: "trivia-channel",
+      content: "<@bot-1> are you alive?",
+      author: {id: "user-1", username: "Reader", bot: false},
+      member: {roles: {cache: new Set(["role-chat"])}},
+      mentions: {users: new Set(["bot-1"]), has: (id) => id === "bot-1"},
+      channel: {id: "trivia-channel", sendTyping: async () => {}},
+      reply: async (payload) => {
+        replies.push(payload);
+        return payload;
+      },
+      react: async () => {
+        throw new Error("Trivia should not see handled Noona mentions.");
+      }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    assert.equal(calls.noonaChat, 1);
+    assert.equal(calls.guess, 0);
+    assert.equal(replies[0].content, "LONG LIVE NOONA.");
+    const state = runtime.getState();
+    assert.equal(state.lastNoonaMentionChannelId, "trivia-channel");
+    assert.equal(state.lastNoonaMentionError, null);
   } finally {
     await runtime.stop();
   }

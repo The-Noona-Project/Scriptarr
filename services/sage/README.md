@@ -17,6 +17,18 @@ targets consistently under concurrency.
 Moon web now creates requests only through `/myrequests`, and Discord `/request` now uses the same metadata-first
 sequence. Sage exposes the browser-safe and Portal-safe orchestration steps separately: metadata search, admin-only
 download-option lookup from the selected metadata result, and final moderated request creation.
+Sage also brokers public Noona mention chat for Portal. Portal sends natural `@Noona` guild mentions to
+`/api/internal/portal/noona-chat`; Sage upserts the Discord user, applies capped Vault-backed memory summaries, gathers
+only conservative read context, optionally drafts low-risk admin proposals, and then calls Oracle with optional context.
+Oracle remains non-mutating, and Portal never calls Oracle directly for public chat.
+Noona memory lives in the `portal.noonaChat.memory` Vault setting as per-user facts plus lightweight server lore such
+as `LONG LIVE NOONA`. It is not raw transcript storage. Sage handles natural controls like `remember that`, `forget
+that`, `forget me`, and `what do you remember about me?`, rejects obvious secrets, and exposes admin-safe counts plus
+clear actions to Moon's `/admin/discord` page.
+Public mention proposals are intentionally narrower than the admin AI page. The public chat allowlist is limited to
+status checks and trivia start/stop proposals, and read context is limited to stack/service status, Discord runtime,
+trivia status, and library search. LocalAI lifecycle, root/system, destructive, and arbitrary broadcast actions are
+blocked even when enabled for admins.
 Duplicate submissions no longer create visible second request rows. Sage attaches duplicate users to a hidden waitlist
 on the canonical request work identity so Portal can DM them when the title becomes ready. When metadata exists but no
 download target exists yet, Sage stores an `unavailable` request, re-checks it every 4 hours, and expires it after 90

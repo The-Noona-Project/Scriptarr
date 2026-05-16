@@ -4414,6 +4414,30 @@ test("sage brokers service-to-service routes with internal service auth", async 
   }).then((response) => response.json());
   assert.equal(oracleChat.reply, "stubbed:hello");
 
+  const noonaRemember = await fetch(`${baseUrl}/api/internal/portal/noona-chat`, {
+    method: "POST",
+    headers: portalHeaders,
+    body: JSON.stringify({
+      message: "remember that I like cozy manga",
+      user: {discordUserId: "discord-123", username: "Portal User"},
+      guildId: "guild-1",
+      channelId: "general"
+    })
+  }).then((response) => response.json());
+  assert.equal(noonaRemember.reply, "I will remember that.");
+
+  const noonaRecall = await fetch(`${baseUrl}/api/internal/portal/noona-chat`, {
+    method: "POST",
+    headers: portalHeaders,
+    body: JSON.stringify({
+      message: "what do you remember about me?",
+      user: {discordUserId: "discord-123", username: "Portal User"},
+      guildId: "guild-1",
+      channelId: "general"
+    })
+  }).then((response) => response.json());
+  assert.match(noonaRecall.reply, /cozy manga/i);
+
   const ravenJob = await fetch(`${baseUrl}/api/internal/jobs/raven-job-1`, {
     method: "PUT",
     headers: ravenHeaders,

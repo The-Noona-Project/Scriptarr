@@ -189,12 +189,16 @@ const detectToolFromPrompt = (prompt) => {
 /**
  * Resolve a prompt into a read tool result or a pending operation proposal.
  *
- * @param {{vaultClient: {getSetting: Function, setSetting: Function}, prompt: string, user?: Record<string, unknown>, requestedToolId?: string, args?: Record<string, unknown>}} options
+ * @param {{vaultClient: {getSetting: Function, setSetting: Function}, prompt: string, user?: Record<string, unknown>, requestedToolId?: string, args?: Record<string, unknown>, allowedToolIds?: string[]}} options
  * @returns {Promise<Record<string, unknown>>}
  */
-export const proposeAiAction = async ({vaultClient, prompt, user, requestedToolId = "", args = {}}) => {
+export const proposeAiAction = async ({vaultClient, prompt, user, requestedToolId = "", args = {}, allowedToolIds = []}) => {
   const tools = await buildToolPayload(vaultClient);
   const toolId = normalizeString(requestedToolId) || detectToolFromPrompt(prompt);
+  const allowed = normalizeArray(allowedToolIds).map((entry) => normalizeString(entry)).filter(Boolean);
+  if (allowed.length && !allowed.includes(toolId)) {
+    return {ok: false, status: 403, error: "That AI tool is not allowed from this surface."};
+  }
   const tool = tools.tools.find((entry) => entry.id === toolId);
   if (!tool) {
     return {ok: false, status: 400, error: "AI could not map that prompt to an allowlisted tool."};

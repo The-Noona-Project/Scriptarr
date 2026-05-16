@@ -2,6 +2,7 @@ import {createDiscordClient} from "./discord/client.mjs";
 import {buildCommandInventory} from "./discord/commandCatalog.mjs";
 import {createPortalCommands} from "./discord/commands/index.mjs";
 import {createDirectMessageHandler} from "./discord/directMessageRouter.mjs";
+import {createNoonaMentionHandler} from "./discord/noonaMentionChat.mjs";
 import {createRoleManager} from "./discord/roleManager.mjs";
 import {normalizePortalDiscordSettings} from "./discord/settings.mjs";
 import {createTriviaRuntime} from "./discord/triviaRuntime.mjs";
@@ -62,6 +63,7 @@ const createCapabilities = (state, settings) => {
   const connected = Boolean(state.connected);
   const onboardingConfigured = Boolean(settings.onboarding?.channelId);
   const triviaConfigured = Boolean(settings.trivia?.enabled && settings.trivia?.channelId);
+  const noonaChatConfigured = Boolean(settings.noonaChat?.enabled);
 
   const commandSync = !authConfigured
     ? {
@@ -150,11 +152,32 @@ const createCapabilities = (state, settings) => {
           detail: state.error || "Portal is not connected to Discord."
         };
 
+  const noonaChat = !noonaChatConfigured
+    ? {
+      status: "disabled",
+      detail: "Noona mention chat is disabled."
+    }
+    : !authConfigured
+      ? {
+        status: "missing",
+        detail: "Configure the Discord bot token and client id before enabling Noona mention chat."
+      }
+      : connected
+        ? {
+          status: "available",
+          detail: "Noona can answer public mentions in the configured guild."
+        }
+        : {
+          status: state.mode === "starting" ? "pending" : "disconnected",
+          detail: state.error || "Portal is not connected to Discord."
+        };
+
   return {
     commandSync,
     directMessages,
     onboarding,
-    trivia
+    trivia,
+    noonaChat
   };
 };
 
@@ -187,7 +210,11 @@ export const createPortalRuntime = ({
     lastDirectMessageReceivedAt: null,
     lastDownloadAllHandledAt: null,
     lastDownloadAllError: null,
-    lastDownloadAllSource: null
+    lastDownloadAllSource: null,
+    lastNoonaMentionAt: null,
+    lastNoonaMentionChannelId: null,
+    lastNoonaMentionUserId: null,
+    lastNoonaMentionError: null
   };
 
   const commands = createPortalCommands({
@@ -253,6 +280,28 @@ export const createPortalRuntime = ({
         ...state,
         lastTriviaRoundStartedAt: event.at || new Date().toISOString(),
         lastTriviaRoundId: normalizeString(event.roundId)
+      };
+      return;
+    }
+
+    if (event.type === "noona-chat-handled" || event.type === "noona-chat-rate-limited") {
+      state = {
+        ...state,
+        lastNoonaMentionAt: event.at || new Date().toISOString(),
+        lastNoonaMentionChannelId: normalizeString(event.channelId),
+        lastNoonaMentionUserId: normalizeString(event.authorId),
+        lastNoonaMentionError: null
+      };
+      return;
+    }
+
+    if (event.type === "noona-chat-error") {
+      state = {
+        ...state,
+        lastNoonaMentionAt: event.at || new Date().toISOString(),
+        lastNoonaMentionChannelId: normalizeString(event.channelId),
+        lastNoonaMentionUserId: normalizeString(event.authorId),
+        lastNoonaMentionError: normalizeString(event.message)
       };
       return;
     }
@@ -325,7 +374,16 @@ export const createPortalRuntime = ({
   };
 
   const startDiscordClient = async ({enableGuildMemberEvents}) => {
-    const nextDiscord = await createDiscordClient({
+    let nextDiscord;
+    const noonaMentionHandler = createNoonaMentionHandler({
+      getSettings: () => settings,
+      getBotUserId: () => normalizeString(nextDiscord?.client?.user?.id),
+      sage,
+      roleManager,
+      logger,
+      onRuntimeEvent: recordRuntimeEvent
+    });
+    nextDiscord = await createDiscordClient({
       token: config.discordToken,
       clientId: config.discordClientId,
       commandMap: commands,
@@ -338,7 +396,10 @@ export const createPortalRuntime = ({
         onRuntimeEvent: recordRuntimeEvent
       }),
       guildMessageHandler: async (message) => {
-        await triviaRuntime?.handleGuildMessage?.(message);
+        const handledByNoona = await noonaMentionHandler(message);
+        if (!handledByNoona) {
+          await triviaRuntime?.handleGuildMessage?.(message);
+        }
       },
       reactionHandler: async (reaction, user) => {
         const emoji = normalizeString(reaction?.emoji?.name || reaction?.emoji || "");

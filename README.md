@@ -16,7 +16,8 @@ handles Discord, and Oracle provides optional AI chat plus bounded Sage-governed
 - `scriptarr-sage`: Moon-facing auth plus the only supported first-party internal HTTP broker
 - `scriptarr-moon`: same-origin installable user app at `/`, type-scoped native reader routes under `/reader/<type>/<title>/<chapter>`, and Arr-style admin app at `/admin`
 - `scriptarr-raven`: Spring Boot Java 24 downloader, library, metadata, and PIA/OpenVPN-aware download engine
-- `scriptarr-portal`: Discord onboarding, requests, notifications, subscriptions, Noona trivia, and Oracle bridge
+- `scriptarr-portal`: Discord onboarding, requests, notifications, subscriptions, Noona trivia, public Noona mention
+  chat, and Oracle bridge
 - `scriptarr-oracle`: FastAPI Python service that starts disabled, defaults to OpenAI config, and can optionally use
   LocalAI later
 
@@ -72,8 +73,8 @@ editor instead of a generic records view.
 Raven now keeps WeebCentral first by default, exposes MangaDex as a second normal download-provider option, and enables
 Anime-Planet ahead of MangaUpdates as a scrape-based metadata source for aliases, summaries, and lifecycle hints.
 Moon admin also exposes a dedicated Discord page at `/admin/discord` for guild workflow settings, onboarding template
-or channel management, per-command role gates, release-channel posts, Noona trivia settings, and Portal runtime
-visibility without exposing Discord credentials.
+or channel management, per-command role gates, release-channel posts, Noona trivia, public mention-chat settings,
+Noona memory review or clears, and Portal runtime visibility without exposing Discord credentials.
 Moon's user app now runs as an embedded Next.js App Router frontend with a megamenu header, avatar profile controls,
 and a simple footer, while the fullscreen reader runs as its own embedded `/reader` Next app.
 That reader supports webtoon, single-page, double-page, and manga-double layouts, LTR/RTL direction, page-fit controls,
@@ -126,7 +127,8 @@ For end-to-end Docker verification, use:
 8. Finish branding, logo, notification, integrations, library, metadata, Raven download-provider, VPN, Oracle,
    moderation, and managed-service update settings in Moon admin.
    If you use the Discord bot runtime, finish the guild id, onboarding, superuser id, and per-command role mapping in
-   `/admin/discord` before syncing slash commands.
+   `/admin/discord` before syncing slash commands. Enable the Discord application Message Content intent too when you
+   want Noona mention chat or trivia guesses to work; the code can request the intent, but Discord must allow it.
 
 ## Key Contracts
 
@@ -154,6 +156,10 @@ For end-to-end Docker verification, use:
 - Portal now owns a real Discord command runtime again. The supported command set is `/ding`, `/status`, `/chat`,
   `/search`, `/request`, `/subscribe`, `/trivia`, plus the owner-only DM `/downloadall` command for the configured Discord
   superuser.
+- Public guild mention chat is now optional in `/admin/discord`. When enabled, users can say `@Noona Ai are you alive?`
+  in allowed guild channels and Portal will reply publicly through Sage. The flow reuses the `/chat` command role gate,
+  ignores unmentioned chatter, bots, wrong guilds, and empty prompts, and keeps trivia message handling separate so one
+  Discord message is not processed twice.
 - The DM-only `downloadall` flow now stays provider-browse first but resolves metadata before queueing each title. It
   now uses a global DM slash command as the supported path: `/downloadall run ...`, `/downloadall status ...`,
   `/downloadall continue ...`, `/downloadall cancel ...`, and `/downloadall help`. Every run is durable now, including
@@ -182,6 +188,10 @@ For end-to-end Docker verification, use:
   channel, accepts public guesses, awards XP for exact, alias, URL, and tolerant fuzzy matches, and posts leaderboards
   after rounds plus scheduled daily, weekly, and monthly windows. Oracle can advise only borderline guesses when AI
   matching is enabled; deterministic matching keeps rounds moving when AI is offline.
+- Noona mention memory is stored as capped Vault settings summaries, not raw transcripts. Users can say `remember that
+  ...`, `forget that`, `forget me`, or `what do you remember about me?`; admins can review counts and clear user or
+  server memory from `/admin/discord`. The memory layer rejects obvious secrets, tokens, passwords, API keys, sessions,
+  and credentials.
 - Portal also sends DMs when duplicate blockers attach a user to the ready-notify waitlist, when an unavailable
   request later finds a source, and when an unavailable request expires after 90 days.
 - Sage and Moon now treat admin events as a first-class brokered contract. Browsers read event history and SSE updates
@@ -221,6 +231,10 @@ For end-to-end Docker verification, use:
 - Sage owns the AI tool registry. Safe read tools can inspect stack status, events, queue, requests, library, Missing
   Content, Discord, trivia, and LocalAI state; mutation or message-affecting tools stay disabled until an admin enables
   them and always create a proposal that must be confirmed before execution.
+- Public Discord chat gets a stricter Sage allowlist than the admin AI page. Noona can read only conservative status,
+  Discord runtime, trivia, and library context, and can draft only low-risk proposals such as status checks or trivia
+  start/stop for later admin confirmation. LocalAI lifecycle, root/system, destructive, and arbitrary broadcast actions
+  are excluded from public chat even if enabled for admins.
 - LocalAI install, start, and remove actions are asynchronous Warden lifecycle jobs. Moon shows Docker pull, container,
   and model-readiness progress, and Portal DMs the requesting admin when the job completes or fails.
 - Raven VPN should fail closed when VPN-backed downloads are enabled and the tunnel cannot be established. Warden now

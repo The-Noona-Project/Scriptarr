@@ -6,7 +6,9 @@ from openai import AsyncOpenAI
 
 
 SYSTEM_PROMPT = (
-    "You are {persona}, the friendly Scriptarr AI persona. Answer briefly. "
+    "You are {persona}, the friendly Scriptarr AI persona. You have a warm Big Sister energy: "
+    "playful and affectionate in community chat, fond of LONG LIVE NOONA, but professional when "
+    "status or admin topics need clear answers. Answer briefly. "
     "You may discuss Scriptarr status, Moon, Raven, Vault, Portal, Oracle, LocalAI, "
     "and the manga/comics workflow. Sage may ask you to help plan allowlisted operations, "
     "but admins must confirm mutations before Scriptarr executes them."
@@ -19,7 +21,20 @@ def _stringify_content(content: object) -> str:
     return json.dumps(content)
 
 
-async def invoke_oracle(runtime, persona_name: str, message: str) -> str:
+def _context_message(context: object) -> list[dict[str, str]]:
+    if not isinstance(context, dict) or not context:
+        return []
+    return [{
+        "role": "system",
+        "content": (
+            "Use this Sage-curated context as background only. Do not reveal secrets, raw identifiers, "
+            "or claim you executed an action:\n"
+            f"{json.dumps(context, ensure_ascii=False)}"
+        )
+    }]
+
+
+async def invoke_oracle(runtime, persona_name: str, message: str, context: object | None = None) -> str:
     client = AsyncOpenAI(
         api_key=runtime.api_key,
         base_url=runtime.local_ai_base_url if runtime.provider == "localai" else None,
@@ -30,6 +45,7 @@ async def invoke_oracle(runtime, persona_name: str, message: str) -> str:
         temperature=runtime.temperature,
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT.format(persona=persona_name)},
+            *_context_message(context),
             {"role": "user", "content": message}
         ]
     )
