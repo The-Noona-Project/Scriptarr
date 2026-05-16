@@ -8,6 +8,7 @@ import {
   canAccessAdmin,
   classifyPathname,
   formatTypeLabel,
+  getLibraryTypeCount,
   getLibraryTypes
 } from "./navigationRoutes.js";
 import {
@@ -30,6 +31,7 @@ export {
   canAccessAdmin,
   classifyPathname,
   formatTypeLabel,
+  getLibraryTypeCount,
   getLibraryTypes,
   resolveTitleTypeSlug
 };
@@ -45,6 +47,7 @@ export default {
   canAccessAdmin,
   classifyPathname,
   formatTypeLabel,
+  getLibraryTypeCount,
   getLibraryTypes,
   resolveTitleTypeSlug
 };

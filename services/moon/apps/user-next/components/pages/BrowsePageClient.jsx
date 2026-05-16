@@ -13,12 +13,10 @@ import {
   buildBrowsePageUrl,
   normalizeBrowseSearchParams
 } from "../../lib/browse.js";
-import {getLibraryTypes} from "../../lib/navigationRoutes.js";
+import {formatTypeLabel, getLibraryTypeCount, getLibraryTypes} from "../../lib/navigationRoutes.js";
 import {useMoonChrome} from "../MoonChromeContext.jsx";
 import {AuthRequiredView, ErrorView, LoadingView} from "../StateView.jsx";
 import TitleCard from "../TitleCard.jsx";
-
-const ALL_TYPES = [{slug: "all", label: "All"}, ...getLibraryTypes()];
 
 /**
  * Resolve the browse result heading for the active filters.
@@ -110,6 +108,20 @@ export const BrowsePageClient = ({initialSearchParams = {}} = {}) => {
   const typeCounts = data?.counts?.byType && typeof data.counts.byType === "object" ? data.counts.byType : {};
   const visibleTotal = Number.parseInt(String(data?.pageInfo?.total ?? 0), 10) || 0;
   const catalogueTotal = Number.parseInt(String(data?.counts?.total ?? visibleTotal), 10) || 0;
+  const libraryTypes = useMemo(() => getLibraryTypes(typeCounts), [typeCounts]);
+  const typeOptions = useMemo(() => [
+    {slug: "all", label: "All", count: catalogueTotal},
+    ...libraryTypes
+  ], [catalogueTotal, libraryTypes]);
+
+  useEffect(() => {
+    if (loading || refreshing || activeType === "all") {
+      return;
+    }
+    if (getLibraryTypeCount(typeCounts, activeType) <= 0) {
+      setActiveType("all");
+    }
+  }, [activeType, loading, refreshing, typeCounts]);
 
   const loadMore = async () => {
     if (!pageInfo?.hasMore || loadingMore) {
@@ -190,9 +202,9 @@ export const BrowsePageClient = ({initialSearchParams = {}} = {}) => {
           {refreshing ? <span className="moon-browse-refresh-dot" aria-live="polite">Refreshing</span> : null}
         </div>
         <div className="moon-browse-filter-row" aria-label="Filter by media type">
-          {ALL_TYPES.map((entry) => {
+          {typeOptions.map((entry) => {
             const selected = entry.slug === activeType || (entry.slug === "all" && activeType === "all");
-            const count = entry.slug === "all" ? catalogueTotal : Number.parseInt(String(typeCounts[entry.slug] || 0), 10) || 0;
+            const count = Math.max(0, Number.parseInt(String(entry.count || 0), 10) || 0);
             return (
               <button
                 key={entry.slug}
@@ -202,7 +214,7 @@ export const BrowsePageClient = ({initialSearchParams = {}} = {}) => {
                 onClick={() => updateType(entry.slug)}
               >
                 <span>{entry.label}</span>
-                <small>{count}</small>
+                {count > 0 ? <small>{count}</small> : null}
               </button>
             );
           })}
@@ -239,7 +251,7 @@ export const BrowsePageClient = ({initialSearchParams = {}} = {}) => {
         <section className={`moon-panel moon-section moon-browse-results ${refreshing ? "is-refreshing" : ""}`.trim()}>
           <div className="moon-section-head moon-browse-results-head">
             <div>
-              <span className="moon-kicker">{activeType === "all" ? "Catalogue" : activeType}</span>
+              <span className="moon-kicker">{activeType === "all" ? "Catalogue" : formatTypeLabel(activeType)}</span>
               <h2>{resultTitle({query: activeQuery, type: activeType, letter: activeLetter})}</h2>
             </div>
             <span className="moon-muted">{refreshing ? "Updating loaded results" : `${visibleTotal} result${visibleTotal === 1 ? "" : "s"}`}</span>

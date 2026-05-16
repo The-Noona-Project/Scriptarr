@@ -238,6 +238,7 @@ export const useMoonJson = (url, {enabled = true, fallback = /** @type {T} */ (n
  *   branding: any,
  *   auth: any,
  *   bootstrap: any,
+ *   libraryTypes: Array<{slug: string, label: string, count: number}>,
  *   loginUrl: string
  * }>}
  */
@@ -256,6 +257,7 @@ export const loadMoonChromeContext = async (returnTo = "/") => {
     branding: payload.branding || {siteName: "Scriptarr"},
     auth: user,
     bootstrap: payload.bootstrap || null,
+    libraryTypes: [],
     loginUrl: ""
   };
 };

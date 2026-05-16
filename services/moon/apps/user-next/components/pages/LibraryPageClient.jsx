@@ -19,7 +19,7 @@ import {AuthRequiredView, EmptyView, ErrorView, LoadingView} from "../StateView.
  * @returns {import("react").ReactNode}
  */
 export const LibraryPageClient = ({typeSlug = ""}) => {
-  const {auth, loginUrl} = useMoonChrome();
+  const {auth, loginUrl, libraryTypes: chromeLibraryTypes = []} = useMoonChrome();
   const libraryUrl = useMemo(() => {
     const params = new URLSearchParams({view: "card", pageSize: "100"});
     if (typeSlug) {
@@ -34,6 +34,12 @@ export const LibraryPageClient = ({typeSlug = ""}) => {
   const [titles, setTitles] = useState([]);
   const [pageInfo, setPageInfo] = useState({hasMore: false, nextCursor: "", total: 0});
   const [loadingMore, setLoadingMore] = useState(false);
+  const visibleLibraryTypes = useMemo(() => {
+    if (Array.isArray(chromeLibraryTypes) && chromeLibraryTypes.length) {
+      return chromeLibraryTypes;
+    }
+    return typeSlug ? [] : getLibraryTypes(data?.counts?.byType);
+  }, [chromeLibraryTypes, data?.counts?.byType, typeSlug]);
 
   useEffect(() => {
     setTitles(Array.isArray(data?.titles) ? data.titles : []);
@@ -90,7 +96,7 @@ export const LibraryPageClient = ({typeSlug = ""}) => {
         </div>
         <div className="moon-pill-row">
           <Link className="moon-pill" href="/library">All</Link>
-          {getLibraryTypes().map((entry) => (
+          {visibleLibraryTypes.map((entry) => (
             <Link key={entry.slug} className="moon-pill" href={buildLibraryPath(entry.slug)}>
               {entry.label}
             </Link>

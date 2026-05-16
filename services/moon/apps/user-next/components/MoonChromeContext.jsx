@@ -13,6 +13,7 @@ import {createContext, useContext} from "react";
  *   branding: {siteName?: string},
  *   auth: any,
  *   bootstrap: any,
+ *   libraryTypes: Array<{slug: string, label: string, count: number}>,
  *   loginUrl: string,
  *   installAvailable: boolean,
  *   promptInstall: () => Promise<boolean>
@@ -22,6 +23,7 @@ const MoonChromeContext = createContext({
   branding: {siteName: "Scriptarr"},
   auth: null,
   bootstrap: null,
+  libraryTypes: [],
   loginUrl: "",
   installAvailable: false,
   promptInstall: async () => false
@@ -34,6 +36,7 @@ const MoonChromeContext = createContext({
  *   branding: {siteName?: string},
  *   auth: any,
  *   bootstrap: any,
+ *   libraryTypes: Array<{slug: string, label: string, count: number}>,
  *   loginUrl: string,
  *   installAvailable: boolean,
  *   promptInstall: () => Promise<boolean>

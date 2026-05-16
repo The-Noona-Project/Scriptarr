@@ -9,6 +9,7 @@ import {
   buildReaderPathForTitleTarget,
   buildTitlePath,
   classifyPathname,
+  getLibraryTypeCount,
   getLibraryTypes
 } from "../apps/user-next/lib/routes.js";
 
@@ -133,13 +134,37 @@ test("user-next route helpers build canonical typed Moon paths", () => {
   );
 });
 
-test("user-next library types stay trimmed to the supported Moon buckets", () => {
-  assert.deepEqual(getLibraryTypes(), [
-    {slug: "manga", label: "Manga"},
-    {slug: "manhwa", label: "Manhwa"},
-    {slug: "manhua", label: "Manhua"},
-    {slug: "webtoon", label: "Webtoon"},
-    {slug: "comic", label: "Comic"},
-    {slug: "oel", label: "OEL"}
+test("user-next library types hide zero-count buckets", () => {
+  const types = getLibraryTypes({
+    manga: 1992,
+    manhwa: 263,
+    manhua: 86,
+    webtoon: 0,
+    comic: 0,
+    oel: 13
+  });
+
+  assert.deepEqual(types, [
+    {slug: "manga", label: "Manga", count: 1992},
+    {slug: "manhwa", label: "Manhwa", count: 263},
+    {slug: "manhua", label: "Manhua", count: 86},
+    {slug: "oel", label: "OEL", count: 13}
   ]);
+  assert.equal(types.some((entry) => entry.count === 0), false);
+});
+
+test("user-next library types keep positive supported and unknown buckets dynamic", () => {
+  assert.deepEqual(getLibraryTypes({
+    manga: 1,
+    webtoon: 2,
+    comic: 3,
+    light_novel: 4
+  }), [
+    {slug: "manga", label: "Manga", count: 1},
+    {slug: "webtoon", label: "Webtoon", count: 2},
+    {slug: "comic", label: "Comic", count: 3},
+    {slug: "light-novel", label: "Light Novel", count: 4}
+  ]);
+  assert.deepEqual(getLibraryTypes(), []);
+  assert.equal(getLibraryTypeCount({Webtoon: 2}, "webtoon"), 2);
 });

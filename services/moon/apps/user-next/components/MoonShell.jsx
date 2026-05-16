@@ -7,7 +7,7 @@
 import {useEffect, useMemo, useState} from "react";
 import Link from "next/link";
 import {usePathname} from "next/navigation";
-import {loadMoonChromeContext, loadMoonLoginUrl} from "../lib/api.js";
+import {loadMoonChromeContext, loadMoonLoginUrl, requestJson} from "../lib/api.js";
 import {buildLibraryPath, classifyPathname, getLibraryTypes} from "../lib/navigationRoutes.js";
 import {Flex} from "./UiPrimitives.jsx";
 import {DesktopNavigation, MobileNavigation} from "./LocalNavigation.jsx";
@@ -19,19 +19,17 @@ import SiteFooter from "./SiteFooter.jsx";
  * Build navigation groups for the Moon user shell.
  *
  * @param {string} pathname
+ * @param {Array<{slug: string, label: string}>} libraryTypes
  * @returns {Array<Record<string, any>>}
  */
-const buildMenuGroups = (pathname) => {
+const buildMenuGroups = (pathname, libraryTypes = []) => {
   const active = classifyPathname(pathname);
-  const librarySections = [
-    {
-      links: getLibraryTypes().map((entry) => ({
-        label: entry.label,
-        href: buildLibraryPath(entry.slug),
-        selected: pathname === buildLibraryPath(entry.slug)
-      }))
-    }
-  ];
+  const libraryLinks = libraryTypes.map((entry) => ({
+    label: entry.label,
+    href: buildLibraryPath(entry.slug),
+    selected: pathname === buildLibraryPath(entry.slug)
+  }));
+  const librarySections = libraryLinks.length ? [{links: libraryLinks}] : [];
 
   return [
     {
@@ -80,6 +78,7 @@ export const MoonShell = ({children}) => {
     branding: {siteName: "Scriptarr"},
     auth: null,
     bootstrap: null,
+    libraryTypes: [],
     loginUrl: "",
     installAvailable: false,
     promptInstall: async () => false
@@ -94,6 +93,16 @@ export const MoonShell = ({children}) => {
     void loadMoonChromeContext(currentRoute).then((nextValue) => {
       if (active) {
         setChrome(nextValue);
+      }
+      if (active && nextValue.auth) {
+        void requestJson("/api/moon-v3/user/library?view=card&pageSize=1").then((result) => {
+          if (active && result.ok) {
+            setChrome((current) => ({
+              ...current,
+              libraryTypes: getLibraryTypes(result.payload?.counts?.byType)
+            }));
+          }
+        });
       }
       if (active && !nextValue.auth) {
         void loadMoonLoginUrl(currentRoute).then((loginUrl) => {
@@ -118,7 +127,7 @@ export const MoonShell = ({children}) => {
     return () => window.removeEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
   }, []);
 
-  const menuGroups = useMemo(() => buildMenuGroups(pathname), [pathname]);
+  const menuGroups = useMemo(() => buildMenuGroups(pathname, chrome.libraryTypes), [chrome.libraryTypes, pathname]);
   const title = chrome.branding?.siteName || "Scriptarr";
   const logoUrl = chrome.branding?.logo?.urls?.chrome || "";
   const promptInstall = useMemo(() => async () => {
