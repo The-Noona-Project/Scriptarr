@@ -95,7 +95,9 @@ Moon v3 settings routes, preserve dirty section drafts during background refresh
 Moon admin's System area now has purpose-built Next pages for operational automation too: `/admin/system/tasks`
 manages allowlisted cron schedules and manual runs, `/admin/system/status` shows the grouped endpoint matrix with safe
 read probes, and `/admin/system/ai` owns Oracle plus optional LocalAI settings, long-running LocalAI progress, test
-prompts, and Sage-governed AI tools that require admin confirmation before operational actions run.
+prompts, and Sage-governed AI tools that require admin confirmation before operational actions run. The AI page paints
+saved settings first, then hydrates optional Oracle and LocalAI runtime state so a slow AI provider does not block the
+admin shell.
 
 Scriptarr is maintained by [The Noona Project](https://github.com/The-Noona-Project/Scriptarr), with community support
 available on [Discord](https://discord.gg/HMYHT8KD5v).
@@ -214,7 +216,8 @@ For end-to-end Docker verification, use:
 - CPU LocalAI can still take tens of seconds to answer even after readiness succeeds. Oracle keeps provider-specific
   degraded replies and waits longer for brokered admin test prompts before treating the selected AI provider as down.
 - Moon's AI page now discovers provider models through Moon -> Sage -> Oracle and constrains the Oracle model field to
-  a dropdown for the selected provider instead of letting browsers or admins type arbitrary model ids.
+  a dropdown for the selected provider instead of letting browsers or admins type arbitrary model ids. Saved Oracle and
+  tool settings load separately from slower runtime probes.
 - Sage owns the AI tool registry. Safe read tools can inspect stack status, events, queue, requests, library, Missing
   Content, Discord, trivia, and LocalAI state; mutation or message-affecting tools stay disabled until an admin enables
   them and always create a proposal that must be confirmed before execution.

@@ -50,6 +50,9 @@ Sage exposes a Portal notification queue for paused, completed, failed, or cance
 notifications only after Portal confirms the requester DM. Paused downloadall DMs can persist reaction decision
 prompts through Sage so the owner can continue with a check reaction or cancel with a cross reaction; duplicate or
 expired prompt decisions are idempotent.
+Sage's allowlisted `stale-queue-cleanup` task now checks Raven title tasks and durable Raven bulk runs together. It
+asks Raven for current bulk-run status so detached `running` runs can reattach when Raven can recover them, and it
+persists exact recovery actions when a stale title task or paused bulk run still needs admin follow-up.
 Sage also brokers compact paginated Moon library card reads from Raven's card projection, passing `q`, `type`,
 `letter`, `cursor`, `pageSize`, `sort`, and optional exact `ids` through instead of sorting a full catalog in memory.
 Browse, library, home, and profile shelf clients should use that route and reserve full title payloads for title

@@ -200,6 +200,9 @@ temporarily unavailable.
   alias instead of the OpenAI default model name.
 - Moon's AI page loads available model ids through Moon -> Sage -> Oracle and renders the model control as a
   provider-specific dropdown. Browsers never call OpenAI or LocalAI directly for model discovery.
+- The AI page loads saved Oracle settings, tool toggles, and proposals first, then hydrates Oracle health and LocalAI
+  runtime state from a secondary brokered runtime payload. Slow optional AI providers should not block the page from
+  opening.
 - `SCRIPTARR_ORACLE_LLM_TIMEOUT_SECONDS` can tune Oracle's provider call timeout. The default is `60` seconds so slow
   CPU LocalAI responses have room to complete.
 
@@ -245,13 +248,16 @@ sends arbitrary Discord broadcasts.
   the typed confirmation `UPDATE SCRIPTARR`
 - manage allowlisted maintenance schedules from `/admin/system/tasks`; cron expressions are free-form, but the jobs
   are Scriptarr-defined only, runs are non-overlapping, and every manual or scheduled run is brokered through Sage with
-  durable job history
+  durable job history. The `Stale queue cleanup` task inspects Raven title tasks and durable `downloadall` runs
+  together, reattaches detached running bulk runs when Raven can recover them, and records exact recovery actions when
+  an admin needs to cancel a stale title task or continue a paused run.
 - inspect the grouped endpoint matrix from `/admin/system/status`; Scriptarr lists Moon, Sage, Vault, Raven, Warden,
   Portal, Oracle, and LocalAI routes quickly on first load, then checks GET/read endpoints only when you run the
   explicit check action. Auth-gated reads report as protected, and mutation routes remain not probed.
 - configure Oracle and optional LocalAI runtime controls from `/admin/system/ai`, including provider, model dropdown,
   temperature, masked OpenAI key state, LocalAI image profile, manual install, start, or remove actions, lifecycle
-  progress, completion toasts, Sage-governed AI tool toggles, confirmed action proposals, and prompt tests
+  progress hydrated after first paint, completion toasts, Sage-governed AI tool toggles, confirmed action proposals,
+  and prompt tests
 - preview or execute the root-only content reset flow from `/admin/system` when you need to wipe content-side state
   and managed files without deleting users, settings, or durable events
 - manage users, roles, and permissions
@@ -360,6 +366,9 @@ Queued cards intentionally do not show ETA values. Running cards show live trans
 Raven and Sage have credible progress data, and `Needs attention` cards can remove failed or stale queued tasks while
 deleting only the incomplete managed working folder. Service update and restart jobs stay out of `Needs attention`;
 track them under System, Updates, and Events instead.
+If a `downloadall` bulk run pauses after stale title-task cleanup, check `/admin/system/tasks` for the latest
+`Stale queue cleanup` result and `/admin/activity/queue` for the listed Raven title task. Cancel the exact stale task
+when needed, then continue the run from the owner DM reaction or `/downloadall continue runid:<id>`.
 
 ## Settings And Database Explorer
 

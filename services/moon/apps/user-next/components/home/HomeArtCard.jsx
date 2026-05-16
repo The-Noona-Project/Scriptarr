@@ -6,7 +6,7 @@
 
 import Link from "next/link";
 import {HoverCard} from "../UiPrimitives.jsx";
-import {buildReaderPath, buildTitlePath} from "../../lib/routes.js";
+import {buildReaderPath, buildTitlePath} from "../../lib/titleRoutes.js";
 import {formatDate, formatProgress} from "../../lib/date.js";
 import CoverImage from "../CoverImage.jsx";
 

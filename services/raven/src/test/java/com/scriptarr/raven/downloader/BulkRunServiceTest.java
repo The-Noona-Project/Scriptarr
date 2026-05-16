@@ -7,6 +7,7 @@ import com.scriptarr.raven.support.ScriptarrLogger;
 import org.junit.jupiter.api.Test;
 
 import java.nio.file.Path;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -138,6 +139,40 @@ class BulkRunServiceTest {
         assertEquals("paused", status.get("status"));
         assertEquals(false, status.get("active"));
         assertTrue(String.valueOf(status.get("message")).contains("Raven could not persist a durable bulk-run batch."));
+    }
+
+    /**
+     * Verify a stale title task that remains running after cancellation pauses
+     * the bulk run with a precise admin recovery action instead of looping.
+     *
+     * @throws Exception when the async run does not settle in time
+     */
+    @Test
+    void staleRunningOwnedTaskPausesRunWithRecoveryAction() throws Exception {
+        BulkRunService service = new BulkRunService(
+            new StuckRunningDownloaderService(),
+            new FakeRavenBrokerClient(),
+            new TestLogger()
+        );
+
+        Map<String, Object> created = service.createRun(Map.of(
+            "type", "manga",
+            "titlegroup", "A",
+            "requestedBy", "owner-1"
+        ));
+        Map<String, Object> status = awaitStatus(service, String.valueOf(created.get("runId")), "paused");
+
+        assertEquals("paused", status.get("status"));
+        assertEquals(false, status.get("active"));
+        assertTrue(String.valueOf(status.get("message")).contains("cancel that task"));
+        Map<String, Object> summary = map(status.get("summary"));
+        List<Map<String, Object>> actions = maps(summary.get("recoveryActions"));
+        assertEquals(1, actions.size());
+        assertEquals("stale-running-title-task", actions.getFirst().get("type"));
+        assertEquals(List.of("task_1"), actions.getFirst().get("taskIds"));
+        assertEquals("/admin/activity/queue", actions.getFirst().get("adminPath"));
+        Map<String, Object> batchResult = map(maps(status.get("batches")).getFirst().get("result"));
+        assertEquals(List.of("task_1"), batchResult.get("staleTaskIds"));
     }
 
     /**
@@ -449,6 +484,36 @@ class BulkRunServiceTest {
                 "queuedAt", now,
                 "updatedAt", now
             ));
+        }
+    }
+
+    private static final class StuckRunningDownloaderService extends NoopDownloaderService {
+        private final String staleUpdatedAt = Instant.now().minus(Duration.ofHours(2)).toString();
+
+        @Override
+        public BulkQueueDownloadResult bulkQueueDownload(
+            String providerId,
+            String type,
+            Boolean nsfw,
+            String titlePrefix,
+            String requestedBy
+        ) {
+            return queuedBulkResult();
+        }
+
+        @Override
+        public List<Map<String, Object>> snapshot() {
+            return List.of(Map.of(
+                "taskId", "task_1",
+                "status", "running",
+                "queuedAt", staleUpdatedAt,
+                "updatedAt", staleUpdatedAt
+            ));
+        }
+
+        @Override
+        public synchronized Map<String, Object> cancelTask(String taskId) {
+            return snapshot().getFirst();
         }
     }
 }

@@ -11,9 +11,139 @@ const SETTINGS_KEY = "sage.systemTasks";
 const OWNER_SERVICE = "scriptarr-sage";
 const JOB_KIND = "system-task";
 const RUN_INTERVAL_MS = 60 * 1000;
+const STALE_QUEUE_THRESHOLD_MS = 2 * 60 * 60 * 1000;
+const BULK_RUN_TERMINAL_STATUSES = new Set(["completed", "cancelled"]);
 
 const normalizeArray = (value) => Array.isArray(value) ? value : [];
 const normalizeObject = (value, fallback = {}) => value && typeof value === "object" && !Array.isArray(value) ? value : fallback;
+
+const isStaleRavenTask = (task) => {
+  const status = normalizeString(task?.status).toLowerCase();
+  const updated = Date.parse(normalizeString(task?.updatedAt));
+  return status === "failed"
+    || (["running", "queued"].includes(status) && Number.isFinite(updated) && updated < Date.now() - STALE_QUEUE_THRESHOLD_MS);
+};
+
+const buildTitleRecoveryAction = (task) => {
+  const status = normalizeString(task?.status).toLowerCase();
+  const taskId = normalizeString(task?.taskId);
+  const titleName = normalizeString(task?.titleName, "Untitled");
+  const action = status === "running" ? "cancel" : status === "failed" ? "retry" : "remove-or-retry";
+  return {
+    type: "stale-title-task",
+    taskId,
+    titleName,
+    status,
+    adminPath: "/admin/activity/queue",
+    action,
+    message: `Open /admin/activity/queue and ${action} Raven task ${taskId || titleName}.`
+  };
+};
+
+const bulkRunStatusNeedsInspection = (status) => !BULK_RUN_TERMINAL_STATUSES.has(normalizeString(status).toLowerCase());
+
+const runStaleQueueCleanup = async ({config, vaultClient, serviceJson}) => {
+  const result = await serviceJson(config.ravenBaseUrl, "/v1/downloads/tasks");
+  if (!result.ok) {
+    throw new Error(result.payload?.error || "Raven task scan failed.");
+  }
+  const tasks = normalizeArray(result.payload?.tasks);
+  const staleTitleTasks = tasks.filter(isStaleRavenTask);
+  const titleRecoveryActions = staleTitleTasks.map(buildTitleRecoveryAction);
+  const bulkRunRecoveryActions = [];
+  const inspectedBulkRuns = [];
+  let autoRecoveredBulkRuns = 0;
+
+  const jobs = normalizeArray(await vaultClient.listJobs({
+    ownerService: "scriptarr-raven",
+    kind: "raven-bulk-downloadall"
+  })).filter((job) => bulkRunStatusNeedsInspection(job?.status));
+
+  for (const job of jobs) {
+    const runId = normalizeString(job?.jobId);
+    if (!runId) {
+      continue;
+    }
+    const statusResult = await serviceJson(config.ravenBaseUrl, `/v1/downloads/bulk-runs/${encodeURIComponent(runId)}`);
+    if (!statusResult.ok) {
+      bulkRunRecoveryActions.push({
+        type: "inspect-bulk-run-failed",
+        runId,
+        adminPath: "/admin/system/tasks",
+        message: `Raven could not inspect bulk run ${runId}: ${statusResult.payload?.error || statusResult.status || "unknown error"}.`
+      });
+      continue;
+    }
+
+    const payload = normalizeObject(statusResult.payload, {});
+    const status = normalizeString(payload.status).toLowerCase();
+    const active = payload.active === true;
+    const summary = normalizeObject(payload.summary, {});
+    const ravenActions = normalizeArray(summary.recoveryActions);
+    inspectedBulkRuns.push({
+      runId,
+      status,
+      active,
+      staleTitleTaskCount: Number.parseInt(String(summary.staleTitleTaskCount || 0), 10) || 0
+    });
+
+    if (status === "running" && !active) {
+      const continueResult = await serviceJson(config.ravenBaseUrl, `/v1/downloads/bulk-runs/${encodeURIComponent(runId)}/continue`, {
+        method: "POST",
+        body: {requestedBy: OWNER_SERVICE}
+      });
+      if (continueResult.ok) {
+        autoRecoveredBulkRuns += 1;
+      } else {
+        bulkRunRecoveryActions.push({
+          type: "continue-detached-bulk-run",
+          runId,
+          adminPath: "/admin/system/tasks",
+          portalCommand: `/downloadall continue runid:${runId}`,
+          message: `Bulk run ${runId} is running without an active Raven worker. Use /downloadall continue runid:${runId} or rerun stale-queue-cleanup.`
+        });
+      }
+    }
+
+    for (const action of ravenActions) {
+      bulkRunRecoveryActions.push({
+        ...normalizeObject(action, {}),
+        runId: normalizeString(action?.runId, runId),
+        adminPath: normalizeString(action?.adminPath, "/admin/activity/queue")
+      });
+    }
+
+    if (status === "paused" && ravenActions.length === 0 && (Number.parseInt(String(summary.staleTitleTaskCount || 0), 10) || 0) > 0) {
+      bulkRunRecoveryActions.push({
+        type: "continue-stale-bulk-run",
+        runId,
+        adminPath: "/admin/activity/queue",
+        portalCommand: `/downloadall continue runid:${runId}`,
+        message: `Bulk run ${runId} is paused after stale title-task cleanup. Continue it with /downloadall continue runid:${runId} or the owner DM check reaction.`
+      });
+    }
+  }
+
+  const recoveryCount = titleRecoveryActions.length + bulkRunRecoveryActions.length;
+  const message = recoveryCount > 0 && autoRecoveredBulkRuns > 0
+    ? `Reattached ${autoRecoveredBulkRuns} Raven bulk run(s) and found ${recoveryCount} recovery action(s).`
+    : recoveryCount > 0
+      ? `Found ${recoveryCount} Raven recovery action(s). Open /admin/activity/queue or use the listed downloadall command.`
+      : autoRecoveredBulkRuns > 0
+        ? `Reattached ${autoRecoveredBulkRuns} detached Raven bulk run(s).`
+        : "No stale Raven queue work or stalled bulk runs found.";
+
+  return {
+    message,
+    taskCount: tasks.length,
+    staleTitleTaskCount: staleTitleTasks.length,
+    recoveryCount,
+    autoRecoveredBulkRuns,
+    inspectedBulkRuns,
+    titleRecoveryActions,
+    bulkRunRecoveryActions
+  };
+};
 
 const DEFAULT_TASKS = Object.freeze([
   {
@@ -244,18 +374,7 @@ export const createSystemTaskRuntime = ({
         return {titleCount: titles.length, gapCount: missing.length};
       }
       case "stale-queue-cleanup": {
-        const result = await serviceJson(config.ravenBaseUrl, "/v1/downloads/tasks");
-        if (!result.ok) {
-          throw new Error(result.payload?.error || "Raven task scan failed.");
-        }
-        const tasks = normalizeArray(result.payload?.tasks);
-        const staleAfterMs = 2 * 60 * 60 * 1000;
-        const stale = tasks.filter((task) => {
-          const status = normalizeString(task.status).toLowerCase();
-          const updated = Date.parse(normalizeString(task.updatedAt));
-          return status === "failed" || (["running", "queued"].includes(status) && Number.isFinite(updated) && updated < Date.now() - staleAfterMs);
-        });
-        return {taskCount: tasks.length, recoveryCount: stale.length};
+        return runStaleQueueCleanup({config, vaultClient, serviceJson});
       }
       default:
         throw new Error("Unknown system task.");
@@ -304,11 +423,12 @@ export const createSystemTaskRuntime = ({
     try {
       const result = await executeTaskWork(taskId);
       const completedAt = new Date().toISOString();
+      const completedMessage = normalizeString(result?.message, "Task completed.");
       await vaultClient.upsertJobTask(jobId, taskId, {
         label: definition.label,
         status: "completed",
         percent: 100,
-        message: "Task completed.",
+        message: completedMessage,
         result,
         sortOrder: 0,
         updatedAt: completedAt
@@ -319,7 +439,7 @@ export const createSystemTaskRuntime = ({
         label: definition.label,
         status: "completed",
         percent: 100,
-        message: "Task completed.",
+        message: completedMessage,
         requestedBy: actor?.actorId || "scriptarr-sage",
         payload: {
           taskId,

@@ -144,8 +144,9 @@ Tasks, Status, and AI now follow the same Next pattern. Tasks renders the Sage-o
 editing, preview, manual run, and recent history; Status initially renders Sage's lightweight grouped endpoint
 registry, then probes GET/read routes only when an admin runs the explicit check action. It shows auth-gated reads as
 protected and leaves mutation routes unprobed. Warden bootstrap and runtime details hydrate from the secondary
-same-origin status runtime payload; AI owns Oracle settings, LocalAI lifecycle controls, asynchronous install/start/remove
-progress, completion toasts, and the admin test prompt.
+same-origin status runtime payload; AI paints saved Oracle settings, tools, and proposals first, then hydrates Oracle
+health, LocalAI lifecycle state, and asynchronous install/start/remove progress from brokered runtime calls while
+keeping completion toasts and the admin test prompt in the same page.
 Moon admin also owns the general Settings hub. It manages brokered `moon.branding` site name plus uploaded logo WebP
 variants, database size summary with a Settings-only DB explorer link, toast notification preferences, project credit
 and support links, and compact Raven VPN, provider, active title-download limit, request workflow, and Discord

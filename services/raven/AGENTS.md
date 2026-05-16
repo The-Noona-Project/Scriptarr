@@ -27,7 +27,9 @@ Raven is Scriptarr's Java download, library, metadata, and VPN-aware download en
 - Raven download tasks must not hit `100%` until file promotion and brokered catalog persistence both succeed. If
   persistence fails, fail the task with the real error instead of leaving it hanging at `90%`.
 - `/downloadall` must skip completed catalog titles, append only missing/new chapters for existing non-completed
-  titles, reject invalid provider URLs, and create durable runs that cannot stall forever on a stale title task.
+  titles, reject invalid provider URLs, and create durable runs that cannot stall forever on a stale title task. If a
+  stale running title cannot be cancelled into retryable work, persist a paused batch/run recovery action with the
+  exact task id and admin follow-up.
 - Page-level source damage should become catalog quality data, not a whole-title dead end: refresh page lists after
   image 404s, generate Scriptarr missing-page placeholders when needed, and mark partial, missing-content, or
   bad-source quality states deterministically.

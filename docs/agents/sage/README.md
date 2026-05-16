@@ -134,8 +134,9 @@
   saves require `ai.write`; LocalAI lifecycle actions require `ai.root`; install/start/remove requests should pass the
   Moon admin requester context to Warden. Admin test prompts and structured assist calls should degrade safely when
   Oracle or LocalAI is unavailable. Keep the admin test timeout long enough for CPU-only LocalAI prompts instead of
-  assuming readiness means fast generation. Model discovery must stay brokered through Oracle; Moon should never call
-  OpenAI or LocalAI directly from the browser.
+  assuming readiness means fast generation. Keep the base AI payload saved-state focused, put Oracle health and LocalAI
+  runtime probes in `/api/moon-v3/admin/system/ai/runtime`, and keep model discovery brokered through Oracle; Moon
+  should never call OpenAI or LocalAI directly from the browser.
 - Sage owns the AI tool registry. Read tools can execute immediately when enabled and permitted; operational tools
   create expiring proposals and require an authorized admin confirmation before Sage executes the allowlisted action.
 - Sage should expose acked system-notification queues for Portal so Warden LocalAI lifecycle jobs can DM the admin who

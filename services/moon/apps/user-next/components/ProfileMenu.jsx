@@ -8,7 +8,7 @@ import {useEffect, useRef, useState} from "react";
 import Link from "next/link";
 import {usePathname} from "next/navigation";
 import {logoutMoonSession} from "../lib/api.js";
-import {buildProfilePath, canAccessAdmin} from "../lib/routes.js";
+import {buildProfilePath, canAccessAdmin} from "../lib/navigationRoutes.js";
 import {buildAvatarProps} from "../lib/profile.js";
 import {Avatar, Button} from "./UiPrimitives.jsx";
 

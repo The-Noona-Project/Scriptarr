@@ -65,7 +65,10 @@ ordered group-first, then type. Run and batch state persist through Sage's gener
 the Raven title task ids queued by that batch, and resume skips completed batches after a restart. Each batch still
 uses the same WeebCentral-only metadata-confident bulk queue path while preserving the owner's `nsfw` filter. The
 `groupsize`/`batchesPerApproval` setting controls how many batch tasks run before Raven pauses, and failed or stale
-run-owned title tasks retry up to three total attempts before safe removal lets the rest of the run continue.
+run-owned title tasks retry up to three total attempts before safe removal lets the rest of the run continue. If a
+stale running title task does not leave `running` after Raven requests cancellation, the batch pauses with a
+`recoveryAction` that points the admin to `/admin/activity/queue` to cancel the exact title task before continuing the
+bulk run.
 `/v1/library?view=card` returns the compact Moon shelf projection without chapter arrays or filesystem roots. It
 accepts `q`, `type`, `letter`, `cursor`, `pageSize`, `sort`, and exact `ids`, forwards those filters through Sage to
 Vault's title-only projection, preserves requested exact-id ordering for activity cards, and keeps full title and

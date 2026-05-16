@@ -80,6 +80,39 @@ const createSageStub = ({requests = []} = {}) => Promise.resolve(http.createServ
     return;
   }
 
+  if (requestUrl.pathname === "/api/moon-v3/admin/system/ai") {
+    response.writeHead(200, {"Content-Type": "application/json"});
+    response.end(JSON.stringify({
+      oracle: {enabled: false, provider: "openai", model: "gpt-4.1-mini", temperature: 0.2},
+      tools: {settings: {toggles: {}}, tools: []},
+      proposals: []
+    }));
+    return;
+  }
+
+  if (requestUrl.pathname === "/api/moon-v3/admin/system/ai/runtime") {
+    response.writeHead(200, {"Content-Type": "application/json"});
+    response.end(JSON.stringify({
+      oracleHealth: {ok: true},
+      oracleStatus: {ok: true, oracle: {enabled: false}},
+      localAi: {installed: false, running: false, message: "LocalAI is optional."},
+      localAiProfile: {selectedProfile: "cpu", profiles: [{key: "cpu", label: "CPU"}]}
+    }));
+    return;
+  }
+
+  if (requestUrl.pathname === "/api/moon-v3/admin/system/ai/models") {
+    const provider = requestUrl.searchParams.get("provider") === "localai" ? "localai" : "openai";
+    response.writeHead(200, {"Content-Type": "application/json"});
+    response.end(JSON.stringify({
+      provider,
+      selectedModel: provider === "localai" ? "gpt-4" : "gpt-4.1-mini",
+      models: [{id: provider === "localai" ? "gpt-4" : "gpt-4.1-mini"}],
+      ok: true
+    }));
+    return;
+  }
+
   if (requestUrl.pathname === "/api/moon-v3/admin/settings") {
     response.writeHead(200, {"Content-Type": "application/json"});
     response.end(JSON.stringify({
@@ -742,6 +775,18 @@ test("moon serves branded split entry documents, typed routes, PWA assets, and M
   assert.equal(apiAdminResponse.status, 200);
   assert.equal((await apiAdminResponse.json()).settings.enabled, true);
 
+  const aiAdminResponse = await fetch(`${baseUrl}/api/moon/v3/admin/system/ai`);
+  assert.equal(aiAdminResponse.status, 200);
+  assert.equal((await aiAdminResponse.json()).oracle.provider, "openai");
+
+  const aiRuntimeResponse = await fetch(`${baseUrl}/api/moon/v3/admin/system/ai/runtime`);
+  assert.equal(aiRuntimeResponse.status, 200);
+  assert.equal((await aiRuntimeResponse.json()).localAiProfile.selectedProfile, "cpu");
+
+  const aiModelsResponse = await fetch(`${baseUrl}/api/moon/v3/admin/system/ai/models?provider=localai`);
+  assert.equal(aiModelsResponse.status, 200);
+  assert.equal((await aiModelsResponse.json()).selectedModel, "gpt-4");
+
   const settingsResponse = await fetch(`${baseUrl}/api/moon/v3/admin/settings`);
   assert.equal(settingsResponse.status, 200);
   assert.equal((await settingsResponse.json()).databaseOverview.tables[0].name, "settings");
@@ -882,6 +927,9 @@ test("moon serves branded split entry documents, typed routes, PWA assets, and M
   assert.ok(requests.some((entry) => entry.method === "POST" && entry.url === "/api/admin/settings/moon/public-api/key"));
   assert.ok(requests.some((entry) => entry.method === "GET" && entry.url === "/api/public/openapi.json"));
   assert.ok(requests.some((entry) => entry.method === "GET" && entry.url === "/api/moon-v3/admin/system/api" && entry.apiKey === "system-secret"));
+  assert.ok(requests.some((entry) => entry.method === "GET" && entry.url === "/api/moon-v3/admin/system/ai"));
+  assert.ok(requests.some((entry) => entry.method === "GET" && entry.url === "/api/moon-v3/admin/system/ai/runtime"));
+  assert.ok(requests.some((entry) => entry.method === "GET" && entry.url === "/api/moon-v3/admin/system/ai/models?provider=localai"));
   assert.ok(requests.some((entry) => entry.method === "GET" && entry.url === "/api/moon-v3/admin/settings"));
   assert.ok(requests.some((entry) => entry.method === "GET" && entry.url === "/api/moon-v3/admin/settings/database"));
   assert.ok(requests.some((entry) => entry.method === "POST" && entry.url === "/api/moon-v3/admin/settings/raven/vpn/test"));

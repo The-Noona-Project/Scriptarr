@@ -294,6 +294,8 @@ public class BulkRunService {
                 "Batch completed. Waiting for owner permission to continue.",
                 buildRunSummary(loadBatchTasks(runId))
             );
+        } catch (BulkRunNeedsAdminRecoveryException recovery) {
+            safelyUpdateRunAfterFailure(runId, STATUS_PAUSED, recovery.getMessage(), null);
         } catch (BulkRunCancelledException ignored) {
             safelyUpdateRunAfterFailure(runId, STATUS_CANCELLED, "Cancelled by owner.", null);
         } catch (InterruptedException interrupted) {
@@ -459,15 +461,23 @@ public class BulkRunService {
                     changed = true;
                     continue;
                 }
-                if (STATUS_RUNNING.equals(status)) {
-                    anyRunning = true;
-                }
                 if (STATUS_RUNNING.equals(status) && isTitleTaskStale(task)) {
                     safeCancelTask(taskId);
                     task = titleTasksById().get(taskId);
                     status = stringValue(task == null ? "" : task.get("status")).toLowerCase(Locale.ROOT);
+                    observedStatuses.put(taskId, status.isBlank() ? "missing" : status);
                     staleTaskIds.add(taskId);
                     changed = true;
+                    if (STATUS_RUNNING.equals(status)) {
+                        pauseBatchForManualRecovery(runId, mutableBatch, result, staleTaskIds, taskId);
+                    }
+                    if (task == null) {
+                        missingTaskIds.add(taskId);
+                        continue;
+                    }
+                }
+                if (STATUS_RUNNING.equals(status)) {
+                    anyRunning = true;
                 }
                 if (STATUS_COMPLETED.equals(status)) {
                     changed = completedTaskIds.add(taskId) || changed;
@@ -484,10 +494,11 @@ public class BulkRunService {
                 if (STATUS_FAILED.equals(status)) {
                     int attemptsUsed = Math.max(1, toInt(attempts.get(taskId), 1));
                     if (attemptsUsed < MAX_TITLE_ATTEMPTS) {
-                        safeRetryTask(taskId);
-                        attempts.put(taskId, attemptsUsed + 1);
+                        if (safeRetryTask(taskId)) {
+                            attempts.put(taskId, attemptsUsed + 1);
+                            changed = true;
+                        }
                         allDone = false;
-                        changed = true;
                     } else {
                         safeRemoveTask(taskId);
                         removedTaskIds.add(taskId);
@@ -739,6 +750,7 @@ public class BulkRunService {
         summary.put("failedTitleTaskCount", 0);
         summary.put("removedFailedTaskCount", 0);
         summary.put("staleTitleTaskCount", 0);
+        summary.put("recoveryActions", List.of());
         summary.put("lastCompletedBatch", Map.of());
         summary.put("nextBatch", Map.of());
         summary.put("queuedTaskIds", List.of());
@@ -748,6 +760,7 @@ public class BulkRunService {
     private Map<String, Object> buildRunSummary(List<Map<String, Object>> batches) {
         Map<String, Object> summary = emptyRunSummary(batches.size());
         List<String> queuedTaskIds = new ArrayList<>();
+        List<Map<String, Object>> recoveryActions = new ArrayList<>();
         Map<String, Object> lastCompletedBatch = Map.of();
         Map<String, Object> nextBatch = Map.of();
         for (Map<String, Object> batch : batches) {
@@ -775,6 +788,10 @@ public class BulkRunService {
             increment(summary, "failedTitleTaskCount", stringList(result.get("failedTaskIds")).size());
             increment(summary, "removedFailedTaskCount", stringList(result.get("removedTaskIds")).size());
             increment(summary, "staleTitleTaskCount", stringList(result.get("staleTaskIds")).size());
+            Map<String, Object> recoveryAction = normalizeMap(result.get("recoveryAction"));
+            if (!recoveryAction.isEmpty()) {
+                recoveryActions.add(recoveryAction);
+            }
             queuedTaskIds.addAll(stringList(result.get("taskIds")));
         }
         int completedBatches = toInt(summary.get("completedBatches"), 0);
@@ -782,6 +799,7 @@ public class BulkRunService {
         summary.put("lastCompletedBatch", lastCompletedBatch);
         summary.put("nextBatch", nextBatch);
         summary.put("queuedTaskIds", List.copyOf(queuedTaskIds));
+        summary.put("recoveryActions", List.copyOf(recoveryActions));
         return summary;
     }
 
@@ -942,6 +960,35 @@ public class BulkRunService {
         return STATUS_QUEUED.equals(status) || status.isBlank() || "pending".equals(status);
     }
 
+    private void pauseBatchForManualRecovery(
+        String runId,
+        Map<String, Object> batch,
+        Map<String, Object> result,
+        Set<String> staleTaskIds,
+        String taskId
+    ) {
+        String message = "Stale Raven title task " + taskId
+            + " is still running after Raven requested cancellation. Open /admin/activity/queue, cancel that task, "
+            + "then continue bulk run " + runId + ".";
+        Map<String, Object> updatedResult = new LinkedHashMap<>(result);
+        updatedResult.put("staleTaskIds", List.copyOf(staleTaskIds));
+        updatedResult.put("recoveryAction", Map.of(
+            "type", "stale-running-title-task",
+            "runId", runId,
+            "batchId", stringValue(batch.get("taskId")),
+            "taskIds", List.of(taskId),
+            "adminPath", "/admin/activity/queue",
+            "taskAction", "cancel",
+            "followUp", "Continue the bulk run after the title task leaves Running.",
+            "message", message
+        ));
+        Map<String, Object> pausedBatch = new LinkedHashMap<>(batch);
+        pausedBatch.put("result", updatedResult);
+        pausedBatch = withBatchStatus(pausedBatch, STATUS_PAUSED, message, Math.max(25, toInt(batch.get("percent"), 25)));
+        putBatchTask(runId, pausedBatch);
+        throw new BulkRunNeedsAdminRecoveryException(message);
+    }
+
     private void safeCancelTask(String taskId) {
         try {
             downloaderService.cancelTask(taskId);
@@ -950,11 +997,13 @@ public class BulkRunService {
         }
     }
 
-    private void safeRetryTask(String taskId) {
+    private boolean safeRetryTask(String taskId) {
         try {
             downloaderService.retryTask(taskId);
+            return true;
         } catch (Exception error) {
             logger.warn("DOWNLOAD", "Bulk run could not retry a failed title task.", "taskId=" + taskId + " error=" + error.getMessage());
+            return false;
         }
     }
 
@@ -1146,5 +1195,11 @@ public class BulkRunService {
     }
 
     private static final class BulkRunCancelledException extends RuntimeException {
+    }
+
+    private static final class BulkRunNeedsAdminRecoveryException extends RuntimeException {
+        private BulkRunNeedsAdminRecoveryException(String message) {
+            super(message);
+        }
     }
 }

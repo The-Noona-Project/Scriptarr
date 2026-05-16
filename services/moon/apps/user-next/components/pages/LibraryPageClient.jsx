@@ -7,7 +7,7 @@
 import {useEffect, useMemo, useState} from "react";
 import Link from "next/link";
 import {requestJson, useMoonJson} from "../../lib/api.js";
-import {buildLibraryPath, formatTypeLabel, getLibraryTypes} from "../../lib/routes.js";
+import {buildLibraryPath, formatTypeLabel, getLibraryTypes} from "../../lib/navigationRoutes.js";
 import {useMoonChrome} from "../MoonChromeContext.jsx";
 import TitleCard from "../TitleCard.jsx";
 import {AuthRequiredView, EmptyView, ErrorView, LoadingView} from "../StateView.jsx";

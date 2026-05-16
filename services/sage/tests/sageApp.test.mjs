@@ -1327,9 +1327,18 @@ test("sage signs in the first owner through the Discord callback and moderates r
     }
   }).then((response) => response.json());
   assert.equal(aiStatus.oracle.provider, "openai");
-  assert.equal(aiStatus.localAiProfile.selectedProfile, "cpu");
-  assert.equal(aiStatus.modelOptions.provider, "openai");
-  assert.equal(aiStatus.modelOptions.models[0].id, "gpt-4.1-mini");
+  assert.equal(aiStatus.localAiProfile, undefined);
+  assert.equal(aiStatus.modelOptions, undefined);
+  assert.equal(dependencyStub.calls.modelOptions, 0);
+
+  const aiRuntime = await fetch(`${baseUrl}/api/moon-v3/admin/system/ai/runtime`, {
+    headers: {
+      "Authorization": `Bearer ${ownerClaim.token}`
+    }
+  }).then((response) => response.json());
+  assert.equal(aiRuntime.localAiProfile.selectedProfile, "cpu");
+  assert.equal(aiRuntime.localAi.installed, false);
+  assert.equal(dependencyStub.calls.localAiProfile, 1);
 
   const unauthenticatedModels = await fetch(`${baseUrl}/api/moon-v3/admin/system/ai/models?provider=localai`);
   assert.equal(unauthenticatedModels.status, 401);
@@ -1442,6 +1451,9 @@ test("sage signs in the first owner through the Discord callback and moderates r
   assert.equal(home.continueReading[0].coverAccent, ownerSmokeLibraryTitle.coverAccent);
   assert.equal(home.continueReading[0].coverUrl, ownerSmokeLibraryTitle.coverUrl);
   assert.equal(home.continueReading[0].bookmark.chapterId, ownerSmokeLibraryTitle.chapters[0].id);
+  assert.equal(home.continueReading[0].readerTarget.kind, "continue");
+  assert.equal(home.continueReading[0].readerTarget.chapterId, ownerSmokeLibraryTitle.chapters[0].id);
+  assert.equal(home.continueReading[0].readerTarget.pageIndex, 8);
   assert.equal(home.shelves[0].title, "Your Bookshelf");
   assert.equal(home.shelves[1].title, "Recently added to Webtoon");
   assert.ok(dependencyStub.calls.health >= 1);
@@ -2175,6 +2187,15 @@ test("sage persists user tag preferences and title or chapter read state into bo
     "Content-Type": "application/json"
   };
 
+  await fetch(`http://127.0.0.1:${vaultPort}/api/service/raven/titles/${defaultLibraryTitle.id}`, {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": "Bearer vault-dev-token"
+    },
+    body: JSON.stringify(defaultLibraryTitle)
+  });
+
   const initialTagPreferences = await fetch(`${baseUrl}/api/moon-v3/user/tag-preferences`, {
     headers: {
       "Authorization": `Bearer ${ownerClaim.token}`
@@ -2243,6 +2264,8 @@ test("sage persists user tag preferences and title or chapter read state into bo
   }).then((response) => response.json());
   assert.equal(homeWhileActive.continueReading.length, 1);
   assert.equal(homeWhileActive.continueReading[0].titleId, "dan-da-dan");
+  assert.equal(homeWhileActive.continueReading[0].readerTarget.kind, "next-unread");
+  assert.equal(homeWhileActive.continueReading[0].readerTarget.chapterId, "dandadan-c167");
   assert.equal(homeWhileActive.tagPreferences.likedTags[0], "Action");
   assert.equal(homeWhileActive.shelves.some((shelf) => shelf.id === "tag:action"), true);
   assert.equal(homeWhileActive.shelves.some((shelf) => shelf.id === "tag:romance"), false);

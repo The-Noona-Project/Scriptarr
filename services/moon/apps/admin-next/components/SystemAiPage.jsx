@@ -4,7 +4,7 @@
  * @file Oracle and LocalAI controls for Moon admin.
  */
 
-import {useEffect, useRef, useState} from "react";
+import {useCallback, useEffect, useRef, useState} from "react";
 import {hasAdminGrant} from "../lib/access.js";
 import {requestJson, useAdminEventStaleness, useAdminJson} from "../lib/api.js";
 import {formatDate, formatDisplayValue, normalizeString} from "../lib/format.js";
@@ -260,6 +260,10 @@ const defaultModelForProvider = (provider) => normalizeString(provider).toLowerC
   ? "gpt-4"
   : "gpt-4.1-mini";
 
+const AI_ENDPOINT = "/api/moon/v3/admin/system/ai";
+const AI_RUNTIME_ENDPOINT = "/api/moon/v3/admin/system/ai/runtime";
+const AI_MODELS_ENDPOINT = "/api/moon/v3/admin/system/ai/models";
+
 const fallbackModelOptions = (provider, currentModel, error) => {
   const selectedModel = normalizeString(currentModel, defaultModelForProvider(provider));
   return {
@@ -291,24 +295,48 @@ export const SystemAiPage = ({user}) => {
   const [actionBusy, setActionBusy] = useState("");
   const [modelOptions, setModelOptions] = useState(null);
   const [modelLoading, setModelLoading] = useState(false);
+  const [runtimeLoading, setRuntimeLoading] = useState(false);
+  const [runtimeError, setRuntimeError] = useState("");
   const lastJobToastRef = useRef("");
   const {notify} = useAdminToast();
-  const {loading, refreshing, error, data, refresh, setData} = useAdminJson("/api/moon/v3/admin/system/ai", {
+  const {loading, refreshing, error, data, refresh, setData} = useAdminJson(AI_ENDPOINT, {
     fallback: {
       oracle: {},
       localAi: {}
     }
   });
+  const refreshRuntime = useCallback(async () => {
+    setRuntimeLoading(true);
+    const result = await requestJson(AI_RUNTIME_ENDPOINT);
+    setRuntimeLoading(false);
+    if (!result.ok) {
+      setRuntimeError(formatDisplayValue(result.payload?.error, "Moon could not hydrate AI runtime state."));
+      return;
+    }
+    const payload = result.payload || {};
+    setRuntimeError("");
+    setData((current) => ({
+      ...(current || {}),
+      oracleHealth: payload.oracleHealth ?? current?.oracleHealth ?? {},
+      oracleStatus: payload.oracleStatus ?? current?.oracleStatus ?? {},
+      localAi: payload.localAi ?? current?.localAi ?? {},
+      localAiProfile: payload.localAiProfile ?? current?.localAiProfile ?? {}
+    }));
+  }, [setData]);
+  const refreshAiPage = useCallback(async () => {
+    await refresh();
+    await refreshRuntime();
+  }, [refresh, refreshRuntime]);
   const localAiJob = resolveLocalAiJob(data?.localAi);
   const localAiJobStatus = normalizeString(localAiJob?.status).toLowerCase();
   const localAiActionActive = ["installing", "starting", "removing"].includes(normalizeString(data?.localAi?.phase).toLowerCase())
     || localAiJobStatus === "running";
-  useAdminEventStaleness({
+  const live = useAdminEventStaleness({
     domains: ["system", "ai"],
     enabled: true,
-    locked: refreshing,
+    locked: Boolean(actionBusy),
     onStale: () => {},
-    onRefresh: refresh
+    onRefresh: refreshAiPage
   });
 
   useEffect(() => {
@@ -335,6 +363,13 @@ export const SystemAiPage = ({user}) => {
   }, [data?.modelOptions, draft?.provider]);
 
   useEffect(() => {
+    if (loading) {
+      return;
+    }
+    void refreshRuntime();
+  }, [loading, refreshRuntime]);
+
+  useEffect(() => {
     const provider = normalizeString(draft?.provider).toLowerCase();
     if (!provider) {
       return undefined;
@@ -342,7 +377,7 @@ export const SystemAiPage = ({user}) => {
 
     let cancelled = false;
     setModelLoading(true);
-    void requestJson(`/api/moon/v3/admin/system/ai/models?provider=${encodeURIComponent(provider)}`).then((result) => {
+    void requestJson(`${AI_MODELS_ENDPOINT}?provider=${encodeURIComponent(provider)}`).then((result) => {
       if (cancelled) {
         return;
       }
@@ -373,10 +408,10 @@ export const SystemAiPage = ({user}) => {
       return undefined;
     }
     const timer = window.setInterval(() => {
-      void refresh();
+      void refreshRuntime();
     }, 5000);
     return () => window.clearInterval(timer);
-  }, [localAiActionActive, refresh]);
+  }, [localAiActionActive, refreshRuntime]);
 
   useEffect(() => {
     if (!localAiJob?.jobId) {
@@ -417,8 +452,10 @@ export const SystemAiPage = ({user}) => {
     });
     setActionBusy("");
     if (!result.ok) {
-      setFlash(formatDisplayValue(result.payload?.error, "Moon could not save Oracle settings."));
+      const message = formatDisplayValue(result.payload?.error, "Moon could not save Oracle settings.");
+      setFlash(message);
       setFlashTone("bad");
+      notify({message, tone: "bad", category: "action"});
       return;
     }
     setData((current) => ({
@@ -428,7 +465,8 @@ export const SystemAiPage = ({user}) => {
     setDraft((current) => ({...(current || {}), openAiApiKey: ""}));
     setFlash("Oracle settings saved.");
     setFlashTone("good");
-    void refresh();
+    notify({message: "Oracle settings saved.", tone: "good", category: "action"});
+    void refreshAiPage();
   };
 
   const runLocalAiAction = async (action) => {
@@ -444,21 +482,25 @@ export const SystemAiPage = ({user}) => {
     });
     setActionBusy("");
     if (!result.ok) {
-      setFlash(formatDisplayValue(result.payload?.error, `Moon could not ${action} LocalAI.`));
+      const message = formatDisplayValue(result.payload?.error, `Moon could not ${action} LocalAI.`);
+      setFlash(message);
       setFlashTone("bad");
+      notify({message, tone: "bad", category: "job"});
       return;
     }
-    setFlash(action === "install"
+    const message = action === "install"
       ? "LocalAI install job started."
       : action === "remove"
         ? "LocalAI removal job started."
-        : "LocalAI startup job requested.");
+        : "LocalAI startup job requested.";
+    setFlash(message);
     setFlashTone("good");
+    notify({message, tone: "good", category: "job"});
     setData((current) => ({
       ...current,
       localAi: result.payload || current?.localAi
     }));
-    void refresh();
+    void refreshRuntime();
   };
 
   const runTest = async () => {
@@ -470,8 +512,10 @@ export const SystemAiPage = ({user}) => {
       }
     });
     if (!result.ok) {
-      setFlash(formatDisplayValue(result.payload?.error, "Oracle test failed."));
+      const message = formatDisplayValue(result.payload?.error, "Oracle test failed.");
+      setFlash(message);
       setFlashTone("bad");
+      notify({message, tone: "bad", category: "action"});
       return;
     }
     setTestReply(normalizeString(result.payload?.reply, JSON.stringify(result.payload || {}, null, 2)));
@@ -492,13 +536,16 @@ export const SystemAiPage = ({user}) => {
     });
     setActionBusy("");
     if (!result.ok) {
-      setFlash(formatDisplayValue(result.payload?.error, "Moon could not save AI tool settings."));
+      const message = formatDisplayValue(result.payload?.error, "Moon could not save AI tool settings.");
+      setFlash(message);
       setFlashTone("bad");
+      notify({message, tone: "bad", category: "action"});
       return;
     }
     setData((current) => ({...current, tools: result.payload}));
     setFlash("AI tool settings saved.");
     setFlashTone("good");
+    notify({message: "AI tool settings saved.", tone: "good", category: "action"});
   };
 
   const runAssist = async () => {
@@ -513,17 +560,23 @@ export const SystemAiPage = ({user}) => {
     });
     setActionBusy("");
     if (!result.ok || result.payload?.ok === false) {
-      setFlash(formatDisplayValue(result.payload?.error, "AI assist failed."));
+      const message = formatDisplayValue(result.payload?.error, "AI assist failed.");
+      setFlash(message);
       setFlashTone("bad");
+      notify({message, tone: "bad", category: "action"});
       return;
     }
     setAssistReply(result.payload?.message || JSON.stringify(result.payload || {}, null, 2));
-    if (result.payload?.proposal) {
-      setData((current) => ({
-        ...current,
-        proposals: [result.payload.proposal, ...normalizeArray(current?.proposals)]
-      }));
-    }
+    setData((current) => ({
+      ...current,
+      ...(result.payload?.tools ? {tools: result.payload.tools} : {}),
+      ...(result.payload?.proposal ? {proposals: [result.payload.proposal, ...normalizeArray(current?.proposals)]} : {})
+    }));
+    notify({
+      message: result.payload?.proposal ? "AI proposal drafted." : formatDisplayValue(result.payload?.message, "AI read tool completed."),
+      tone: "good",
+      category: "action"
+    });
   };
 
   const updateProposal = async (proposalId, action) => {
@@ -533,19 +586,31 @@ export const SystemAiPage = ({user}) => {
       json: {}
     });
     setActionBusy("");
+    const proposal = result.payload?.proposal || result.payload;
     if (!result.ok) {
-      setFlash(formatDisplayValue(result.payload?.error, `Moon could not ${action} the AI proposal.`));
+      if (proposal?.id) {
+        setData((current) => ({
+          ...current,
+          proposals: normalizeArray(current?.proposals).some((entry) => entry.id === proposal.id)
+            ? normalizeArray(current?.proposals).map((entry) => entry.id === proposal.id ? proposal : entry)
+            : [proposal, ...normalizeArray(current?.proposals)]
+        }));
+      }
+      const message = formatDisplayValue(result.payload?.error, `Moon could not ${action} the AI proposal.`);
+      setFlash(message);
       setFlashTone("bad");
+      notify({message, tone: "bad", category: "action"});
       return;
     }
-    const proposal = result.payload?.proposal || result.payload;
     setData((current) => ({
       ...current,
       proposals: normalizeArray(current?.proposals).map((entry) => entry.id === proposal.id ? proposal : entry)
     }));
-    setFlash(action === "confirm" ? "AI proposal confirmed." : "AI proposal cancelled.");
+    const message = action === "confirm" ? "AI proposal confirmed." : "AI proposal cancelled.";
+    setFlash(message);
     setFlashTone("good");
-    void refresh();
+    notify({message, tone: "good", category: "action"});
+    void refreshAiPage();
   };
 
   if (loading || !draft) {
@@ -590,6 +655,7 @@ export const SystemAiPage = ({user}) => {
     <>
       {error ? <AdminActionBanner tone="bad">{error}</AdminActionBanner> : null}
       {flash ? <AdminActionBanner tone={flashTone}>{flash}</AdminActionBanner> : null}
+      {runtimeError ? <AdminActionBanner tone="warning">{runtimeError}</AdminActionBanner> : null}
       {modelWarning ? <AdminActionBanner tone="warning">{modelWarning}</AdminActionBanner> : null}
       <section className="admin-panel">
         <div className="admin-section-heading">
@@ -598,8 +664,8 @@ export const SystemAiPage = ({user}) => {
             <h2>AI</h2>
             <p className="admin-muted">Oracle settings and LocalAI lifecycle controls stay brokered through Moon and Sage.</p>
           </div>
-          <AdminStatusBadge tone={refreshing ? "warning" : oracleTone(oracleStatusLabel)}>
-            {refreshing ? "Refreshing" : oracleStatusLabel}
+          <AdminStatusBadge tone={refreshing || runtimeLoading ? "warning" : oracleTone(oracleStatusLabel)}>
+            {refreshing || runtimeLoading ? "Refreshing quietly" : oracleStatusLabel}
           </AdminStatusBadge>
         </div>
         <div className="admin-metric-grid">
@@ -607,6 +673,10 @@ export const SystemAiPage = ({user}) => {
           <article className="admin-metric-card"><span>Model</span><strong>{formatDisplayValue(data?.oracle?.model, "not set")}</strong></article>
           <article className="admin-metric-card"><span>OpenAI key</span><strong>{data?.oracle?.openAiApiKeyConfigured ? "configured" : "missing"}</strong></article>
           <article className="admin-metric-card"><span>LocalAI</span><strong>{localAiStatusLabel}</strong></article>
+        </div>
+        <div className="admin-log-meta">
+          <span>Events: {formatDisplayValue(live.state, "idle")}</span>
+          <span>Runtime: {runtimeLoading ? "hydrating" : runtimeError ? "degraded" : "loaded"}</span>
         </div>
       </section>
       <section className="admin-ai-grid">

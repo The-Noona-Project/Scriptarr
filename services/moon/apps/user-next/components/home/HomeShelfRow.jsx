@@ -6,7 +6,7 @@
 
 import Link from "next/link";
 import {Scroller} from "../UiPrimitives.jsx";
-import {buildLibraryPath} from "../../lib/routes.js";
+import {buildLibraryPath} from "../../lib/navigationRoutes.js";
 import HomeArtCard from "./HomeArtCard.jsx";
 
 /**

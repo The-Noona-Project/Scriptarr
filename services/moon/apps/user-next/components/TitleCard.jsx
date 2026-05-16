@@ -3,7 +3,7 @@
  */
 
 import Link from "next/link";
-import {buildReaderPathForTitleTarget, buildTitlePathForTitle} from "../lib/routes.js";
+import {buildReaderPathForTitleTarget, buildTitlePathForTitle} from "../lib/titleRoutes.js";
 import {formatCoverage} from "../lib/date.js";
 import CoverImage from "./CoverImage.jsx";
 

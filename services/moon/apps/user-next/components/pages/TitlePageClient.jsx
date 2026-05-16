@@ -7,7 +7,7 @@
 import {startTransition, useEffect, useMemo, useState} from "react";
 import {useRouter} from "next/navigation";
 import {requestJson, useMoonJson} from "../../lib/api.js";
-import {buildReaderPathForTitle, buildTitlePathForTitle} from "../../lib/routes.js";
+import {buildReaderPathForTitle, buildTitlePathForTitle} from "../../lib/titleRoutes.js";
 import {formatDate, formatProgress} from "../../lib/date.js";
 import {Button, Flex} from "../UiPrimitives.jsx";
 import {useMoonChrome} from "../MoonChromeContext.jsx";

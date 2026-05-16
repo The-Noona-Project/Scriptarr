@@ -102,3 +102,102 @@ test("system task runtime previews, persists schedules, and blocks overlapping r
   const job = await running;
   assert.equal(job.status, "completed");
 });
+
+test("stale queue cleanup inspects durable bulk runs and records recovery actions", async () => {
+  const vaultClient = createFakeVault();
+  await vaultClient.upsertJob("bulkrun-detached", {
+    ownerService: "scriptarr-raven",
+    kind: "raven-bulk-downloadall",
+    status: "running",
+    label: "Raven mega downloadall"
+  });
+  await vaultClient.upsertJob("bulkrun-paused", {
+    ownerService: "scriptarr-raven",
+    kind: "raven-bulk-downloadall",
+    status: "paused",
+    label: "Raven mega downloadall"
+  });
+
+  const calls = [];
+  const runtime = createSystemTaskRuntime({
+    config: {
+      wardenBaseUrl: "http://warden.test",
+      ravenBaseUrl: "http://raven.test"
+    },
+    vaultClient,
+    serviceJson: async (_baseUrl, path, options = {}) => {
+      calls.push({path, method: options.method || "GET"});
+      if (path === "/v1/downloads/tasks") {
+        return {
+          ok: true,
+          status: 200,
+          payload: {
+            tasks: [{
+              taskId: "task-stale-1",
+              titleName: "Stale Title",
+              status: "queued",
+              updatedAt: new Date(Date.now() - (3 * 60 * 60 * 1000)).toISOString()
+            }]
+          }
+        };
+      }
+      if (path === "/v1/downloads/bulk-runs/bulkrun-detached") {
+        return {
+          ok: true,
+          status: 200,
+          payload: {
+            runId: "bulkrun-detached",
+            status: "running",
+            active: false,
+            summary: {staleTitleTaskCount: 0, recoveryActions: []}
+          }
+        };
+      }
+      if (path === "/v1/downloads/bulk-runs/bulkrun-detached/continue" && options.method === "POST") {
+        return {
+          ok: true,
+          status: 202,
+          payload: {
+            runId: "bulkrun-detached",
+            status: "running",
+            active: true
+          }
+        };
+      }
+      if (path === "/v1/downloads/bulk-runs/bulkrun-paused") {
+        return {
+          ok: true,
+          status: 200,
+          payload: {
+            runId: "bulkrun-paused",
+            status: "paused",
+            active: false,
+            summary: {
+              staleTitleTaskCount: 1,
+              recoveryActions: [{
+                type: "stale-running-title-task",
+                runId: "bulkrun-paused",
+                taskIds: ["task-stuck-1"],
+                adminPath: "/admin/activity/queue",
+                message: "Cancel task-stuck-1, then continue the bulk run."
+              }]
+            }
+          }
+        };
+      }
+      return {ok: true, status: 200, payload: {tasks: [], titles: []}};
+    },
+    logger: {},
+    readRequestWorkflowSettings: async () => ({autoApproveAndDownload: false})
+  });
+
+  const job = await runtime.runTask("stale-queue-cleanup", {manual: true});
+
+  assert.equal(job.status, "completed");
+  assert.equal(job.result.autoRecoveredBulkRuns, 1);
+  assert.equal(job.result.recoveryCount, 2);
+  assert.equal(job.result.titleRecoveryActions[0].taskId, "task-stale-1");
+  assert.equal(job.result.bulkRunRecoveryActions[0].runId, "bulkrun-paused");
+  assert.match(job.message, /Reattached 1 Raven bulk run/);
+  assert.equal(calls.some((call) => call.path === "/v1/downloads/bulk-runs/bulkrun-detached/continue" && call.method === "POST"), true);
+});

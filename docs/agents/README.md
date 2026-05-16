@@ -152,7 +152,8 @@ Architecture invariants:
 - Raven should only report `100%` after the promoted files persist into the brokered catalog, and startup recovery now
   rescans finished `downloaded/<type>/...` content to heal missing library rows.
 - Raven should skip completed titles during `/downloadall`, append only missing/new chapters for existing active
-  titles, and convert source-image damage into Missing Content quality fields instead of wedging a whole batch.
+  titles, convert source-image damage into Missing Content quality fields instead of wedging a whole batch, and pause
+  with an exact recovery action if a stale running title task cannot be cancelled into retryable work.
 - Oracle is now a FastAPI Python service that keeps the same Sage-facing wire contract plus `/api/assist` for bounded
   structured assistance. It never executes mutations directly.
 - Warden-managed LocalAI presets use the LocalAI AIO images and must wait for readiness before surfacing success.

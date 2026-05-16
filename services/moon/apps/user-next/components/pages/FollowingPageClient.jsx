@@ -6,7 +6,7 @@
 
 import Link from "next/link";
 import {useMoonJson} from "../../lib/api.js";
-import {buildTitlePath} from "../../lib/routes.js";
+import {buildTitlePath} from "../../lib/titleRoutes.js";
 import {useMoonChrome} from "../MoonChromeContext.jsx";
 import {AuthRequiredView, EmptyView, ErrorView, LoadingView} from "../StateView.jsx";
 

@@ -10,7 +10,8 @@ import Link from "next/link";
 import {useMoonChrome} from "../MoonChromeContext.jsx";
 import {AuthRequiredView, ErrorView, LoadingView} from "../StateView.jsx";
 import {requestJson, useMoonJson} from "../../lib/api.js";
-import {buildLibraryPath, buildTitlePath, canAccessAdmin} from "../../lib/routes.js";
+import {buildLibraryPath, canAccessAdmin} from "../../lib/navigationRoutes.js";
+import {buildTitlePath} from "../../lib/titleRoutes.js";
 import {buildAvatarProps} from "../../lib/profile.js";
 import {Avatar, Button, Column, Flex} from "../UiPrimitives.jsx";
 

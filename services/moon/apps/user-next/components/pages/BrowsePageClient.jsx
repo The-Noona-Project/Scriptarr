@@ -13,7 +13,7 @@ import {
   buildBrowsePageUrl,
   normalizeBrowseSearchParams
 } from "../../lib/browse.js";
-import {getLibraryTypes} from "../../lib/routes.js";
+import {getLibraryTypes} from "../../lib/navigationRoutes.js";
 import {useMoonChrome} from "../MoonChromeContext.jsx";
 import {AuthRequiredView, ErrorView, LoadingView} from "../StateView.jsx";
 import TitleCard from "../TitleCard.jsx";

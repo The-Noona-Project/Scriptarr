@@ -71,3 +71,19 @@ test("first-load Moon shells avoid the Once UI JavaScript barrel", () => {
     assert.doesNotMatch(readMoonFile(file), /from\s+"@once-ui-system\/core"/, `${file} should not import the Once UI barrel`);
   }
 });
+
+test("user chrome keeps reader route helpers out of shell imports", () => {
+  const chromeFiles = [
+    "apps/user-next/components/MoonShell.jsx",
+    "apps/user-next/components/ProfileMenu.jsx"
+  ];
+
+  for (const file of chromeFiles) {
+    const source = readMoonFile(file);
+    assert.match(source, /lib\/navigationRoutes\.js/, `${file} should import navigation-only helpers`);
+    assert.doesNotMatch(source, /lib\/routes\.js|lib\/titleRoutes\.js|buildReaderPath/, `${file} should not import reader-link helpers`);
+  }
+
+  const navigationRoutes = readMoonFile("apps/user-next/lib/navigationRoutes.js");
+  assert.doesNotMatch(navigationRoutes, /titleRoutes|buildReaderPath|readerTarget/);
+});

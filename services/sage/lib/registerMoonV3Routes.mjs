@@ -562,7 +562,7 @@ export const registerMoonV3Routes = (app, {
     };
   };
 
-  const loadLibraryCardPageByIds = async (titleIds = []) => {
+  const loadLibraryCardPageByIds = async (titleIds = [], discordUserId = "") => {
     const ids = Array.from(new Set(normalizeArray(titleIds).map((entry) => normalizeString(entry)).filter(Boolean))).slice(0, 100);
     if (!ids.length) {
       return [];
@@ -571,7 +571,10 @@ export const registerMoonV3Routes = (app, {
       ids: ids.join(","),
       pageSize: ids.length
     });
-    return normalizeArray(page.titles);
+    const titles = normalizeArray(page.titles);
+    return normalizeString(discordUserId)
+      ? decorateCardsWithReaderTargets(titles, discordUserId)
+      : titles;
   };
 
   const resolveLibraryCardLetter = (title = {}) => {
@@ -3524,6 +3527,44 @@ export const registerMoonV3Routes = (app, {
     return result;
   };
 
+  /**
+   * Build the fast saved-state payload for the Moon AI admin page.
+   *
+   * @returns {Promise<Record<string, unknown>>}
+   */
+  const buildAdminAiPayload = async () => {
+    const [oracle, tools, proposals] = await Promise.all([
+      readOracleSettings(),
+      buildToolPayload(vaultClient),
+      readAiProposals(vaultClient)
+    ]);
+    return {
+      oracle,
+      tools,
+      proposals: normalizeArray(proposals?.proposals).slice(-10).reverse()
+    };
+  };
+
+  /**
+   * Build optional Oracle and LocalAI runtime details for secondary hydration.
+   *
+   * @returns {Promise<Record<string, unknown>>}
+   */
+  const buildAdminAiRuntimePayload = async () => {
+    const [oracleHealth, oracleStatus, localAiStatus, localAiProfile] = await Promise.all([
+      safeJson(serviceJson(config.oracleBaseUrl, "/health", {timeoutMs: 2200})),
+      safeJson(serviceJson(config.oracleBaseUrl, "/api/status", {timeoutMs: 2200})),
+      safeJson(serviceJson(config.wardenBaseUrl, "/api/localai/status", {timeoutMs: 3000})),
+      safeJson(serviceJson(config.wardenBaseUrl, "/api/localai/profile", {timeoutMs: 2200}))
+    ]);
+    return {
+      oracleHealth: oracleHealth.payload || oracleHealth,
+      oracleStatus: oracleStatus.payload || oracleStatus,
+      localAi: localAiStatus.payload || localAiStatus,
+      localAiProfile: localAiProfile.payload || localAiProfile
+    };
+  };
+
   const executeAiProposal = async (proposal, user) => {
     const tool = toolForId(proposal?.toolId);
     if (!tool) {
@@ -3761,30 +3802,11 @@ export const registerMoonV3Routes = (app, {
   }));
 
   app.get("/api/moon-v3/admin/system/ai", requireAiRead(async (_req, res) => {
-    const [oracle, oracleHealth, oracleStatus, localAiStatus, localAiProfile, tools, proposals] = await Promise.all([
-      readOracleSettings(),
-      safeJson(serviceJson(config.oracleBaseUrl, "/health", {timeoutMs: 2200})),
-      safeJson(serviceJson(config.oracleBaseUrl, "/api/status", {timeoutMs: 2200})),
-      safeJson(serviceJson(config.wardenBaseUrl, "/api/localai/status", {timeoutMs: 3000})),
-      safeJson(serviceJson(config.wardenBaseUrl, "/api/localai/profile", {timeoutMs: 2200})),
-      buildToolPayload(vaultClient),
-      readAiProposals(vaultClient)
-    ]);
-    const modelProvider = normalizeString(oracle?.provider, "openai").toLowerCase();
-    const safeModelProvider = ["openai", "localai"].includes(modelProvider) ? modelProvider : "openai";
-    const modelOptions = await safeJson(serviceJson(config.oracleBaseUrl, `/api/models?provider=${encodeURIComponent(safeModelProvider)}`, {
-      timeoutMs: 6500
-    }));
-    res.json({
-      oracle,
-      oracleHealth: oracleHealth.payload || oracleHealth,
-      oracleStatus: oracleStatus.payload || oracleStatus,
-      localAi: localAiStatus.payload || localAiStatus,
-      localAiProfile: localAiProfile.payload || localAiProfile,
-      modelOptions: modelOptions.payload || modelOptions,
-      tools,
-      proposals: normalizeArray(proposals?.proposals).slice(-10).reverse()
-    });
+    res.json(await buildAdminAiPayload());
+  }));
+
+  app.get("/api/moon-v3/admin/system/ai/runtime", requireAiRead(async (_req, res) => {
+    res.json(await buildAdminAiRuntimePayload());
   }));
 
   app.put("/api/moon-v3/admin/system/ai/oracle", requireAiWrite(async (req, res) => {
@@ -3892,7 +3914,7 @@ export const registerMoonV3Routes = (app, {
         loadUserStateInputs(req.user.discordUserId)
       ]);
       const activityIds = collectUserActivityTitleIds(userInputs);
-      const activityTitles = await loadLibraryCardPageByIds(activityIds);
+      const activityTitles = await loadLibraryCardPageByIds(activityIds, req.user.discordUserId);
       const recentLibrary = buildUserLibraryStateFromInputs(cardPage.titles, userInputs);
       const activityLibrary = buildUserLibraryStateFromInputs(activityTitles, userInputs);
 

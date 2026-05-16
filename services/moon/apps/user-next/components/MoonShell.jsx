@@ -8,7 +8,7 @@ import {useEffect, useMemo, useState} from "react";
 import Link from "next/link";
 import {usePathname} from "next/navigation";
 import {loadMoonChromeContext, loadMoonLoginUrl} from "../lib/api.js";
-import {buildLibraryPath, classifyPathname, getLibraryTypes} from "../lib/routes.js";
+import {buildLibraryPath, classifyPathname, getLibraryTypes} from "../lib/navigationRoutes.js";
 import {Flex} from "./UiPrimitives.jsx";
 import {DesktopNavigation, MobileNavigation} from "./LocalNavigation.jsx";
 import MoonChromeContext from "./MoonChromeContext.jsx";
