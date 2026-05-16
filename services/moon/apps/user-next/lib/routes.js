@@ -87,6 +87,17 @@ export const buildReaderPathForTitle = (title, chapterId) =>
   buildReaderPath(resolveTitleTypeSlug(title), title?.id || "", chapterId);
 
 /**
+ * Build the best reader route for a compact title card.
+ *
+ * @param {{id?: string, libraryTypeSlug?: string, mediaType?: string, readerTarget?: {chapterId?: string} | null} | null | undefined} title
+ * @returns {string}
+ */
+export const buildReaderPathForTitleTarget = (title) => {
+  const chapterId = String(title?.readerTarget?.chapterId || "").trim();
+  return chapterId ? buildReaderPathForTitle(title, chapterId) : buildTitlePathForTitle(title);
+};
+
+/**
  * Normalize a pathname so Moon can highlight the active chrome surface.
  *
  * @param {string} pathname
@@ -150,6 +161,7 @@ export default {
   buildLibraryPath,
   buildReaderPath,
   buildReaderPathForTitle,
+  buildReaderPathForTitleTarget,
   buildTitlePath,
   buildTitlePathForTitle,
   canAccessAdmin,

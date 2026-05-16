@@ -100,6 +100,9 @@ Read this before editing Scriptarr.
   and clean it with `npm run docker:test:teardown` if it is left running.
 - Moon performance work also needs `npm --workspace services/moon run bundle:report` after the touched user, reader,
   or admin builds, and bundle regressions should be compared against the current route first-load JS baseline.
+- Dependency refreshes should prefer existing `package.json` ranges and minimal lockfile movement. If a package changes
+  optional peer behavior, prove the affected build and record any newly required direct dependencies instead of pulling
+  broad latest-version upgrades.
 
 ## Workflow Notes
 
@@ -119,6 +122,8 @@ Read this before editing Scriptarr.
   lowest-priority guards on external queueing.
 - Moon browse, library, and home shelves should stay on the compact title-card broker path. Pass filters through Moon
   -> Sage -> Vault or Raven card projections instead of hydrating full title or chapter arrays for list views.
+  Browse state is URL-owned (`q`, `type`, `letter`, `cursor`, `pageSize`) and card art should route to the
+  Sage/Vault-merged `readerTarget` while title text routes to the title page.
 - For Moon load-speed work, measure before editing. Build a timing table for representative user and admin pages, split
   document or Next asset load, chrome/bootstrap calls, main page payload, SSE/event calls, and payload size, then compare
   Moon route time against downstream Sage, Raven, and Vault time for heavy endpoints.

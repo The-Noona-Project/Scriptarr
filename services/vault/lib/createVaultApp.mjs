@@ -474,6 +474,13 @@ export const createVaultApp = async ({logger = createLogger("VAULT")} = {}) => {
     res.json(await store.listRavenTitleCards(req.query || {}));
   });
 
+  app.get("/api/service/reader-targets/:discordUserId", async (req, res) => {
+    res.json(await store.listReaderTargets({
+      discordUserId: req.params.discordUserId,
+      titleIds: readQueryList(req.query, "titleId").flatMap((entry) => entry.split(","))
+    }));
+  });
+
   app.get("/api/service/raven/titles/:titleId", async (req, res) => {
     const title = await store.getRavenTitle(req.params.titleId);
     if (!title) {

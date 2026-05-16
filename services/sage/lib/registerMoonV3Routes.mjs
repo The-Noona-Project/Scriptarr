@@ -521,6 +521,47 @@ export const registerMoonV3Routes = (app, {
     };
   };
 
+  const normalizeReaderTarget = (target = {}) => {
+    const normalized = normalizeObject(target, {}) || {};
+    const chapterId = normalizeString(normalized.chapterId);
+    if (!chapterId) {
+      return null;
+    }
+    const kind = ["continue", "next-unread", "first"].includes(normalizeString(normalized.kind))
+      ? normalizeString(normalized.kind)
+      : "first";
+    return {
+      mediaId: normalizeString(normalized.mediaId),
+      chapterId,
+      label: normalizeString(normalized.label, "Chapter"),
+      chapterNumber: normalizeString(normalized.chapterNumber),
+      kind,
+      positionRatio: Number(normalized.positionRatio || 0),
+      pageIndex: Math.max(0, Number.parseInt(String(normalized.pageIndex || 0), 10) || 0),
+      updatedAt: parseIso(normalized.updatedAt)
+    };
+  };
+
+  const decorateCardsWithReaderTargets = async (titles = [], discordUserId = "") => {
+    const ids = Array.from(new Set(normalizeArray(titles).map((title) => normalizeString(title.id)).filter(Boolean))).slice(0, 100);
+    if (!ids.length || !normalizeString(discordUserId)) {
+      return titles;
+    }
+    const targets = normalizeObject(await vaultClient.listReaderTargets(discordUserId, ids), {}) || {};
+    return titles.map((title) => ({
+      ...title,
+      readerTarget: normalizeReaderTarget(targets[normalizeString(title.id)])
+    }));
+  };
+
+  const loadLibraryCardPageForUser = async (query = {}, discordUserId = "") => {
+    const page = await loadLibraryCardPage(query);
+    return {
+      ...page,
+      titles: await decorateCardsWithReaderTargets(page.titles, discordUserId)
+    };
+  };
+
   const loadLibraryCardPageByIds = async (titleIds = []) => {
     const ids = Array.from(new Set(normalizeArray(titleIds).map((entry) => normalizeString(entry)).filter(Boolean))).slice(0, 100);
     if (!ids.length) {
@@ -533,32 +574,10 @@ export const registerMoonV3Routes = (app, {
     return normalizeArray(page.titles);
   };
 
-  const libraryCardSearchKey = (title = {}) => [
-    title.title,
-    title.libraryTypeLabel,
-    title.libraryTypeSlug,
-    title.mediaType,
-    title.status,
-    title.author,
-    ...normalizeArray(title.tags),
-    ...normalizeArray(title.aliases)
-  ].filter(Boolean).join(" ").toLowerCase();
-
   const resolveLibraryCardLetter = (title = {}) => {
-    const match = normalizeString(title.title).toUpperCase().match(/[A-Z]/);
-    return match ? match[0] : "#";
+    const first = normalizeString(title.title).trim().toUpperCase().charAt(0);
+    return /^[A-Z]$/.test(first) ? first : "#";
   };
-
-  const sortLibraryCards = (titles = []) => [...normalizeArray(titles)].sort((left, right) => {
-    const titleCompare = normalizeString(left.title).localeCompare(normalizeString(right.title), "en", {
-      numeric: true,
-      sensitivity: "base"
-    });
-    if (titleCompare !== 0) {
-      return titleCompare;
-    }
-    return normalizeString(left.id).localeCompare(normalizeString(right.id), "en", {numeric: true});
-  });
 
   const buildLibraryCardCounts = (titles = []) => {
     const byLetter = {"#": 0};
@@ -573,49 +592,6 @@ export const registerMoonV3Routes = (app, {
       byType[type] = (byType[type] || 0) + 1;
     }
     return {total: normalizeArray(titles).length, byLetter, byType};
-  };
-
-  const buildLibraryCardPage = (titles = [], query = {}) => {
-    const q = normalizeString(query.q || query.query).toLowerCase();
-    const type = normalizeTypeSlug(query.type || "", "");
-    const letter = normalizeString(query.letter).toUpperCase();
-    const pageSize = Math.min(
-      LIBRARY_CARD_PAGE_SIZE_MAX,
-      Math.max(1, Number.parseInt(String(query.pageSize || LIBRARY_CARD_PAGE_SIZE_DEFAULT), 10) || LIBRARY_CARD_PAGE_SIZE_DEFAULT)
-    );
-    const cursor = Math.max(0, Number.parseInt(String(query.cursor || 0), 10) || 0);
-    const base = sortLibraryCards(titles).filter((title) => {
-      if (type && normalizeTypeSlug(title.libraryTypeSlug || title.mediaType) !== type) {
-        return false;
-      }
-      if (q && !libraryCardSearchKey(title).includes(q)) {
-        return false;
-      }
-      return true;
-    });
-    const counts = buildLibraryCardCounts(base);
-    const letterFiltered = letter
-      ? base.filter((title) => resolveLibraryCardLetter(title) === letter)
-      : base;
-    const page = letterFiltered.slice(cursor, cursor + pageSize);
-    const nextOffset = cursor + page.length;
-    return {
-      titles: page,
-      counts,
-      filters: {
-        q,
-        type,
-        letter: letter || "",
-        pageSize
-      },
-      pageInfo: {
-        cursor: String(cursor),
-        nextCursor: nextOffset < letterFiltered.length ? String(nextOffset) : "",
-        hasMore: nextOffset < letterFiltered.length,
-        pageSize,
-        total: letterFiltered.length
-      }
-    };
   };
 
   const loadLibraryTitle = async (titleId) => {
@@ -3909,9 +3885,9 @@ export const registerMoonV3Routes = (app, {
     res.status(logs.status).json(logs.payload);
   }));
 
-    app.get("/api/moon-v3/user/home", withUser(requireUser, async (req, res) => {
+  app.get("/api/moon-v3/user/home", withUser(requireUser, async (req, res) => {
       const [cardPage, requests, userInputs] = await Promise.all([
-        loadLibraryCardPage({pageSize: 100, sort: "recent"}),
+        loadLibraryCardPageForUser({pageSize: 100, sort: "recent"}, req.user.discordUserId),
         loadRequests(),
         loadUserStateInputs(req.user.discordUserId)
       ]);
@@ -4059,7 +4035,7 @@ export const registerMoonV3Routes = (app, {
 
   app.get("/api/moon-v3/user/library", withUser(requireUser, async (req, res) => {
     if (normalizeString(req.query.view) === "card") {
-      res.json(await loadLibraryCardPage(req.query));
+      res.json(await loadLibraryCardPageForUser(req.query, req.user.discordUserId));
       return;
     }
     res.json({titles: await loadLibrary()});

@@ -4,7 +4,7 @@
  * @file Lazy bridge for the profile-only Once UI style panel.
  */
 
-import {StylePanel} from "@once-ui-system/core";
+import {StylePanel} from "@once-ui-system/core/components/StylePanel";
 
 /**
  * Render the Once UI browser-local style panel outside the first-load shell.

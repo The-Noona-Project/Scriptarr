@@ -8,15 +8,17 @@ import Link from "next/link";
 import {HoverCard} from "../UiPrimitives.jsx";
 import {buildReaderPath, buildTitlePath} from "../../lib/routes.js";
 import {formatDate, formatProgress} from "../../lib/date.js";
+import CoverImage from "../CoverImage.jsx";
 
 const resolveTypeSlug = (item) => item?.libraryTypeSlug || item?.mediaType || "manga";
 const resolveTitleId = (item) => item?.id || item?.titleId || item?.mediaId || "";
-const resolveHref = (item, shelfKind) => {
+const resolveTitleHref = (item) => buildTitlePath(resolveTypeSlug(item), resolveTitleId(item));
+const resolveArtHref = (item, shelfKind) => {
   const typeSlug = resolveTypeSlug(item);
   const titleId = resolveTitleId(item);
-  const chapterId = item?.bookmark?.chapterId || "";
+  const chapterId = item?.readerTarget?.chapterId || item?.bookmark?.chapterId || "";
 
-  if (shelfKind === "bookshelf" && chapterId) {
+  if (chapterId) {
     return buildReaderPath(typeSlug, titleId, chapterId);
   }
 
@@ -62,32 +64,29 @@ const resolveMetaLine = (item, shelfKind) => {
  * @returns {import("react").ReactNode}
  */
 export const HomeArtCard = ({item, shelfKind}) => {
-  const href = resolveHref(item, shelfKind);
+  const artHref = resolveArtHref(item, shelfKind);
+  const titleHref = resolveTitleHref(item);
   const tags = Array.isArray(item?.tags) ? item.tags.filter(Boolean).slice(0, 3) : [];
 
   return (
     <HoverCard
       trigger={(
-        <Link href={href} className="moon-home-art-card">
-          {item?.coverThumbUrl || item?.coverUrl ? (
-            <img
-              src={item.coverThumbUrl || item.coverUrl}
-              alt={`${item?.title || "Title"} cover`}
-              loading="lazy"
-              referrerPolicy="no-referrer"
+        <article className="moon-home-art-card">
+          <Link href={artHref} className="moon-home-art-card-art" aria-label={`Read ${item?.title || "title"}`}>
+            <CoverImage
+              title={item?.title || "Title"}
+              coverUrl={item?.coverUrl || ""}
+              coverThumbUrl={item?.coverThumbUrl || ""}
+              fallbackClassName="moon-home-art-card-fallback"
             />
-          ) : (
-            <div className="moon-home-art-card-fallback">
-              <span>{String(item?.title || "?").charAt(0)}</span>
-            </div>
-          )}
-          <div className="moon-home-art-card-shade" />
+            <div className="moon-home-art-card-shade" />
+          </Link>
           <div className="moon-home-art-card-copy">
             <span className="moon-home-art-card-status">{resolveStatusLine(item, shelfKind)}</span>
-            <strong>{item?.title || "Untitled"}</strong>
+            <Link href={titleHref}>{item?.title || "Untitled"}</Link>
             <span>{resolveMetaLine(item, shelfKind)}</span>
           </div>
-        </Link>
+        </article>
       )}
       className="moon-home-hover-card"
       direction="column"

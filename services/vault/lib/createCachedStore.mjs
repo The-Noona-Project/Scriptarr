@@ -298,11 +298,13 @@ export const createCachedStore = (
     async upsertProgress(payload) {
       const progress = await baseStore.upsertProgress(payload);
       invalidate(`progress:${payload.discordUserId}`);
+      invalidatePrefix("reader-targets:");
       return progress;
     },
     async deleteProgress(payload) {
       const result = await baseStore.deleteProgress(payload);
       invalidate(`progress:${payload.discordUserId}`);
+      invalidatePrefix("reader-targets:");
       return result;
     },
     async getProgressByUser(discordUserId) {
@@ -318,6 +320,7 @@ export const createCachedStore = (
         `read-state:${payload.discordUserId}:`,
         `progress:${payload.discordUserId}`
       );
+      invalidatePrefix("reader-targets:");
       invalidatePrefix("raven-title:", "raven-titles:list");
       return result;
     },
@@ -328,6 +331,7 @@ export const createCachedStore = (
         `read-state:${payload.discordUserId}:`,
         `progress:${payload.discordUserId}`
       );
+      invalidatePrefix("reader-targets:");
       invalidatePrefix("raven-title:", "raven-titles:list");
       return result;
     },
@@ -338,6 +342,7 @@ export const createCachedStore = (
         `read-state:${payload.discordUserId}:`,
         `progress:${payload.discordUserId}`
       );
+      invalidatePrefix("reader-targets:");
       invalidatePrefix("raven-title:", "raven-titles:list");
       return result;
     },
@@ -348,6 +353,7 @@ export const createCachedStore = (
         `read-state:${payload.discordUserId}:`,
         `progress:${payload.discordUserId}`
       );
+      invalidatePrefix("reader-targets:");
       invalidatePrefix("raven-title:", "raven-titles:list");
       return result;
     },
@@ -361,6 +367,7 @@ export const createCachedStore = (
         "request:",
         "progress:",
         "read-state:",
+        "reader-targets:",
         "raven-title:",
         "raven-title-cards:",
         "raven-titles:list",
@@ -380,6 +387,9 @@ export const createCachedStore = (
     async listRavenTitleCards(filters = {}) {
       return readThrough(makeListKey("raven-title-cards", filters), () => baseStore.listRavenTitleCards(filters));
     },
+    async listReaderTargets(filters = {}) {
+      return readThrough(makeListKey("reader-targets", filters), () => baseStore.listReaderTargets(filters));
+    },
     async getRavenTitle(titleId) {
       return readThrough(`raven-title:${titleId}`, () => baseStore.getRavenTitle(titleId));
     },
@@ -393,6 +403,7 @@ export const createCachedStore = (
     async replaceRavenChapters(titleId, chapters) {
       const replaced = await baseStore.replaceRavenChapters(titleId, chapters);
       invalidatePrefix("raven-title-cards:");
+      invalidatePrefix("reader-targets:");
       invalidate("raven-titles:list", `raven-title:${titleId}`);
       return replaced;
     },

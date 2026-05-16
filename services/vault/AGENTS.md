@@ -32,5 +32,8 @@ MySQL.
   async work. Preserve their owner, kind, status, payload, result, and task ordering contracts.
 - Permission groups, sessions, API keys, requests, reader state, follows, bookmarks, and Raven catalog records are
   shared product contracts. Add route and store tests when any of those shapes change.
+- Compact card reader targets are Vault-owned state projections. Keep the service route bounded by title ids and user
+  id, prefer progress/bookmarks over next unread over first readable chapter, and invalidate the reader-target cache
+  whenever progress, read state, bookmarks, or Raven chapter rows change.
 - Prove Vault changes with `npm --workspace services/vault test`; use `npm run docker:healthcheck` when migrations,
   startup, cache behavior, or cross-service contracts change.

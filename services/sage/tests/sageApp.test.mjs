@@ -1196,6 +1196,32 @@ test("sage signs in the first owner through the Discord callback and moderates r
 
   assert.equal(moonLibrary.titles[0].title, ownerSmokeLibraryTitle.title);
 
+  await fetch(`http://127.0.0.1:${vaultPort}/api/service/raven/titles/${ownerSmokeLibraryTitle.id}`, {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": "Bearer vault-dev-token"
+    },
+    body: JSON.stringify(ownerSmokeLibraryTitle)
+  });
+  await fetch(`http://127.0.0.1:${vaultPort}/api/service/progress`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": "Bearer vault-dev-token"
+    },
+    body: JSON.stringify({
+      mediaId: ownerSmokeLibraryTitle.id,
+      discordUserId: "owner-1",
+      chapterLabel: ownerSmokeLibraryTitle.chapters[0].label,
+      positionRatio: 0.5,
+      bookmark: {
+        chapterId: ownerSmokeLibraryTitle.chapters[0].id,
+        pageIndex: 8
+      }
+    })
+  });
+
   const moonCardLibrary = await fetch(`${baseUrl}/api/moon-v3/user/library?view=card&pageSize=1`, {
     headers: {
       "Authorization": `Bearer ${ownerClaim.token}`
@@ -1205,6 +1231,9 @@ test("sage signs in the first owner through the Discord callback and moderates r
   assert.equal(moonCardLibrary.titles[0].title, ownerSmokeLibraryTitle.title);
   assert.equal(Object.hasOwn(moonCardLibrary.titles[0], "chapters"), false);
   assert.equal(Object.hasOwn(moonCardLibrary.titles[0], "downloadRoot"), false);
+  assert.equal(moonCardLibrary.titles[0].readerTarget.kind, "continue");
+  assert.equal(moonCardLibrary.titles[0].readerTarget.chapterId, ownerSmokeLibraryTitle.chapters[0].id);
+  assert.equal(moonCardLibrary.titles[0].readerTarget.pageIndex, 8);
   assert.equal(moonCardLibrary.pageInfo.pageSize, 1);
   assert.equal(dependencyStub.calls.libraryCard, 1);
 

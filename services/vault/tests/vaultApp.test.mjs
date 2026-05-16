@@ -541,7 +541,29 @@ test("vault exposes compact Raven title cards without chapter payloads", async (
     })
   });
 
-  await upsertTitle({id: "dan-da-dan", title: "Dandadan", tags: ["action"], aliases: ["Dan Da Dan"]});
+  await upsertTitle({
+    id: "dan-da-dan",
+    title: "Dandadan",
+    tags: ["action"],
+    aliases: ["Dan Da Dan"],
+    chapterCount: 2,
+    chaptersDownloaded: 2,
+    chapters: [{
+      id: "dan-da-dan-c1",
+      label: "Chapter 1",
+      chapterNumber: "1",
+      pageCount: 12,
+      available: true,
+      archivePath: "/downloads/downloaded/manga/dan-da-dan/Chapter_1.cbz"
+    }, {
+      id: "dan-da-dan-c2",
+      label: "Chapter 2",
+      chapterNumber: "2",
+      pageCount: 10,
+      available: true,
+      archivePath: "/downloads/downloaded/manga/dan-da-dan/Chapter_2.cbz"
+    }]
+  });
   await upsertTitle({id: "blue-box", title: "Blue Box", tags: ["sports"], aliases: []});
   await upsertTitle({
     id: "solo-leveling",
@@ -552,23 +574,28 @@ test("vault exposes compact Raven title cards without chapter payloads", async (
     tags: ["action"],
     aliases: ["Only I Level Up"]
   });
+  await upsertTitle({id: "twentieth-century-boys", title: "20th Century Boys", tags: ["mystery"], aliases: []});
 
   const firstPage = await fetch(`${baseUrl}/api/service/raven/title-cards?pageSize=1&sort=title`, {headers}).then((response) => response.json());
   assert.equal(firstPage.titles.length, 1);
   assert.equal(firstPage.pageInfo.pageSize, 1);
   assert.equal(firstPage.pageInfo.hasMore, true);
-  assert.equal(firstPage.counts.total, 3);
+  assert.equal(firstPage.counts.total, 4);
   assert.equal(Object.hasOwn(firstPage.titles[0], "chapters"), false);
   assert.equal(Object.hasOwn(firstPage.titles[0], "workingRoot"), false);
   assert.equal(Object.hasOwn(firstPage.titles[0], "downloadRoot"), false);
 
   const mangaPage = await fetch(`${baseUrl}/api/service/raven/title-cards?type=manga&pageSize=60`, {headers}).then((response) => response.json());
-  assert.deepEqual(mangaPage.titles.map((title) => title.title), ["Blue Box", "Dandadan"]);
-  assert.equal(mangaPage.counts.byType.manga, 2);
+  assert.deepEqual(mangaPage.titles.map((title) => title.title), ["20th Century Boys", "Blue Box", "Dandadan"]);
+  assert.equal(mangaPage.counts.byType.manga, 3);
 
   const letterPage = await fetch(`${baseUrl}/api/service/raven/title-cards?letter=D`, {headers}).then((response) => response.json());
   assert.deepEqual(letterPage.titles.map((title) => title.title), ["Dandadan"]);
   assert.equal(letterPage.pageInfo.total, 1);
+
+  const symbolPage = await fetch(`${baseUrl}/api/service/raven/title-cards?letter=%23`, {headers}).then((response) => response.json());
+  assert.deepEqual(symbolPage.titles.map((title) => title.title), ["20th Century Boys"]);
+  assert.equal(symbolPage.counts.byLetter["#"], 1);
 
   const queryPage = await fetch(`${baseUrl}/api/service/raven/title-cards?q=only%20i`, {headers}).then((response) => response.json());
   assert.deepEqual(queryPage.titles.map((title) => title.title), ["Solo Leveling"]);
@@ -578,7 +605,43 @@ test("vault exposes compact Raven title cards without chapter payloads", async (
   assert.equal(exactIdPage.titles.some((title) => Object.hasOwn(title, "chapters")), false);
 
   const fullTitles = await fetch(`${baseUrl}/api/service/raven/titles`, {headers}).then((response) => response.json());
-  assert.equal(fullTitles.find((title) => title.id === "dan-da-dan").chapters.length, 1);
+  assert.equal(fullTitles.find((title) => title.id === "dan-da-dan").chapters.length, 2);
+
+  const initialTargets = await fetch(`${baseUrl}/api/service/reader-targets/reader-1?titleId=dan-da-dan&titleId=solo-leveling`, {headers}).then((response) => response.json());
+  assert.equal(initialTargets["dan-da-dan"].kind, "first");
+  assert.equal(initialTargets["dan-da-dan"].chapterId, "dan-da-dan-c1");
+
+  await fetch(`${baseUrl}/api/service/read-state/chapter/read`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      discordUserId: "reader-1",
+      mediaId: "dan-da-dan",
+      chapterId: "dan-da-dan-c1"
+    })
+  });
+  const nextUnreadTargets = await fetch(`${baseUrl}/api/service/reader-targets/reader-1?titleId=dan-da-dan`, {headers}).then((response) => response.json());
+  assert.equal(nextUnreadTargets["dan-da-dan"].kind, "next-unread");
+  assert.equal(nextUnreadTargets["dan-da-dan"].chapterId, "dan-da-dan-c2");
+
+  await fetch(`${baseUrl}/api/service/progress`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      discordUserId: "reader-1",
+      mediaId: "solo-leveling",
+      chapterLabel: "Chapter 1",
+      positionRatio: 0.45,
+      bookmark: {
+        chapterId: "solo-leveling-c1",
+        pageIndex: 4
+      }
+    })
+  });
+  const progressTargets = await fetch(`${baseUrl}/api/service/reader-targets/reader-1?titleId=solo-leveling`, {headers}).then((response) => response.json());
+  assert.equal(progressTargets["solo-leveling"].kind, "continue");
+  assert.equal(progressTargets["solo-leveling"].chapterId, "solo-leveling-c1");
+  assert.equal(progressTargets["solo-leveling"].pageIndex, 4);
 
   server.close();
 });

@@ -82,6 +82,12 @@
   chapter arrays. Home shelves should stay bounded to compact card reads and hydrate full titles only for exact
   continue-reading, read-state, or following ids. Use the compact exact-id card projection (`view=card&ids=...`) for
   those activity ids instead of fanning out into individual full title requests.
+- `/browse` search/filter state is shareable URL state. Use `q`, `type`, and `letter`, debounce URL replacement, keep
+  previously loaded cards visible while new results refresh, and load additional chunks with `cursor`/`pageSize`.
+- User cards have two routes by design: cover/art opens the best reader target from the server-merged `readerTarget`,
+  while title/copy opens `/title/:type/:titleId`. Avoid nested anchors and keep the split accessible.
+- Card images should go through `CoverImage.jsx`, preferring `coverThumbUrl` then `coverUrl` and finally a styled
+  initial fallback so intermittent upstream image failures do not show broken alt text in the UI.
 - For the next Moon speed pass, build a fresh timing table before editing. Watch document load, Next JS/CSS chunk size,
   chrome/session/bootstrap calls, main route payload, admin event-stream startup, image or cover-cache work, and
   downstream Sage/Raven/Vault latency separately so the fix targets the real bottleneck.
@@ -91,6 +97,9 @@
 - Cover cards should prefer Moon's derived `coverThumbUrl` WebP cache when Sage provides one. The cache is derived
   storage only: Moon fetches Sage-approved cover URLs, converts them with `sharp`, stores WebP files under the Moon
   cover-cache folder, and exposes a rerunnable `Optimize cover images` admin task.
+- Once UI `1.7.x` makes `compressorjs`, `prismjs`, and `recharts` peer dependencies. Keep the StylePanel bridge lazy,
+  avoid root `@once-ui-system/core` JavaScript imports outside that bridge, and run the user build after dependency
+  refreshes so peer resolution failures are caught before handoff.
 - Bookshelf membership is no longer derived from `media_progress` alone. Moon should treat title/chapter read state as
   the source of truth for started vs completed bookshelf behavior while still keeping progress rows for the active
   reading position.

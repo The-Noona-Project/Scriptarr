@@ -45,6 +45,10 @@
 - Vault owns the compact Raven title-card projection at `/api/service/raven/title-cards`. Keep it title-table-only,
   indexed for type/title/recency filters, paginated by cursor/pageSize, able to return exact `ids` in caller order,
   and free of chapter arrays or filesystem roots.
+- Vault also owns the service-only reader-target projection for compact cards. Given a Discord user id and bounded
+  title ids, return the best chapter target using progress/bookmark first, then next unread, then first readable
+  chapter. Keep this projection cache-aware and invalidate it with progress, bookmark, chapter-read, and Raven chapter
+  mutations.
 - Vault's content reset path must stay content-only. It may clear requests, request work locks, progress, read state,
   follows, bookmarks, Raven catalog rows, Raven download tasks, and Raven-owned jobs, but it must not delete users,
   permission groups, API keys, sessions, settings, secrets, or durable events.

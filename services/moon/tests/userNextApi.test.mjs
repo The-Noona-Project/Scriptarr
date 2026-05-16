@@ -6,6 +6,7 @@ import {
   buildLibraryPath,
   buildProfilePath,
   buildReaderPath,
+  buildReaderPathForTitleTarget,
   buildTitlePath,
   classifyPathname,
   getLibraryTypes
@@ -118,6 +119,18 @@ test("user-next route helpers build canonical typed Moon paths", () => {
   assert.equal(buildLibraryPath("Web Toon"), "/library/web-toon");
   assert.equal(buildTitlePath("Web Toon", "dan-da-dan"), "/title/web-toon/dan-da-dan");
   assert.equal(buildReaderPath("Web Toon", "dan-da-dan", "chapter-1"), "/reader/web-toon/dan-da-dan/chapter-1");
+  assert.equal(
+    buildReaderPathForTitleTarget({
+      id: "dan-da-dan",
+      libraryTypeSlug: "webtoon",
+      readerTarget: {chapterId: "chapter-1"}
+    }),
+    "/reader/webtoon/dan-da-dan/chapter-1"
+  );
+  assert.equal(
+    buildReaderPathForTitleTarget({id: "dan-da-dan", libraryTypeSlug: "webtoon", readerTarget: null}),
+    "/title/webtoon/dan-da-dan"
+  );
 });
 
 test("user-next library types stay trimmed to the supported Moon buckets", () => {

@@ -35,6 +35,9 @@
   instead of forcing the browser to stitch several unrelated APIs together.
 - Home and profile activity cards should use Raven's compact exact-id card projection through Sage rather than
   fanning out into full title reads. Preserve the order requested by Moon when brokering `view=card&ids=...`.
+- For browse/library/home cards, Sage should merge the bounded Vault reader-target projection into each compact title.
+  The target should expose only the chapter id/type metadata Moon needs to build reader URLs, and should prefer saved
+  progress, then next unread, then first readable chapter.
 - Broker Moon's sanitized Discord auth `returnTo` path through OAuth `state`, and let Moon's callback relay enforce
   the final fallback to `/` when the remembered route is invalid or the signed-in user cannot access it.
 - Moon's root-only content reset is Sage-owned orchestration. Keep the preview plus execute flow brokered, require the

@@ -1,25 +1,14 @@
 /**
- * @file Browse helpers for Moon's alphabetical user-library surface.
+ * @file Browse helpers for Moon's compact user-library catalogue.
  */
 
-export const BROWSE_LETTERS = Array.from({length: 26}, (_, index) => String.fromCharCode(65 + index));
+export const BROWSE_LETTERS = ["#", ...Array.from({length: 26}, (_, index) => String.fromCharCode(65 + index))];
+export const BROWSE_PAGE_SIZE = 72;
 
 const browseCollator = new Intl.Collator("en", {
   numeric: true,
   sensitivity: "base"
 });
-
-const toSearchString = (title) => [
-  title?.title,
-  title?.libraryTypeLabel,
-  title?.libraryTypeSlug,
-  title?.mediaType,
-  ...(Array.isArray(title?.aliases) ? title.aliases : []),
-  ...(Array.isArray(title?.tags) ? title.tags : [])
-]
-  .filter(Boolean)
-  .join(" ")
-  .toLowerCase();
 
 /**
  * Sort titles alphabetically by display title.
@@ -36,19 +25,27 @@ export const sortBrowseTitles = (titles) => [...(Array.isArray(titles) ? titles 
 });
 
 /**
- * Filter and sort the browse payload by the current search key.
+ * Normalize a media type slug for shareable browse URLs.
  *
- * @param {Array<Record<string, any>> | null | undefined} titles
- * @param {string | null | undefined} search
- * @returns {Array<Record<string, any>>}
+ * @param {string | null | undefined} value
+ * @returns {string}
  */
-export const filterBrowseTitles = (titles, search = "") => {
-  const sorted = sortBrowseTitles(titles);
-  const key = String(search || "").trim().toLowerCase();
-  if (!key) {
-    return sorted;
-  }
-  return sorted.filter((title) => toSearchString(title).includes(key));
+export const normalizeBrowseType = (value) => String(value || "")
+  .trim()
+  .toLowerCase()
+  .replace(/[^a-z0-9]+/g, "-")
+  .replace(/^-+/, "")
+  .replace(/-+$/, "") || "all";
+
+/**
+ * Normalize an A-Z browse bucket.
+ *
+ * @param {string | null | undefined} value
+ * @returns {string}
+ */
+export const normalizeBrowseLetter = (value) => {
+  const normalized = String(value || "").trim().toUpperCase();
+  return BROWSE_LETTERS.includes(normalized) ? normalized : "";
 };
 
 /**
@@ -58,11 +55,11 @@ export const filterBrowseTitles = (titles, search = "") => {
  * @returns {string}
  */
 export const resolveBrowseLetter = (title) => {
-  const match = String(title?.title || "")
+  const first = String(title?.title || "")
     .trim()
     .toUpperCase()
-    .match(/[A-Z]/);
-  return match ? match[0] : "#";
+    .charAt(0);
+  return /^[A-Z]$/.test(first) ? first : "#";
 };
 
 /**
@@ -73,22 +70,13 @@ export const resolveBrowseLetter = (title) => {
  */
 export const buildBrowseSections = (titles) => {
   const groups = new Map(BROWSE_LETTERS.map((letter) => [letter, []]));
-  const overflow = [];
 
   for (const title of sortBrowseTitles(titles)) {
     const letter = resolveBrowseLetter(title);
-    if (groups.has(letter)) {
-      groups.get(letter).push(title);
-      continue;
-    }
-    overflow.push(title);
+    groups.get(letter)?.push(title);
   }
 
   const sections = [];
-  if (overflow.length) {
-    sections.push({letter: "#", titles: overflow});
-  }
-
   for (const letter of BROWSE_LETTERS) {
     const bucket = groups.get(letter);
     if (bucket?.length) {
@@ -102,16 +90,20 @@ export const buildBrowseSections = (titles) => {
 /**
  * Resolve the A-Z rail state for the current filtered library set.
  *
- * @param {Array<Record<string, any>> | null | undefined} titles
+ * @param {Array<Record<string, any>> | Record<string, number> | null | undefined} value
  * @returns {Array<{letter: string, count: number, disabled: boolean}>}
  */
-export const buildBrowseLetterState = (titles) => {
+export const buildBrowseLetterState = (value) => {
   const counts = new Map(BROWSE_LETTERS.map((letter) => [letter, 0]));
 
-  for (const title of Array.isArray(titles) ? titles : []) {
-    const letter = resolveBrowseLetter(title);
-    if (counts.has(letter)) {
+  if (Array.isArray(value)) {
+    for (const title of value) {
+      const letter = resolveBrowseLetter(title);
       counts.set(letter, (counts.get(letter) || 0) + 1);
+    }
+  } else if (value && typeof value === "object") {
+    for (const letter of BROWSE_LETTERS) {
+      counts.set(letter, Number.parseInt(String(value[letter] || 0), 10) || 0);
     }
   }
 
@@ -125,11 +117,91 @@ export const buildBrowseLetterState = (titles) => {
   });
 };
 
+/**
+ * Normalize initial browse filters from a Next searchParams object.
+ *
+ * @param {URLSearchParams | Record<string, string | string[] | undefined> | null | undefined} searchParams
+ * @returns {{query: string, type: string, letter: string}}
+ */
+export const normalizeBrowseSearchParams = (searchParams = {}) => {
+  const read = (key) => {
+    if (searchParams instanceof URLSearchParams) {
+      return searchParams.get(key) || "";
+    }
+    const value = searchParams?.[key];
+    return Array.isArray(value) ? value[0] || "" : value || "";
+  };
+
+  return {
+    query: String(read("q") || read("query") || "").trim(),
+    type: normalizeBrowseType(read("type")),
+    letter: normalizeBrowseLetter(read("letter"))
+  };
+};
+
+/**
+ * Build a shareable Moon browse URL.
+ *
+ * @param {{query?: string, type?: string, letter?: string}} filters
+ * @returns {string}
+ */
+export const buildBrowsePageUrl = ({query = "", type = "all", letter = ""} = {}) => {
+  const params = new URLSearchParams();
+  const normalizedQuery = String(query || "").trim();
+  const normalizedType = normalizeBrowseType(type);
+  const normalizedLetter = normalizeBrowseLetter(letter);
+  if (normalizedQuery) {
+    params.set("q", normalizedQuery);
+  }
+  if (normalizedType && normalizedType !== "all") {
+    params.set("type", normalizedType);
+  }
+  if (normalizedLetter) {
+    params.set("letter", normalizedLetter);
+  }
+  const suffix = params.toString();
+  return suffix ? `/browse?${suffix}` : "/browse";
+};
+
+/**
+ * Build the same-origin Moon card API URL for browse results.
+ *
+ * @param {{query?: string, type?: string, letter?: string, cursor?: string, pageSize?: number}} filters
+ * @returns {string}
+ */
+export const buildBrowseApiUrl = ({query = "", type = "all", letter = "", cursor = "", pageSize = BROWSE_PAGE_SIZE} = {}) => {
+  const params = new URLSearchParams({
+    view: "card",
+    pageSize: String(pageSize)
+  });
+  const normalizedQuery = String(query || "").trim();
+  const normalizedType = normalizeBrowseType(type);
+  const normalizedLetter = normalizeBrowseLetter(letter);
+  if (normalizedQuery) {
+    params.set("q", normalizedQuery);
+  }
+  if (normalizedType && normalizedType !== "all") {
+    params.set("type", normalizedType);
+  }
+  if (normalizedLetter) {
+    params.set("letter", normalizedLetter);
+  }
+  if (cursor) {
+    params.set("cursor", String(cursor));
+  }
+  return `/api/moon-v3/user/library?${params.toString()}`;
+};
+
 export default {
   BROWSE_LETTERS,
+  BROWSE_PAGE_SIZE,
+  buildBrowseApiUrl,
   buildBrowseLetterState,
+  buildBrowsePageUrl,
   buildBrowseSections,
-  filterBrowseTitles,
+  normalizeBrowseLetter,
+  normalizeBrowseSearchParams,
+  normalizeBrowseType,
   resolveBrowseLetter,
   sortBrowseTitles
 };

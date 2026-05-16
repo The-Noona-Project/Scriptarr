@@ -61,8 +61,17 @@ from the same runtime.
 - User card lists should call `/api/moon-v3/user/library?view=card`, including `ids=...` for exact activity cards.
   Title and reader pages are the places that may hydrate full title, manifest, chapter, preference, bookmark, and
   read-state payloads.
+- Browse owns `q`, `type`, and `letter` in the URL. Update only the results chunk on search/filter changes, keep
+  previous card data visible while a newer same-origin request is in flight, and rely on the server-side compact card
+  path for filtering/pagination.
+- Compact cards should use the merged `readerTarget` for cover/art links and the canonical title route for title/copy
+  links. Use `CoverImage.jsx` for card artwork so broken remote covers fall back to a styled initial instead of a
+  broken image glyph.
 - Keep always-mounted user/admin shells on local primitives. Do not reintroduce root `@once-ui-system/core` JavaScript
   imports outside the lazy profile-only style panel bridge.
+- Once UI `1.7.x` no longer installs every module helper as a transitive dependency. When refreshing Once UI, keep
+  `compressorjs`, `prismjs`, and `recharts` resolution in mind and prove the profile route through
+  `npm --workspace services/moon run build:user`.
 
 ## Performance Navigation
 

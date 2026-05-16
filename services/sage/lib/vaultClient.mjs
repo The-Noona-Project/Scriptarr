@@ -87,6 +87,7 @@ const requestJson = async (baseUrl, headers, path, {method = "GET", body, allowS
  *   getProgress: (discordUserId: string) => Promise<any>,
  *   upsertProgress: (payload: Record<string, unknown>) => Promise<any>
  *   deleteProgress: (payload: Record<string, unknown>) => Promise<any>
+ *   listReaderTargets: (discordUserId: string, titleIds: string[]) => Promise<any>,
  * }}
  */
 export const createVaultClient = (config) => {
@@ -459,6 +460,18 @@ export const createVaultClient = (config) => {
       }
       const {payload} = await requestJson(baseUrl, headers, `/api/service/raven/title-cards${params.size ? `?${params.toString()}` : ""}`, {
         context: "Failed to list Raven title cards from Vault"
+      });
+      return payload;
+    },
+    async listReaderTargets(discordUserId, titleIds = []) {
+      const params = new URLSearchParams();
+      for (const titleId of Array.isArray(titleIds) ? titleIds : []) {
+        if (titleId != null && String(titleId).trim()) {
+          params.append("titleId", String(titleId));
+        }
+      }
+      const {payload} = await requestJson(baseUrl, headers, `/api/service/reader-targets/${encodeURIComponent(discordUserId)}${params.size ? `?${params.toString()}` : ""}`, {
+        context: "Failed to list reader targets from Vault"
       });
       return payload;
     },

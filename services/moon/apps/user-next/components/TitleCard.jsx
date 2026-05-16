@@ -3,8 +3,30 @@
  */
 
 import Link from "next/link";
-import {buildTitlePathForTitle} from "../lib/routes.js";
+import {buildReaderPathForTitleTarget, buildTitlePathForTitle} from "../lib/routes.js";
 import {formatCoverage} from "../lib/date.js";
+import CoverImage from "./CoverImage.jsx";
+
+/**
+ * Build the short action label for a compact card art link.
+ *
+ * @param {Record<string, any> | null | undefined} title
+ * @returns {string}
+ */
+const readerTargetLabel = (title) => {
+  const target = title?.readerTarget || null;
+  const label = target?.label || title?.latestChapter || "chapter";
+  if (target?.kind === "continue") {
+    return `Continue ${label}`;
+  }
+  if (target?.kind === "next-unread") {
+    return `Read next ${label}`;
+  }
+  if (target?.kind === "first") {
+    return `Start ${label}`;
+  }
+  return "Open title";
+};
 
 /**
  * Render a title card with full-cover treatment.
@@ -21,37 +43,40 @@ import {formatCoverage} from "../lib/date.js";
  *     mediaType?: string,
  *     latestChapter?: string,
  *     chapterCount?: number,
- *     chaptersDownloaded?: number
+ *     chaptersDownloaded?: number,
+ *     readerTarget?: {chapterId?: string, label?: string, kind?: string} | null
  *   },
  *   compact?: boolean,
  *   variant?: "default" | "browse"
  * }} props
  * @returns {import("react").ReactNode}
  */
-export const TitleCard = ({title, compact = false, variant = "default"}) => (
-  <Link
-    href={buildTitlePathForTitle(title)}
-    className={`moon-title-card ${compact ? "is-compact" : ""} ${variant === "browse" ? "is-browse" : ""}`.trim()}
-  >
-    <div className="moon-title-card-media">
-      {title?.coverThumbUrl || title?.coverUrl ? (
-        <img src={title.coverThumbUrl || title.coverUrl} alt={`${title?.title || "Untitled"} cover`} loading="lazy" referrerPolicy="no-referrer" />
-      ) : (
-        <div className="moon-title-card-fallback">
-          <span>{String(title?.title || "U").trim().charAt(0).toUpperCase()}</span>
+export const TitleCard = ({title, compact = false, variant = "default"}) => {
+  const titleHref = buildTitlePathForTitle(title);
+  const readerHref = buildReaderPathForTitleTarget(title);
+  const titleText = title?.title || "Untitled";
+
+  return (
+    <article className={`moon-title-card ${compact ? "is-compact" : ""} ${variant === "browse" ? "is-browse" : ""}`.trim()}>
+      <Link href={readerHref} className="moon-title-card-media" aria-label={`${readerTargetLabel(title)} for ${titleText}`}>
+        <CoverImage
+          title={titleText}
+          coverUrl={title?.coverUrl || ""}
+          coverThumbUrl={title?.coverThumbUrl || ""}
+          fallbackClassName="moon-title-card-fallback"
+        />
+      </Link>
+      <Link href={titleHref} className="moon-title-card-copy" aria-label={`Open ${titleText} title page`}>
+        <div className="moon-title-card-meta">
+          <span>{title?.libraryTypeLabel || title?.mediaType || "Title"}</span>
+          <span>{formatCoverage(title?.chaptersDownloaded, title?.chapterCount)}</span>
         </div>
-      )}
-    </div>
-    <div className="moon-title-card-copy">
-      <div className="moon-title-card-meta">
-        <span>{title?.libraryTypeLabel || title?.mediaType || "Title"}</span>
-        <span>{formatCoverage(title?.chaptersDownloaded, title?.chapterCount)}</span>
-      </div>
-      <h3>{title?.title || "Untitled"}</h3>
-      <p>{title?.summary || "Open the title page to review chapters, metadata, and reading progress."}</p>
-      <strong>{title?.latestChapter || "Read now"}</strong>
-    </div>
-  </Link>
-);
+        <h3>{titleText}</h3>
+        <p>{title?.summary || "Open the title page to review chapters, metadata, and reading progress."}</p>
+        <strong>{readerTargetLabel(title)}</strong>
+      </Link>
+    </article>
+  );
+};
 
 export default TitleCard;

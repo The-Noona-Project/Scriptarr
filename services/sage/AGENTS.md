@@ -35,10 +35,15 @@ HTTP broker.
 
 - Moon v3 browser-safe payloads live in `lib/registerMoonV3Routes.mjs`; split reusable payload logic into nearby helper
   modules when the route file starts hiding policy decisions.
+- Moon compact card routes should broker Raven/Vault card projections and merge bounded reader targets server-side.
+  Keep `/browse`, `/library`, and home shelf filters on `view=card` with `q`, `type`, `letter`, `cursor`, `pageSize`,
+  `sort`, and optional exact `ids`; do not ask Moon browsers to hydrate full title/chapter arrays for list pages.
 - First-party service broker routes live in `lib/registerInternalBrokerRoutes.mjs`. Portal, Raven, Warden, and Oracle
   should call those internal routes instead of talking directly to Vault or each other.
 - Durable state reads and writes go through `lib/vaultClient.mjs`, which is the Sage-side client for Vault's service
   API. Do not add MySQL access here.
+- Reader target lookups belong in `vaultClient.mjs` plus focused Moon v3 helpers. Precedence is saved progress/bookmark,
+  next unread chapter, first readable chapter, then no target so Moon falls back to the title page.
 - User-specific Moon title, reader, bookshelf, bookmark, follow, and tag-state helpers should reuse shared user-state
   loaders instead of fanning out into repeated Vault reads.
 - Settings that have both saved state and runtime state should keep the saved payload fast, then expose a secondary
