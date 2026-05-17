@@ -193,6 +193,35 @@ const toChapterSummary = (chapter = {}) => ({
   updatedAt: parseIso(chapter.updatedAt)
 });
 
+const compareReaderChaptersByNumber = (left = {}, right = {}) => {
+  const leftNumber = Number.parseFloat(String(left.chapterNumber || ""));
+  const rightNumber = Number.parseFloat(String(right.chapterNumber || ""));
+  if (Number.isFinite(leftNumber) && Number.isFinite(rightNumber) && leftNumber !== rightNumber) {
+    return leftNumber - rightNumber;
+  }
+  return normalizeString(left.chapterNumber || left.label || left.id).localeCompare(
+    normalizeString(right.chapterNumber || right.label || right.id),
+    "en",
+    {numeric: true, sensitivity: "base"}
+  );
+};
+
+const resolveReaderAdjacentChapterIds = (chapters = [], chapterId = "") => {
+  const currentId = normalizeString(chapterId);
+  const readableChapters = normalizeArray(chapters)
+    .filter((entry) => entry?.available !== false && normalizeString(entry?.id))
+    .sort(compareReaderChaptersByNumber);
+  const chapterIndex = readableChapters.findIndex((entry) => normalizeString(entry.id) === currentId);
+  if (chapterIndex < 0) {
+    return {matched: false, previousChapterId: null, nextChapterId: null};
+  }
+  return {
+    matched: true,
+    previousChapterId: normalizeString(readableChapters[chapterIndex - 1]?.id) || null,
+    nextChapterId: normalizeString(readableChapters[chapterIndex + 1]?.id) || null
+  };
+};
+
 const READER_PAGE_DEFAULT_SIZE = 12;
 const READER_PAGE_MAX_SIZE = 100;
 
@@ -5134,10 +5163,13 @@ export const registerMoonV3Routes = (app, {
     const pages = normalizeArray(payload.pages);
     const pageCount = pages.length || enrichedChapter.pageCount || chapterSummary.pageCount || 0;
     const chapterIndex = fullChapters.findIndex((entry) => entry.id === chapterId);
-    const previousChapterId = normalizeString(payload.previousChapterId)
-      || (chapterIndex > 0 ? normalizeString(fullChapters[chapterIndex - 1]?.id) : "");
-    const nextChapterId = normalizeString(payload.nextChapterId)
-      || (chapterIndex > -1 ? normalizeString(fullChapters[chapterIndex + 1]?.id) : "");
+    const adjacentChapterIds = resolveReaderAdjacentChapterIds(fullChapters, chapterId);
+    const previousChapterId = adjacentChapterIds.matched
+      ? adjacentChapterIds.previousChapterId
+      : normalizeString(payload.previousChapterId) || (chapterIndex > 0 ? normalizeString(fullChapters[chapterIndex - 1]?.id) : "");
+    const nextChapterId = adjacentChapterIds.matched
+      ? adjacentChapterIds.nextChapterId
+      : normalizeString(payload.nextChapterId) || (chapterIndex > -1 ? normalizeString(fullChapters[chapterIndex + 1]?.id) : "");
     const typeSlug = normalizeTypeSlug(fullTitle.libraryTypeSlug || fullTitle.mediaType);
     const titleProgressId = normalizeString(payload.title?.id || fullTitle.id || titleId);
     const progressEntry = normalizeArray(userInputs.progress).find((entry) => normalizeString(entry.mediaId) === titleProgressId);

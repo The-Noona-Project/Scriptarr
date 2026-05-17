@@ -473,6 +473,14 @@ public final class LibraryService {
 
         String previousChapterId = chapterIndex > 0 ? manifest.chapters().get(chapterIndex - 1).id() : null;
         String nextChapterId = chapterIndex + 1 < manifest.chapters().size() ? manifest.chapters().get(chapterIndex + 1).id() : null;
+        List<LibraryChapter> readingOrderChapters = manifest.chapters().stream()
+            .sorted(Comparator.comparing((LibraryChapter entry) -> chapterSortKey(entry.chapterNumber())))
+            .toList();
+        int readingOrderIndex = readingOrderChapters.indexOf(chapter);
+        if (readingOrderIndex >= 0) {
+            previousChapterId = readingOrderIndex > 0 ? readingOrderChapters.get(readingOrderIndex - 1).id() : null;
+            nextChapterId = readingOrderIndex + 1 < readingOrderChapters.size() ? readingOrderChapters.get(readingOrderIndex + 1).id() : null;
+        }
 
         return new ReaderChapterPayload(manifest.title(), chapter, pages, previousChapterId, nextChapterId);
     }

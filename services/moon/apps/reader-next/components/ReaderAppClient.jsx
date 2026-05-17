@@ -13,6 +13,7 @@ import {
   resolveKeyboardAction,
   resolvePointerSwipe
 } from "../lib/inputController.js";
+import {hasReaderPageWindow, mergeReaderPages, resolveWebtoonLoadMoreAction} from "../lib/pageChunks.js";
 import {buildReaderPath, buildReaderPathForTitle} from "../lib/routes.js";
 import ReaderControls from "./ReaderControls.jsx";
 import ReaderSettings from "./ReaderSettings.jsx";
@@ -55,21 +56,6 @@ const chapterRowsUrlFor = (titleId, cursor = "") => {
   return `/api/moon-v3/user/title/${encodeURIComponent(titleId)}/chapters?${params.toString()}`;
 };
 
-const mergePages = (current = [], incoming = []) => {
-  const byIndex = new Map();
-  for (const page of current) {
-    if (Number.isInteger(page?.index)) {
-      byIndex.set(page.index, page);
-    }
-  }
-  for (const page of incoming) {
-    if (Number.isInteger(page?.index)) {
-      byIndex.set(page.index, page);
-    }
-  }
-  return Array.from(byIndex.values()).sort((left, right) => left.index - right.index);
-};
-
 const mergeChapterRows = (current = [], incoming = []) => {
   const byId = new Map();
   for (const chapter of current) {
@@ -83,17 +69,6 @@ const mergeChapterRows = (current = [], incoming = []) => {
     }
   }
   return Array.from(byId.values());
-};
-
-const hasPageWindow = (pages = [], start = 0, size = 1, pageCount = 0) => {
-  const indexes = new Set(pages.map((page) => page.index));
-  const end = Math.min(Math.max(0, pageCount), start + size);
-  for (let index = start; index < end; index += 1) {
-    if (!indexes.has(index)) {
-      return false;
-    }
-  }
-  return end > start;
 };
 
 /**
@@ -149,6 +124,20 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = ""}) => {
   const activePageCount = Math.max(1, Number.parseInt(String(activeSession?.pageCount || 1), 10) || 1);
   const activePageDisplayIndex = isPaged ? pagedPageIndex : activePageIndex;
   const currentPageEntry = pageState.get(pagedChapterId) || {pages: [], pageInfo: null, loading: false, error: ""};
+  const lastWebtoonChapterId = webtoonChapterIds[webtoonChapterIds.length - 1] || "";
+  const lastWebtoonSession = lastWebtoonChapterId ? sessionMap.get(lastWebtoonChapterId) : null;
+  const lastWebtoonEntry = lastWebtoonChapterId ? pageState.get(lastWebtoonChapterId) : null;
+  const lastWebtoonLoadAction = resolveWebtoonLoadMoreAction({
+    session: lastWebtoonSession,
+    entry: lastWebtoonEntry
+  });
+  const webtoonLoadMoreReady = !isPaged && lastWebtoonLoadAction.ready && !lastWebtoonLoadAction.done;
+  const webtoonLoadMoreKey = [
+    lastWebtoonChapterId,
+    lastWebtoonSession?.pageRevision || "",
+    lastWebtoonEntry?.pageInfo?.nextCursor || "",
+    lastWebtoonEntry?.error || ""
+  ].join(":");
   const spreadSize = pagesPerStep(layoutMode);
   const spreadStart = layoutMode === "single" ? pagedPageIndex : Math.max(0, pagedPageIndex - (pagedPageIndex % spreadSize));
   const spreadDirection = layoutMode === "manga-double" || readingDirection === "rtl" ? "rtl" : "ltr";
@@ -242,7 +231,7 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = ""}) => {
       const next = new Map(current);
       const entry = next.get(key) || {pages: [], pageInfo: null, loading: false, error: ""};
       next.set(key, {
-        pages: replace ? result.payload.pages || [] : mergePages(entry.pages, result.payload.pages || []),
+        pages: replace ? result.payload.pages || [] : mergeReaderPages(entry.pages, result.payload.pages || []),
         pageInfo: result.payload.pageInfo || null,
         loading: false,
         error: "",
@@ -262,7 +251,7 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = ""}) => {
     const start = Math.max(0, Math.min(nextPageIndex, pageCount - 1));
     const alignedStart = layoutMode === "single" ? start : Math.max(0, start - (start % pagesPerStep(layoutMode)));
     const entry = pageState.get(session.chapter.id);
-    if (entry && hasPageWindow(entry.pages, alignedStart, PAGE_CHUNK_SIZE, pageCount)) {
+    if (entry && hasReaderPageWindow(entry.pages, alignedStart, PAGE_CHUNK_SIZE, pageCount)) {
       return;
     }
     await loadPages(session, {cursor: alignedStart, pageSize: PAGE_CHUNK_SIZE});
@@ -531,20 +520,24 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = ""}) => {
   const loadMoreWebtoon = useCallback(async () => {
     const lastChapterId = webtoonChapterIds[webtoonChapterIds.length - 1];
     const lastSession = sessionMap.get(lastChapterId);
-    if (!lastSession) {
+    const current = pageState.get(lastChapterId);
+    const action = resolveWebtoonLoadMoreAction({session: lastSession, entry: current});
+    if (!action.ready) {
+      return null;
+    }
+    if (action.done) {
       return false;
     }
-    const current = pageState.get(lastChapterId);
-    if (current?.pageInfo?.hasMore) {
-      await loadPages(lastSession, {cursor: current.pageInfo.nextCursor || 0});
+    if (Object.hasOwn(action, "cursor")) {
+      if (action.cursor === "" || action.cursor == null) {
+        return null;
+      }
+      await loadPages(lastSession, {cursor: action.cursor, replace: action.replace === true});
       return true;
     }
-    if (!lastSession.nextChapterId) {
-      return false;
-    }
-    const nextSession = await fetchSession(lastSession.nextChapterId);
+    const nextSession = await fetchSession(action.nextChapterId);
     if (!nextSession) {
-      return false;
+      return null;
     }
     setWebtoonChapterIds((currentIds) => currentIds.includes(nextSession.chapter.id) ? currentIds : [...currentIds, nextSession.chapter.id]);
     await loadPages(nextSession, {cursor: 0, replace: true});
@@ -751,6 +744,8 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = ""}) => {
         webtoonChapters={webtoonChapters}
         showPageNumbers={showPageNumbers}
         loadingPages={currentPageEntry.loading}
+        loadMoreReady={webtoonLoadMoreReady}
+        loadMoreKey={webtoonLoadMoreKey}
         loadMore={loadMoreWebtoon}
       />
 

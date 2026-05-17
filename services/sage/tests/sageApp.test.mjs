@@ -147,6 +147,40 @@ const ownerSmokeLibraryTitle = Object.freeze({
   }))
 });
 
+const descendingReaderTitle = Object.freeze({
+  ...defaultLibraryTitle,
+  id: "tomb-raider-king",
+  title: "Tomb Raider King",
+  mediaType: "manhwa",
+  libraryTypeLabel: "Manhwa",
+  libraryTypeSlug: "manhwa",
+  latestChapter: "253",
+  chapterCount: 3,
+  chaptersDownloaded: 3,
+  chapters: [{
+    id: "tomb-raider-king-c253",
+    label: "Chapter 253",
+    chapterNumber: "253",
+    pageCount: 24,
+    releaseDate: "2026-04-21",
+    available: true
+  }, {
+    id: "tomb-raider-king-c252",
+    label: "Chapter 252",
+    chapterNumber: "252",
+    pageCount: 71,
+    releaseDate: "2026-04-20",
+    available: true
+  }, {
+    id: "tomb-raider-king-c251",
+    label: "Chapter 251",
+    chapterNumber: "251",
+    pageCount: 48,
+    releaseDate: "2026-04-19",
+    available: true
+  }]
+});
+
 const defaultIntakePayload = Object.freeze({
   query: "dandadan",
   requestType: "webtoon",
@@ -1154,6 +1188,47 @@ test("sage carries a sanitized returnTo path through Discord OAuth state", async
 
   const ownerClaim = await signInViaDiscord(baseUrl, `state=${encodeURIComponent(state)}`);
   assert.equal(ownerClaim.returnTo, "/browse?q=moon");
+
+  await closeServer(sageServer);
+  await closeServer(vaultServer);
+  await closeServer(dependencyStub.server);
+});
+
+test("sage reader session normalizes adjacent chapters to reading order", async () => {
+  const {app: vaultApp} = await createVaultApp();
+  const vaultServer = vaultApp.listen(0);
+  const vaultPort = vaultServer.address().port;
+
+  const dependencyStub = await createDependencyStub({libraryTitles: [descendingReaderTitle]});
+  dependencyStub.server.listen(0);
+  const dependencyPort = dependencyStub.server.address().port;
+
+  process.env.SCRIPTARR_VAULT_BASE_URL = `http://127.0.0.1:${vaultPort}`;
+  process.env.SCRIPTARR_WARDEN_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_PORTAL_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_ORACLE_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_RAVEN_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_PUBLIC_BASE_URL = "https://pax-kun.com";
+  process.env.SCRIPTARR_DISCORD_CLIENT_ID = "discord-client-id";
+  process.env.SCRIPTARR_DISCORD_CLIENT_SECRET = "discord-client-secret";
+
+  installDiscordFetchStub();
+
+  const {app: sageApp} = await createSageApp();
+  const sageServer = sageApp.listen(0);
+  const sagePort = sageServer.address().port;
+  const baseUrl = `http://127.0.0.1:${sagePort}`;
+  const ownerClaim = await signInViaDiscord(baseUrl);
+
+  const readerSession = await fetch(`${baseUrl}/api/moon-v3/user/reader/title/tomb-raider-king/chapter/tomb-raider-king-c252/session`, {
+    headers: {
+      "Authorization": `Bearer ${ownerClaim.token}`
+    }
+  }).then((response) => response.json());
+
+  assert.equal(readerSession.previousChapterId, "tomb-raider-king-c251");
+  assert.equal(readerSession.nextChapterId, "tomb-raider-king-c253");
+  assert.equal(readerSession.pageCount, 71);
 
   await closeServer(sageServer);
   await closeServer(vaultServer);

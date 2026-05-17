@@ -9,17 +9,17 @@ import {useEffect, useRef, useState} from "react";
 /**
  * Render the infinite-reader load sentinel.
  *
- * @param {{loadMore: () => Promise<boolean>, label?: string}} props
+ * @param {{loadMore: () => Promise<boolean | null | undefined>, label?: string, ready?: boolean, resetKey?: string}} props
  * @returns {import("react").ReactNode}
  */
-export const ReaderLoadMore = ({loadMore, label = "Load next"}) => {
+export const ReaderLoadMore = ({loadMore, label = "Load next", ready = true, resetKey = ""}) => {
   const sentinelRef = useRef(/** @type {HTMLDivElement | null} */ (null));
   const [pending, setPending] = useState(false);
   const [hasMore, setHasMore] = useState(true);
   const [error, setError] = useState("");
 
   const runLoad = async () => {
-    if (pending || !hasMore) {
+    if (pending || !hasMore || !ready) {
       return;
     }
     setPending(true);
@@ -37,8 +37,14 @@ export const ReaderLoadMore = ({loadMore, label = "Load next"}) => {
   };
 
   useEffect(() => {
+    setPending(false);
+    setHasMore(true);
+    setError("");
+  }, [resetKey]);
+
+  useEffect(() => {
     const node = sentinelRef.current;
-    if (!node || typeof IntersectionObserver === "undefined") {
+    if (!ready || !node || typeof IntersectionObserver === "undefined") {
       return undefined;
     }
     const observer = new IntersectionObserver((entries) => {
@@ -49,9 +55,9 @@ export const ReaderLoadMore = ({loadMore, label = "Load next"}) => {
     }, {rootMargin: "360px 0px", threshold: 0.01});
     observer.observe(node);
     return () => observer.disconnect();
-  }, [hasMore, pending]);
+  }, [hasMore, pending, ready]);
 
-  if (!hasMore) {
+  if (!ready || !hasMore) {
     return null;
   }
 

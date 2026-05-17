@@ -12,7 +12,7 @@ import {ReaderPageSkeletons} from "./ReaderSkeleton.jsx";
 /**
  * Render the active reader page stage.
  *
- * @param {{title: any, layoutMode: string, pageFit: string, spreadDirection: string, isPaged: boolean, spreadPages: any[], pagedChapterId: string, webtoonChapters: any[], showPageNumbers: boolean, loadingPages?: boolean, loadMore: () => Promise<boolean>}} props
+ * @param {{title: any, layoutMode: string, pageFit: string, spreadDirection: string, isPaged: boolean, spreadPages: any[], pagedChapterId: string, webtoonChapters: any[], showPageNumbers: boolean, loadingPages?: boolean, loadMoreReady?: boolean, loadMoreKey?: string, loadMore: () => Promise<boolean | null | undefined>}} props
  * @returns {import("react").ReactNode}
  */
 export const ReaderStage = ({
@@ -26,6 +26,8 @@ export const ReaderStage = ({
   webtoonChapters,
   showPageNumbers,
   loadingPages = false,
+  loadMoreReady = true,
+  loadMoreKey = "",
   loadMore
 }) => (
   <section className="reader-stage" aria-label={`${title.title} reader`} data-fit={pageFit} data-layout={layoutMode}>
@@ -66,7 +68,7 @@ export const ReaderStage = ({
             {chapterPayload.error ? <div className="reader-loading-next"><p>{chapterPayload.error}</p></div> : null}
           </section>
         ))}
-        <ReaderLoadMore loadMore={loadMore} label="Load next pages" />
+        <ReaderLoadMore loadMore={loadMore} label="Load next pages" ready={loadMoreReady} resetKey={loadMoreKey} />
       </div>
     )}
   </section>

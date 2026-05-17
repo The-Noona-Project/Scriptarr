@@ -237,6 +237,54 @@ class LibraryServiceTest {
     }
 
     /**
+     * Verify reader button adjacency follows chapter reading order even though
+     * the manifest itself remains newest-first for list displays.
+     */
+    @Test
+    void readerChapterUsesReadingOrderAdjacentIds() {
+        FakeRavenBrokerClient brokerClient = new FakeRavenBrokerClient();
+        ScriptarrLogger logger = mock(ScriptarrLogger.class);
+        LibraryService service = new LibraryService(brokerClient, new RavenSettingsService(brokerClient, logger, List.of()), logger);
+
+        brokerClient.setLibraryTitle(new LibraryTitle(
+            "tomb-raider-king",
+            "Tomb Raider King",
+            "manhwa",
+            "Manhwa",
+            "manhwa",
+            "active",
+            "253",
+            "#de6d3a",
+            "",
+            "",
+            3,
+            3,
+            "",
+            List.of(),
+            List.of(),
+            "",
+            null,
+            List.of(),
+            "",
+            "",
+            "/downloads/downloading/manhwa/Tomb_Raider_King",
+            "/downloads/downloaded/manhwa/Tomb_Raider_King",
+            List.of(
+                new LibraryChapter("tomb-raider-king-c253", "Chapter 253", "253", 24, Instant.parse("2026-04-21T08:00:00Z").toString(), true, "/downloads/downloaded/manhwa/Tomb_Raider_King/ch253.cbz", null, null),
+                new LibraryChapter("tomb-raider-king-c252", "Chapter 252", "252", 71, Instant.parse("2026-04-20T08:00:00Z").toString(), true, "/downloads/downloaded/manhwa/Tomb_Raider_King/ch252.cbz", null, null),
+                new LibraryChapter("tomb-raider-king-c251", "Chapter 251", "251", 48, Instant.parse("2026-04-19T08:00:00Z").toString(), true, "/downloads/downloaded/manhwa/Tomb_Raider_King/ch251.cbz", null, null)
+            ),
+            null
+        ));
+
+        ReaderChapterPayload payload = service.readerChapter("tomb-raider-king", "tomb-raider-king-c252");
+
+        assertNotNull(payload);
+        assertEquals("tomb-raider-king-c251", payload.previousChapterId());
+        assertEquals("tomb-raider-king-c253", payload.nextChapterId());
+    }
+
+    /**
      * Verify Raven's card view uses the compact broker projection instead of
      * loading full title/chapter records.
      */
