@@ -20,14 +20,15 @@ import SiteFooter from "./SiteFooter.jsx";
  *
  * @param {string} pathname
  * @param {Array<{slug: string, label: string}>} libraryTypes
+ * @param {string} activeType
  * @returns {Array<Record<string, any>>}
  */
-const buildMenuGroups = (pathname, libraryTypes = []) => {
+const buildMenuGroups = (pathname, libraryTypes = [], activeType = "") => {
   const active = classifyPathname(pathname);
   const libraryLinks = libraryTypes.map((entry) => ({
     label: entry.label,
     href: buildLibraryPath(entry.slug),
-    selected: pathname === buildLibraryPath(entry.slug)
+    selected: active === "library" && entry.slug === activeType
   }));
   const librarySections = libraryLinks.length ? [{links: libraryLinks}] : [];
 
@@ -37,12 +38,6 @@ const buildMenuGroups = (pathname, libraryTypes = []) => {
       label: "Home",
       href: "/",
       selected: active === "home"
-    },
-    {
-      id: "browse",
-      label: "Browse",
-      href: "/browse",
-      selected: active === "browse"
     },
     {
       id: "library",
@@ -127,7 +122,18 @@ export const MoonShell = ({children}) => {
     return () => window.removeEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
   }, []);
 
-  const menuGroups = useMemo(() => buildMenuGroups(pathname, chrome.libraryTypes), [chrome.libraryTypes, pathname]);
+  const activeType = useMemo(() => {
+    const pathMatch = String(pathname || "").match(/^\/library\/([^/?#]+)/);
+    if (pathMatch?.[1]) {
+      try {
+        return decodeURIComponent(pathMatch[1]);
+      } catch {
+        return pathMatch[1];
+      }
+    }
+    return "";
+  }, [pathname]);
+  const menuGroups = useMemo(() => buildMenuGroups(pathname, chrome.libraryTypes, activeType), [activeType, chrome.libraryTypes, pathname]);
   const title = chrome.branding?.siteName || "Scriptarr";
   const logoUrl = chrome.branding?.logo?.urls?.chrome || "";
   const promptInstall = useMemo(() => async () => {

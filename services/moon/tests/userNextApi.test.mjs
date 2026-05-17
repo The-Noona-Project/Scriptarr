@@ -117,7 +117,8 @@ test("profile route helpers classify /profile cleanly", () => {
 });
 
 test("user-next route helpers build canonical typed Moon paths", () => {
-  assert.equal(buildLibraryPath("Web Toon"), "/library/web-toon");
+  assert.equal(buildLibraryPath("Web Toon"), "/library?type=web-toon");
+  assert.equal(classifyPathname("/browse"), "library");
   assert.equal(buildTitlePath("Web Toon", "dan-da-dan"), "/title/web-toon/dan-da-dan");
   assert.equal(buildReaderPath("Web Toon", "dan-da-dan", "chapter-1"), "/reader/web-toon/dan-da-dan/chapter-1");
   assert.equal(

@@ -164,13 +164,15 @@ const createCapabilities = (state, settings) => {
         status: "missing",
         detail: "Configure the Discord bot token and client id before enabling Noona mention chat."
       }
-      : connected
-        ? {
-          status: "available",
-          detail: "Noona can answer public mentions in the configured guild."
-        }
-        : {
-          status: state.mode === "starting" ? "pending" : "disconnected",
+    : connected
+      ? {
+        status: "available",
+        detail: settings.noonaChat?.allowedChannelIds?.length
+          ? `Noona can answer public mentions in ${settings.noonaChat.allowedChannelIds.length} configured channel(s). Message Content intent must also be enabled in Discord.`
+          : "Noona can answer public mentions in any configured guild channel. Message Content intent must also be enabled in Discord."
+      }
+      : {
+        status: state.mode === "starting" ? "pending" : "disconnected",
           detail: state.error || "Portal is not connected to Discord."
         };
 

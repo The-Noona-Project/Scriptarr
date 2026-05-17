@@ -174,10 +174,11 @@ For end-to-end Docker verification, use:
   in the Discord DM summary. Completed library titles are skipped, in-progress titles append only missing or new
   chapters, and `nsfw:false` still requires explicit WeebCentral `Adult Content: No`. That owner-only command is
   intentionally locked to WeebCentral and will fail fast if WeebCentral is disabled.
-- Moon browse and library shelves use compact paginated title-card APIs, and title pages now load a summary first,
-  chapter rows through paged InfiniteScroll, and requests only when the Requests tab opens. Cover art is converted into
-  a derived Moon WebP cache on demand, and `/admin/system/tasks` includes a rerunnable cover optimization action to
-  prebuild missing or stale cached covers.
+- Moon's canonical `/library` catalogue uses compact paginated title-card APIs with remembered grid/row views,
+  Skeleton loading, and InfiniteScroll; `/browse` stays as a compatibility entrypoint. Title pages now load a summary
+  first, chapter rows through paged InfiniteScroll, and requests only when the Requests tab opens. Cover art is
+  converted into a derived Moon WebP cache on demand, and `/admin/system/tasks` includes a rerunnable cover
+  optimization action to prebuild missing or stale cached covers.
 - Portal now prefers a minimal Discord runtime over going fully dark when privileged intents are unavailable, so slash
   commands and DMs can stay online while onboarding is shown as degraded in Moon admin.
 - Discord `/subscribe` reuses Moon's shared follow store, so Moon and Discord notifications stay aligned instead of

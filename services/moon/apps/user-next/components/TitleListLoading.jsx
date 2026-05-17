@@ -85,3 +85,34 @@ export const TitleRowListSkeleton = ({count = 8}) => (
     ))}
   </div>
 );
+
+/**
+ * Render cover-led shelf placeholders for the home page.
+ *
+ * @param {{shelves?: number, itemsPerShelf?: number}} props
+ * @returns {import("react").ReactNode}
+ */
+export const HomeShelfSkeleton = ({shelves = 3, itemsPerShelf = 5}) => (
+  <div className="moon-home-layout" aria-busy="true" aria-label="Loading home shelves">
+    {Array.from({length: shelves}).map((_, shelfIndex) => (
+      <section className="moon-home-shelf moon-home-shelf-skeleton" key={shelfIndex}>
+        <div className="moon-home-shelf-head">
+          <div className="moon-home-shelf-skeleton-copy">
+            <OnceSkeleton shape="line" width="s" height="xs" delay={String((shelfIndex % 4) + 1)} />
+            <OnceSkeleton shape="line" width="l" height="m" delay={String((shelfIndex % 4) + 2)} />
+            <OnceSkeleton shape="line" width="xl" height="xs" delay={String((shelfIndex % 4) + 3)} />
+          </div>
+        </div>
+        <div className="moon-home-scroller moon-home-skeleton-row">
+          {Array.from({length: itemsPerShelf}).map((__, itemIndex) => (
+            <div className="moon-home-scroller-item" key={itemIndex}>
+              <article className="moon-home-art-card moon-home-art-card-skeleton">
+                <OnceSkeleton shape="block" className="moon-once-skeleton-fill" delay={String((itemIndex % 4) + 1)} />
+              </article>
+            </div>
+          ))}
+        </div>
+      </section>
+    ))}
+  </div>
+);

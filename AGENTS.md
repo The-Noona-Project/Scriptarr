@@ -123,10 +123,11 @@ Read this before editing Scriptarr.
 - Moon also owns the trusted public automation API. Keep external search and request traffic behind Moon's
   `/api/public/*` routes, store only hashed API keys in Vault through Sage, and preserve the NSFW, duplicate, and
   lowest-priority guards on external queueing.
-- Moon browse, library, and home shelves should stay on the compact title-card broker path. Pass filters through Moon
-  -> Sage -> Vault or Raven card projections instead of hydrating full title or chapter arrays for list views.
-  Browse state is URL-owned (`q`, `type`, `letter`, `cursor`, `pageSize`) and card art should route to the
-  Sage/Vault-merged `readerTarget` while title text routes to the title page.
+- Moon home shelves and the unified `/library` catalogue should stay on the compact title-card broker path. Pass
+  filters through Moon -> Sage -> Vault or Raven card projections instead of hydrating full title or chapter arrays for
+  list views. `/browse` is a compatibility entrypoint into `/library`; catalogue state is URL-owned
+  (`q`, `type`, `letter`, `cursor`, `pageSize`, `view`) plus the browser's remembered grid/row preference. Card art
+  should route to the Sage/Vault-merged `readerTarget` while title text routes to the title page.
 - For Moon load-speed work, measure before editing. Build a timing table for representative user and admin pages, split
   document or Next asset load, chrome/bootstrap calls, main page payload, SSE/event calls, and payload size, then compare
   Moon route time against downstream Sage, Raven, and Vault time for heavy endpoints.

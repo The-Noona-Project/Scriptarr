@@ -25,6 +25,26 @@
   min-height: 160px;
 }
 
+.moon-home-shelf-skeleton {
+  pointer-events: none;
+}
+
+.moon-home-shelf-skeleton-copy {
+  display: grid;
+  gap: 10px;
+  min-width: min(420px, 100%);
+}
+
+.moon-home-skeleton-row {
+  display: flex;
+  gap: 24px;
+  overflow: hidden;
+}
+
+.moon-home-art-card-skeleton {
+  box-shadow: none;
+}
+
 .moon-library-title-list {
   display: grid;
   gap: 10px;

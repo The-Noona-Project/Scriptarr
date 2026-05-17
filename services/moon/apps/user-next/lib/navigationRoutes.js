@@ -35,21 +35,23 @@ export const buildProfilePath = () => "/profile";
  * @param {string} [typeSlug]
  * @returns {string}
  */
-export const buildLibraryPath = (typeSlug = "manga") =>
-  `/library/${encodeURIComponent(normalizeTypeSlug(typeSlug))}`;
+export const buildLibraryPath = (typeSlug = "manga") => {
+  const slug = normalizeTypeSlug(typeSlug, "");
+  return slug ? `/library?type=${encodeURIComponent(slug)}` : "/library";
+};
 
 /**
  * Normalize a pathname so Moon can highlight the active chrome surface.
  *
  * @param {string} pathname
- * @returns {"home" | "browse" | "library" | "requests" | "following" | "profile" | "title" | "reader"}
+ * @returns {"home" | "library" | "requests" | "following" | "profile" | "title" | "reader"}
  */
 export const classifyPathname = (pathname) => {
   if (pathname === "/") {
     return "home";
   }
   if (pathname.startsWith("/browse")) {
-    return "browse";
+    return "library";
   }
   if (pathname.startsWith("/library")) {
     return "library";

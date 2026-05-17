@@ -27,7 +27,8 @@
   - `/admin/system/*`
 - The supported user route families are:
   - `/`
-  - `/browse`
+  - `/library`
+  - `/browse` as a compatibility entrypoint into `/library`
   - `/library/:type`
   - `/title/:type/:titleId`
   - `/myrequests`
@@ -86,13 +87,16 @@
 - The user app has a browser-local return-visit JSON cache in `apps/user-next/lib/persistentJsonCache.js`. Use it only
   through `useMoonJson({persistentCache})` for signed-in home, browse, library, and profile card/preview payloads;
   keep auth, cookies, API keys, requests mutations, title detail, reader state, and admin data live-only.
-- `/browse` search/filter state is shareable URL state. Use `q`, `type`, and `letter`, debounce URL replacement, keep
-  previously loaded cards visible while new results refresh, and load additional chunks with `cursor`/`pageSize`.
-- Browse and library list loading should use the shared user-list leaf primitives for Once UI `Skeleton` and
-  `InfiniteScroll`, imported only through direct component paths inside `TitleListLoading.jsx`. Pair automatic loading
-  with a manual fallback button, de-dupe appended compact title rows by id, avoid inline Skeleton styles that force the
-  Once layout context, and keep Once UI JavaScript out of always-mounted shell, provider, navigation, and state-view
-  files.
+- `/library` is the canonical catalogue route. `/browse` and `/library/:type` should feed the same catalogue client and
+  settle into `/library` URL state. Use `q`, `type`, `letter`, `view`, and `pageSize`, debounce URL replacement, keep
+  previously loaded cards or rows visible while new results refresh, remember the user's grid/row view locally, and
+  load additional chunks with the compact cursor API.
+- Catalogue list loading should use the shared user-list leaf primitives for Once UI `Skeleton` and `InfiniteScroll`,
+  imported only through direct component paths inside `TitleListLoading.jsx`. Pair automatic loading with a manual
+  fallback button, de-dupe appended compact title rows by id, avoid inline Skeleton styles that force the Once layout
+  context, and keep Once UI JavaScript out of always-mounted shell, provider, navigation, and state-view files. Home may
+  reuse the leaf Skeleton primitive for shelf placeholders, but should stay bounded rather than pretending to have
+  infinite shelves.
 - User cards have two routes by design: cover/art opens the best reader target from the server-merged `readerTarget`,
   while title/copy opens `/title/:type/:titleId`. Avoid nested anchors and keep the split accessible.
 - Card images should go through `CoverImage.jsx`, preferring `coverThumbUrl` then `coverUrl` and finally a styled

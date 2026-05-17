@@ -49,8 +49,8 @@ per-command role gates are managed from Moon admin at `/admin/discord`. Discord 
 
 Moon admin also surfaces the live Discord runtime state from Portal, including command-sync health, onboarding
 capability, requested intents or partials, the most recent DM receive timestamp, the last handled `downloadall`
-timestamp, the last `downloadall` error text, last Noona mention-chat time or error, and the last meaningful Discord
-runtime error when the bot disconnects.
+timestamp, the last `downloadall` error text, Noona mention-chat availability, last channel/user, last error, and the
+last meaningful Discord runtime error when the bot disconnects.
 
 Noona mention chat lets guild users talk naturally to the real bot user id, such as `@Noona Ai are you alive?`. Portal
 detects the bot mention by Discord user id, removes the mention from the prompt, checks the same `/chat` role gate used

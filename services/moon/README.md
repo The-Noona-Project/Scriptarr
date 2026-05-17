@@ -16,13 +16,14 @@ role gates, onboarding template or channel management, release-channel posts, Gi
 mention chat, Noona memory review or clear actions, and Portal runtime visibility without exposing Discord credentials
 in the browser.
 That Discord page now distinguishes connected command runtime, command-sync health, onboarding capability, and the last
-meaningful Portal runtime error instead of collapsing everything into one disconnected status. It also surfaces the
-last Noona mention-chat time or error so public chat problems can be diagnosed without reading Portal logs.
+meaningful Portal runtime error instead of collapsing everything into one disconnected status. It also surfaces Noona
+mention-chat status, last channel/user, and last error so public chat problems can be diagnosed without reading Portal
+logs.
 
 Moon 3.0 also includes a native reader flow with:
 
-- browse and library routes at `/browse` and `/library`
-- typed library routes at `/library/<type>`
+- the canonical catalogue at `/library`
+- compatibility catalogue entrypoints at `/browse` and `/library/<type>`
 - typed series detail routes at `/title/<type>/<titleId>`
 - a typed native reader at `/reader/<type>/<titleId>/<chapterId>`
 - request and following views at `/myrequests` and `/following`
@@ -30,8 +31,8 @@ Moon 3.0 also includes a native reader flow with:
 
 Moon still accepts the older untyped title and reader URLs as backward-compatible shims, but the typed paths above are
 the canonical links emitted by the user app.
-Browse and library shelves use compact paginated title-card APIs so large catalogs do not send chapter arrays to the
-browser. Moon also owns a derived WebP cover cache: cards prefer Sage-provided `coverThumbUrl` values, cache files are
+The catalogue and home shelves use compact paginated title-card APIs so large catalogs do not send chapter arrays to
+the browser. Moon also owns a derived WebP cover cache: cards prefer Sage-provided `coverThumbUrl` values, cache files are
 stored outside authoritative catalog state, and `/admin/system/tasks` includes a safe `Optimize cover images` action.
 Moon's request and admin add-title flows now share the same metadata-first intake engine. Readers pick metadata only,
 and Scriptarr saves that metadata snapshot with the request so moderators can review the upstream metadata site and
@@ -47,19 +48,18 @@ single-row megamenu header with plain site-name branding, a compact anchored ava
 dedicated `/profile` page for local StylePanel preferences and install actions. That profile route is now a tabbed
 account hub with `Overview`,
 `Stats`, and `Preferences` sections instead of one long settings sheet. The older plain-JS user shell has been
-removed, and Library type links now live only under the `Library` mega menu, and `/browse` now uses A-Z shelf rows
-with the same lightweight scroller behavior as the home page.
+removed, and Library type links now live under the `Library` mega menu and canonical `/library?type=...` URL state.
 Discord login now also preserves the same-origin route where the user started whenever possible, so signing in from a
 title, reader, browse, request, or admin page returns to that page instead of always dropping into one fixed surface.
 If the remembered path is missing, unsafe, or not allowed for the signed-in user, Moon falls back to `/`.
 Chrome startup uses `/api/moon/chrome/bootstrap?returnTo=...` to collapse branding, auth state, user identity, and
 first-owner bootstrap into one same-origin call. Moon only asks Sage for the Discord OAuth URL when a signed-out
 surface actually needs to render a login link.
-It keeps a quick-jump index rail on the left and tighter search against titles, aliases, types, and tags while browse
-cards clamp long copy until the reader opens the full title page. The home route is intentionally simpler too: it
-starts with a personalized "Your Bookshelf" continue-reading shelf, then stacks cover-led scroller rows for recently
-added titles by library type and tag-driven suggestions based on explicit tag likes or hides plus inferred taste from
-read history, follows, and the active bookshelf.
+The catalogue keeps a quick-jump index rail on the left, tighter search against titles, aliases, types, and tags, a
+remembered Grid/Rows view toggle, and paged InfiniteScroll with a manual fallback button. The home route is
+intentionally simpler too: it starts with a personalized "Your Bookshelf" continue-reading shelf, then stacks cover-led
+scroller rows for recently added titles by library type and tag-driven suggestions based on explicit tag likes or hides
+plus inferred taste from read history, follows, and the active bookshelf.
 Moon's reader is now a dedicated fullscreen app at `/reader/<type>/<titleId>/<chapterId>` with isolated
 `/reader/_next` assets, own auth/loading/error states, overlay controls, progress controls, settings drawer, and
 layout preferences for webtoon, single page, double page, manga double, LTR/RTL direction, and width/height/contain

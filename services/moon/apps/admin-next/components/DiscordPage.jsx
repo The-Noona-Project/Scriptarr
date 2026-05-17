@@ -240,6 +240,8 @@ export const DiscordPage = ({user}) => {
   const triviaRuntime = data?.triviaRuntime || {};
   const noonaMemory = data?.noonaMemory || {};
   const noonaUsers = normalizeArray(noonaMemory.users);
+  const noonaCapability = runtime.capabilities?.noonaChat || {};
+  const noonaAllowedChannelCount = normalizeArray(draft.noonaChat.allowedChannelIds).length;
   const activeTriviaRound = triviaRuntime.activeRound || null;
   const latestTriviaRound = triviaRuntime.latestRound || activeTriviaRound || null;
   const triviaAnswer = normalizeString(activeTriviaRound?.answer || latestTriviaRound?.answer);
@@ -352,11 +354,21 @@ export const DiscordPage = ({user}) => {
             <label><input disabled type="checkbox" checked={draft.noonaChat.publicReplies} readOnly /> Public replies</label>
           </div>
           <div className="admin-detail-grid">
+            <span><strong>Mention status</strong>{formatDisplayValue(noonaCapability.status, draft.noonaChat.enabled ? "pending" : "disabled")}</span>
+            <span><strong>Allowed scope</strong>{noonaAllowedChannelCount ? `${noonaAllowedChannelCount} channel${noonaAllowedChannelCount === 1 ? "" : "s"}` : "any guild channel"}</span>
+            <span><strong>Last channel</strong>{formatDisplayValue(runtime.lastNoonaMentionChannelId, "none")}</span>
+            <span><strong>Last user</strong>{formatDisplayValue(runtime.lastNoonaMentionUserId, "none")}</span>
             <span><strong>Users remembered</strong>{noonaMemory.userCount || 0}</span>
             <span><strong>User facts</strong>{noonaMemory.userFactCount || 0}</span>
             <span><strong>Server lore</strong>{noonaMemory.serverFactCount || 0}</span>
             <span><strong>Last error</strong>{formatDisplayValue(runtime.lastNoonaMentionError, "none")}</span>
           </div>
+          {noonaCapability.detail ? (
+            <div className="admin-log-box">
+              <div className="admin-kicker">Mention chat runtime</div>
+              <p>{noonaCapability.detail}</p>
+            </div>
+          ) : null}
           {normalizeArray(noonaMemory.serverFacts).length ? (
             <div className="admin-log-box">
               <div className="admin-kicker">Server lore</div>

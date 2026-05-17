@@ -7,7 +7,8 @@
 import HomeShelfRow from "../home/HomeShelfRow.jsx";
 import {useMoonJson} from "../../lib/api.js";
 import {useMoonChrome} from "../MoonChromeContext.jsx";
-import {AuthRequiredView, EmptyView, ErrorView, LoadingView} from "../StateView.jsx";
+import {AuthRequiredView, EmptyView, ErrorView} from "../StateView.jsx";
+import {HomeShelfSkeleton} from "../TitleListLoading.jsx";
 
 /**
  * Render Moon's personalized home surface.
@@ -17,7 +18,7 @@ import {AuthRequiredView, EmptyView, ErrorView, LoadingView} from "../StateView.
 export const HomePageClient = () => {
   const {auth, branding, loginUrl} = useMoonChrome();
   const siteName = branding?.siteName || "Scriptarr";
-  const {loading, error, status, data} = useMoonJson("/api/moon-v3/user/home", {
+  const {loading, refreshing, error, status, data} = useMoonJson("/api/moon-v3/user/home", {
     fallback: {
       latestTitles: [],
       continueReading: [],
@@ -28,10 +29,6 @@ export const HomePageClient = () => {
     persistentCache: {userKey: auth?.discordUserId, scope: "home"}
   });
 
-  if (loading) {
-    return <LoadingView label={`${siteName} is building your shelves, recent arrivals, and reading-pattern rows.`} />;
-  }
-
   if (status === 401 && !auth) {
     return (
       <AuthRequiredView
@@ -41,16 +38,22 @@ export const HomePageClient = () => {
     );
   }
 
-  if (error) {
-    return <ErrorView detail={error} />;
-  }
-
   const shelves = Array.isArray(data?.shelves) ? data.shelves : [];
   const bookshelf = shelves.find((shelf) => shelf.id === "bookshelf") || null;
   const secondaryShelves = shelves.filter((shelf) => shelf.id !== "bookshelf");
 
+  if (error && !shelves.length) {
+    return <ErrorView detail={error} />;
+  }
+
+  if (loading && !shelves.length) {
+    return <HomeShelfSkeleton shelves={3} itemsPerShelf={5} />;
+  }
+
   return (
     <div className="moon-home-layout">
+      {error ? <div className="moon-inline-error" role="status">{error}</div> : null}
+      {refreshing ? <span className="moon-browse-refresh-dot moon-home-refresh-dot" aria-live="polite">Refreshing</span> : null}
       {bookshelf ? (
         <HomeShelfRow shelf={bookshelf} />
       ) : (

@@ -4,11 +4,18 @@ import assert from "node:assert/strict";
 import {
   BROWSE_LETTERS,
   BROWSE_PAGE_SIZE,
+  CATALOGUE_ROW_PAGE_SIZE,
   buildBrowseApiUrl,
   buildBrowseLetterState,
   buildBrowsePageUrl,
   buildBrowseSections,
+  buildCatalogueApiUrl,
+  buildCataloguePageUrl,
+  normalizeCataloguePageSize,
+  normalizeCatalogueSearchParams,
+  normalizeCatalogueView,
   normalizeBrowseSearchParams,
+  resolveCatalogueInitialView,
   resolveBrowseLetter,
   sortBrowseTitles
 } from "../apps/user-next/lib/browse.js";
@@ -72,5 +79,29 @@ test("browse URLs preserve global search, explicit filters, and compact card API
   assert.equal(
     buildBrowseApiUrl({query: "bleach", type: "all", letter: ""}),
     `/api/moon-v3/user/library?view=card&pageSize=${BROWSE_PAGE_SIZE}&q=bleach`
+  );
+});
+
+test("catalogue URLs use /library canonical state with remembered view-safe page sizes", () => {
+  const parsed = normalizeCatalogueSearchParams(new URLSearchParams("q=solo&type=Manhwa&letter=%23&view=rows&pageSize=250"));
+
+  assert.deepEqual(parsed, {
+    query: "solo",
+    type: "manhwa",
+    letter: "#",
+    view: "rows",
+    explicitView: "rows",
+    pageSize: 100
+  });
+  assert.equal(normalizeCatalogueView("grid", "rows"), "grid");
+  assert.equal(resolveCatalogueInitialView({savedView: "rows", routeFallback: "grid"}), "rows");
+  assert.equal(normalizeCataloguePageSize("", "rows"), CATALOGUE_ROW_PAGE_SIZE);
+  assert.equal(
+    buildCataloguePageUrl(parsed),
+    "/library?q=solo&type=manhwa&letter=%23&view=rows&pageSize=100"
+  );
+  assert.equal(
+    buildCatalogueApiUrl(parsed),
+    "/api/moon-v3/user/library?view=card&pageSize=100&q=solo&type=manhwa&letter=%23"
   );
 });

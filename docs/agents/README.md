@@ -65,8 +65,9 @@ Coding rules that avoid hidden drift:
 - Do not let first-party services bypass Sage for shared state. Vault is the only database owner.
 - Keep list views on compact projections. Hydrate full Raven title, chapter, manifest, or user-state payloads only for
   title/detail/reader routes or exact-id cards.
-- For `/browse`, keep the URL as the source of truth for search/filter state and refresh only the results chunk.
-  Server-side card payloads should include the minimal `readerTarget` needed for art-click reader links.
+- For the unified `/library` catalogue, keep the URL as the source of truth for search/filter/view state and refresh
+  only the results chunk. `/browse` remains a compatibility entrypoint. Server-side card payloads should include the
+  minimal `readerTarget` needed for art-click reader links.
 - Keep admin SSE shared through Moon's admin provider; page-local `EventSource` instances are a regression unless the
   route has a strong isolated reason.
 - Keep stale product language out of code and docs. Scriptarr is the product, Noona is only the Discord bot/persona,
@@ -170,9 +171,9 @@ Architecture invariants:
   Keep browser traffic same-origin through Moon -> Sage, keep task jobs allowlisted, make Status load the lightweight
   registry first and probe GET/read endpoints only from its explicit check action, and keep Oracle/LocalAI settings
   plus Sage-governed AI tool proposals under `/admin/system/ai`.
-- Moon browse, library, and home shelves should use Raven's compact card projection through Sage. Do not load full
-  Raven title/chapter arrays for card lists; hydrate full titles only for title/detail/reader flows or exact
-  continue-reading ids.
+- Moon home shelves and the unified `/library` catalogue should use Raven's compact card projection through Sage. Do
+  not load full Raven title/chapter arrays for card lists; hydrate full titles only for title/detail/reader flows or
+  exact continue-reading ids.
 - Card links are intentionally split: cover/art opens the best reader URL from `readerTarget`, and title/copy opens the
   canonical title page. Keep this accessible-link split in browse, library, and home shelf cards.
 - Moon chrome should collapse branding, auth, user identity, and first-owner bootstrap into

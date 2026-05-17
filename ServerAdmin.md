@@ -288,8 +288,8 @@ routes continue to use Moon same-origin APIs plus the Discord-backed guard where
 
 Common user routes:
 
-- `/browse`
-- `/library/<type>`
+- `/library`
+- `/browse` and `/library/<type>` as compatibility catalogue entrypoints
 - `/title/<type>/<titleId>`
 - `/reader/<type>/<titleId>/<chapterId>`
 - `/myrequests`
@@ -307,10 +307,10 @@ and Logout, a dedicated `/profile` page for local StylePanel preferences and ins
 The dedicated reader app is fullscreen, has its own overlays and settings drawer, and supports webtoon, single,
 double, manga double, LTR/RTL, and page-fit controls. `/profile` is now a tabbed account
 hub with `Overview`, `Stats`, and `Preferences` instead of one long mixed settings panel. Library type links now live
-only inside the `Library` mega menu, and `/browse` now renders as A-Z shelf rows with the same lightweight scroller
-behavior used on the home page. It keeps a quick-jump letter rail on the left and tighter search against titles,
-aliases, types, and tags while browse cards clamp long copy until the user opens a title page. Its home route now
-favors a simpler media-library feel too, with a personalized "Your Bookshelf" continue-reading row followed by
+inside the `Library` mega menu and canonical `/library?type=...` URL state, while `/browse` still opens the same
+catalogue for old links. The catalogue keeps a quick-jump letter rail on the left, tighter search against titles,
+aliases, types, and tags, a remembered Grid/Rows view toggle, paged InfiniteScroll, and stable Skeleton loading states.
+Its home route now favors a simpler media-library feel too, with a personalized "Your Bookshelf" continue-reading row followed by
 cover-led scrollers for recently added titles by type and tag-driven shelves based on explicit tag likes or hides plus
 inferred taste from read history, follows, and the active bookshelf.
 Moon chrome now starts from one same-origin bootstrap call for branding, auth state, user identity, and first-owner
@@ -498,8 +498,8 @@ Portal now prefers a minimal Discord runtime when privileged intents are unavail
 can stay online while onboarding is marked degraded, and `/admin/discord` will show the last meaningful runtime or
 command-sync error instead of only a generic disconnected state.
 That runtime view now also surfaces the requested intents or partials, the most recent DM receive timestamp, the last
-handled `downloadall`, the last `downloadall` error, and the last Noona mention-chat time or error so owner-only DM and
-public chat failures are easier to trace.
+handled `downloadall`, the last `downloadall` error, and Noona mention-chat status, last channel/user, and last error
+so owner-only DM and public chat failures are easier to trace.
 
 ## Public Moon API
 

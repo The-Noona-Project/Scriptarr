@@ -1383,6 +1383,42 @@ a {
   position: relative;
 }
 
+.moon-catalogue-toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: center;
+}
+
+.moon-catalogue-view-toggle {
+  display: inline-grid;
+  grid-template-columns: repeat(2, minmax(72px, 1fr));
+  gap: 4px;
+  padding: 4px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.045);
+}
+
+.moon-segment-button {
+  min-height: 38px;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: rgba(255, 248, 240, 0.78);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+  transition: background 160ms ease, color 160ms ease;
+}
+
+.moon-segment-button:hover,
+.moon-segment-button:focus-visible,
+.moon-segment-button.is-active {
+  background: rgba(255, 196, 156, 0.13);
+  color: rgba(255, 248, 240, 0.98);
+}
+
 .moon-browse-refresh-dot {
   position: absolute;
   top: 50%;
@@ -1868,8 +1904,15 @@ a {
 }
 
 .moon-home-layout {
+  position: relative;
   display: grid;
   gap: 36px;
+}
+
+.moon-home-refresh-dot {
+  position: static;
+  transform: none;
+  justify-self: end;
 }
 
 .moon-home-shelf {
@@ -2074,6 +2117,10 @@ a {
   .moon-browse-results-head {
     flex-direction: column;
     align-items: start;
+  }
+
+  .moon-catalogue-toolbar {
+    grid-template-columns: 1fr;
   }
 
   .moon-browse-hero-head .moon-muted,
