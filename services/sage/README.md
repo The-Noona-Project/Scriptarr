@@ -136,5 +136,6 @@ an object with `ackedIds`, `silenceBefore`, `lastDigestAt`, and `updatedAt`, whi
 normalize correctly. The scheduled or manual update-check task also asks GitHub for new
 `The-Noona-Project/Scriptarr` commits since the last posted update, asks Oracle for an AI-written Noona summary, and
 exposes a stable `update:<latestSha>` channel notification when an update channel is configured. If Oracle cannot
-summarize the commits, Sage stores the pending range for retry instead of posting a fallback. Portal acknowledges
-release and update notifications through Sage only after Discord accepts the channel message.
+summarize the commits or returns degraded/disabled fallback copy, Sage stores the pending range for retry instead of
+posting a fallback. Portal acknowledges release and update notifications through Sage only after Discord accepts the
+channel message.

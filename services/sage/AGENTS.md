@@ -42,7 +42,8 @@ HTTP broker.
 - Keep Warden aggregation split by contract: `/health` for service health, `/api/bootstrap` for the static plan, and
   `/api/runtime` for live runtime details.
 - Keep GitHub update digests Sage-owned. The `update-check` system task may read GitHub's public API and ask Oracle
-  for a Noona summary, but Portal only receives durable update notification payloads through Sage.
+  for a Noona summary, but Portal only receives durable update notification payloads through Sage after the summary is
+  a real AI response, not degraded or disabled provider fallback copy.
 - Keep full JSDoc on exported Sage `.mjs` source and test files. `npm test` should enforce that gate.
 
 ## Coding Map

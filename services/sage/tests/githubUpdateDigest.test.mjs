@@ -138,6 +138,74 @@ test("GitHub update digest queues retry state when Oracle cannot summarize", asy
   assert.equal(state.pending.summary, "");
 });
 
+test("GitHub update digest waits when Oracle returns degraded fallback copy", async () => {
+  const vault = await createVault({
+    [GITHUB_UPDATE_DIGEST_SETTING_KEY]: {
+      key: GITHUB_UPDATE_DIGEST_SETTING_KEY,
+      lastPostedSha: "base-sha"
+    }
+  });
+  const service = createGithubUpdateDigestService({
+    config: {oracleBaseUrl: "http://oracle.test"},
+    vaultClient: vault,
+    fetchImpl: createGithubFetch({
+      commits: [commit("abc123def4567890", "Wait for real Noona update summary")]
+    }),
+    serviceJson: async () => ({
+      ok: true,
+      status: 200,
+      payload: {
+        ok: true,
+        degraded: true,
+        reply: "Noona is in read-only fallback mode because LocalAI is unavailable right now."
+      }
+    }),
+    logger: {}
+  });
+
+  const result = await service.checkForNewCommits();
+  const state = vault.read(GITHUB_UPDATE_DIGEST_SETTING_KEY);
+
+  assert.equal(result.status, "pending-summary");
+  assert.equal(state.pending.status, "pending-summary");
+  assert.equal(state.pending.summary, "");
+  assert.match(state.pending.error, /not ready/);
+});
+
+test("GitHub update digest waits when Oracle is disabled or returns no summary", async () => {
+  for (const payload of [
+    {ok: true, disabled: true, reply: "Noona is currently off."},
+    {ok: true, reply: ""}
+  ]) {
+    const vault = await createVault({
+      [GITHUB_UPDATE_DIGEST_SETTING_KEY]: {
+        key: GITHUB_UPDATE_DIGEST_SETTING_KEY,
+        lastPostedSha: "base-sha"
+      }
+    });
+    const service = createGithubUpdateDigestService({
+      config: {oracleBaseUrl: "http://oracle.test"},
+      vaultClient: vault,
+      fetchImpl: createGithubFetch({
+        commits: [commit("abc123def4567890", "Wait for usable Noona summary")]
+      }),
+      serviceJson: async () => ({
+        ok: true,
+        status: 200,
+        payload
+      }),
+      logger: {}
+    });
+
+    const result = await service.checkForNewCommits();
+    const state = vault.read(GITHUB_UPDATE_DIGEST_SETTING_KEY);
+
+    assert.equal(result.status, "pending-summary");
+    assert.equal(state.pending.status, "pending-summary");
+    assert.equal(state.pending.summary, "");
+  }
+});
+
 test("GitHub update digest retries pending AI summaries without advancing the post baseline", async () => {
   const vault = await createVault({
     [GITHUB_UPDATE_DIGEST_SETTING_KEY]: {

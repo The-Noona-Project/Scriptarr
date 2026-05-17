@@ -202,8 +202,8 @@ For end-to-end Docker verification, use:
   successful releases.
 - Portal can also post Noona-written GitHub update summaries to a separate update channel from `/admin/discord`.
   Sage checks `The-Noona-Project/Scriptarr` during the scheduled or manual update-check task, asks Oracle for the
-  summary, retries instead of posting a fallback when AI is unavailable, and exposes stable `update:<latestSha>`
-  notifications that Portal acknowledges only after Discord accepts the message.
+  summary, retries instead of posting a degraded or disabled AI fallback when AI is unavailable, and exposes stable
+  `update:<latestSha>` notifications that Portal acknowledges only after Discord accepts the message.
 - Noona trivia is configured from `/admin/discord`. Portal posts sanitized title-summary clues in the configured
   channel, accepts public guesses, awards XP for exact, alias, URL, and tolerant fuzzy matches, and posts leaderboards
   after rounds plus scheduled daily, weekly, and monthly windows. Oracle can advise only borderline guesses when AI

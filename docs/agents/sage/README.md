@@ -166,8 +166,9 @@
   them acknowledged after Portal confirms the Discord channel send.
 - Sage should expose acked update-channel notification queues for Portal from GitHub update digests. The `update-check`
   system task must call Warden's image check first, then compare `The-Noona-Project/Scriptarr` commits against the
-  last posted update baseline, ask Oracle for the Noona summary, store pending retry state when Oracle is unavailable,
-  and use stable `update:<latestSha>` ids that are acknowledged only after Portal confirms the Discord channel send.
+  last posted update baseline, ask Oracle for the Noona summary, store pending retry state when Oracle is unavailable
+  or returns degraded/disabled fallback copy, and use stable `update:<latestSha>` ids that are acknowledged only after
+  Portal confirms the Discord channel send.
 - Sage should expose acked downloadall notification queues for Portal from Raven durable run jobs. Use stable
   `downloadall:<runId>:<batchId>:<status>` ids and only mark them acknowledged after Portal confirms the requester DM.
 - Sage also owns downloadall reaction decision prompts. Store the paused-notification DM message id, owner id, run id,

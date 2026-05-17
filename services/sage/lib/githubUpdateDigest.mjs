@@ -23,6 +23,32 @@ const shortSha = (value) => normalizeString(value).slice(0, 12);
 
 const updateNotificationId = (sha) => `update:${shortSha(sha)}`;
 
+const FALLBACK_SUMMARY_PATTERNS = Object.freeze([
+  /read-only fallback mode/i,
+  /currently off/i,
+  /api key (has not been set|is not configured)/i,
+  /configured for openai, but the api key/i,
+  /add an openai api key or switch to localai/i,
+  /\b(localai|openai|oracle|ai provider)\b.*\b(unavailable|disabled|not configured|quiet|off)\b/i,
+  /\b(unavailable|disabled|not configured|quiet|off)\b.*\b(localai|openai|oracle|ai provider)\b/i
+]);
+
+/**
+ * Decide whether an Oracle reply is a real Noona update summary rather than
+ * degraded provider copy that should stay queued for retry.
+ *
+ * @param {string} summary
+ * @param {Record<string, unknown>} payload
+ * @returns {boolean}
+ */
+export const isUsableGithubUpdateSummary = (summary, payload = {}) => {
+  const normalized = normalizeString(summary);
+  if (!normalized || payload?.degraded === true || payload?.disabled === true) {
+    return false;
+  }
+  return !FALLBACK_SUMMARY_PATTERNS.some((pattern) => pattern.test(normalized));
+};
+
 /**
  * Normalize the durable update digest setting stored in Vault.
  *
@@ -156,8 +182,11 @@ const requestOracleSummary = async ({config, serviceJson, branch, baseSha, compa
     }
   });
   const reply = normalizeString(result?.payload?.reply || result?.payload?.text || result?.payload?.summary);
-  if (!result?.ok || !reply) {
+  if (!result?.ok) {
     throw new Error(normalizeString(result?.payload?.error, "Oracle did not return an update summary."));
+  }
+  if (!isUsableGithubUpdateSummary(reply, normalizeObject(result?.payload, {}) || {})) {
+    throw new Error("Oracle update summary is not ready.");
   }
   return reply.slice(0, 1800);
 };
@@ -388,5 +417,6 @@ export default {
   GITHUB_UPDATE_DIGEST_SETTING_KEY,
   GITHUB_UPDATE_REPOSITORY,
   createGithubUpdateDigestService,
+  isUsableGithubUpdateSummary,
   normalizeGithubUpdateDigestState
 };

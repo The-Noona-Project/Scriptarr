@@ -15,6 +15,7 @@ import {
 } from "./noonaVisualIdentity.mjs";
 import {
   GITHUB_UPDATE_DIGEST_SETTING_KEY,
+  isUsableGithubUpdateSummary,
   normalizeGithubUpdateDigestState
 } from "./githubUpdateDigest.mjs";
 import {
@@ -685,6 +686,7 @@ const buildUpdateNotifications = async ({vaultClient}) => {
     || normalizeString(pending.status) !== "ready"
     || !normalizeString(pending.id).startsWith("update:")
     || !normalizeString(pending.summary)
+    || !isUsableGithubUpdateSummary(normalizeString(pending.summary), pending)
     || normalizeString(state.lastPostedSha).slice(0, 12) === normalizeString(pending.latestSha)
   ) {
     return [];

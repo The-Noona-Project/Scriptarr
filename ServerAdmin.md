@@ -503,8 +503,9 @@ newest titles plus a `+N more` count, and are only acknowledged after Discord ac
 If an update channel id is configured, Sage checks `The-Noona-Project/Scriptarr` after the managed image update refresh
 inside the scheduled or manual `update-check` task. New commits since the last posted update are summarized by Oracle
 in Noona's voice, stored durably, and posted by Portal with a stable `update:<latestSha>` id. If Oracle is unavailable
-or returns no summary, Sage keeps the commit range pending and retries on the next update check instead of posting a
-weak fallback. After an update post is acknowledged, public Noona mention chat can answer questions like "what
+or returns degraded, disabled, fallback, or empty summary text, Sage keeps the commit range pending and retries on the
+next update check instead of posting a weak fallback. After an update post is acknowledged, public Noona mention chat
+can answer questions like "what
 changed?" or "how do I use it?" from the latest posted digest in any channel already allowed for Noona mention chat.
 When a duplicate request is blocked because Scriptarr is already tracking the same concrete work, Sage now attaches the
 user to a hidden notification waitlist instead of creating a second visible request row. Portal DMs those waitlisted

@@ -4227,6 +4227,39 @@ test("sage round-trips brokered Portal Discord settings and exposes them in admi
         repository: {owner: "The-Noona-Project", repo: "Scriptarr", branch: "main"},
         lastPostedSha: "base-sha",
         pending: {
+          id: "update:fallback1234",
+          status: "ready",
+          repository: "The-Noona-Project/Scriptarr",
+          branch: "main",
+          baseSha: "base-sha",
+          latestSha: "fallback1234",
+          latestFullSha: "fallback1234567890",
+          compareUrl: "https://github.com/The-Noona-Project/Scriptarr/compare/base...main",
+          commitCount: 1,
+          commits: [{sha: "fallback1234", title: "Add waiting update guard", author: "Noona", date: "2026-05-16T00:00:00.000Z"}],
+          summary: "Noona is in read-only fallback mode because LocalAI is unavailable right now.",
+          createdAt: "2026-05-16T00:00:00.000Z"
+        }
+      }
+    })
+  });
+  const blockedFallbackUpdateNotifications = await fetch(`${baseUrl}/api/internal/portal/notifications/updates`, {
+    headers: {"Authorization": "Bearer portal-dev-token"}
+  }).then((response) => response.json());
+  assert.deepEqual(blockedFallbackUpdateNotifications.notifications, []);
+
+  await fetch(`http://127.0.0.1:${vaultPort}/api/service/settings/portal.githubUpdateDigest`, {
+    method: "PUT",
+    headers: {
+      "Authorization": "Bearer vault-dev-token",
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      value: {
+        key: "portal.githubUpdateDigest",
+        repository: {owner: "The-Noona-Project", repo: "Scriptarr", branch: "main"},
+        lastPostedSha: "base-sha",
+        pending: {
           id: "update:abc123def456",
           status: "ready",
           repository: "The-Noona-Project/Scriptarr",
