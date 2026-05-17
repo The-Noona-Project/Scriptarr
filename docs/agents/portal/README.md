@@ -8,6 +8,9 @@
   owner-only DM `/downloadall`.
 - Portal should treat the brokered `portal.discord` setting as the source of truth for guild id, onboarding message or
   channel, DM superuser id, release notification channel id, update notification channel id, and per-command role gates.
+- Bundled Discord avatar assets live in `services/portal/assets/discord`. Portal may upload the configured
+  `SCRIPTARR_DISCORD_BOT_PERSONA` avatar on startup according to `SCRIPTARR_DISCORD_AVATAR_MODE`, but should not write
+  avatar bytes into Vault or Discord message memory.
 - Portal should prefer a minimal Discord runtime over going fully dark when privileged intents are unavailable. Slash
   commands and DMs should remain online, while onboarding should degrade separately and surface the real runtime error
   or command-sync problem back through Moon admin.
@@ -29,6 +32,8 @@
 - Mention chat must call Sage's `/api/internal/portal/noona-chat` route, not Oracle directly. Sage owns durable memory,
   allowed read context, latest posted update digest context, conservative proposal detection, and Oracle fallback
   behavior.
+- Noona/Appa appearance knowledge belongs in Sage's visual identity helper and is passed to Oracle as read-only
+  context. Portal only owns Discord delivery and default avatar upload.
 - When mention chat handles a guild message, do not pass that same message into trivia guess handling. Unmentioned
   guild messages should still flow to trivia unchanged.
 - Keep one active trivia clock. Startup, settings reload, manual starts, wins, and timeouts should reconcile against

@@ -416,6 +416,12 @@ Moon admin now owns the Discord workflow settings that Portal uses at runtime:
 - trivia channel id, optional leaderboard channel id, scoring, cooldowns, hints, and AI borderline matching
 - per-command enable toggles and required Discord role ids
 
+Portal also bundles default Discord avatars for the public bot identities. `SCRIPTARR_DISCORD_BOT_PERSONA` accepts
+`noona` or `appa` and defaults to `noona`. `SCRIPTARR_DISCORD_AVATAR_MODE` defaults to `missing`, which uploads the
+bundled avatar only when the Discord bot has no custom avatar; use `off` to disable this or `force` for one deliberate
+avatar refresh. Sage passes Noona and Appa's visual descriptions to Oracle as read-only context, so Noona can answer
+appearance questions without storing image data in chat memory.
+
 Noona mention chat is public by design in this version. With it enabled, users can mention the real bot user id in any
 allowed guild channel, for example `@Noona Ai are you alive?`, and Portal replies to that message after sending the
 request through Sage. Portal ignores bots, wrong guilds, empty mentions, channels outside the allowlist, and unmentioned

@@ -290,16 +290,28 @@ a {
 
 .moon-local-nav-flyout {
   position: absolute;
-  top: calc(100% + 10px);
-  left: 0;
+  top: calc(100% + 6px);
+  right: 0;
   z-index: 50;
   display: none;
-  min-width: 180px;
+  grid-template-columns: repeat(2, minmax(130px, 1fr));
+  min-width: 300px;
+  max-width: min(420px, calc(100vw - 32px));
+  gap: 4px;
   border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 18px;
+  border-radius: 16px;
   background: rgba(8, 14, 20, 0.98);
   box-shadow: 0 20px 54px rgba(0, 0, 0, 0.34);
   padding: 8px;
+}
+
+.moon-local-nav-flyout::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 100%;
+  height: 8px;
 }
 
 .moon-local-nav-item:hover .moon-local-nav-flyout,
@@ -311,6 +323,11 @@ a {
 .moon-local-mobile-section a {
   border-radius: 12px;
   width: 100%;
+}
+
+.moon-local-nav-flyout a {
+  min-height: 34px;
+  padding: 8px 10px;
 }
 
 .moon-local-mobile-nav,
@@ -1365,14 +1382,17 @@ a {
 }
 
 .moon-browse-page {
-  gap: 22px;
+  gap: 16px;
+}
+
+.moon-catalogue-page .moon-panel {
+  border-radius: 18px;
 }
 
 .moon-browse-hero {
-  position: sticky;
-  top: 78px;
+  position: relative;
   z-index: 4;
-  backdrop-filter: blur(18px);
+  padding: 20px 22px;
 }
 
 .moon-browse-hero-head {
@@ -1386,7 +1406,7 @@ a {
 .moon-catalogue-toolbar {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  gap: 14px;
+  gap: 12px;
   align-items: center;
 }
 
@@ -1445,9 +1465,9 @@ a {
 
 .moon-browse-filter-row {
   display: flex;
-  gap: 10px;
+  gap: 8px;
   flex-wrap: wrap;
-  margin-top: 14px;
+  margin-top: 12px;
 }
 
 .moon-filter-pill {
@@ -1472,14 +1492,14 @@ a {
 
 .moon-browse-layout {
   display: grid;
-  grid-template-columns: 92px minmax(0, 1fr);
-  gap: 22px;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 18px;
   align-items: start;
 }
 
 .moon-browse-rail {
   position: sticky;
-  top: 108px;
+  top: 96px;
 }
 
 .moon-browse-rail-stick {
@@ -1489,21 +1509,22 @@ a {
 
 .moon-browse-letter-index {
   display: grid;
-  gap: 6px;
-  padding: 8px;
-  border-radius: 22px;
+  gap: 4px;
+  padding: 6px;
+  border-radius: 16px;
   background: rgba(9, 14, 19, 0.9);
   border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .moon-browse-letter-button {
   width: 100%;
-  min-height: 40px;
+  min-height: 34px;
   border: 0;
-  border-radius: 14px;
+  border-radius: 10px;
   background: transparent;
   color: rgba(255, 248, 240, 0.82);
   font: inherit;
+  font-size: 0.92rem;
   cursor: pointer;
   transition: background 160ms ease, color 160ms ease, opacity 160ms ease;
 }
@@ -1531,6 +1552,7 @@ a {
 
 .moon-browse-results {
   position: relative;
+  padding: 20px 22px;
   transition: opacity 160ms ease, border-color 160ms ease;
 }
 

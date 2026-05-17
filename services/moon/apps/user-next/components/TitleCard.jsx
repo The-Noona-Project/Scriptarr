@@ -27,11 +27,12 @@ import CoverImage from "./CoverImage.jsx";
  *     readerTarget?: {chapterId?: string, label?: string, kind?: string} | null
  *   },
  *   compact?: boolean,
+ *   priority?: boolean,
  *   variant?: "default" | "browse"
  * }} props
  * @returns {import("react").ReactNode}
  */
-export const TitleCard = ({title, compact = false, variant = "default"}) => {
+export const TitleCard = ({title, compact = false, priority = false, variant = "default"}) => {
   const titleHref = buildTitlePathForTitle(title);
   const readerHref = buildReaderPathForTitleTarget(title);
   const titleText = title?.title || "Untitled";
@@ -45,6 +46,7 @@ export const TitleCard = ({title, compact = false, variant = "default"}) => {
           coverUrl={title?.coverUrl || ""}
           coverThumbUrl={title?.coverThumbUrl || ""}
           fallbackClassName="moon-title-card-fallback"
+          loading={priority ? "eager" : "lazy"}
         />
       </Link>
       <Link href={titleHref} className="moon-title-card-copy" aria-label={`Open ${titleText} title page`}>

@@ -4,10 +4,11 @@
  * @file Shared app shell for Moon's Next-based user experience.
  */
 
-import {useEffect, useMemo, useState} from "react";
+import {useCallback, useEffect, useMemo, useRef, useState} from "react";
 import Link from "next/link";
 import {usePathname} from "next/navigation";
 import {loadMoonChromeContext, loadMoonLoginUrl, requestJson} from "../lib/api.js";
+import {normalizeBrowseType} from "../lib/browse.js";
 import {buildLibraryPath, classifyPathname, getLibraryTypes} from "../lib/navigationRoutes.js";
 import {Flex} from "./UiPrimitives.jsx";
 import {DesktopNavigation, MobileNavigation} from "./LocalNavigation.jsx";
@@ -69,6 +70,7 @@ const buildMenuGroups = (pathname, libraryTypes = [], activeType = "") => {
  */
 export const MoonShell = ({children}) => {
   const pathname = usePathname();
+  const [queryType, setQueryType] = useState("");
   const [chrome, setChrome] = useState({
     branding: {siteName: "Scriptarr"},
     auth: null,
@@ -80,6 +82,15 @@ export const MoonShell = ({children}) => {
   });
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [installPrompt, setInstallPrompt] = useState(null);
+  const libraryTypesLoadingRef = useRef(false);
+  const syncQueryTypeFromLocation = useCallback(() => {
+    try {
+      const nextType = String(new URLSearchParams(window.location.search).get("type") || "").trim();
+      setQueryType(nextType ? normalizeBrowseType(nextType) : "");
+    } catch {
+      setQueryType("");
+    }
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -88,16 +99,6 @@ export const MoonShell = ({children}) => {
     void loadMoonChromeContext(currentRoute).then((nextValue) => {
       if (active) {
         setChrome(nextValue);
-      }
-      if (active && nextValue.auth) {
-        void requestJson("/api/moon-v3/user/library?view=card&pageSize=1").then((result) => {
-          if (active && result.ok) {
-            setChrome((current) => ({
-              ...current,
-              libraryTypes: getLibraryTypes(result.payload?.counts?.byType)
-            }));
-          }
-        });
       }
       if (active && !nextValue.auth) {
         void loadMoonLoginUrl(currentRoute).then((loginUrl) => {
@@ -114,6 +115,31 @@ export const MoonShell = ({children}) => {
   }, [pathname]);
 
   useEffect(() => {
+    syncQueryTypeFromLocation();
+    window.addEventListener("popstate", syncQueryTypeFromLocation);
+    return () => {
+      window.removeEventListener("popstate", syncQueryTypeFromLocation);
+    };
+  }, [pathname, syncQueryTypeFromLocation]);
+
+  const ensureLibraryTypes = useCallback(() => {
+    if (!chrome.auth || chrome.libraryTypes.length || libraryTypesLoadingRef.current) {
+      return;
+    }
+    libraryTypesLoadingRef.current = true;
+    void requestJson("/api/moon-v3/user/library?view=card&pageSize=1").then((result) => {
+      if (result.ok) {
+        setChrome((current) => ({
+          ...current,
+          libraryTypes: getLibraryTypes(result.payload?.counts?.byType)
+        }));
+      }
+    }).finally(() => {
+      libraryTypesLoadingRef.current = false;
+    });
+  }, [chrome.auth, chrome.libraryTypes.length]);
+
+  useEffect(() => {
     const handleBeforeInstallPrompt = (event) => {
       event.preventDefault();
       setInstallPrompt(event);
@@ -123,16 +149,19 @@ export const MoonShell = ({children}) => {
   }, []);
 
   const activeType = useMemo(() => {
+    if (queryType) {
+      return queryType;
+    }
     const pathMatch = String(pathname || "").match(/^\/library\/([^/?#]+)/);
     if (pathMatch?.[1]) {
       try {
-        return decodeURIComponent(pathMatch[1]);
+        return normalizeBrowseType(decodeURIComponent(pathMatch[1]));
       } catch {
-        return pathMatch[1];
+        return normalizeBrowseType(pathMatch[1]);
       }
     }
     return "";
-  }, [pathname]);
+  }, [pathname, queryType]);
   const menuGroups = useMemo(() => buildMenuGroups(pathname, chrome.libraryTypes, activeType), [activeType, chrome.libraryTypes, pathname]);
   const title = chrome.branding?.siteName || "Scriptarr";
   const logoUrl = chrome.branding?.logo?.urls?.chrome || "";
@@ -161,19 +190,41 @@ export const MoonShell = ({children}) => {
             </Link>
             <Flex gap="16" vertical="center" className="moon-header-actions">
               <div className="moon-nav-desktop">
-                <DesktopNavigation menuGroups={menuGroups} />
+                <DesktopNavigation menuGroups={menuGroups} onGroupOpen={(group) => {
+                  if (group?.id === "library") {
+                    syncQueryTypeFromLocation();
+                    ensureLibraryTypes();
+                  }
+                }} />
               </div>
               <div className="moon-nav-mobile">
                 <button
                   className="moon-mobile-menu-trigger"
                   type="button"
-                  onClick={() => setMobileMenuOpen((value) => !value)}
+                  onClick={() => {
+                    setMobileMenuOpen((value) => {
+                      const nextValue = !value;
+                      if (nextValue) {
+                        ensureLibraryTypes();
+                      }
+                      return nextValue;
+                    });
+                  }}
                 >
                   {mobileMenuOpen ? "Close" : "Menu"}
                 </button>
                 {mobileMenuOpen ? (
                   <div className="moon-mobile-menu-surface">
-                    <MobileNavigation menuGroups={menuGroups} onClose={() => setMobileMenuOpen(false)} />
+                    <MobileNavigation
+                      menuGroups={menuGroups}
+                      onClose={() => setMobileMenuOpen(false)}
+                      onGroupOpen={(group) => {
+                        if (group?.id === "library") {
+                          syncQueryTypeFromLocation();
+                          ensureLibraryTypes();
+                        }
+                      }}
+                    />
                   </div>
                 ) : null}
               </div>

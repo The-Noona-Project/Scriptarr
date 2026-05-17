@@ -13,6 +13,11 @@ import {
   readNoonaChatMemory,
   writeNoonaChatMemory
 } from "./noonaChatMemory.mjs";
+import {
+  buildNoonaVisualIdentityContext,
+  buildNoonaVisualIdentityReply,
+  isVisualIdentityPrompt
+} from "./noonaVisualIdentity.mjs";
 
 export const NOONA_CHAT_READ_TOOL_IDS = Object.freeze([
   "stack_status",
@@ -142,6 +147,9 @@ const buildReadContext = async ({config, serviceJson, vaultClient, triviaService
       context.latestUpdate = latestUpdate;
     }
   }
+  if (isVisualIdentityPrompt(message)) {
+    context.visualIdentity = buildNoonaVisualIdentityContext();
+  }
   return Object.keys(context).length ? context : null;
 };
 
@@ -160,6 +168,9 @@ const proposalReply = (planned) => {
 const fallbackReply = (message) => {
   if (/long\s+live\s+noona/i.test(normalizeString(message))) {
     return "LONG LIVE NOONA. Big sister heard you loud and clear.";
+  }
+  if (isVisualIdentityPrompt(message)) {
+    return buildNoonaVisualIdentityReply(message);
   }
   return "Noona is here. Oracle is a little quiet right now, but I am listening.";
 };
@@ -257,6 +268,7 @@ export const createNoonaChatService = ({
         context: {
           source: "discord-mention",
           personaStyle: "Noona is a warm Big Sister persona: playful and affectionate, fond of LONG LIVE NOONA, but professional when status or admin topics need clarity.",
+          visualIdentity: buildNoonaVisualIdentityContext(),
           user: {
             discordUserId,
             username: normalizeString(user.username || user.displayName || user.globalName, "Reader"),
@@ -275,14 +287,18 @@ export const createNoonaChatService = ({
       }
     }));
     const oraclePayload = oracle.payload || {};
+    const oracleDegraded = oracle.ok === false || oraclePayload.disabled === true || oraclePayload.degraded === true;
+    const reply = isVisualIdentityPrompt(message) && oracleDegraded
+      ? buildNoonaVisualIdentityReply(message)
+      : normalizeString(oraclePayload.reply, fallbackReply(message));
     return {
       ok: true,
-      reply: normalizeString(oraclePayload.reply, fallbackReply(message)),
+      reply,
       memory: memoryContext,
       readContext,
       oracle: {
         disabled: oraclePayload.disabled === true,
-        degraded: oracle.ok === false || oraclePayload.degraded === true
+        degraded: oracleDegraded
       },
       error: normalizeString(oraclePayload.error)
     };

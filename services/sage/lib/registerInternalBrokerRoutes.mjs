@@ -8,6 +8,11 @@ import {buildIntakeSelection, evaluateSelectionAgainstGuardState} from "./reques
 import {buildRequestWorkConflictPayload, isRequestWorkConflictError} from "./requestConflict.mjs";
 import {createNoonaChatService} from "./noonaChatService.mjs";
 import {
+  buildNoonaVisualIdentityContext,
+  buildNoonaVisualIdentityReply,
+  isVisualIdentityPrompt
+} from "./noonaVisualIdentity.mjs";
+import {
   GITHUB_UPDATE_DIGEST_SETTING_KEY,
   normalizeGithubUpdateDigestState
 } from "./githubUpdateDigest.mjs";
@@ -43,6 +48,21 @@ const normalizeScalarString = (value, fallback = "") => {
 
 const normalizeArray = (value) => Array.isArray(value) ? value : [];
 const normalizeObject = (value, fallback = null) => value && typeof value === "object" && !Array.isArray(value) ? value : fallback;
+
+const buildPortalOracleChatBody = (body = {}) => {
+  const source = normalizeObject(body, {}) || {};
+  const context = normalizeObject(source.context, {}) || {};
+  if (!isVisualIdentityPrompt(source.message)) {
+    return source;
+  }
+  return {
+    ...source,
+    context: {
+      ...context,
+      visualIdentity: buildNoonaVisualIdentityContext()
+    }
+  };
+};
 const normalizeTypeSlug = (value, fallback = "manga") => {
   const normalized = normalizeString(value, fallback)
     .toLowerCase()
@@ -1766,10 +1786,21 @@ export const registerInternalBrokerRoutes = (app, {
   }));
 
   app.post("/api/internal/oracle/chat", withService(requireService, ["scriptarr-portal"], async (req, res) => {
-    await proxyResult(res, serviceJson(config.oracleBaseUrl, "/api/chat", {
+    const body = buildPortalOracleChatBody(req.body || {});
+    const result = await safeServiceJson(serviceJson(config.oracleBaseUrl, "/api/chat", {
       method: "POST",
-      body: req.body || {}
+      body
     }));
+    const degradedVisualPrompt = isVisualIdentityPrompt(body.message)
+      && (result.status >= 500 || result.payload?.disabled === true || result.payload?.degraded === true);
+    res.status(result.status).json(degradedVisualPrompt
+      ? {
+        ...result.payload,
+        ok: true,
+        reply: buildNoonaVisualIdentityReply(body.message),
+        visualIdentityFallback: true
+      }
+      : result.payload);
   }));
 
   app.post("/api/internal/portal/noona-chat", withService(requireService, ["scriptarr-portal"], async (req, res) => {

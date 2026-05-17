@@ -22,6 +22,8 @@ Oracle preserves the same internal contract used elsewhere in Scriptarr:
 summarized Noona memory, user display information, and read-only status/library/trivia context. Oracle treats it as
 background only; it does not store memory, execute tools, mutate Scriptarr, or reveal raw identifiers/secrets back to
 Discord.
+Sage may also include a small `visualIdentity` context for Noona and Appa appearance questions; Oracle treats those
+descriptions as read-only persona background and does not inspect image files directly.
 
 Moon admin now manages Oracle from `/admin/system/ai` through Sage. That page saves provider, model, temperature, and
 masked OpenAI key state, shows Oracle health, and sends a small brokered test prompt without exposing Oracle directly

@@ -1,6 +1,7 @@
 import {extractGlobalDefinitions, extractGuildDefinitions} from "./commandCatalog.mjs";
 import {syncPortalCommands} from "./commandSynchronizer.mjs";
 import {createInteractionHandler} from "./interactionRouter.mjs";
+import {syncDiscordBotAvatar} from "./botIdentity.mjs";
 
 const DEFAULT_EVENT_NAMES = Object.freeze({
   ready: "ready",
@@ -111,6 +112,8 @@ export const createDiscordClient = async ({
   reactionHandler,
   guildMemberAddHandler,
   enableGuildMemberEvents = false,
+  botIdentity,
+  avatarMode = "missing",
   onRuntimeEvent,
   logger,
   clientFactory
@@ -302,6 +305,24 @@ export const createDiscordClient = async ({
     try {
       await client.login(token);
       await ready;
+      const avatarSync = await syncDiscordBotAvatar({
+        client,
+        identity: botIdentity,
+        mode: avatarMode,
+        logger
+      }).catch((error) => {
+        logger?.warn?.("Portal Discord default avatar sync failed.", {error});
+        return {
+          status: "failed",
+          identity: botIdentity?.id || "noona",
+          reason: describeError(error)
+        };
+      });
+      onRuntimeEvent?.({
+        type: "avatar-sync",
+        at: new Date().toISOString(),
+        ...avatarSync
+      });
       return registerCommands();
     } catch (error) {
       readyReject?.(error);

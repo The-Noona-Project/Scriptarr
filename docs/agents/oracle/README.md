@@ -9,6 +9,8 @@
 - `/api/chat` accepts optional Sage-curated context while preserving the message-only contract. Use context for
   persona, summarized memory, and read-only status/library/trivia background only; do not store it, expose raw ids or
   secrets, or treat it as permission to mutate anything.
+- If the context includes `visualIdentity`, use it only to answer Noona/Appa appearance questions. Do not claim Oracle
+  viewed the images directly; Sage owns the text descriptions and Portal owns the Discord avatar assets.
 - It still uses OpenAI-compatible wiring so LocalAI can be swapped in later.
 - It should gracefully return disabled or degraded responses when OpenAI or LocalAI is unavailable.
 - Keep degraded replies provider-specific so OpenAI failures are not reported as LocalAI outages, and keep the

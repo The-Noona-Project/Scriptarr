@@ -337,6 +337,8 @@ export const resolveServicePlan = ({env = process.env, containerNamePrefix = ""}
       SCRIPTARR_PORTAL_PORT: String(portalPort),
       SCRIPTARR_DISCORD_CLIENT_ID: env.SCRIPTARR_DISCORD_CLIENT_ID || "",
       SCRIPTARR_DISCORD_TOKEN: env.DISCORD_TOKEN || "",
+      SCRIPTARR_DISCORD_BOT_PERSONA: env.SCRIPTARR_DISCORD_BOT_PERSONA || "",
+      SCRIPTARR_DISCORD_AVATAR_MODE: env.SCRIPTARR_DISCORD_AVATAR_MODE || "",
       DISCORD_TOKEN: env.DISCORD_TOKEN || ""
     },
     mounts: resolveFolderMounts(storageLayout, "scriptarr-portal", ["logs"]),

@@ -1,4 +1,5 @@
 import {createDiscordClient} from "./discord/client.mjs";
+import {resolveDiscordBotIdentity} from "./discord/botIdentity.mjs";
 import {buildCommandInventory} from "./discord/commandCatalog.mjs";
 import {createPortalCommands} from "./discord/commands/index.mjs";
 import {createDirectMessageHandler} from "./discord/directMessageRouter.mjs";
@@ -209,6 +210,7 @@ export const createPortalRuntime = ({
   let discord = null;
   let followNotifier = null;
   let triviaRuntime = null;
+  const botIdentity = resolveDiscordBotIdentity(config.discordBotPersona);
   let state = {
     mode: config.discordToken && config.discordClientId ? "idle" : "disabled",
     connected: false,
@@ -229,6 +231,10 @@ export const createPortalRuntime = ({
     lastDownloadAllHandledAt: null,
     lastDownloadAllError: null,
     lastDownloadAllSource: null,
+    botIdentity: botIdentity.id,
+    lastBotAvatarSyncAt: null,
+    lastBotAvatarSyncStatus: null,
+    lastBotAvatarSyncError: null,
     lastNoonaMentionAt: null,
     lastNoonaMentionChannelId: null,
     lastNoonaMentionUserId: null,
@@ -300,6 +306,17 @@ export const createPortalRuntime = ({
         ...state,
         lastTriviaRoundStartedAt: event.at || new Date().toISOString(),
         lastTriviaRoundId: normalizeString(event.roundId)
+      };
+      return;
+    }
+
+    if (event.type === "avatar-sync") {
+      state = {
+        ...state,
+        botIdentity: normalizeString(event.identity, botIdentity.id),
+        lastBotAvatarSyncAt: event.at || new Date().toISOString(),
+        lastBotAvatarSyncStatus: normalizeString(event.status),
+        lastBotAvatarSyncError: event.status === "failed" ? normalizeString(event.reason) : null
       };
       return;
     }
@@ -473,6 +490,8 @@ export const createPortalRuntime = ({
         }
       } : null,
       enableGuildMemberEvents,
+      botIdentity,
+      avatarMode: config.discordAvatarMode,
       onRuntimeEvent: recordRuntimeEvent,
       logger,
       clientFactory

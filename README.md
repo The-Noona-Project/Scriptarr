@@ -162,6 +162,9 @@ For end-to-end Docker verification, use:
   in allowed guild channels and Portal will reply publicly through Sage. The flow reuses the `/chat` command role gate,
   ignores unmentioned chatter, bots, wrong guilds, and empty prompts, and keeps trivia message handling separate so one
   Discord message is not processed twice.
+- Scriptarr bundles default Discord avatar assets for Noona and Appa. Portal can apply the configured bundled avatar
+  when the bot has no custom avatar, while Sage gives Noona read-only visual context so she can answer what she and
+  Appa look like without storing image data in chat memory.
 - The DM-only `downloadall` flow now stays provider-browse first but resolves metadata before queueing each title. It
   now uses a global DM slash command as the supported path: `/downloadall run ...`, `/downloadall status ...`,
   `/downloadall continue ...`, `/downloadall cancel ...`, and `/downloadall help`. Every run is durable now, including

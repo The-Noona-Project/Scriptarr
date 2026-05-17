@@ -150,6 +150,19 @@ test("Noona chat injects latest posted update digest for update questions", asyn
   assert.equal(oracleCall.options.body.context.readContext.latestUpdate.commits[0].title, "Chunk title loading");
 });
 
+test("Noona chat sends visual identity context for Noona and Appa questions", async () => {
+  const calls = [];
+  const {service} = createService({calls});
+
+  const result = await service.handlePortalMention(mentionPayload("what does Appa look like?"));
+  const oracleCall = calls.find((call) => call.path === "/api/chat");
+
+  assert.equal(result.ok, true);
+  assert.equal(oracleCall.options.body.context.visualIdentity.characters.noona.name, "Noona");
+  assert.match(oracleCall.options.body.context.visualIdentity.characters.appa.description, /cloud-like companion/i);
+  assert.match(oracleCall.options.body.context.readContext.visualIdentity.characters.appa.description, /glowing teal eyes/i);
+});
+
 test("Noona chat creates only conservative public proposals", async () => {
   const vault = createMemoryVault();
   const {service} = createService({vault});
@@ -188,4 +201,21 @@ test("Noona chat uses a graceful fallback when Oracle is degraded", async () => 
   assert.equal(result.oracle.degraded, true);
   assert.equal(result.reply, "LONG LIVE NOONA. Big sister heard you loud and clear.");
   assert.match(result.error, /Oracle offline/i);
+});
+
+test("Noona chat can describe visual identity when Oracle is degraded", async () => {
+  const vault = createMemoryVault();
+  const service = createNoonaChatService({
+    config: {oracleBaseUrl: "http://oracle.test"},
+    vaultClient: vault,
+    serviceJson: async () => {
+      throw new Error("Oracle offline");
+    }
+  });
+
+  const result = await service.handlePortalMention(mentionPayload("what does Noona and Appa look like?"));
+
+  assert.equal(result.ok, true);
+  assert.match(result.reply, /long dark hair/i);
+  assert.match(result.reply, /cloud-like companion/i);
 });

@@ -65,7 +65,7 @@ const typeFromLegacyLibraryPath = (pathname) => {
   }
 };
 
-const resultTitle = ({query, type, letter, view}) => {
+const resultTitle = ({query, type, letter}) => {
   if (query) {
     return letter ? `Search results in ${letter}` : "Search results";
   }
@@ -73,9 +73,9 @@ const resultTitle = ({query, type, letter, view}) => {
     return `Titles under ${letter}`;
   }
   if (type && type !== "all") {
-    return view === "rows" ? `${formatTypeLabel(type)} rows` : `${formatTypeLabel(type)} grid`;
+    return `${formatTypeLabel(type)} titles`;
   }
-  return view === "rows" ? "All library rows" : "Full catalogue grid";
+  return "All titles";
 };
 
 /**
@@ -287,8 +287,8 @@ export const CataloguePageClient = ({initialSearchParams = {}, initialTypeSlug =
       <section className="moon-panel moon-section moon-browse-hero">
         <div className="moon-section-head moon-browse-hero-head">
           <div>
-            <span className="moon-kicker">Library</span>
-            <h2>{isGrid ? "Fast catalogue search" : "Dense library rows"}</h2>
+            <span className="moon-kicker">Catalogue</span>
+            <h2>Library</h2>
           </div>
           <span className="moon-muted">{searchLabel}</span>
         </div>
@@ -374,7 +374,7 @@ export const CataloguePageClient = ({initialSearchParams = {}, initialTypeSlug =
           <div className="moon-section-head moon-browse-results-head">
             <div>
               <span className="moon-kicker">{activeType === "all" ? "Catalogue" : formatTypeLabel(activeType)}</span>
-              <h2>{resultTitle({query: activeQuery, type: activeType, letter: activeLetter, view: activeView})}</h2>
+              <h2>{resultTitle({query: activeQuery, type: activeType, letter: activeLetter})}</h2>
             </div>
             <span className="moon-muted">{resultCountLabel}</span>
           </div>
@@ -391,9 +391,9 @@ export const CataloguePageClient = ({initialSearchParams = {}, initialTypeSlug =
                   threshold={360}
                   className="moon-infinite-list-sentinel"
                   loadMore={loadMore}
-                  renderItem={(title) => isGrid
-                    ? <TitleCard key={title.id} title={title} variant="browse" />
-                    : <LibraryTitleRow key={title.id} title={title} />}
+                  renderItem={(title, index) => isGrid
+                    ? <TitleCard key={title.id} title={title} priority={index < 8} variant="browse" />
+                    : <LibraryTitleRow key={title.id} title={title} priority={index < 8} />}
                 />
               </div>
               {loadingMore ? (isGrid ? <TitleCardGridSkeleton count={4} /> : <TitleRowListSkeleton count={3} />) : null}

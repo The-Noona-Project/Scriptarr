@@ -46,11 +46,15 @@ DM summary. For `nsfw:false`, Raven only queues titles whose WeebCentral detail 
 
 Guild id, onboarding settings, release notification channel id, GitHub update channel id, DM superuser id, Noona mention-chat settings, and
 per-command role gates are managed from Moon admin at `/admin/discord`. Discord bot credentials remain env-managed.
+Portal also bundles default Discord avatars for `noona` and `appa` under `assets/discord`. Set
+`SCRIPTARR_DISCORD_BOT_PERSONA` to `noona` or `appa`; Portal defaults to `noona`. `SCRIPTARR_DISCORD_AVATAR_MODE`
+defaults to `missing`, which uploads the bundled avatar only when the bot has no custom avatar. Use `off` to disable
+runtime avatar sync or `force` for one intentional avatar refresh.
 
 Moon admin also surfaces the live Discord runtime state from Portal, including command-sync health, onboarding
 capability, requested intents or partials, the most recent DM receive timestamp, the last handled `downloadall`
 timestamp, the last `downloadall` error text, Noona mention-chat availability, last channel/user, last error, and the
-last meaningful Discord runtime error when the bot disconnects.
+last default-avatar sync result, plus the last meaningful Discord runtime error when the bot disconnects.
 
 Noona mention chat lets guild users talk naturally to the real bot user id, such as `@Noona Ai are you alive?`. Portal
 detects the bot mention by Discord user id, removes the mention from the prompt, checks the same `/chat` role gate used
@@ -74,6 +78,8 @@ Durable Noona memory is summarized through Sage and Vault, not stored as raw Dis
 `remember that ...`, `forget that`, `forget me`, or `what do you remember about me?`. Server lore such as `LONG LIVE
 NOONA` is capped separately from user facts. Admins can review memory counts and clear one user, server lore, or all
 Noona memory from `/admin/discord`.
+Sage also sends Noona and Appa's visual identity facts to Oracle for appearance questions, and Noona can answer from
+those bundled descriptions when Oracle is degraded. The Discord images remain project assets, not raw chat memory.
 
 Public chat never executes mutations. Sage gives it a conservative read context for status, Discord runtime, trivia,
 and library search, and can draft only low-risk proposals such as status checks or trivia start/stop for later admin

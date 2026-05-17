@@ -62,6 +62,8 @@ export const resolvePortalConfig = (env = process.env) => ({
   publicBaseUrl: normalizeUrl(env.SCRIPTARR_PUBLIC_BASE_URL || env.SCRIPTARR_MOON_BASE_URL, ""),
   discordToken: normalizeString(env.SCRIPTARR_DISCORD_TOKEN || env.DISCORD_TOKEN || "", ""),
   discordClientId: normalizeString(env.SCRIPTARR_DISCORD_CLIENT_ID || "", ""),
+  discordBotPersona: normalizeString(env.SCRIPTARR_DISCORD_BOT_PERSONA, "noona").toLowerCase(),
+  discordAvatarMode: normalizeString(env.SCRIPTARR_DISCORD_AVATAR_MODE, "missing").toLowerCase(),
   discordDefaults: {
     guildId: normalizeOptionalString(env.SCRIPTARR_DISCORD_GUILD_ID || env.REQUIRED_GUILD_ID),
     superuserId: normalizeOptionalString(env.SCRIPTARR_DISCORD_SUPERUSER_ID || env.SUPERUSER_ID),

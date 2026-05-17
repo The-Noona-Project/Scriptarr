@@ -273,6 +273,7 @@ export const DiscordPage = ({user}) => {
         <div className="admin-log-meta">
           <span>Live stream: {live.state}</span>
           <span>Last sync: {formatDate(runtime.portal?.runtime?.lastSyncAt || runtime.lastSyncAt)}</span>
+          <span>Default avatar: {formatDisplayValue(runtime.lastBotAvatarSyncStatus, runtime.botIdentity ? `${runtime.botIdentity} pending` : "none")}</span>
           <span>Last Noona mention: {formatDate(runtime.lastNoonaMentionAt)}</span>
           <span>Warning: {formatDisplayValue(runtime.warning || runtime.syncError || runtime.error, "none")}</span>
         </div>

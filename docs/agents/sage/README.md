@@ -71,6 +71,8 @@
   `portal.noonaChat.memory` settings payload, natural memory commands, secret rejection, conservative read-context
   loading, latest posted GitHub update digest context, public proposal filtering, Oracle fallback, and admin-safe
   memory review/clear payloads. Portal must not call Oracle or Vault directly for this flow.
+- Keep Noona/Appa appearance facts in `lib/noonaVisualIdentity.mjs`. Those descriptions are read-only Oracle context
+  and deterministic degraded-mode replies, not durable user memory or transcript storage.
 - Public mention chat proposals are stricter than `/admin/system/ai`: allow only low-risk status-check and trivia
   start/stop proposals, even when broader LocalAI, root/system, or destructive tools are enabled for admins.
 - `portal.discord.trivia` is the source of truth for Noona trivia channels, scoring, hints, schedules, and AI

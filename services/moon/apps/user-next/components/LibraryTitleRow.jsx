@@ -26,10 +26,11 @@ import CoverImage from "./CoverImage.jsx";
  *     chaptersDownloaded?: number,
  *     readerTarget?: {chapterId?: string, label?: string, kind?: string} | null
  *   }
+ *   priority?: boolean
  * }} props
  * @returns {import("react").ReactNode}
  */
-export const LibraryTitleRow = ({title}) => {
+export const LibraryTitleRow = ({title, priority = false}) => {
   const titleHref = buildTitlePathForTitle(title);
   const readerHref = buildReaderPathForTitleTarget(title);
   const titleText = title?.title || "Untitled";
@@ -43,6 +44,7 @@ export const LibraryTitleRow = ({title}) => {
           coverUrl={title?.coverUrl || ""}
           coverThumbUrl={title?.coverThumbUrl || ""}
           fallbackClassName="moon-title-card-fallback"
+          loading={priority ? "eager" : "lazy"}
         />
       </Link>
       <div className="moon-library-title-main">
@@ -56,7 +58,7 @@ export const LibraryTitleRow = ({title}) => {
         <p>{title?.summary || "Open the title page to review chapters, metadata, and reading progress."}</p>
       </div>
       <div className="moon-library-title-side">
-        <span>{title?.latestChapter || "No chapter summary yet"}</span>
+        <span>{title?.latestChapter ? `Latest ${title.latestChapter}` : "No chapter summary yet"}</span>
         <Link href={readerHref}>{readerLabel}</Link>
       </div>
     </article>

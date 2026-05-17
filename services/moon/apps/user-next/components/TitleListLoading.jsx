@@ -5,6 +5,7 @@
  */
 
 import dynamic from "next/dynamic";
+import {Fragment, useEffect, useState} from "react";
 
 const OnceSkeleton = dynamic(
   () => import("@once-ui-system/core/components/Skeleton").then((module) => module.Skeleton),
@@ -14,11 +15,22 @@ const OnceSkeleton = dynamic(
   }
 );
 
-const OnceInfiniteScroll = dynamic(
-  () => import("@once-ui-system/core/components/InfiniteScroll").then((module) => module.InfiniteScroll),
-  {
-    ssr: false
-  }
+let infiniteScrollLoader = null;
+
+const loadOnceInfiniteScroll = () => {
+  infiniteScrollLoader ||= import("@once-ui-system/core/components/InfiniteScroll").then((module) => module.InfiniteScroll);
+  return infiniteScrollLoader;
+};
+
+const ImmediateTitleList = ({items = [], renderItem, className = ""}) => (
+  <>
+    {items.map((item, index) => (
+      <Fragment key={item?.id || index}>
+        {renderItem(item, index)}
+      </Fragment>
+    ))}
+    <div className={className || undefined} aria-hidden="true" />
+  </>
 );
 
 /**
@@ -27,9 +39,33 @@ const OnceInfiniteScroll = dynamic(
  * @param {import("@once-ui-system/core/components/InfiniteScroll").InfiniteScrollProps<any>} props
  * @returns {import("react").ReactNode}
  */
-export const TitleListInfiniteScroll = (props) => (
-  <OnceInfiniteScroll {...props} />
-);
+export const TitleListInfiniteScroll = (props) => {
+  const [InfiniteScrollComponent, setInfiniteScrollComponent] = useState(null);
+
+  useEffect(() => {
+    let active = true;
+    loadOnceInfiniteScroll()
+      .then((component) => {
+        if (active) {
+          setInfiniteScrollComponent(() => component);
+        }
+      })
+      .catch(() => {
+        if (active) {
+          setInfiniteScrollComponent(null);
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  if (!InfiniteScrollComponent) {
+    return <ImmediateTitleList {...props} />;
+  }
+
+  return <InfiniteScrollComponent {...props} />;
+};
 
 /**
  * Render card-shaped placeholders for the browse grid.
