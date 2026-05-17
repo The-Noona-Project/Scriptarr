@@ -280,7 +280,7 @@ def create_app(
 
     @app.on_event("startup")
     async def startup_embedded_local_ai() -> None:
-        await embedded_runtime.start()
+        await embedded_runtime.prepare()
 
     @app.on_event("shutdown")
     async def shutdown_embedded_local_ai() -> None:

@@ -97,11 +97,7 @@ def _split_model_urls(config: OracleConfig) -> list[str]:
 
 
 def _has_nvidia_device() -> bool:
-    return (
-        Path("/dev/nvidia0").exists()
-        or Path("/dev/nvidiactl").exists()
-        or Path("/proc/driver/nvidia/gpus").exists()
-    )
+    return Path("/dev/nvidia0").exists()
 
 
 def _resolve_gpu_layers(value: str) -> int:
@@ -198,16 +194,7 @@ class EmbeddedLocalAiManager:
             return
         if self.process and self.process.returncode is None:
             return
-
-        Path(self.config.local_ai_models_dir).mkdir(parents=True, exist_ok=True)
-        Path(self.config.local_ai_data_dir).mkdir(parents=True, exist_ok=True)
-        Path(self.config.local_ai_backends_path).mkdir(parents=True, exist_ok=True)
-        Path(self.config.local_ai_tmp_dir).mkdir(parents=True, exist_ok=True)
-        Path(self.config.local_ai_backend_assets_path).mkdir(parents=True, exist_ok=True)
-        Path(self.config.local_ai_generated_content_path).mkdir(parents=True, exist_ok=True)
-        Path(self.config.local_ai_upload_path).mkdir(parents=True, exist_ok=True)
-        self._write_model_config()
-
+        await self.prepare()
         args = [self.config.local_ai_bin, *shlex.split(self.config.local_ai_args)]
         env = {
             **os.environ,
@@ -239,6 +226,20 @@ class EmbeddedLocalAiManager:
             self.process = None
             self._mark(message="Embedded LocalAI could not start.", error=str(error))
             self.logger.warning("Embedded LocalAI could not start.", extra={"error": str(error)})
+
+    async def prepare(self) -> None:
+        if not self.enabled:
+            self._mark(message="Embedded LocalAI is disabled.")
+            return
+        Path(self.config.local_ai_models_dir).mkdir(parents=True, exist_ok=True)
+        Path(self.config.local_ai_data_dir).mkdir(parents=True, exist_ok=True)
+        Path(self.config.local_ai_backends_path).mkdir(parents=True, exist_ok=True)
+        Path(self.config.local_ai_tmp_dir).mkdir(parents=True, exist_ok=True)
+        Path(self.config.local_ai_backend_assets_path).mkdir(parents=True, exist_ok=True)
+        Path(self.config.local_ai_generated_content_path).mkdir(parents=True, exist_ok=True)
+        Path(self.config.local_ai_upload_path).mkdir(parents=True, exist_ok=True)
+        self._write_model_config()
+        self._mark(message="Embedded LocalAI cache prepared.")
 
     async def stop(self) -> None:
         if self.process and self.process.returncode is None:
@@ -417,13 +418,13 @@ class EmbeddedLocalAiManager:
 
     async def _run_ensure_job(self, job_id: str, action: str, model_url: str, huggingface_token: str, download_model: bool) -> None:
         try:
-            await self._update_job(job_id, status="running", progressPercent=5, percent=5, message="Starting embedded LocalAI.")
-            await self.start()
             if action == "remove":
                 await self.stop()
                 await self._update_job(job_id, status="completed", progressPercent=100, percent=100, message="Embedded LocalAI stopped.")
                 self._download_jobs[job_id]["finishedAt"] = _now_iso()
                 return
+            await self._update_job(job_id, status="running", progressPercent=5, percent=5, message="Preparing embedded LocalAI.")
+            await self.prepare()
             if download_model:
                 await self._update_job(job_id, message="Downloading selected GGUF model.", progressPercent=10, percent=10)
                 download = await self.ensure_model_file(model_url, huggingface_token=huggingface_token, job_id=job_id)
@@ -433,6 +434,8 @@ class EmbeddedLocalAiManager:
                     raise EmbeddedLocalAiError("The selected LocalAI model is not downloaded yet.")
                 download = {"status": "present", "path": model["path"], "bytes": model["bytes"]}
             self._write_model_config(model_url)
+            await self._update_job(job_id, message="Starting embedded LocalAI.", progressPercent=85, percent=85)
+            await self.start()
             await self._update_job(job_id, message="Verifying chat generation.", progressPercent=90, percent=90)
             probe = await self.probe_generation(force=True, model_url=model_url)
             if not probe.get("ready"):
@@ -531,7 +534,7 @@ class EmbeddedLocalAiManager:
 
     async def status(self) -> dict[str, Any]:
         if self.enabled and not self.running():
-            await self.start()
+            await self.prepare()
         model = self.model_status(self.config.local_ai_default_model_url)
         probe = await self.probe_generation() if self.enabled and model["downloaded"] and self.running() else {
             "ready": False,

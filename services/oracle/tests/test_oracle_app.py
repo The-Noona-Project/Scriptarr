@@ -41,6 +41,7 @@ class FakeEmbeddedLocalAi:
     def __init__(self, *, ready=True, status=None) -> None:
         self.ready = ready
         self.started = False
+        self.prepared = False
         self.stopped = False
         self.ensure_jobs: list[dict] = []
         self.probe_count = 0
@@ -64,6 +65,9 @@ class FakeEmbeddedLocalAi:
 
     async def start(self) -> None:
         self.started = True
+
+    async def prepare(self) -> None:
+        self.prepared = True
 
     async def stop(self) -> None:
         self.stopped = True
@@ -331,7 +335,8 @@ def test_embedded_localai_model_discovery_uses_oracle_model_cache():
         "Hermes-3-Llama-3.1-8B-Q4_K_M.gguf",
         "Qwen3-8B-Q4_K_M.gguf"
     ]
-    assert embedded.started is True
+    assert embedded.prepared is True
+    assert embedded.started is False
 
 
 def test_embedded_localai_status_and_install_action_are_oracle_owned():

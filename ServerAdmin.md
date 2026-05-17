@@ -171,8 +171,8 @@ OpenAI-compatible LocalAI runtime inside `scriptarr-oracle`; the default model i
 
 Moon admin still exposes install, start, remove, status, and probe controls through the existing AI page, but those
 actions now flow Moon -> Sage -> Oracle. Oracle owns the private embedded model cache/runtime: it writes the GGUF YAML,
-downloads the selected model once into persistent storage, starts LocalAI, and only reports ready after a tiny
-OpenAI-compatible generation probe succeeds.
+downloads the selected model once into persistent storage, starts LocalAI during the explicit lifecycle action, and
+only reports ready after a tiny OpenAI-compatible generation probe succeeds.
 
 Warden plans the `scriptarr-oracle` container instead of a `scriptarr-localai` sidecar. It mounts persistent
 `localai/models` and `localai/data` folders into Oracle and passes hardware flags for the selected profile. NVIDIA
