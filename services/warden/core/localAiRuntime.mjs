@@ -39,6 +39,7 @@ const ORACLE_SETTINGS_KEY = "oracle.settings";
 const LOCALAI_CONFIG_CACHE_FILE = "localai-config.json";
 const LOCALAI_JOB_KIND = "localai-lifecycle";
 const LOCALAI_READINESS_MODEL = "gpt-4";
+const LOCALAI_READINESS_CHAT_TIMEOUT_MS = 60000;
 const nowIso = () => new Date().toISOString();
 const clampPercent = (value) => Math.min(100, Math.max(0, Number.parseInt(String(value), 10) || 0));
 
@@ -186,7 +187,7 @@ const probeLocalAiChat = async (fetchImpl, baseUrl) => {
         temperature: 0,
         max_tokens: 4
       }),
-      signal: AbortSignal.timeout(15000)
+      signal: AbortSignal.timeout(LOCALAI_READINESS_CHAT_TIMEOUT_MS)
     });
     const payload = await readJsonBody(response);
     const ok = Boolean(response.ok && hasUsableChatCompletion(payload));
