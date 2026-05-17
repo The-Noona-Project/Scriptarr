@@ -55,12 +55,13 @@ Warden also ships the Docker-backed test stack used by repo contributors:
 - `/api/updates`: current managed-service image state plus the latest broker-backed update job snapshot
 - `/api/updates/check`: pull-first update check for the managed sibling services
 - `/api/updates/install`: asynchronous managed-service install or restart flow for the sibling services
-- `/api/localai/*`: manual LocalAI AIO selection, install, status, readiness-gated start, and remove
+- `/api/localai/*`: legacy standalone LocalAI sidecar controls kept for compatibility only; Moon's current AI page
+  reaches Oracle's embedded LocalAI routes through Sage
 - `/health`: service health, Docker socket availability, and latest reconcile summary
 
-Moon's `/admin/system/ai` page reaches these LocalAI endpoints only through Sage. Warden should keep status and
-profile reads safe for the System Status matrix while keeping install, start, and remove service-authenticated and
-reported through durable job or event state.
+Moon's `/admin/system/ai` page now reaches Oracle's embedded LocalAI endpoints only through Sage. Warden should keep
+its runtime APIs service-authenticated, but its active role for LocalAI is planning the Oracle container mounts,
+environment, GPU device requests, and drift detection.
 
 ## Raven VPN Runtime
 
@@ -72,17 +73,7 @@ runtime as unsupported and enabled VPN downloads fail closed.
 
 ## LocalAI
 
-Warden ships four LocalAI AIO presets:
-
-- `cpu -> localai/localai:latest-aio-cpu`
-- `nvidia -> localai/localai:latest-aio-gpu-nvidia-cuda-12`
-- `amd -> localai/localai:latest-aio-gpu-hipblas`
-- `intel -> localai/localai:latest-aio-gpu-intel`
-
-When admins install or start LocalAI, Warden creates a long-running lifecycle job and updates separate Docker image,
-container, and model-readiness tasks so Moon can render progress without holding the HTTP request open. Starting
-LocalAI applies the matching runtime flags for the selected preset, mounts the persistent `localai/models` and
-`localai/data` folders, and waits for `GET /readyz` with `GET /v1/models` as a fallback before it reports the
-container as ready. Warden also constrains the AIO `MODELS` preload set to the Oracle-safe `text-to-text.yaml` profile
-for the selected hardware so the official AIO image boots reliably instead of hanging on optional bundled speech or
-media models. Removing LocalAI stops and removes the managed container plus the currently selected LocalAI image.
+Oracle embeds the LocalAI runtime in the `scriptarr-oracle` image. Warden mounts the persistent `localai/models` and
+`localai/data` folders into Oracle, passes profile-specific runtime flags such as NVIDIA `--gpus all`, and recreates
+Oracle when Docker inspect shows the requested GPU device binding is missing. Install, start, remove, and generation
+probe jobs are Oracle-owned and brokered through Sage.

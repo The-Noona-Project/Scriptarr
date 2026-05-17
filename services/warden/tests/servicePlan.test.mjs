@@ -22,6 +22,7 @@ test("service plan exposes the fixed Scriptarr network and selfhost mysql by def
   assert.equal(plan.stackMode, "production");
   assert.equal(plan.mysql.mode, "selfhost");
   assert.equal(plan.services.some((service) => service.name === "scriptarr-mysql"), true);
+  const oracle = plan.services.find((service) => service.name === "scriptarr-oracle");
   assert.equal(plan.services.find((service) => service.name === "scriptarr-moon").publishedPorts[0].hostPort, 3000);
   assert.equal(plan.services.find((service) => service.name === "scriptarr-vault").env.SUPERUSER_ID, "owner-1");
   assert.equal(plan.services.find((service) => service.name === "scriptarr-raven").env.SCRIPTARR_RAVEN_LOG_DIR, "/app/logs");
@@ -32,12 +33,35 @@ test("service plan exposes the fixed Scriptarr network and selfhost mysql by def
   assert.equal(plan.services.find((service) => service.name === "scriptarr-sage").env.SCRIPTARR_APPA_DISCORD_CLIENT_ID, "appa-client-id");
   assert.equal(plan.services.find((service) => service.name === "scriptarr-portal").env.SCRIPTARR_APPA_DISCORD_TOKEN, "appa-token");
   assert.equal(plan.services.find((service) => service.name === "scriptarr-portal").env.SCRIPTARR_APPA_DISCORD_CLIENT_ID, "appa-client-id");
-  assert.equal(plan.services.find((service) => service.name === "scriptarr-oracle").env.SCRIPTARR_SAGE_BASE_URL, "http://scriptarr-sage:3004");
+  assert.equal(oracle.env.SCRIPTARR_SAGE_BASE_URL, "http://scriptarr-sage:3004");
+  assert.equal(oracle.env.SCRIPTARR_LOCALAI_EMBEDDED, "true");
+  assert.equal(oracle.env.SCRIPTARR_LOCALAI_BASE_URL, "http://127.0.0.1:8080/v1");
+  assert.equal(oracle.env.SCRIPTARR_LOCALAI_DEFAULT_MODEL.includes("Hermes-3-Llama-3.1-8B-Q4_K_S.gguf"), true);
+  assert.equal(oracle.mounts.some((mount) => mount.containerPath === "/models"), true);
+  assert.equal(oracle.mounts.some((mount) => mount.containerPath === "/data"), true);
   assert.match(plan.services.find((service) => service.name === "scriptarr-mysql").healthCheck.command, /mysqladmin ping/);
   assert.match(plan.services.find((service) => service.name === "scriptarr-moon").healthCheck.command, /127\.0\.0\.1:3000\/health/);
   assert.match(plan.services.find((service) => service.name === "scriptarr-raven").healthCheck.command, /curl -fsS http:\/\/127\.0\.0\.1:8080\/health/);
   assert.match(plan.services.find((service) => service.name === "scriptarr-oracle").healthCheck.command, /python -c/);
   assert.match(plan.services.find((service) => service.name === "scriptarr-oracle").healthCheck.command, /127\.0\.0\.1:3001\/health/);
+});
+
+test("service plan gives embedded Oracle LocalAI NVIDIA runtime args when hinted", () => {
+  const plan = resolveServicePlan({
+    env: {
+      SCRIPTARR_MYSQL_URL: "SELFHOST",
+      SCRIPTARR_MYSQL_USER: "scriptarr",
+      SCRIPTARR_MYSQL_PASSWORD: "secret",
+      SCRIPTARR_ORACLE_LOCALAI_GPU_PROFILE: "nvidia",
+      SCRIPTARR_LOCALAI_BASE_URL: "http://scriptarr-localai:8080/v1"
+    }
+  });
+
+  const oracle = plan.services.find((service) => service.name === "scriptarr-oracle");
+  assert.deepEqual(oracle.extraArgs, ["--gpus", "all"]);
+  assert.equal(oracle.env.NVIDIA_VISIBLE_DEVICES, "all");
+  assert.equal(oracle.env.NVIDIA_DRIVER_CAPABILITIES, "compute,utility");
+  assert.equal(oracle.env.SCRIPTARR_LOCALAI_BASE_URL, "http://127.0.0.1:8080/v1");
 });
 
 test("service plan can explicitly disable Raven VPN runtime devices", () => {

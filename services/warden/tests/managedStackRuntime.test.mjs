@@ -7,8 +7,10 @@ import assert from "node:assert/strict";
 import {
   actualCapabilitiesForInspect,
   actualDevicesForInspect,
+  actualGpuRequestForInspect,
   desiredCapabilitiesForExtraArgs,
-  desiredDevicesForExtraArgs
+  desiredDevicesForExtraArgs,
+  desiredGpuRequestForExtraArgs
 } from "../core/managedStackRuntime.mjs";
 
 test("managed stack runtime normalizes capability and device drift inputs", () => {
@@ -41,4 +43,24 @@ test("managed stack runtime detects missing Raven VPN runtime capability inputs"
 
   assert.notDeepEqual(actualCapabilitiesForInspect(inspect), desiredCapabilitiesForExtraArgs(extraArgs));
   assert.notDeepEqual(actualDevicesForInspect(inspect), desiredDevicesForExtraArgs(extraArgs));
+});
+
+test("managed stack runtime detects Docker GPU request drift", () => {
+  const desiredArgs = ["--gpus", "all"];
+  const withGpu = {
+    HostConfig: {
+      DeviceRequests: [{
+        Capabilities: [["gpu", "utility", "compute"]]
+      }]
+    }
+  };
+  const withoutGpu = {
+    HostConfig: {
+      DeviceRequests: []
+    }
+  };
+
+  assert.equal(desiredGpuRequestForExtraArgs(desiredArgs), true);
+  assert.equal(actualGpuRequestForInspect(withGpu), true);
+  assert.equal(actualGpuRequestForInspect(withoutGpu), false);
 });

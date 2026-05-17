@@ -174,8 +174,9 @@
   dropdown, temperature, masked key state, LocalAI profile/image controls, manual install/start/remove actions,
   lifecycle progress, health/status, completion toasts, test prompt, tool toggles, assistant prompts, and confirmable
   proposals here instead of drifting those controls back into the main Settings page. Model options must come through
-  Moon -> Sage -> Oracle, not browser-direct provider calls. Keep saved Oracle/tool/proposal state on the fast AI page
-  payload and hydrate optional Oracle or LocalAI runtime probes from the secondary AI runtime route.
+  Moon -> Sage -> Oracle, not browser-direct provider calls. LocalAI actions now control Oracle's embedded runtime and
+  model cache, not a standalone sidecar. Keep saved Oracle/tool/proposal state on the fast AI page payload and hydrate
+  optional Oracle or LocalAI runtime probes from the secondary AI runtime route.
 - `/admin/system` also owns the root-only content reset maintenance flow. Keep it two-step, confirmation-gated,
   same-origin, and honest about what will be deleted: content-side requests, progress, read state, follows, bookmarks,
   Raven catalog state, Raven task state, and managed Raven download folders only.

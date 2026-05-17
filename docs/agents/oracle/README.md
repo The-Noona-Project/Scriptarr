@@ -13,17 +13,17 @@
   should degrade to `ok` with no correction text, not a guessed public correction.
 - If the context includes `visualIdentity`, use it only to answer Noona/Appa appearance questions. Do not claim Oracle
   viewed the images directly; Sage owns the text descriptions and Portal owns the Discord avatar assets.
-- It still uses OpenAI-compatible wiring so LocalAI can be swapped in later.
+- It uses OpenAI-compatible wiring for both OpenAI and embedded LocalAI. Embedded LocalAI runs in the Oracle container,
+  starts with no preloaded model, and downloads the selected GGUF once into persistent storage.
 - It should gracefully return disabled or degraded responses when OpenAI or LocalAI is unavailable.
 - Keep degraded replies provider-specific so OpenAI failures are not reported as LocalAI outages, and keep the
   provider call timeout long enough for CPU-only LocalAI admin tests.
-- Keep `GET /api/models` additive and read-only. It should discover OpenAI or LocalAI models through server-side
-  provider calls, filter OpenAI results to Oracle-compatible text/chat models, and return a current/default fallback
-  option if discovery fails.
+- Keep `GET /api/models` additive and read-only. It should discover OpenAI models through server-side provider calls
+  and return Oracle's embedded LocalAI model options/status when LocalAI is embedded.
 - Oracle's first-party Scriptarr reads should flow through Sage's internal broker routes rather than direct Vault or
   Warden clients.
-- When Oracle is configured for LocalAI and the model is left blank, use a LocalAI-friendly alias rather than the
-  OpenAI-default model name.
+- When Oracle is configured for LocalAI and the model is left blank or still has a legacy OpenAI-style alias, use
+  `Hermes-3-Llama-3.1-8B-Q4_K_S.gguf`.
 - Moon admin now manages Oracle from `/admin/system/ai` through Sage. Keep `/api/status` and `/api/chat` suitable for
   health display and the admin test prompt, and keep disabled or degraded responses friendly rather than making the
   broader stack unhealthy.

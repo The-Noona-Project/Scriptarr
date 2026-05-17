@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 from fastapi.testclient import TestClient
 
 from oracle_service.app import create_app
@@ -35,6 +37,102 @@ class FakeSageClient:
         return self.bootstrap
 
 
+class FakeEmbeddedLocalAi:
+    def __init__(self, *, ready=True, status=None) -> None:
+        self.ready = ready
+        self.started = False
+        self.stopped = False
+        self.ensure_jobs: list[dict] = []
+        self.probe_count = 0
+        self.status_payload = status or {
+            "enabled": True,
+            "running": True,
+            "ready": ready,
+            "model": {
+                "id": "Hermes-3-Llama-3.1-8B-Q4_K_S.gguf",
+                "present": ready,
+                "configured": ready
+            },
+            "probe": {
+                "ready": ready,
+                "checkedAt": "2026-05-17T00:00:00Z" if ready else None,
+                "error": None if ready else "Generation probe has not passed."
+            },
+            "job": None,
+            "baseUrl": "http://127.0.0.1:8080/v1"
+        }
+
+    async def start(self) -> None:
+        self.started = True
+
+    async def stop(self) -> None:
+        self.stopped = True
+
+    async def status(self):
+        return self.status_payload
+
+    async def is_ready(self) -> bool:
+        return self.ready
+
+    async def probe_generation(self, *, force=False):
+        self.probe_count += 1
+        self.status_payload["ready"] = self.ready
+        self.status_payload["probe"] = {
+            "ready": self.ready,
+            "checkedAt": "2026-05-17T00:00:00Z",
+            "error": None if self.ready else "Generation probe failed.",
+            "forced": force
+        }
+        return self.status_payload["probe"]
+
+    def model_options_payload(self, selected_model: str):
+        return {
+            "ok": True,
+            "provider": "localai",
+            "selectedModel": selected_model,
+            "source": "embedded-oracle",
+            "models": [
+                {
+                    "id": "Hermes-3-Llama-3.1-8B-Q4_K_S.gguf",
+                    "label": "Hermes 3 Llama 3.1 8B Q4_K_S"
+                },
+                {
+                    "id": "Hermes-3-Llama-3.1-8B-Q4_K_M.gguf",
+                    "label": "Hermes 3 Llama 3.1 8B Q4_K_M"
+                },
+                {
+                    "id": "Qwen3-8B-Q4_K_M.gguf",
+                    "label": "Qwen3 8B Q4_K_M"
+                }
+            ],
+            "status": self.status_payload
+        }
+
+    async def start_ensure_job(
+        self,
+        *,
+        action="ensure",
+        model_url=None,
+        huggingface_token="",
+        download_model=True,
+        requested_by=None,
+        force=False
+    ):
+        job = {
+            "id": "localai-ensure-test",
+            "action": action,
+            "status": "queued",
+            "modelUrl": model_url,
+            "hasToken": bool(huggingface_token),
+            "downloadModel": download_model,
+            "requestedBy": requested_by,
+            "force": force
+        }
+        self.ensure_jobs.append(job)
+        self.status_payload["job"] = job
+        return job
+
+
 def build_config() -> OracleConfig:
     return OracleConfig(
         port=3001,
@@ -48,6 +146,14 @@ def build_config() -> OracleConfig:
         temperature=0.2,
         llm_timeout_seconds=60.0,
         noona_persona_name="Noona"
+    )
+
+
+def build_embedded_config() -> OracleConfig:
+    return replace(
+        build_config(),
+        local_ai_embedded_enabled=True,
+        model="Hermes-3-Llama-3.1-8B-Q4_K_S.gguf"
     )
 
 
@@ -90,7 +196,8 @@ def test_oracle_status_reads_scriptarr_bootstrap_through_sage():
     assert payload["oracle"] == {
         "enabled": False,
         "provider": "openai",
-        "model": "gpt-4.1-mini"
+        "model": "gpt-4.1-mini",
+        "embeddedLocalAi": None
     }
 
 
@@ -110,6 +217,7 @@ def test_health_reports_runtime_and_bootstrap_details():
         "provider": "openai",
         "model": "gpt-4.1-mini",
         "localAiBaseUrl": "http://127.0.0.1:8080/v1",
+        "embeddedLocalAi": None,
         "openAiApiKeyConfigured": True,
         "status": {
             "ok": True,
@@ -196,6 +304,57 @@ def test_localai_model_discovery_reads_openai_compatible_models_endpoint():
     assert payload["selectedModel"] == "gpt-4"
     assert [entry["id"] for entry in payload["models"]] == ["gpt-4", "hermes-3"]
     assert seen["url"] == "http://127.0.0.1:8080/v1/models"
+
+
+def test_embedded_localai_model_discovery_uses_oracle_model_cache():
+    sage = FakeSageClient(
+        settings={
+            "enabled": True,
+            "provider": "localai",
+            "model": "gpt-4",
+            "temperature": 0.2
+        }
+    )
+    embedded = FakeEmbeddedLocalAi(ready=True)
+    app = create_app(config=build_embedded_config(), sage_client=sage, embedded_local_ai=embedded)
+
+    with TestClient(app) as client:
+        response = client.get("/api/models?provider=localai")
+
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["provider"] == "localai"
+    assert payload["selectedModel"] == "Hermes-3-Llama-3.1-8B-Q4_K_S.gguf"
+    assert payload["source"] == "embedded-oracle"
+    assert [entry["id"] for entry in payload["models"]] == [
+        "Hermes-3-Llama-3.1-8B-Q4_K_S.gguf",
+        "Hermes-3-Llama-3.1-8B-Q4_K_M.gguf",
+        "Qwen3-8B-Q4_K_M.gguf"
+    ]
+    assert embedded.started is True
+
+
+def test_embedded_localai_status_and_install_action_are_oracle_owned():
+    sage = FakeSageClient()
+    embedded = FakeEmbeddedLocalAi(ready=False)
+    app = create_app(config=build_embedded_config(), sage_client=sage, embedded_local_ai=embedded)
+
+    with TestClient(app) as client:
+        status_response = client.get("/api/localai/status")
+        probe_response = client.post("/api/localai/probe", json={"force": True})
+        install_response = client.post(
+            "/api/localai/actions/install",
+            json={"model": "Hermes-3-Llama-3.1-8B-Q4_K_M.gguf", "requestedBy": {"kind": "owner"}}
+        )
+
+    assert status_response.json()["enabled"] is True
+    assert probe_response.json()["ready"] is False
+    assert embedded.probe_count == 1
+    install_payload = install_response.json()
+    assert install_payload["ok"] is True
+    assert install_payload["job"]["action"] == "install"
+    assert install_payload["job"]["modelUrl"] == "Hermes-3-Llama-3.1-8B-Q4_K_M.gguf"
+    assert install_payload["job"]["requestedBy"] == {"kind": "owner"}
 
 
 def test_model_discovery_falls_back_when_openai_key_is_missing():
@@ -340,6 +499,28 @@ def test_localai_unavailable_returns_degraded_fallback():
         return False
 
     app = create_app(config=build_config(), sage_client=sage, probe_local_ai_fn=unavailable_probe)
+
+    with TestClient(app) as client:
+        response = client.post("/api/chat", json={"message": "Say hi"})
+
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["degraded"] is True
+    assert payload["reply"] == "Noona is in read-only fallback mode because LocalAI is unavailable right now."
+    assert payload["error"] == "LocalAI probe failed."
+
+
+def test_embedded_localai_requires_generation_probe_before_chat():
+    sage = FakeSageClient(
+        settings={
+            "enabled": True,
+            "provider": "localai",
+            "model": "Hermes-3-Llama-3.1-8B-Q4_K_S.gguf",
+            "temperature": 0.2
+        }
+    )
+    embedded = FakeEmbeddedLocalAi(ready=False)
+    app = create_app(config=build_embedded_config(), sage_client=sage, embedded_local_ai=embedded)
 
     with TestClient(app) as client:
         response = client.post("/api/chat", json={"message": "Say hi"})

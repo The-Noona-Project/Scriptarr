@@ -38,7 +38,8 @@ How to choose the edit point:
 - Discord symptom: inspect Portal first, then the Sage broker route and Vault/Raven state it depends on.
 - Durable-state symptom: inspect Sage's broker call and Vault's store before changing any service-local cache.
 - Download/library/VPN symptom: inspect Raven, but keep shared state through Sage and Vault.
-- Docker, image, first-boot, update, or LocalAI lifecycle symptom: inspect Warden and its service plan/runtime code.
+- Docker, image, first-boot, update, or GPU service-plan symptom: inspect Warden and its service plan/runtime code.
+  Embedded LocalAI model/runtime symptoms start in Oracle, then flow back through Sage and Moon admin routes.
 
 Common code paths:
 
@@ -163,8 +164,8 @@ Architecture invariants:
   with an exact recovery action if a stale running title task cannot be cancelled into retryable work.
 - Oracle is now a FastAPI Python service that keeps the same Sage-facing wire contract plus `/api/assist` for bounded
   structured assistance. It never executes mutations directly.
-- Warden-managed LocalAI presets use the LocalAI AIO images and must wait for a usable chat-completion readiness probe
-  before surfacing success.
+- Oracle owns embedded LocalAI model/runtime lifecycle. Warden only injects Oracle mounts and GPU/runtime flags; do not
+  revive the standalone `scriptarr-localai` sidecar path unless the product requirement explicitly changes.
 - Raven VPN fails closed when enabled, and the internal `raven.naming` setting now controls chapter and page naming.
 - `raven.naming` is now profile-based by library type, and Moon admin exposes it through `/admin/mediamanagement`
   instead of burying it in the generic settings page.

@@ -15,8 +15,8 @@ optional Appa admin/reviewer chat, and the Oracle chat bridge through Sage.
   templates and Sage-owned state remain authoritative.
 - Portal must send first-party internal HTTP through Sage. Do not add direct Vault, Warden, Raven, or Oracle calls here.
 - Keep the split Discord command contract intact: Noona owns reader-facing commands and public chat; Appa owns admin
-  commands, admin mentions, DM-only `downloadall`, and serious Noona corrections. If Appa is disabled, missing env, or
-  degraded at startup, Noona must keep the legacy single-bot admin fallback.
+  commands, admin mentions, DM-only `downloadall`, redacted Discord diagnostics, and serious Noona corrections. If
+  Appa is disabled, missing env, or degraded at startup, Noona must keep the legacy single-bot admin fallback.
 - Noona trivia guesses are normal guild messages in the configured channel. Portal should ignore bots, wrong channels,
   and inactive rounds; Sage owns the round, guess, score, and leaderboard state.
 - Public Noona mention chat should detect the real bot mention by Discord user id, not display name. It must ignore
@@ -24,6 +24,8 @@ optional Appa admin/reviewer chat, and the Oracle chat bridge through Sage.
   publicly; split long replies; and return handled so trivia does not also process the same message.
 - Appa review should happen after Noona replies and only post same-thread corrections for serious verdicts. Persist
   review and delivery results through Sage with redacted excerpts, not raw transcripts.
+- Appa Discord diagnostics may inspect recent messages only in configured Noona/Appa-allowed channels. Redact content
+  before responding or auditing, and persist only redacted diagnostic events through Sage.
 - Keep Discord workflow configuration behind the brokered `portal.discord` setting consumed from Moon admin instead of
   scattering guild, role, or onboarding logic across unrelated env vars.
 - Keep public Discord copy branded. Normal slash-command replies, requester DMs, release posts, and update posts should

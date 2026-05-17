@@ -6,8 +6,8 @@
 - Portal is not allowed to call Vault or Oracle directly. First-party internal traffic must go through Sage's token-authenticated broker routes.
 - In split mode, Noona owns reader-facing `/search`, `/request`, `/subscribe`, `/trivia status|leaderboard`, public
   mention chat, trivia posts/guesses, onboarding, requester DMs, release posts, and update posts. Appa owns admin
-  `/ding`, `/status`, owner-only DM `/downloadall`, `/trivia start|stop`, admin mentions, legacy raw DM
-  `downloadall ...`, downloadall reactions, and serious Noona corrections.
+  `/ding`, `/status`, owner-only DM `/downloadall`, `/trivia start|stop`, `/discord inspect|testpost`, admin
+  mentions, legacy raw DM `downloadall ...`, downloadall reactions, and serious Noona corrections.
 - If Appa is disabled, missing env, or degraded at startup, Noona must retain the legacy single-bot admin fallback,
   including `/chat`, admin slash commands, DM `downloadall`, and downloadall reactions.
 - Portal should treat the brokered `portal.discord` setting as the source of truth for guild id, onboarding message or
@@ -39,6 +39,9 @@
   behavior.
 - Appa admin mentions must call Sage's `/api/internal/portal/appa-chat`, not Oracle directly. Appa may draft
   Sage-governed proposals but must never execute actions from Discord.
+- Appa Discord diagnostics must stay Appa-owned. `/discord inspect` may read recent messages only from configured
+  Noona/Appa-allowed channels, return short sanitized snippets plus metadata, and record a redacted audit event through
+  Sage. `/discord testpost` should send only the admin-supplied test text to an allowed channel and audit the result.
 - Public Noona replies may trigger a background Sage `/api/internal/portal/noona-review` call. Appa should only post a
   same-thread correction for serious verdicts, and Portal must append delivery success/failure through Sage after
   Discord accepts or rejects the correction.
@@ -55,8 +58,6 @@
 - Durable Noona memory is a capped Vault settings summary, not raw transcript storage. Portal may surface runtime
   diagnostics such as last mention time/error, while Sage handles `remember that`, `forget that`, `forget me`, and
   `what do you remember about me?`.
-- Portal also sends deduped system DMs for LocalAI lifecycle jobs exposed by Sage, including install, start, and
-  remove completion or failure notices for the Discord-backed admin who requested the action.
 - Portal-originated async request and Discord-runtime state that matters to operators should now be mirrored into the
   shared durable event log through Sage's internal broker routes instead of living only in Portal-local memory.
 - `/request` now mirrors Moon's metadata-first wizard. Portal should search raw metadata rows first, then submit one

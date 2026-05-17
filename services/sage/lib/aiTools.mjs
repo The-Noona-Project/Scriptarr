@@ -31,9 +31,9 @@ export const AI_TOOL_REGISTRY = Object.freeze([
   {id: "request_refresh_sources", label: "Refresh Request Sources", kind: "operation", risk: "medium", grant: {domain: "requests", level: "write"}, defaultEnabled: false, description: "Refresh download sources for a request."},
   {id: "queue_retry_failed", label: "Retry Queue Attention", kind: "operation", risk: "medium", grant: {domain: "activity", level: "write"}, defaultEnabled: false, description: "Retry failed queue items that are eligible for recovery."},
   {id: "system_task_run", label: "Run System Task", kind: "operation", risk: "medium", grant: {domain: "system", level: "root"}, defaultEnabled: false, description: "Run an allowlisted Sage system task."},
-  {id: "localai_install", label: "Install LocalAI", kind: "operation", risk: "high", grant: {domain: "ai", level: "root"}, defaultEnabled: false, description: "Start Warden's LocalAI install job."},
-  {id: "localai_start", label: "Start LocalAI", kind: "operation", risk: "medium", grant: {domain: "ai", level: "root"}, defaultEnabled: false, description: "Start LocalAI and wait for readiness."},
-  {id: "localai_remove", label: "Remove LocalAI", kind: "operation", risk: "high", grant: {domain: "ai", level: "root"}, defaultEnabled: false, description: "Remove the LocalAI container/image."},
+  {id: "localai_install", label: "Install LocalAI", kind: "operation", risk: "high", grant: {domain: "ai", level: "root"}, defaultEnabled: false, description: "Start Oracle's embedded LocalAI model ensure job."},
+  {id: "localai_start", label: "Start LocalAI", kind: "operation", risk: "medium", grant: {domain: "ai", level: "root"}, defaultEnabled: false, description: "Start embedded LocalAI and wait for generation readiness."},
+  {id: "localai_remove", label: "Remove LocalAI", kind: "operation", risk: "high", grant: {domain: "ai", level: "root"}, defaultEnabled: false, description: "Stop Oracle's embedded LocalAI runtime."},
   {id: "trivia_start", label: "Start Trivia Round", kind: "operation", risk: "low", grant: {domain: "discord", level: "write"}, defaultEnabled: false, description: "Start a manual Discord trivia round."},
   {id: "trivia_stop", label: "Stop Trivia Round", kind: "operation", risk: "low", grant: {domain: "discord", level: "write"}, defaultEnabled: false, description: "Stop the active Discord trivia round."}
 ]);

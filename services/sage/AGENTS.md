@@ -29,6 +29,8 @@ HTTP broker.
 - Keep Appa admin chat and Noona public-reply review brokered through Sage. Portal should call
   `/api/internal/portal/appa-chat`, `/api/internal/portal/noona-review`, and `/api/internal/portal/noona-review/delivery`;
   Sage owns Appa persona context, redacted durable audit events, and conservative proposal boundaries.
+- Keep Appa Discord diagnostics brokered through Sage. Portal should call
+  `/api/internal/portal/appa-discord-diagnostic`, and Sage should persist only redacted metadata/snippets for audit.
 - Keep AI tool execution Sage-governed. Oracle can assist planning, but Sage must enforce the `ai` domain, enabled
   toggles, grant checks, proposal confirmation, expiry, and durable events.
 - Portal-facing release notifications should be grouped into digest payloads with cursor-style `silenceBefore`

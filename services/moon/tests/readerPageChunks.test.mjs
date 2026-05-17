@@ -4,9 +4,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  beginReaderPageRequest,
+  completeReaderPageRequest,
   hasReaderPageWindow,
+  hasReaderPageRequestForChapter,
+  mergeReaderPageRequestPages,
   mergeReaderPages,
-  resolveWebtoonLoadMoreAction
+  resolveReaderPreloadPlan,
+  resolveWebtoonLoadMoreAction,
+  warmReaderPageImages
 } from "../apps/reader-next/lib/pageChunks.js";
 
 test("reader page chunks append by index without duplicates or reordering", () => {
@@ -28,6 +34,145 @@ test("reader page window detects missing chunk metadata", () => {
 
   assert.equal(hasReaderPageWindow(loaded, 0, 12, 71), true);
   assert.equal(hasReaderPageWindow(loaded, 12, 12, 71), false);
+});
+
+test("reader page request merge keeps appended chunks when initial replace finishes late", () => {
+  const pages = mergeReaderPageRequestPages({
+    currentPages: [{index: 12}, {index: 13}],
+    incomingPages: [{index: 0}, {index: 1}],
+    replace: true,
+    currentRevision: "rev-1",
+    nextRevision: "rev-1"
+  });
+
+  assert.deepEqual(pages.map((page) => page.index), [0, 1, 12, 13]);
+});
+
+test("reader page request merge drops old revision pages on replacement", () => {
+  const pages = mergeReaderPageRequestPages({
+    currentPages: [{index: 12}, {index: 13}],
+    incomingPages: [{index: 0}, {index: 1}],
+    replace: true,
+    currentRevision: "rev-1",
+    nextRevision: "rev-2"
+  });
+
+  assert.deepEqual(pages.map((page) => page.index), [0, 1]);
+});
+
+test("reader page request tracker lets concurrent chapter chunks merge independently", () => {
+  const inFlight = new Set();
+  const first = beginReaderPageRequest(inFlight, {
+    epoch: 1,
+    chapterId: "chapter-252",
+    cursor: 0,
+    pageSize: 12,
+    pageRevision: "rev-1"
+  });
+  const second = beginReaderPageRequest(inFlight, {
+    epoch: 1,
+    chapterId: "chapter-252",
+    cursor: 12,
+    pageSize: 12,
+    pageRevision: "rev-1"
+  });
+
+  assert.equal(hasReaderPageRequestForChapter(inFlight, {epoch: 1, chapterId: "chapter-252"}), true);
+  assert.equal(completeReaderPageRequest(inFlight, second), true);
+  assert.equal(hasReaderPageRequestForChapter(inFlight, {epoch: 1, chapterId: "chapter-252"}), true);
+  assert.equal(completeReaderPageRequest(inFlight, first), true);
+  assert.equal(hasReaderPageRequestForChapter(inFlight, {epoch: 1, chapterId: "chapter-252"}), false);
+});
+
+test("reader page request tracker keeps duplicate prefetch attempts independent", () => {
+  const inFlight = new Set();
+  const first = beginReaderPageRequest(inFlight, {
+    epoch: 1,
+    chapterId: "chapter-252",
+    cursor: 12,
+    pageSize: 12,
+    pageRevision: "rev-1",
+    requestId: 1
+  });
+  const second = beginReaderPageRequest(inFlight, {
+    epoch: 1,
+    chapterId: "chapter-252",
+    cursor: 12,
+    pageSize: 12,
+    pageRevision: "rev-1",
+    requestId: 2
+  });
+
+  assert.equal(completeReaderPageRequest(inFlight, first), true);
+  assert.equal(completeReaderPageRequest(inFlight, second), true);
+});
+
+test("reader page request tracker rejects stale tokens after a chapter reset", () => {
+  const inFlight = new Set();
+  const stale = beginReaderPageRequest(inFlight, {
+    epoch: 1,
+    chapterId: "chapter-252",
+    cursor: 0,
+    pageSize: 12,
+    pageRevision: "rev-1",
+    replace: true
+  });
+
+  inFlight.clear();
+
+  assert.equal(completeReaderPageRequest(inFlight, stale), false);
+});
+
+test("webtoon preload plans the next three pages plus a previous cushion", () => {
+  const loaded = Array.from({length: 12}, (_value, index) => ({index}));
+  const plan = resolveReaderPreloadPlan({
+    layoutMode: "webtoon",
+    activeIndex: 10,
+    pageCount: 30,
+    loadedPages: loaded,
+    chunkSize: 12
+  });
+
+  assert.deepEqual(plan.warmIndexes, [9, 11, 12, 13]);
+  assert.deepEqual(plan.metadataRequests, [{cursor: 12, pageSize: 12}]);
+  assert.equal(plan.prefetchNextChapter, false);
+});
+
+test("paged preload reaches three pages ahead and asks for next chapter prefetch near the end", () => {
+  const loaded = Array.from({length: 18}, (_value, index) => ({index}));
+  const plan = resolveReaderPreloadPlan({
+    layoutMode: "single",
+    activeIndex: 17,
+    pageCount: 20,
+    loadedPages: loaded,
+    chunkSize: 12
+  });
+
+  assert.deepEqual(plan.warmIndexes, [18, 19]);
+  assert.deepEqual(plan.metadataRequests, [{cursor: 18, pageSize: 2}]);
+  assert.equal(plan.prefetchNextChapter, true);
+});
+
+test("reader image warmer decodes only requested loaded page images", async () => {
+  const sources = [];
+  class FakeImage {
+    set src(value) {
+      sources.push(value);
+      setTimeout(() => this.onload?.(), 0);
+    }
+
+    decode() {
+      return Promise.resolve();
+    }
+  }
+
+  const result = await warmReaderPageImages([
+    {index: 1, src: "/page-1.jpg"},
+    {index: 2, src: "/page-2.jpg"}
+  ], [2, 3], {imageFactory: FakeImage});
+
+  assert.deepEqual(sources, ["/page-2.jpg"]);
+  assert.deepEqual(result, [{index: 2, ok: true}]);
 });
 
 test("webtoon load-more waits while the first chunk is still loading", () => {

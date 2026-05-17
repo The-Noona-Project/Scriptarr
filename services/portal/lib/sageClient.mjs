@@ -298,6 +298,13 @@ export const createSageClient = (config) => {
         timeoutMs: 30000
       });
     },
+    recordAppaDiscordDiagnostic(payload) {
+      return requestJson(config.sageBaseUrl, jsonHeaders, "/api/internal/portal/appa-discord-diagnostic", {
+        method: "POST",
+        body: payload,
+        timeoutMs: 10000
+      });
+    },
     reviewNoonaReply(payload) {
       return requestJson(config.sageBaseUrl, jsonHeaders, "/api/internal/portal/noona-review", {
         method: "POST",

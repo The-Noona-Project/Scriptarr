@@ -12,6 +12,7 @@ export const knownPortalDiscordCommands = Object.freeze([
   {id: "request", name: "request", description: "Create a moderated Scriptarr request from Discord.", mode: "slash", splitOwner: "noona"},
   {id: "subscribe", name: "subscribe", description: "Follow a title for release notifications.", mode: "slash", splitOwner: "noona"},
   {id: "trivia", name: "trivia", description: "Play and manage Scriptarr title trivia.", mode: "slash", splitOwner: "both"},
+  {id: "discord", name: "discord", description: "Appa-owned Discord channel diagnostics.", mode: "slash", splitOwner: "appa"},
   {id: "downloadall", name: "downloadall", description: "Owner-only DM-only WeebCentral downloadall run command.", mode: "dm", splitOwner: "appa", ownerOnly: true, roleManaged: false}
 ]);
 
@@ -19,6 +20,7 @@ export const knownAppaDiscordCommands = Object.freeze([
   {id: "ding", name: "ding", description: "Simple Appa health reply.", mode: "slash"},
   {id: "status", name: "status", description: "Read-only Scriptarr status summary.", mode: "slash"},
   {id: "trivia", name: "trivia", description: "Admin trivia start and stop controls.", mode: "slash"},
+  {id: "discord", name: "discord", description: "Inspect allowed channels and send Appa diagnostic test posts.", mode: "slash"},
   {id: "downloadall", name: "downloadall", description: "Owner-only DM-only WeebCentral downloadall run command.", mode: "dm"}
 ]);
 

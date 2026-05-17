@@ -132,6 +132,38 @@ test("Appa review stores redacted recommendation and records correction delivery
   assert.equal(vault.events[1].metadata.correctionMessageId, "appa-reply-1");
 });
 
+test("Appa Discord diagnostics record only redacted durable audit snippets", async () => {
+  const vault = createVault();
+  const service = createAppaChatService({
+    config: {},
+    vaultClient: vault,
+    serviceJson: async () => ({ok: true, status: 200, payload: {}})
+  });
+
+  const result = await service.recordDiscordDiagnostic({
+    action: "inspect",
+    guildId: "guild-1",
+    channelId: "admin-chat",
+    requestedBy: "admin-1",
+    snippets: [{
+      messageId: "message-1",
+      author: "CaptainPax",
+      createdAt: "2026-05-17T12:00:00.000Z",
+      snippet: "password=hunter2 https://secret.example <@12345> token=abc123",
+      attachmentCount: 1
+    }]
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(vault.events.length, 1);
+  assert.equal(vault.events[0].eventType, "appa-discord-diagnostic");
+  assert.equal(vault.events[0].metadata.action, "inspect");
+  assert.equal(vault.events[0].metadata.snippetCount, 1);
+  assert.doesNotMatch(vault.events[0].metadata.snippets[0].snippet, /hunter2|secret\.example|<@12345>|abc123/);
+  assert.match(vault.events[0].metadata.snippets[0].snippet, /\[redacted-url\]/);
+  assert.match(vault.events[0].metadata.snippets[0].snippet, /\[redacted-mention\]/);
+});
+
 test("Portal Discord settings normalize Appa command gates and split metadata defaults", () => {
   const settings = normalizePortalDiscordSettings({
     appa: {
@@ -140,6 +172,7 @@ test("Portal Discord settings normalize Appa command gates and split metadata de
       correctionMode: "off",
       commands: {
         status: {enabled: false, roleId: "role-appa-status"},
+        discord: {enabled: true, roleId: "role-appa-discord"},
         downloadall: {enabled: true, roleId: "ignored-owner-role"}
       }
     }
@@ -150,5 +183,6 @@ test("Portal Discord settings normalize Appa command gates and split metadata de
   assert.equal(settings.appa.correctionMode, "off");
   assert.equal(settings.appa.commands.status.enabled, false);
   assert.equal(settings.appa.commands.status.roleId, "role-appa-status");
+  assert.equal(settings.appa.commands.discord.roleId, "role-appa-discord");
   assert.equal(settings.appa.commands.downloadall.roleId, "");
 });

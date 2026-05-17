@@ -22,7 +22,7 @@ const DOWNLOADALL_APPROVE_REACTION = "✅";
 const DOWNLOADALL_DENY_REACTION = "❌";
 
 const NOONA_SPLIT_COMMANDS = Object.freeze(["search", "request", "subscribe", "trivia"]);
-const APPA_SPLIT_COMMANDS = Object.freeze(["ding", "status", "trivia", "downloadall"]);
+const APPA_SPLIT_COMMANDS = Object.freeze(["ding", "status", "trivia", "discord", "downloadall"]);
 
 const collectErrorText = (error) => {
   const fragments = [];

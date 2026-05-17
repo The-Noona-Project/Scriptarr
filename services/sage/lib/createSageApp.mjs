@@ -54,7 +54,7 @@ const ORACLE_OPENAI_API_KEY_SECRET = "oracle.openai.apiKey";
 const MOON_PUBLIC_API_KEY = "moon.publicApi";
 const MOON_PUBLIC_API_HASH_SECRET = "moon.publicApi.keyHash";
 const ORACLE_OPENAI_DEFAULT_MODEL = process.env.SCRIPTARR_ORACLE_OPENAI_MODEL || "gpt-4.1-mini";
-const ORACLE_LOCALAI_DEFAULT_MODEL = "gpt-4";
+const ORACLE_LOCALAI_DEFAULT_MODEL = "Hermes-3-Llama-3.1-8B-Q4_K_S.gguf";
 const PUBLIC_API_SELECTION_TTL_MS = 5 * 60 * 1000;
 const INTERNAL_JSON_BODY_LIMIT = "10mb";
 
@@ -503,19 +503,6 @@ const sendPortalOnboardingTest = async (config, payload) => safeJson(serviceJson
   body: payload
 }));
 
-const syncWardenLocalAiConfig = async (config, oracleSettings) => {
-  const payload = {
-    profileKey: oracleSettings.localAiProfileKey,
-    imageMode: oracleSettings.localAiImageMode,
-    customImage: oracleSettings.localAiCustomImage
-  };
-  return safeJson(serviceJson(config.wardenBaseUrl, "/api/localai/config", {
-    method: "PUT",
-    body: payload,
-    timeoutMs: 3000
-  }));
-};
-
 const persistOracleSettings = async ({config, vaultClient, user, body, appendAdminUserEvent}) => {
   const password = normalizeString(body?.openAiApiKey);
   const existingSecret = await readSecret(vaultClient, ORACLE_OPENAI_API_KEY_SECRET);
@@ -533,7 +520,6 @@ const persistOracleSettings = async ({config, vaultClient, user, body, appendAdm
   if (password) {
     await vaultClient.setSecret(ORACLE_OPENAI_API_KEY_SECRET, password);
   }
-  const wardenSync = await syncWardenLocalAiConfig(config, nextSettings);
   await appendAdminUserEvent(user, {
     domain: "settings",
     eventType: "oracle-settings-updated",
@@ -548,7 +534,11 @@ const persistOracleSettings = async ({config, vaultClient, user, body, appendAdm
   });
   return {
     ...(await readOracleSettings(vaultClient)),
-    wardenSync: wardenSync.payload || wardenSync
+    localAiSync: {
+      ok: true,
+      owner: "scriptarr-oracle",
+      message: "Embedded LocalAI settings are applied by Oracle runtime."
+    }
   };
 };
 
@@ -1735,7 +1725,7 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
   app.get("/api/admin/warden/localai", requireAdminGrant(vaultClient, "system", "read"), async (_req, res) => {
     const [oracleSettings, localAiStatus] = await Promise.all([
       readOracleSettings(vaultClient),
-      safeJson(serviceJson(config.wardenBaseUrl, "/api/localai/status"))
+      safeJson(serviceJson(config.oracleBaseUrl, "/api/localai/status"))
     ]);
     res.json({
       oracle: oracleSettings,
@@ -1745,10 +1735,10 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
 
   app.post("/api/admin/warden/localai/install", requireAdminGrant(vaultClient, "system", "root"), async (req, res) => {
     const oracleSettings = await readOracleSettings(vaultClient);
-    await syncWardenLocalAiConfig(config, oracleSettings);
-    const result = await safeJson(serviceJson(config.wardenBaseUrl, "/api/localai/actions/install", {
+    const result = await safeJson(serviceJson(config.oracleBaseUrl, "/api/localai/actions/install", {
       method: "POST",
       body: {
+        model: oracleSettings.model,
         requestedBy: {
           discordUserId: normalizeString(req.user?.discordUserId),
           username: normalizeString(req.user?.username, "Admin")
@@ -1760,8 +1750,8 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
       domain: "system",
       eventType: "localai-install-started",
       targetType: "service",
-      targetId: "scriptarr-warden",
-      message: `${req.user.username} started the LocalAI install flow.`,
+      targetId: "scriptarr-oracle",
+      message: `${req.user.username} started the embedded LocalAI install flow.`,
       metadata: {
         result: result.payload || result
       }
@@ -1771,10 +1761,10 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
 
   app.post("/api/admin/warden/localai/start", requireAdminGrant(vaultClient, "system", "root"), async (req, res) => {
     const oracleSettings = await readOracleSettings(vaultClient);
-    await syncWardenLocalAiConfig(config, oracleSettings);
-    const result = await safeJson(serviceJson(config.wardenBaseUrl, "/api/localai/actions/start", {
+    const result = await safeJson(serviceJson(config.oracleBaseUrl, "/api/localai/actions/start", {
       method: "POST",
       body: {
+        model: oracleSettings.model,
         requestedBy: {
           discordUserId: normalizeString(req.user?.discordUserId),
           username: normalizeString(req.user?.username, "Admin")
@@ -1786,8 +1776,8 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
       domain: "system",
       eventType: "localai-started",
       targetType: "service",
-      targetId: "scriptarr-warden",
-      message: `${req.user.username} started LocalAI.`,
+      targetId: "scriptarr-oracle",
+      message: `${req.user.username} started embedded LocalAI.`,
       metadata: {
         result: result.payload || result
       }
@@ -1796,7 +1786,7 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
   });
 
   app.post("/api/admin/warden/localai/remove", requireAdminGrant(vaultClient, "system", "root"), async (req, res) => {
-    const result = await safeJson(serviceJson(config.wardenBaseUrl, "/api/localai/actions/remove", {
+    const result = await safeJson(serviceJson(config.oracleBaseUrl, "/api/localai/actions/remove", {
       method: "POST",
       body: {
         requestedBy: {
@@ -1810,8 +1800,8 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
       domain: "system",
       eventType: "localai-remove-requested",
       targetType: "service",
-      targetId: "scriptarr-warden",
-      message: `${req.user.username} requested LocalAI removal.`,
+      targetId: "scriptarr-oracle",
+      message: `${req.user.username} requested embedded LocalAI removal.`,
       metadata: {
         result: result.payload || result
       }
@@ -1913,8 +1903,7 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
       user,
       body,
       appendAdminUserEvent
-    }),
-    syncWardenLocalAiConfig: (oracleSettings) => syncWardenLocalAiConfig(config, oracleSettings)
+    })
   });
 
   app.use((error, _req, res, _next) => {

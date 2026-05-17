@@ -509,9 +509,9 @@ const createDependencyStub = ({
       response.writeHead(200, {"Content-Type": "application/json"});
       response.end(JSON.stringify({
         provider,
-        selectedModel: provider === "localai" ? "gpt-4" : "gpt-4.1-mini",
+        selectedModel: provider === "localai" ? "Hermes-3-Llama-3.1-8B-Q4_K_S.gguf" : "gpt-4.1-mini",
         models: provider === "localai"
-          ? [{id: "gpt-4", label: "gpt-4"}]
+          ? [{id: "Hermes-3-Llama-3.1-8B-Q4_K_S.gguf", label: "Hermes 3 Llama 3.1 8B Q4_K_S"}]
           : [{id: "gpt-4.1-mini", label: "gpt-4.1-mini"}],
         source: "live",
         ok: true,
@@ -1034,16 +1034,17 @@ const createDependencyStub = ({
       calls.localAiProfile += 1;
       response.writeHead(200, {"Content-Type": "application/json"});
       response.end(JSON.stringify({
-        selectedProfile: "cpu",
+        selectedProfile: "embedded",
         profiles: [{
-          key: "cpu",
-          label: "CPU",
-          image: "localai/localai:latest-aio-cpu"
+          key: "embedded",
+          label: "Embedded Oracle",
+          image: "scriptarr-oracle"
         }, {
           key: "nvidia",
           label: "NVIDIA",
-          image: "localai/localai:latest-aio-gpu-nvidia-cuda-12"
-        }]
+          image: "scriptarr-oracle"
+        }],
+        embedded: true
       }));
       return;
     }
@@ -1533,7 +1534,7 @@ test("sage signs in the first owner through the Discord callback and moderates r
       "Authorization": `Bearer ${ownerClaim.token}`
     }
   }).then((response) => response.json());
-  assert.equal(aiRuntime.localAiProfile.selectedProfile, "cpu");
+  assert.equal(aiRuntime.localAiProfile.selectedProfile, "embedded");
   assert.equal(aiRuntime.localAi.installed, false);
   assert.equal(dependencyStub.calls.localAiProfile, 1);
 
@@ -1546,7 +1547,7 @@ test("sage signs in the first owner through the Discord callback and moderates r
     }
   }).then((response) => response.json());
   assert.equal(aiLocalAiModels.provider, "localai");
-  assert.equal(aiLocalAiModels.models[0].id, "gpt-4");
+  assert.equal(aiLocalAiModels.models[0].id, "Hermes-3-Llama-3.1-8B-Q4_K_S.gguf");
 
   const aiLocalAiStart = await fetch(`${baseUrl}/api/moon-v3/admin/system/ai/localai/start`, {
     method: "POST",
@@ -1555,7 +1556,7 @@ test("sage signs in the first owner through the Discord callback and moderates r
       "Authorization": `Bearer ${ownerClaim.token}`
     },
     body: JSON.stringify({
-      localAiProfileKey: "cpu",
+      localAiProfileKey: "nvidia",
       localAiImageMode: "preset",
       localAiCustomImage: ""
     })
@@ -4438,7 +4439,7 @@ test("sage no longer exposes a dev-session claim endpoint", async () => {
   await closeServer(dependencyStub.server);
 });
 
-test("sage defaults a blank LocalAI model to an AIO-friendly alias", async () => {
+test("sage defaults a blank LocalAI model to the embedded Hermes model", async () => {
   const {app: vaultApp} = await createVaultApp();
   const vaultServer = vaultApp.listen(0);
   const vaultPort = vaultServer.address().port;
@@ -4482,7 +4483,7 @@ test("sage defaults a blank LocalAI model to an AIO-friendly alias", async () =>
 
   assert.equal(response.status, 200);
   assert.equal(oracleSettings.provider, "localai");
-  assert.equal(oracleSettings.model, "gpt-4");
+  assert.equal(oracleSettings.model, "Hermes-3-Llama-3.1-8B-Q4_K_S.gguf");
 
   await closeServer(sageServer);
   await closeServer(vaultServer);

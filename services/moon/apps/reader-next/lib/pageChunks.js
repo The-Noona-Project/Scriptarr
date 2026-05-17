@@ -4,6 +4,19 @@
  * @file Reader page-chunk state helpers.
  */
 
+const REQUEST_TOKEN_SEPARATOR = "\u001f";
+
+const toPositiveInteger = (value, fallback = 0) => {
+  const parsed = Number.parseInt(String(value), 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+};
+
+const clampIndex = (value, pageCount) => {
+  const parsed = Number.parseInt(String(value), 10);
+  const index = Number.isFinite(parsed) ? parsed : 0;
+  return Math.max(0, Math.min(index, Math.max(0, pageCount - 1)));
+};
+
 /**
  * Merge reader page metadata by page index while preserving numeric page order.
  *
@@ -27,6 +40,26 @@ export const mergeReaderPages = (current = [], incoming = []) => {
 };
 
 /**
+ * Merge one completed page request into local state without letting a late
+ * initial replacement erase newer chunks from the same page revision.
+ *
+ * @param {{currentPages?: Array<{index?: number}>, incomingPages?: Array<{index?: number}>, replace?: boolean, currentRevision?: string, nextRevision?: string}} options
+ * @returns {Array<{index?: number}>}
+ */
+export const mergeReaderPageRequestPages = ({
+  currentPages = [],
+  incomingPages = [],
+  replace = false,
+  currentRevision = "",
+  nextRevision = ""
+} = {}) => {
+  if (replace && currentRevision && nextRevision && currentRevision !== nextRevision) {
+    return mergeReaderPages([], incomingPages);
+  }
+  return mergeReaderPages(currentPages, incomingPages);
+};
+
+/**
  * Check whether the locally loaded metadata covers a contiguous reader window.
  *
  * @param {Array<{index?: number}>} [pages]
@@ -44,6 +77,169 @@ export const hasReaderPageWindow = (pages = [], start = 0, size = 1, pageCount =
     }
   }
   return end > start;
+};
+
+/**
+ * Create a token for one concrete reader page metadata request.
+ *
+ * @param {{epoch?: number, chapterId: string, cursor?: string | number, pageSize?: number, pageRevision?: string, replace?: boolean, requestId?: string | number}} options
+ * @returns {string}
+ */
+export const createReaderPageRequestToken = ({
+  epoch = 0,
+  chapterId,
+  cursor = 0,
+  pageSize = 1,
+  pageRevision = "",
+  replace = false,
+  requestId = ""
+}) => [
+  epoch,
+  chapterId,
+  cursor,
+  pageSize,
+  pageRevision,
+  replace ? "replace" : "append",
+  requestId
+].map((part) => String(part ?? "")).join(REQUEST_TOKEN_SEPARATOR);
+
+/**
+ * Mark one page request as in flight and return its completion token.
+ *
+ * @param {Set<string>} inFlight
+ * @param {{epoch?: number, chapterId: string, cursor?: string | number, pageSize?: number, pageRevision?: string, replace?: boolean, requestId?: string | number}} options
+ * @returns {string}
+ */
+export const beginReaderPageRequest = (inFlight, options) => {
+  const token = createReaderPageRequestToken(options);
+  inFlight.add(token);
+  return token;
+};
+
+/**
+ * Complete one page request without invalidating other chapter requests.
+ *
+ * @param {Set<string>} inFlight
+ * @param {string} token
+ * @returns {boolean}
+ */
+export const completeReaderPageRequest = (inFlight, token) => {
+  if (!inFlight.has(token)) {
+    return false;
+  }
+  inFlight.delete(token);
+  return true;
+};
+
+/**
+ * Check whether a chapter still has metadata requests in flight.
+ *
+ * @param {Set<string>} inFlight
+ * @param {{epoch?: number, chapterId: string}} options
+ * @returns {boolean}
+ */
+export const hasReaderPageRequestForChapter = (inFlight, {epoch = 0, chapterId}) => {
+  const prefix = [epoch, chapterId].map((part) => String(part ?? "")).join(REQUEST_TOKEN_SEPARATOR) + REQUEST_TOKEN_SEPARATOR;
+  for (const token of inFlight) {
+    if (token.startsWith(prefix)) {
+      return true;
+    }
+  }
+  return false;
+};
+
+/**
+ * Resolve page metadata and image warm-up work around the active reader page.
+ *
+ * @param {{layoutMode?: string, activeIndex?: number, pageCount?: number, loadedPages?: Array<{index?: number}>, chunkSize?: number, aheadCount?: number, previousCushion?: number}} options
+ * @returns {{metadataRequests: Array<{cursor: number, pageSize: number}>, warmIndexes: number[], prefetchNextChapter: boolean}}
+ */
+export const resolveReaderPreloadPlan = ({
+  layoutMode = "webtoon",
+  activeIndex = 0,
+  pageCount = 0,
+  loadedPages = [],
+  chunkSize = 12,
+  aheadCount = 3,
+  previousCushion = 1
+} = {}) => {
+  const total = toPositiveInteger(pageCount, 0);
+  if (!total) {
+    return {metadataRequests: [], warmIndexes: [], prefetchNextChapter: false};
+  }
+  const active = clampIndex(activeIndex, total);
+  const isWebtoon = layoutMode === "webtoon";
+  const metadataIndexes = [];
+  const warmIndexes = [];
+
+  if (isWebtoon) {
+    for (let index = active - previousCushion; index < active; index += 1) {
+      metadataIndexes.push(index);
+      warmIndexes.push(index);
+    }
+    for (let index = active + 1; index <= active + aheadCount; index += 1) {
+      metadataIndexes.push(index);
+      warmIndexes.push(index);
+    }
+  } else {
+    for (let index = active; index <= active + aheadCount; index += 1) {
+      metadataIndexes.push(index);
+      if (index > active) {
+        warmIndexes.push(index);
+      }
+    }
+  }
+
+  const normalize = (indexes) => Array.from(new Set(indexes))
+    .filter((index) => Number.isInteger(index) && index >= 0 && index < total)
+    .sort((left, right) => left - right);
+  const loadedIndexes = new Set(loadedPages.map((page) => page?.index).filter(Number.isInteger));
+  const missing = normalize(metadataIndexes).filter((index) => !loadedIndexes.has(index));
+  const metadataRequests = [];
+  if (missing.length) {
+    const cursor = missing[0];
+    const minimumSize = missing[missing.length - 1] - cursor + 1;
+    metadataRequests.push({
+      cursor,
+      pageSize: Math.min(total - cursor, Math.max(toPositiveInteger(chunkSize, 1), minimumSize))
+    });
+  }
+
+  return {
+    metadataRequests,
+    warmIndexes: normalize(warmIndexes),
+    prefetchNextChapter: !isWebtoon && active + aheadCount >= total
+  };
+};
+
+/**
+ * Decode available page images ahead of the reader viewport.
+ *
+ * @param {Array<{index?: number, src?: string}>} pages
+ * @param {number[]} indexes
+ * @param {{imageFactory?: typeof Image}} [options]
+ * @returns {Promise<Array<{index: number, ok: boolean}>>}
+ */
+export const warmReaderPageImages = async (pages = [], indexes = [], {imageFactory = globalThis.Image} = {}) => {
+  if (typeof imageFactory !== "function") {
+    return [];
+  }
+  const wanted = new Set(indexes);
+  const pageEntries = pages.filter((page) => Number.isInteger(page?.index) && wanted.has(page.index) && page.src);
+  const results = await Promise.all(pageEntries.map((page) => new Promise((resolve) => {
+    const image = new imageFactory();
+    const finish = (ok) => resolve({index: page.index, ok});
+    image.onload = () => {
+      if (typeof image.decode === "function") {
+        Promise.resolve(image.decode()).then(() => finish(true), () => finish(false));
+        return;
+      }
+      finish(true);
+    };
+    image.onerror = () => finish(false);
+    image.src = page.src;
+  })));
+  return results;
 };
 
 /**
@@ -73,7 +269,14 @@ export const resolveWebtoonLoadMoreAction = ({session = null, entry = null} = {}
 };
 
 export default {
+  beginReaderPageRequest,
+  completeReaderPageRequest,
+  createReaderPageRequestToken,
   hasReaderPageWindow,
+  hasReaderPageRequestForChapter,
+  mergeReaderPageRequestPages,
   mergeReaderPages,
+  resolveReaderPreloadPlan,
+  warmReaderPageImages,
   resolveWebtoonLoadMoreAction
 };

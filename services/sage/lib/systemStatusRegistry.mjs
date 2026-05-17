@@ -120,9 +120,9 @@ export const buildEndpointRegistry = () => [
     id: "localai",
     label: "LocalAI",
     endpoints: [
-      endpoint("localai", "GET", "/api/localai/status", {auth: "via Warden", description: "LocalAI container/runtime state.", probePath: "/api/localai/status"}),
-      endpoint("localai", "GET", "/api/localai/profile", {auth: "via Warden", description: "Available LocalAI image profiles.", probePath: "/api/localai/profile"}),
-      endpoint("localai", "PUT", "/api/localai/config", {auth: "via Warden", description: "Persist LocalAI image profile."})
+      endpoint("localai", "GET", "/api/localai/status", {auth: "via Oracle", description: "Embedded LocalAI runtime and model state.", probePath: "/api/localai/status"}),
+      endpoint("localai", "GET", "/api/localai/profile", {auth: "via Oracle", description: "Embedded LocalAI profile and model options.", probePath: "/api/localai/profile"}),
+      endpoint("localai", "POST", "/api/localai/probe", {auth: "via Oracle", description: "Force a LocalAI generation readiness probe."})
     ]
   }
 ];
@@ -138,8 +138,9 @@ const baseUrlFor = (config, groupId) => {
     case "raven":
       return config.ravenBaseUrl || "";
     case "warden":
-    case "localai":
       return config.wardenBaseUrl || "";
+    case "localai":
+      return config.oracleBaseUrl || "";
     case "portal":
       return config.portalBaseUrl || "";
     case "oracle":

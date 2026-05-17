@@ -1,7 +1,7 @@
 # Warden AI Notes
 
-- Warden owns first boot, runtime defaults, service descriptors, the URL-first MySQL contract, and LocalAI image
-  selection.
+- Warden owns first boot, runtime defaults, service descriptors, the URL-first MySQL contract, and GPU/runtime flag
+  planning for managed services.
 - Warden must surface the exact Discord callback URL administrators need.
 - Warden owns one shared internal Docker network named `scriptarr-network`; Moon is the only default public bridge.
 - Warden runs as its own Docker container and is the only first-party container admins should start manually in the
@@ -14,13 +14,11 @@
   Docker's `healthy` status during first boot and upgrades.
 - `npm run docker:healthcheck` is the default Warden-managed smoke flow for contributors. It is expected to take a
   while on cold machines because it rebuilds images and may need to pull missing layers.
-- LocalAI is manual in 3.0: no first-boot pull, install, or start.
-- LocalAI presets now use the LocalAI AIO image family. Warden must mount persistent LocalAI state, pass the correct
-  hardware flags for the selected preset, wait for a usable chat-completion readiness probe before reporting success,
-  and constrain the AIO `MODELS` preload set to the Oracle-safe text generation profile instead of the full bundled
-  list.
-- LocalAI install, start, and remove actions must be asynchronous lifecycle jobs mirrored through Sage or Vault with
-  task progress for image pull, container work, and model readiness.
+- LocalAI is manual in 3.0: no first-boot model pull, install, or start.
+- Embedded LocalAI now lives inside Oracle. Warden must mount persistent `localai/models` and `localai/data` into the
+  Oracle container and pass the correct hardware flags for the selected profile, especially NVIDIA `--gpus all`.
+- LocalAI install, start, remove, and readiness actions are Oracle-owned embedded runtime jobs brokered through Sage.
+  Warden should not recreate the standalone `scriptarr-localai` sidecar path by default.
 - AI acceleration is optional; safe fallback is required.
 - The repo-level Docker test stack is Warden-managed, starts a containerized Warden first, and should stay aligned with
   the runtime service plan.
@@ -29,9 +27,9 @@
   before Sage or Moon ever see log entries. There is intentionally no raw-log toggle.
 - The managed-service update path lives behind Moon -> Sage -> Warden and only targets the sibling first-party
   services. Warden and MySQL are informational or manual in the current product scope.
-- Warden LocalAI status, profile, install, start, and remove actions are now driven from Moon's `/admin/system/ai` page
-  through Sage. Keep those APIs service-auth only, readiness-gated where applicable, and safe to surface in the System
-  Status matrix as read probes where applicable.
+- Moon's `/admin/system/ai` page still shows LocalAI status, profile, install, start, and remove actions through Sage,
+  but those requests terminate at Oracle's embedded runtime routes. Keep Warden's role focused on service-plan mounts,
+  environment, GPU device requests, and drift detection.
 - Warden should inject Sage broker settings into Portal, Oracle, and Raven instead of direct first-party base URLs.
 - Warden should launch Raven with the VPN runtime device/capability contract (`NET_ADMIN` and `/dev/net/tun`) when not
   explicitly disabled, and drift detection should recreate Raven when those flags disappear.

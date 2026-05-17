@@ -1823,6 +1823,11 @@ export const registerInternalBrokerRoutes = (app, {
     res.status(result.status || (result.ok === false ? 400 : 200)).json(result);
   }));
 
+  app.post("/api/internal/portal/appa-discord-diagnostic", withService(requireService, ["scriptarr-portal"], async (req, res) => {
+    const result = await appaChatService.recordDiscordDiagnostic(req.body || {});
+    res.status(result.status || (result.ok === false ? 400 : 200)).json(result);
+  }));
+
   app.post("/api/internal/portal/noona-review", withService(requireService, ["scriptarr-portal"], async (req, res) => {
     const result = await appaChatService.reviewNoonaPublicReply(req.body || {});
     res.status(result.status || (result.ok === false ? 400 : 200)).json(result);

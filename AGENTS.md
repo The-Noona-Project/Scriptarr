@@ -157,8 +157,8 @@ Read this before editing Scriptarr.
   missing pages, and bad-source quality states, with `/admin/wanted/missing-chapters` left as an alias only.
 - Oracle now lives in `services/oracle` as a Python FastAPI service even though the repo-level test and Docker helpers
   still flow through the npm workspace.
-- Warden's LocalAI presets now target the LocalAI AIO image family, should only report success after readiness, and
-  should boot the Oracle-safe text-generation preload set instead of the full bundled model list.
+- Oracle now owns embedded LocalAI model/runtime lifecycle. Warden should plan the Oracle container's persistent model
+  mounts and GPU flags, not start a standalone LocalAI sidecar by default.
 - Raven VPN should fail closed when enabled, and Raven chapter or page naming now comes from the internal
   `raven.naming` template settings rather than only hard-coded defaults.
 - `raven.naming` is now profile-based by library type, and Moon admin owns that workflow at

@@ -155,7 +155,8 @@ Warden manages one shared internal Docker network named `scriptarr-network`.
 - Warden attaches itself to `scriptarr-network` after boot so the managed services can reach `http://scriptarr-warden:4001`.
 - Vault, Sage, Raven, Portal, Oracle, and managed MySQL stay internal to that network.
 - Moon also joins `scriptarr-network`, but it is the only first-party service Warden publishes publicly by default.
-- LocalAI joins the same internal network when an admin installs or starts it later from Moon admin.
+- Embedded LocalAI runs inside `scriptarr-oracle` when an admin enables it later from Moon admin; there is no
+  standalone LocalAI sidecar in the default runtime plan.
 - Outside the Docker test flow, Warden itself should stay unpublished unless you are doing a deliberate internal debug
   session.
 - First-party services should not reach across the stack directly. Sage is the supported internal HTTP broker, with
@@ -164,30 +165,19 @@ Warden manages one shared internal Docker network named `scriptarr-network`.
 
 ## LocalAI Behavior
 
-Warden inspects the host and selects a LocalAI AIO image by hardware class:
+LocalAI is not installed or started on first boot. When an admin selects LocalAI, Oracle starts its embedded
+OpenAI-compatible LocalAI runtime inside `scriptarr-oracle`; the default model is
+`Hermes-3-Llama-3.1-8B-Q4_K_S.gguf`, with Hermes Q4_K_M and Qwen3 8B Q4_K_M available as alternates.
 
-- NVIDIA: `localai/localai:latest-aio-gpu-nvidia-cuda-12`
-- Intel: `localai/localai:latest-aio-gpu-intel`
-- AMD: `localai/localai:latest-aio-gpu-hipblas`
-- CPU fallback: `localai/localai:latest-aio-cpu`
+Moon admin still exposes install, start, remove, status, and probe controls through the existing AI page, but those
+actions now flow Moon -> Sage -> Oracle. Oracle owns the private embedded model cache/runtime: it writes the GGUF YAML,
+downloads the selected model once into persistent storage, starts LocalAI, and only reports ready after a tiny
+OpenAI-compatible generation probe succeeds.
 
-LocalAI is not installed or started on first boot. Moon admin lets the server admin choose a preset image or custom
-override and then manually trigger install, start, or remove flows later. Warden runs those flows as asynchronous
-LocalAI lifecycle jobs, mirrors progress into the shared broker, and lets the Moon admin page show Docker pull,
-container, and model-readiness progress without timing out the browser request.
-
-Warden mounts the persistent LocalAI models and data folders, passes the matching hardware flags for the selected
-preset, and waits for LocalAI readiness before it reports startup success. This can take 5 to 20 minutes depending on
-the host, and the first AIO warm-up may take a bit longer. Warden now boots the official AIO images with the
-Oracle-safe text-generation preload set instead of the full default AIO bundle so startup does not block on optional
-speech, image, or other bundled models. When a lifecycle job completes or fails, Portal sends one Discord DM to the
-admin who requested it when that admin has a Discord-backed user id.
-
-Readiness means the LocalAI HTTP runtime responds and a tiny OpenAI-compatible chat completion can be generated with
-the Scriptarr LocalAI alias. CPU-only generation may still take tens of seconds per prompt, so Oracle uses a longer
-provider-call timeout and Moon's admin test broker waits long enough for a small LocalAI response before reporting the
-selected provider as degraded. If the model catalog responds but the chat backend cannot load, Warden keeps LocalAI out
-of the ready state and surfaces the loader error in the lifecycle job.
+Warden plans the `scriptarr-oracle` container instead of a `scriptarr-localai` sidecar. It mounts persistent
+`localai/models` and `localai/data` folders into Oracle and passes hardware flags for the selected profile. NVIDIA
+hosts should run Oracle with `--gpus all`, `NVIDIA_VISIBLE_DEVICES=all`, and compute/utility driver capabilities;
+CPU-only hosts can still use LocalAI, but generation may be slow.
 
 If GPU-specific startup is unavailable, the rest of Scriptarr should stay healthy while AI features remain disabled or
 temporarily unavailable.
@@ -201,10 +191,10 @@ temporarily unavailable.
 - Oracle also exposes a structured assist endpoint through Sage for bounded helper text, trivia borderline matching,
   and AI tool planning. It never executes mutations directly; Sage turns operational prompts into confirmable admin
   proposals.
-- Admins can later switch Oracle to LocalAI from Moon admin and then manually install, start, or remove LocalAI through
-  Warden.
-- When the provider is `localai` and no model is set explicitly, Scriptarr falls back to the LocalAI-friendly `gpt-4`
-  alias instead of the OpenAI default model name.
+- Admins can later switch Oracle to LocalAI from Moon admin and then manually install, start, probe, or remove the
+  embedded model/runtime through Oracle-brokered actions.
+- When the provider is `localai` and no model is set explicitly, Scriptarr falls back to
+  `Hermes-3-Llama-3.1-8B-Q4_K_S.gguf` instead of the OpenAI default model name.
 - Moon's AI page loads available model ids through Moon -> Sage -> Oracle and renders the model control as a
   provider-specific dropdown. Browsers never call OpenAI or LocalAI directly for model discovery.
 - The AI page loads saved Oracle settings, tool toggles, and proposals first, then hydrates Oracle health and LocalAI
@@ -448,7 +438,8 @@ unless the application setting allows it.
 The split Discord command set is:
 
 - Noona: `/search`, `/request`, `/subscribe`, `/trivia status`, and `/trivia leaderboard`
-- Appa: `/ding`, `/status`, owner-only DM `/downloadall`, `/trivia start`, and `/trivia stop`
+- Appa: `/ding`, `/status`, owner-only DM `/downloadall`, `/trivia start`, `/trivia stop`, `/discord inspect`, and
+  `/discord testpost`
 
 When Appa is disabled or unavailable, Noona registers the legacy single-bot command set, including `/ding`, `/status`,
 `/chat`, `/search`, `/request`, `/subscribe`, `/trivia`, and owner-only DM `/downloadall`. Split mode does not
@@ -457,6 +448,10 @@ gate.
 
 Blank role ids mean any member in the configured guild can use that slash command. `downloadall` ignores guild roles,
 is only supported in bot DMs, and only checks the configured DM superuser id.
+`/discord inspect` is Appa's admin diagnostic for recent allowed-channel messages. It returns short redacted snippets
+and metadata only, stores a redacted durable audit event through Sage, and should be used when troubleshooting Noona,
+trivia, or notification delivery without copying full Discord transcripts into logs. `/discord testpost` sends a small
+Appa-owned test message to an allowed channel and records the same redacted audit trail.
 `/trivia` controls Noona's title-summary guessing game. Normal channel messages are the guesses; exact titles, aliases,
 source links, Moon title links, and tolerant fuzzy matches count. Winners get XP with speed and streak bonuses, and
 leaderboards can be posted after each round plus daily, weekly, and monthly at the configured server-time hour.
@@ -553,7 +548,6 @@ Recommended data folders under `SCRIPTARR_DATA_ROOT`:
 - `raven/logs/`
 - `localai/data/`
 - `localai/models/`
-- `localai/logs/`
 - `warden/logs/`
 - `warden/runtime/`
 
@@ -628,9 +622,9 @@ The test stack uses:
   callback or public base URL can also break the return-path handoff and drop users back to `/`.
 - If Oracle is off, confirm the chosen provider and credentials in `/admin/system/ai` before treating the rest of the
   stack as unhealthy.
-- If LocalAI actions are slow, let the Moon admin job continue instead of retrying immediately; the initial pull and
-  startup are intentionally long-running. The progress card tracks the Docker image, container, and readiness phases,
-  and Portal DMs the requesting admin when the action completes or fails.
+- If LocalAI actions are slow, let the Moon admin job continue instead of retrying immediately; the first GGUF download,
+  runtime start, and generation probe are intentionally long-running. The progress card tracks model download, runtime,
+  and readiness phases.
 - If Raven VPN is enabled, failed settings reads, stale settings, missing `/dev/net/tun`, missing `NET_ADMIN`, or
   failed tunnel startup block downloads instead of silently falling back to direct traffic. Warden recreates Raven when
   its VPN device/capability flags drift; if your host cannot support TUN, leave VPN disabled or opt out of the runtime

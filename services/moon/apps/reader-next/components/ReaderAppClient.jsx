@@ -13,7 +13,16 @@ import {
   resolveKeyboardAction,
   resolvePointerSwipe
 } from "../lib/inputController.js";
-import {hasReaderPageWindow, mergeReaderPages, resolveWebtoonLoadMoreAction} from "../lib/pageChunks.js";
+import {
+  beginReaderPageRequest,
+  completeReaderPageRequest,
+  hasReaderPageWindow,
+  hasReaderPageRequestForChapter,
+  mergeReaderPageRequestPages,
+  resolveReaderPreloadPlan,
+  resolveWebtoonLoadMoreAction,
+  warmReaderPageImages
+} from "../lib/pageChunks.js";
 import {buildReaderPath, buildReaderPathForTitle} from "../lib/routes.js";
 import ReaderControls from "./ReaderControls.jsx";
 import ReaderSettings from "./ReaderSettings.jsx";
@@ -109,7 +118,10 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = ""}) => {
   const [chapterPageInfo, setChapterPageInfo] = useState(null);
   const [chapterRowsLoading, setChapterRowsLoading] = useState(false);
   const sessionCache = useRef(new Map());
-  const pageRequestKeyRef = useRef(new Map());
+  const pageRequestTokensRef = useRef(new Set());
+  const pageRequestSeqRef = useRef(0);
+  const pageLoadEpochRef = useRef(0);
+  const warmedImageKeyRef = useRef(new Set());
   const pageObserverRef = useRef(/** @type {IntersectionObserver | null} */ (null));
   const pointerStartRef = useRef(/** @type {{x: number, y: number} | null} */ (null));
   const inputStateRef = useRef(createReaderInputState());
@@ -200,8 +212,17 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = ""}) => {
       return null;
     }
     const key = session.chapter.id;
-    const requestKey = `${key}:${cursor}:${pageSize}:${session.pageRevision || ""}:${replace ? "replace" : "append"}`;
-    pageRequestKeyRef.current.set(key, requestKey);
+    const requestEpoch = pageLoadEpochRef.current;
+    pageRequestSeqRef.current += 1;
+    const requestToken = beginReaderPageRequest(pageRequestTokensRef.current, {
+      epoch: requestEpoch,
+      chapterId: key,
+      cursor,
+      pageSize,
+      pageRevision: session.pageRevision || "",
+      replace,
+      requestId: pageRequestSeqRef.current
+    });
     setPageState((current) => {
       const next = new Map(current);
       const entry = next.get(key) || {pages: [], pageInfo: null, loading: false, error: ""};
@@ -214,14 +235,18 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = ""}) => {
       pageSize,
       rev: session.pageRevision || ""
     }));
-    if (pageRequestKeyRef.current.get(key) !== requestKey) {
+    if (!completeReaderPageRequest(pageRequestTokensRef.current, requestToken)) {
       return null;
     }
+    const stillLoading = hasReaderPageRequestForChapter(pageRequestTokensRef.current, {
+      epoch: requestEpoch,
+      chapterId: key
+    });
     if (!result.ok) {
       setPageState((current) => {
         const next = new Map(current);
         const entry = next.get(key) || {pages: [], pageInfo: null, loading: false, error: ""};
-        next.set(key, {...entry, loading: false, error: result.payload?.error || "Could not load these pages."});
+        next.set(key, {...entry, loading: stillLoading, error: result.payload?.error || "Could not load these pages."});
         return next;
       });
       return null;
@@ -230,12 +255,19 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = ""}) => {
     setPageState((current) => {
       const next = new Map(current);
       const entry = next.get(key) || {pages: [], pageInfo: null, loading: false, error: ""};
+      const pageRevision = result.payload.pageRevision || session.pageRevision || "";
       next.set(key, {
-        pages: replace ? result.payload.pages || [] : mergeReaderPages(entry.pages, result.payload.pages || []),
+        pages: mergeReaderPageRequestPages({
+          currentPages: entry.pages,
+          incomingPages: result.payload.pages || [],
+          replace,
+          currentRevision: entry.pageRevision || "",
+          nextRevision: pageRevision
+        }),
         pageInfo: result.payload.pageInfo || null,
-        loading: false,
+        loading: stillLoading,
         error: "",
-        pageRevision: result.payload.pageRevision || session.pageRevision || ""
+        pageRevision
       });
       return next;
     });
@@ -251,11 +283,47 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = ""}) => {
     const start = Math.max(0, Math.min(nextPageIndex, pageCount - 1));
     const alignedStart = layoutMode === "single" ? start : Math.max(0, start - (start % pagesPerStep(layoutMode)));
     const entry = pageState.get(session.chapter.id);
-    if (entry && hasReaderPageWindow(entry.pages, alignedStart, PAGE_CHUNK_SIZE, pageCount)) {
+    const plan = resolveReaderPreloadPlan({
+      layoutMode,
+      activeIndex: alignedStart,
+      pageCount,
+      loadedPages: entry?.pages || [],
+      chunkSize: PAGE_CHUNK_SIZE,
+      aheadCount: PAGE_CHUNK_SIZE - 1,
+      previousCushion: 0
+    });
+    if (!plan.metadataRequests.length || entry?.loading) {
       return;
     }
-    await loadPages(session, {cursor: alignedStart, pageSize: PAGE_CHUNK_SIZE});
+    await Promise.all(plan.metadataRequests.map((request) =>
+      loadPages(session, {cursor: request.cursor, pageSize: request.pageSize})
+    ));
   }, [fetchSession, layoutMode, loadPages, pageState]);
+
+  const warmPageImages = useCallback((session, indexes = []) => {
+    if (!session?.chapter?.id || !indexes.length) {
+      return;
+    }
+    const entry = pageState.get(session.chapter.id);
+    if (!entry?.pages?.length) {
+      return;
+    }
+    const pendingIndexes = indexes.filter((index) => {
+      const page = entry.pages.find((candidate) => candidate.index === index && candidate.src);
+      if (!page) {
+        return false;
+      }
+      const warmKey = `${session.chapter.id}:${page.index}:${page.src}`;
+      if (warmedImageKeyRef.current.has(warmKey)) {
+        return false;
+      }
+      warmedImageKeyRef.current.add(warmKey);
+      return true;
+    });
+    if (pendingIndexes.length) {
+      void warmReaderPageImages(entry.pages, pendingIndexes);
+    }
+  }, [pageState]);
 
   useEffect(() => {
     let active = true;
@@ -289,7 +357,9 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = ""}) => {
       initialSession.pageCount || 1
     );
     sessionCache.current.clear();
-    pageRequestKeyRef.current.clear();
+    pageLoadEpochRef.current += 1;
+    pageRequestTokensRef.current.clear();
+    warmedImageKeyRef.current.clear();
     setSessionMap(new Map([[initialSession.chapter.id, initialSession]]));
     setPageState(new Map());
     setWebtoonChapterIds([initialSession.chapter.id]);
@@ -374,10 +444,51 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = ""}) => {
   }, [chapterId, isPaged, pageState, webtoonChapterIds]);
 
   useEffect(() => {
-    if (isPaged && currentPagedSession?.chapter?.id) {
-      void ensurePageWindow(currentPagedSession.chapter.id, pagedPageIndex, currentPagedSession);
+    const session = isPaged ? currentPagedSession : activeSession;
+    const activeIndex = isPaged ? pagedPageIndex : activePageIndex;
+    if (!session?.chapter?.id) {
+      return;
     }
-  }, [currentPagedSession, ensurePageWindow, isPaged, pagedPageIndex]);
+    const pageCount = Math.max(1, Number.parseInt(String(session.pageCount || 1), 10) || 1);
+    const entry = pageState.get(session.chapter.id);
+    const plan = resolveReaderPreloadPlan({
+      layoutMode,
+      activeIndex,
+      pageCount,
+      loadedPages: entry?.pages || [],
+      chunkSize: PAGE_CHUNK_SIZE
+    });
+    if (!entry?.loading) {
+      for (const request of plan.metadataRequests) {
+        void loadPages(session, {cursor: request.cursor, pageSize: request.pageSize});
+      }
+    }
+    warmPageImages(session, plan.warmIndexes);
+    if (!isPaged || !plan.prefetchNextChapter || !session.nextChapterId) {
+      return;
+    }
+    void fetchSession(session.nextChapterId).then((nextSession) => {
+      if (!nextSession?.chapter?.id) {
+        return;
+      }
+      const nextEntry = pageState.get(nextSession.chapter.id);
+      if (nextEntry?.loading || hasReaderPageWindow(nextEntry?.pages || [], 0, Math.min(3, nextSession.pageCount || 1), nextSession.pageCount || 1)) {
+        return;
+      }
+      void loadPages(nextSession, {cursor: 0, pageSize: PAGE_CHUNK_SIZE, replace: true});
+    });
+  }, [
+    activePageIndex,
+    activeSession,
+    currentPagedSession,
+    fetchSession,
+    isPaged,
+    layoutMode,
+    loadPages,
+    pageState,
+    pagedPageIndex,
+    warmPageImages
+  ]);
 
   useEffect(() => {
     const pending = pendingScrollRef.current;

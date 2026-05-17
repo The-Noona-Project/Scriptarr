@@ -5,8 +5,8 @@ Read this before editing `services/warden`.
 ## Role
 
 Warden is Scriptarr's Docker orchestrator and first-boot source of truth. It seeds runtime defaults, derives the
-Discord callback URL, parses the URL-first MySQL contract, owns `scriptarr-network`, selects the correct LocalAI AIO
-image for the host hardware, and exposes manual LocalAI lifecycle actions after install.
+Discord callback URL, parses the URL-first MySQL contract, owns `scriptarr-network`, and injects GPU/runtime flags for
+managed services.
 
 ## Hard Rules
 
@@ -31,18 +31,16 @@ image for the host hardware, and exposes manual LocalAI lifecycle actions after 
 - Keep Moon -> Sage -> Warden managed-service updates scoped to the sibling first-party services. Warden and MySQL stay
   manual unless the product requirements explicitly change.
 - Keep Warden update jobs durable through the shared broker instead of leaving them in process-local memory only.
-- Keep LocalAI manual. Warden may cache the last Sage-synced LocalAI selection in `warden/runtime`, but Sage/Vault stay
-  the durable owner of Oracle/LocalAI settings.
-- Keep LocalAI starts readiness-gated. Warden should not report success until `GET /readyz` or the `GET /v1/models`
-  fallback succeeds.
-- Keep the official LocalAI AIO images, but boot them with the Oracle-safe `text-to-text.yaml` preload set instead of
-  the full bundled model list so startup does not hang on optional speech or media models.
-- Keep LocalAI AIO runtime mounts and hardware flags aligned with the selected preset:
+- Keep LocalAI manual. Oracle owns the embedded LocalAI model cache/runtime; Sage/Vault stay the durable owner of
+  Oracle/LocalAI settings.
+- Do not revive the standalone `scriptarr-localai` sidecar by default. Warden should mount persistent LocalAI models
+  and data into `scriptarr-oracle`, then let Oracle's embedded runtime handle install/start/remove/readiness.
+- Keep Oracle LocalAI runtime mounts and hardware flags aligned with the selected preset:
   - `cpu`: no extra device flags
   - `nvidia`: `--gpus all`
   - `intel`: `--device /dev/dri --group-add video`
   - `amd`: `--device /dev/kfd --device /dev/dri --group-add video`
-- If service boot order, network topology, LocalAI image selection, first-boot auth, or Docker test mode changes,
+- If service boot order, network topology, embedded LocalAI runtime planning, first-boot auth, or Docker test mode changes,
   update the Warden docs.
 
 ## Coding Map
@@ -50,7 +48,7 @@ image for the host hardware, and exposes manual LocalAI lifecycle actions after 
 - Service definitions, env injection, network aliases, ports, volumes, and health commands live in
   `config/servicePlan.mjs`.
 - Container reconciliation and drift handling live in `core/managedStackRuntime.mjs`; update orchestration lives in
-  `core/updateRuntime.mjs`; LocalAI lifecycle work lives in `core/localAiRuntime.mjs`.
+  `core/updateRuntime.mjs`; legacy sidecar LocalAI lifecycle work lives in `core/localAiRuntime.mjs`.
 - Docker CLI helpers live under `docker`; filesystem and storage layout helpers live under `filesystem`.
 - Warden should reconcile sibling first-party services from inside the `scriptarr-warden` container through the Docker
   socket. Do not move this responsibility into Moon, Sage, or host scripts.

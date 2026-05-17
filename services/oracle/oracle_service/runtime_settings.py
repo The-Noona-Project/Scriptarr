@@ -6,6 +6,7 @@ import asyncio
 from dataclasses import dataclass
 
 from .config import OracleConfig
+from .embedded_localai import normalize_local_ai_model_id
 
 ORACLE_SETTINGS_KEY = "oracle.settings"
 ORACLE_OPENAI_API_KEY_SECRET = "oracle.openai.apiKey"
@@ -65,10 +66,14 @@ async def resolve_oracle_runtime_settings(*, config: OracleConfig, sage_client) 
     # Keep the provider list closed so unexpected persisted values do not leak deeper.
     provider = normalized_provider if normalized_provider in {"openai", "localai"} else "openai"
 
+    selected_model = _normalize_string(settings.get("model"), config.model)
+    if provider == "localai":
+        selected_model = normalize_local_ai_model_id(selected_model, config)
+
     return OracleRuntimeSettings(
         enabled=_normalize_boolean(settings.get("enabled"), False),
         provider=provider,
-        model=_normalize_string(settings.get("model"), config.model),
+        model=selected_model,
         temperature=parsed_temperature,
         open_ai_api_key_configured=bool(open_ai_api_key),
         local_ai_profile_key=_normalize_string(settings.get("localAiProfileKey"), "nvidia"),

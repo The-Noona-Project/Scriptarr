@@ -11,8 +11,8 @@ handles Discord, and Oracle provides optional AI chat plus bounded Sage-governed
 
 ## Service Map
 
-- `scriptarr-warden`: bootstraps the stack, parses the URL-first MySQL contract, owns `scriptarr-network`, and exposes
-  manual LocalAI install, start, or remove actions
+- `scriptarr-warden`: bootstraps the stack, parses the URL-first MySQL contract, owns `scriptarr-network`, and plans
+  GPU/runtime flags for managed services
 - `scriptarr-mysql`: durable shared datastore for Scriptarr when `SCRIPTARR_MYSQL_URL=SELFHOST`
 - `scriptarr-vault`: auth, permissions, settings, secrets, cache, requests, sessions, progress, and generic job broker
 - `scriptarr-sage`: Moon-facing auth plus the only supported first-party internal HTTP broker
@@ -20,8 +20,8 @@ handles Discord, and Oracle provides optional AI chat plus bounded Sage-governed
 - `scriptarr-raven`: Spring Boot Java 24 downloader, library, metadata, and PIA/OpenVPN-aware download engine
 - `scriptarr-portal`: Discord onboarding, requests, notifications, subscriptions, Noona trivia, public Noona mention
   chat, and Oracle bridge
-- `scriptarr-oracle`: FastAPI Python service that starts disabled, defaults to OpenAI config, and can optionally use
-  LocalAI later
+- `scriptarr-oracle`: FastAPI Python service that starts disabled, defaults to OpenAI config, and can optionally run
+  embedded LocalAI with a persistent model cache
 
 ## Docker Images
 
@@ -160,8 +160,8 @@ For end-to-end Docker verification, use:
 - Portal now owns a real Discord command runtime again. Noona handles reader-facing `/search`, `/request`,
   `/subscribe`, public mention chat, trivia status/leaderboards, release posts, update posts, and requester DMs. When
   Appa is enabled with its own Discord token/client id, Appa owns admin `/ding`, `/status`, `/downloadall`,
-  `/trivia start|stop`, admin mentions, and serious corrections. If Appa is disabled or fails, Noona keeps the legacy
-  single-bot admin fallback.
+  `/trivia start|stop`, `/discord inspect|testpost`, admin mentions, and serious corrections. If Appa is disabled or
+  fails, Noona keeps the legacy single-bot admin fallback.
 - Public guild mention chat is now optional in `/admin/discord`. When enabled, users can say `@Noona Ai are you alive?`
   in allowed guild channels and Portal will reply publicly through Sage. The flow reuses the `/chat` command role gate,
   ignores unmentioned chatter, bots, wrong guilds, and empty prompts, and keeps trivia message handling separate so one
@@ -238,12 +238,14 @@ For end-to-end Docker verification, use:
 - Warden is not published publicly by default outside the test stack. Admins should talk to the stack through Moon
   unless they are debugging from inside the managed Docker network.
 - LocalAI is optional for overall stack health and is not installed on first boot.
-- Oracle starts disabled and OpenAI-first. LocalAI is enabled later from Moon admin when the admin is ready for a slow
-  install or start cycle.
-- Warden-managed LocalAI presets now use the LocalAI AIO image family and only report startup success once the LocalAI
-  runtime can answer a tiny OpenAI-compatible chat probe. Warden now starts those AIO images with the Oracle-safe
-  text-generation preload set instead of the full bundled model list so first startup does not get stuck on optional
-  speech or media models.
+- Oracle starts disabled and OpenAI-first. When LocalAI is selected, Oracle now runs an embedded OpenAI-compatible
+  LocalAI runtime inside the `scriptarr-oracle` container instead of relying on a standalone sidecar.
+- Warden still plans the Oracle container mounts and GPU flags. NVIDIA installs should give `scriptarr-oracle`
+  `--gpus all` plus compute/utility driver capabilities, while CPU-only hosts should keep AI degraded without making
+  the stack unhealthy.
+- Embedded LocalAI starts with no model preload. Moon admin can ask Oracle to ensure the selected GGUF model; Oracle
+  writes the model YAML, downloads it once into the persistent `localai/models` folder, and reports ready only after a
+  tiny OpenAI-compatible generation probe succeeds.
 - CPU LocalAI can still take tens of seconds to answer even after readiness succeeds. Oracle keeps provider-specific
   degraded replies and waits longer for brokered admin test prompts before treating the selected AI provider as down.
 - Moon's AI page now discovers provider models through Moon -> Sage -> Oracle and constrains the Oracle model field to
@@ -256,8 +258,8 @@ For end-to-end Docker verification, use:
   Discord runtime, latest posted update digest, trivia, and library context, and can draft only low-risk proposals such as status checks or trivia
   start/stop for later admin confirmation. LocalAI lifecycle, root/system, destructive, and arbitrary broadcast actions
   are excluded from public chat even if enabled for admins.
-- LocalAI install, start, and remove actions are asynchronous Warden lifecycle jobs. Moon shows Docker pull, container,
-  and model-readiness progress, and Portal DMs the requesting admin when the job completes or fails.
+- LocalAI install, start, and remove actions are asynchronous Oracle-owned embedded runtime jobs brokered through
+  Moon -> Sage. Moon shows model download, runtime, and generation-readiness progress.
 - Raven VPN should fail closed when VPN-backed downloads are enabled and the tunnel cannot be established. Warden now
   launches Raven with `NET_ADMIN` and `/dev/net/tun` by default so OpenVPN can run on Linux hosts with TUN support, and
   Raven health reports runtime capability, settings freshness, and whether the tunnel is `armed` idle or actively

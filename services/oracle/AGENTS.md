@@ -15,7 +15,8 @@ LocalAI.
   Sage owns all action proposals, confirmations, and executions.
 - Oracle degradation must not make the rest of Scriptarr unhealthy.
 - Keep Oracle off by default on fresh installs.
-- Keep LocalAI communication OpenAI-compatible so Warden-selected images stay swappable.
+- Keep LocalAI communication OpenAI-compatible. Oracle owns the embedded LocalAI model cache/runtime; Warden only
+  injects container mounts and GPU/runtime flags.
 - Route Oracle's first-party Scriptarr HTTP through Sage; do not add direct Vault or Warden calls here.
 - Preserve Oracle's internal wire contract when changing implementation details:
   - `GET /health`
@@ -30,8 +31,8 @@ LocalAI.
 
 ## Coding Map
 
-- FastAPI app and route behavior live under `oracle_service`. Provider configuration and OpenAI-compatible LocalAI
-  handling should stay isolated from Sage-facing response shapes.
+- FastAPI app and route behavior live under `oracle_service`. Provider configuration and embedded LocalAI handling
+  should stay isolated from Sage-facing response shapes.
 - Oracle may read Scriptarr status through Sage, but it must not execute mutations or bypass Sage to Vault, Warden, or
   other first-party services.
 - LocalAI is optional. Missing, slow, or unhealthy AI dependencies should degrade Oracle responses without making the

@@ -161,6 +161,26 @@ export const actualDevicesForInspect = (inspect) =>
     .filter(Boolean)
     .sort();
 
+/**
+ * Detect whether a Docker descriptor requested GPU access through CLI-style args.
+ *
+ * @param {string[]} [extraArgs] container runtime args
+ * @returns {boolean} true when `--gpus` is requested
+ */
+export const desiredGpuRequestForExtraArgs = (extraArgs = []) =>
+  valuesForOption(extraArgs, "--gpus").some(Boolean);
+
+/**
+ * Detect whether Docker inspect data shows an assigned GPU device request.
+ *
+ * @param {Record<string, unknown> | null | undefined} inspect Docker inspect payload
+ * @returns {boolean} true when a gpu capability set is present
+ */
+export const actualGpuRequestForInspect = (inspect) =>
+  (inspect?.HostConfig?.DeviceRequests || [])
+    .some((entry) => (entry?.Capabilities || [])
+      .some((capabilitySet) => (capabilitySet || []).map((value) => normalizeString(value).toLowerCase()).includes("gpu")));
+
 const toNanoseconds = (value) => {
   const normalized = normalizeString(value).toLowerCase();
   if (!normalized) {
@@ -420,6 +440,10 @@ export const createManagedStackRuntime = ({env = process.env, logger}) => {
     const desiredDevices = desiredDevicesForExtraArgs(descriptor.extraArgs);
     if (desiredDevices.length && !includesAll(actualDevicesForInspect(inspect), desiredDevices)) {
       reasons.push("devices");
+    }
+
+    if (desiredGpuRequestForExtraArgs(descriptor.extraArgs) && !actualGpuRequestForInspect(inspect)) {
+      reasons.push("gpus");
     }
 
     if (normalizeString(inspect?.HostConfig?.RestartPolicy?.Name || "no") !== resolveRestartPolicy(descriptor)) {

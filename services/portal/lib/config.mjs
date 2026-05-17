@@ -42,6 +42,7 @@ export const PORTAL_COMMAND_NAMES = Object.freeze([
   "request",
   "subscribe",
   "trivia",
+  "discord",
   "downloadall"
 ]);
 
@@ -49,6 +50,7 @@ export const APPA_COMMAND_NAMES = Object.freeze([
   "ding",
   "status",
   "trivia",
+  "discord",
   "downloadall"
 ]);
 

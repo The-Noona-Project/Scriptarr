@@ -76,6 +76,9 @@
 - Broker public Noona reply review through `/api/internal/portal/noona-review`. Store a redacted review event first,
   then let Portal record correction delivery success/failure through Sage only after Discord accepts or rejects the
   Appa message. Do not store full prompts, replies, transcripts, tokens, or secrets.
+- Broker Appa Discord diagnostics through `/api/internal/portal/appa-discord-diagnostic`. Store only action metadata,
+  channel/user ids, counts, status, and short redacted snippets; never persist full Discord transcripts or unredacted
+  message content.
 - Keep Noona/Appa appearance facts in `lib/noonaVisualIdentity.mjs`. Those descriptions are read-only Oracle context
   and deterministic degraded-mode replies, not durable user memory or transcript storage.
 - Public mention chat proposals are stricter than `/admin/system/ai`: allow only low-risk status-check and trivia

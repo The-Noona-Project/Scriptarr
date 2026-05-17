@@ -211,6 +211,7 @@ test("portal runtime syncs enabled commands and exposes Discord runtime state", 
       "chat",
       "search",
       "request",
+      "discord",
       "trivia"
     ]);
   } finally {
@@ -268,6 +269,7 @@ test("portal runtime splits reader and admin commands when Appa is enabled", asy
     assert.equal(triviaRow.status, "Registered to Noona + Appa");
     assert.deepEqual(state.commands.filter((command) => command.registered).map((command) => command.name).sort(), [
       "ding",
+      "discord",
       "downloadall",
       "request",
       "search",
@@ -1091,6 +1093,135 @@ test("interaction router enforces guild and role gates and formats search result
   });
   await handler(allowed);
   assert.match(allowed.__calls.editReply[0].content, /https:\/\/pax-kun\.com\/title\/manga\/title-1/);
+});
+
+test("Appa Discord diagnostics inspect and testpost only configured channels with redacted audit", async () => {
+  const settings = {
+    guildId: "guild-1",
+    noonaChat: {allowedChannelIds: ["noona-chat"]},
+    appa: {
+      adminMentionChannelIds: ["admin-chat"],
+      commands: {
+        discord: {enabled: true, roleId: "role-appa"}
+      }
+    },
+    commands: {
+      discord: {enabled: true, roleId: "legacy-role"}
+    }
+  };
+  const diagnostics = [];
+  const sentMessages = [];
+  const adminChannel = {
+    id: "admin-chat",
+    messages: {
+      fetch: async ({limit}) => {
+        assert.equal(limit, 2);
+        return new Map([
+          ["m1", {
+            id: "m1",
+            author: {username: "Admin"},
+            createdAt: new Date("2026-05-17T12:00:00.000Z"),
+            content: "token=abc123 https://secret.example <@12345> restart?"
+          }],
+          ["m2", {
+            id: "m2",
+            author: {username: "Noona"},
+            createdTimestamp: Date.parse("2026-05-17T12:01:00.000Z"),
+            content: "Looks fine."
+          }]
+        ]);
+      }
+    },
+    send: async (payload) => {
+      sentMessages.push(payload);
+      return {id: "posted-1"};
+    }
+  };
+  const commands = createPortalCommands({
+    sage: {
+      async recordAppaDiscordDiagnostic(payload) {
+        diagnostics.push(payload);
+        return {ok: true, payload: {ok: true}};
+      }
+    },
+    getSettings: () => settings
+  });
+  const handler = createInteractionHandler({
+    commandMap: commands,
+    roleManager: createRoleManager({
+      getSettings: () => settings,
+      getCommandSettings: (currentSettings, commandName) => currentSettings.appa.commands[commandName]
+    }),
+    logger: createLogger()
+  });
+
+  const denied = createInteraction({
+    commandName: "discord",
+    guildId: "guild-1",
+    roleIds: [],
+    strings: {__subcommand: "inspect"}
+  });
+  await handler(denied);
+  assert.match(denied.__calls.reply[0].content, /permission/i);
+
+  const inspect = createInteraction({
+    commandName: "discord",
+    guildId: "guild-1",
+    roleIds: ["role-appa"],
+    strings: {__subcommand: "inspect", limit: 2}
+  });
+  inspect.options.getChannel = (name) => name === "channel" ? {id: "admin-chat"} : null;
+  inspect.client = {channels: {fetch: async () => adminChannel}};
+  await handler(inspect);
+  assert.match(inspect.__calls.editReply[0].content, /Appa inspected <#admin-chat>/);
+  assert.doesNotMatch(inspect.__calls.editReply[0].content, /abc123|secret\.example|<@12345>/);
+  assert.match(inspect.__calls.editReply[0].content, /\[redacted-url\]/);
+  assert.equal(diagnostics[0].action, "inspect");
+  assert.equal(diagnostics[0].snippets.length, 2);
+  assert.match(diagnostics[0].snippets[0].snippet, /\[redacted-mention\]/);
+
+  const testpost = createInteraction({
+    commandName: "discord",
+    guildId: "guild-1",
+    roleIds: ["role-appa"],
+    strings: {
+      __subcommand: "testpost",
+      message: "ping <@12345> https://secret.example password=hunter2"
+    }
+  });
+  testpost.options.getChannel = (name) => name === "channel" ? {id: "admin-chat"} : null;
+  testpost.client = {channels: {fetch: async () => adminChannel}};
+  await handler(testpost);
+  assert.equal(sentMessages[0].allowedMentions.parse.length, 0);
+  assert.doesNotMatch(sentMessages[0].content, /hunter2|secret\.example|<@12345>/);
+  assert.equal(diagnostics[1].action, "testpost");
+  assert.equal(diagnostics[1].messageId, "posted-1");
+
+  const blockedChannel = createInteraction({
+    commandName: "discord",
+    guildId: "guild-1",
+    roleIds: ["role-appa"],
+    strings: {__subcommand: "inspect"}
+  });
+  blockedChannel.options.getChannel = (name) => name === "channel" ? {id: "random"} : null;
+  blockedChannel.client = {channels: {fetch: async () => ({id: "random"})}};
+  await handler(blockedChannel);
+  assert.match(blockedChannel.__calls.editReply[0].content, /configured Noona chat or Appa admin channels/i);
+
+  settings.noonaChat = {enabled: true, allowedChannelIds: []};
+  const guildWideNoonaChannel = createInteraction({
+    commandName: "discord",
+    guildId: "guild-1",
+    roleIds: ["role-appa"],
+    strings: {__subcommand: "inspect", limit: 1}
+  });
+  guildWideNoonaChannel.options.getChannel = (name) => name === "channel" ? {id: "random"} : null;
+  guildWideNoonaChannel.client = {channels: {fetch: async () => ({
+    id: "random",
+    messages: {fetch: async () => new Map()}
+  })}};
+  await handler(guildWideNoonaChannel);
+  assert.match(guildWideNoonaChannel.__calls.editReply[0].content, /Appa inspected <#random>/);
 });
 
 test("request and subscribe commands drive interactive Sage-backed selections", async () => {

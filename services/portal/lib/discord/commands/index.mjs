@@ -5,6 +5,7 @@ import {createSearchCommand} from "./searchCommand.mjs";
 import {createRequestCommand} from "./requestCommand.mjs";
 import {createSubscribeCommand} from "./subscribeCommand.mjs";
 import {createDownloadAllCommand} from "./downloadAllCommand.mjs";
+import {createDiscordDiagnosticsCommand} from "./discordDiagnosticsCommand.mjs";
 import {createTriviaCommand} from "./triviaCommand.mjs";
 
 export const createPortalCommands = ({
@@ -26,6 +27,10 @@ export const createPortalCommands = ({
   commands.set("search", createSearchCommand({sage, publicBaseUrl, getBrandName}));
   commands.set("request", createRequestCommand({sage, getBrandName}));
   commands.set("subscribe", createSubscribeCommand({sage, getBrandName}));
+  commands.set("discord", createDiscordDiagnosticsCommand({
+    sage,
+    getSettings
+  }));
   commands.set("downloadall", createDownloadAllCommand({
     sage,
     getBrandName,

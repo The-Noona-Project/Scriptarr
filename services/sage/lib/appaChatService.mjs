@@ -25,8 +25,20 @@ const redactExcerpt = (value, limit = 220) => normalizeString(value)
   .replace(/\b(token|secret|password|passwd|api[_ -]?key)\b\s*[:=]\s*\S+/gi, "$1=[redacted]")
   .replace(/\b[A-Za-z0-9_-]{24,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{20,}\b/g, "[redacted-token]")
   .replace(/\b(?:sk|ghp|github_pat)_[A-Za-z0-9_ -]{12,}\b/gi, "[redacted-token]")
+  .replace(/https?:\/\/\S+/gi, "[redacted-url]")
+  .replace(/<@!?\d+>|<@&\d+>|<#\d+>/g, "[redacted-mention]")
+  .replace(/@(everyone|here)\b/gi, "@[redacted]")
+  .replace(/\s+/g, " ")
   .slice(0, limit)
   .trim();
+
+const normalizeDiagnosticSnippet = (entry = {}) => ({
+  messageId: normalizeString(entry.messageId),
+  author: redactExcerpt(entry.author, 64),
+  createdAt: normalizeString(entry.createdAt),
+  snippet: redactExcerpt(entry.snippet, 180),
+  attachmentCount: Math.max(0, Number.parseInt(String(entry.attachmentCount ?? 0), 10) || 0)
+});
 
 const proposalReply = (planned) => {
   if (planned?.ok === false) {
@@ -125,7 +137,7 @@ const seriousSeverity = (severity) => ["serious", "high", "critical"].includes(n
  *   readPortalDiscordSettings?: Function,
  *   logger?: {warn?: Function}
  * }} options
- * @returns {{handlePortalAdminMention: Function, reviewNoonaPublicReply: Function}}
+ * @returns {{handlePortalAdminMention: Function, reviewNoonaPublicReply: Function, recordNoonaReviewDelivery: Function, recordDiscordDiagnostic: Function}}
  */
 export const createAppaChatService = ({
   config,
@@ -317,10 +329,44 @@ export const createAppaChatService = ({
     return {ok: true, delivered};
   };
 
+  const recordDiscordDiagnostic = async (payload = {}) => {
+    const action = normalizeString(payload.action).toLowerCase();
+    if (!["inspect", "testpost"].includes(action)) {
+      return {ok: false, status: 400, error: "Unsupported Appa Discord diagnostic action."};
+    }
+    const snippets = normalizeArray(payload.snippets)
+      .map((entry) => normalizeDiagnosticSnippet(normalizeObject(entry, {}) || {}))
+      .filter((entry) => entry.snippet || entry.messageId)
+      .slice(0, 10);
+    await appendDurableEvent(vaultClient, {
+      ...buildServiceActor("scriptarr-portal", "Portal Appa diagnostics"),
+      domain: "discord",
+      eventType: "appa-discord-diagnostic",
+      severity: "info",
+      targetType: "discord-channel",
+      targetId: normalizeString(payload.channelId),
+      message: action === "inspect"
+        ? "Appa inspected an allowed Discord channel with redacted snippets."
+        : "Appa posted a Discord diagnostics test message.",
+      metadata: {
+        action,
+        guildId: normalizeString(payload.guildId),
+        channelId: normalizeString(payload.channelId),
+        requestedBy: normalizeString(payload.requestedBy),
+        messageId: normalizeString(payload.messageId),
+        messageExcerpt: redactExcerpt(payload.messageExcerpt, 220),
+        snippetCount: snippets.length,
+        snippets
+      }
+    }, logger);
+    return {ok: true, action, snippetCount: snippets.length};
+  };
+
   return {
     handlePortalAdminMention,
     reviewNoonaPublicReply,
-    recordNoonaReviewDelivery
+    recordNoonaReviewDelivery,
+    recordDiscordDiagnostic
   };
 };
 

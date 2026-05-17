@@ -97,7 +97,7 @@ const localAiProfileLabel = (profile) => {
 };
 
 /**
- * Resolve LocalAI's current lifecycle label from Warden's runtime payload.
+ * Resolve LocalAI's current lifecycle label from Oracle's embedded runtime payload.
  *
  * @param {any} localAi
  * @returns {string}
@@ -257,7 +257,7 @@ const resolveModelChoices = (payload) => {
 };
 
 const defaultModelForProvider = (provider) => normalizeString(provider).toLowerCase() === "localai"
-  ? "gpt-4"
+  ? "Hermes-3-Llama-3.1-8B-Q4_K_S.gguf"
   : "gpt-4.1-mini";
 
 const AI_ENDPOINT = "/api/moon/v3/admin/system/ai";

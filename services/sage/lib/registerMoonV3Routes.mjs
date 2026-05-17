@@ -575,8 +575,7 @@ export const registerMoonV3Routes = (app, {
   serviceJson,
   safeJson,
   systemTaskRuntime,
-  persistOracleSettings,
-  syncWardenLocalAiConfig
+  persistOracleSettings
 }) => {
   const fetchRavenJson = async (path, options = {}) => {
     const result = await serviceJson(config.ravenBaseUrl, path, options);
@@ -3771,12 +3770,10 @@ export const registerMoonV3Routes = (app, {
     const oracleSettings = action === "remove"
       ? await readOracleSettings()
       : await readLocalAiActionSettings(body);
-    if (action !== "remove") {
-      await syncWardenLocalAiConfig(oracleSettings);
-    }
-    const result = await safeJson(serviceJson(config.wardenBaseUrl, `/api/localai/actions/${encodeURIComponent(action)}`, {
+    const result = await safeJson(serviceJson(config.oracleBaseUrl, `/api/localai/actions/${encodeURIComponent(action)}`, {
       method: "POST",
       body: {
+        model: normalizeString(body?.model || body?.modelUrl || oracleSettings.model),
         requestedBy: {
           discordUserId: normalizeString(user?.discordUserId),
           username: normalizeString(user?.username, "Admin")
@@ -3790,8 +3787,8 @@ export const registerMoonV3Routes = (app, {
       eventType: `localai-${action}-requested`,
       severity: "info",
       targetType: "service",
-      targetId: "scriptarr-warden",
-      message: `${normalizeString(user?.username, "An admin")} requested LocalAI ${action} from Moon admin AI.`,
+      targetId: "scriptarr-oracle",
+      message: `${normalizeString(user?.username, "An admin")} requested embedded LocalAI ${action} from Moon admin AI.`,
       metadata: {
         result: result.payload || result
       }
@@ -3826,8 +3823,8 @@ export const registerMoonV3Routes = (app, {
     const [oracleHealth, oracleStatus, localAiStatus, localAiProfile] = await Promise.all([
       safeJson(serviceJson(config.oracleBaseUrl, "/health", {timeoutMs: 2200})),
       safeJson(serviceJson(config.oracleBaseUrl, "/api/status", {timeoutMs: 2200})),
-      safeJson(serviceJson(config.wardenBaseUrl, "/api/localai/status", {timeoutMs: 3000})),
-      safeJson(serviceJson(config.wardenBaseUrl, "/api/localai/profile", {timeoutMs: 2200}))
+      safeJson(serviceJson(config.oracleBaseUrl, "/api/localai/status", {timeoutMs: 3000})),
+      safeJson(serviceJson(config.oracleBaseUrl, "/api/localai/profile", {timeoutMs: 2200}))
     ]);
     return {
       oracleHealth: oracleHealth.payload || oracleHealth,
@@ -3964,7 +3961,7 @@ export const registerMoonV3Routes = (app, {
     }
     if (tool.id === "localai_status") {
       await markToolUsed(vaultClient, tool.id);
-      const result = await serviceJson(config.wardenBaseUrl, "/api/localai/status", {timeoutMs: 3000});
+      const result = await serviceJson(config.oracleBaseUrl, "/api/localai/status", {timeoutMs: 3000});
       return {message: "LocalAI status loaded.", data: result.payload || result};
     }
     return {message: `${tool.label} is available, but no direct read executor is wired yet.`, data: null};

@@ -2,7 +2,6 @@
  * @file Scriptarr Warden module: services/warden/config/servicePlan.mjs.
  */
 import {
-  DEFAULT_LOCALAI_PORT,
   DEFAULT_MOON_PORT,
   DEFAULT_MOON_PUBLIC_PORT,
   DEFAULT_NETWORK_NAME,
@@ -19,6 +18,7 @@ import {
   DEFAULT_WARDEN_SERVICE_BASE_URL
 } from "./constants.mjs";
 import {resolveServiceImage} from "./images.mjs";
+import {resolveLocalAiProfile} from "./localAiProfiles.mjs";
 import {resolveMysqlConfig, toInternalMysqlEnv} from "./mysqlConfig.mjs";
 import {buildScriptarrStorageLayout, resolveScriptarrDataRoot} from "../filesystem/storageLayout.mjs";
 
@@ -217,7 +217,23 @@ export const resolveServicePlan = ({env = process.env, containerNamePrefix = ""}
   const oraclePort = resolvePort(env.SCRIPTARR_ORACLE_PORT, DEFAULT_ORACLE_PORT);
   const ravenPort = resolvePort(env.SCRIPTARR_RAVEN_PORT, DEFAULT_RAVEN_PORT);
   const wardenBaseUrlForServices = normalizeString(env.SCRIPTARR_WARDEN_BASE_URL) || DEFAULT_WARDEN_SERVICE_BASE_URL;
-  const localAiBaseUrl = normalizeString(env.SCRIPTARR_LOCALAI_BASE_URL) || `http://scriptarr-localai:${DEFAULT_LOCALAI_PORT}/v1`;
+  const oracleEmbeddedLocalAi = normalizeString(env.SCRIPTARR_LOCALAI_EMBEDDED) || "true";
+  const oracleLocalAiBaseUrl = normalizeString(env.SCRIPTARR_ORACLE_LOCALAI_BASE_URL)
+    || (oracleEmbeddedLocalAi === "false"
+      ? normalizeString(env.SCRIPTARR_LOCALAI_BASE_URL) || "http://scriptarr-localai:8080/v1"
+      : "http://127.0.0.1:8080/v1");
+  const oracleLocalAiProfile = resolveLocalAiProfile({
+    env: {
+      ...env,
+      SCRIPTARR_GPU_HINT: normalizeString(env.SCRIPTARR_ORACLE_LOCALAI_GPU_PROFILE || env.SCRIPTARR_GPU_HINT)
+    }
+  });
+  const oracleGpuEnv = oracleLocalAiProfile.key === "nvidia"
+    ? {
+      NVIDIA_VISIBLE_DEVICES: env.NVIDIA_VISIBLE_DEVICES || "all",
+      NVIDIA_DRIVER_CAPABILITIES: env.NVIDIA_DRIVER_CAPABILITIES || "compute,utility"
+    }
+    : {};
   const resolvedContainerNamePrefix = resolveContainerNamePrefix({env, containerNamePrefix});
 
   /** @type {ReturnType<typeof resolveServicePlan>["services"]} */
@@ -359,13 +375,31 @@ export const resolveServicePlan = ({env = process.env, containerNamePrefix = ""}
     env: {
       SCRIPTARR_SAGE_BASE_URL: `http://scriptarr-sage:${sagePort}`,
       SCRIPTARR_SERVICE_TOKEN: serviceTokens["scriptarr-oracle"],
-      SCRIPTARR_LOCALAI_BASE_URL: localAiBaseUrl,
+      SCRIPTARR_LOCALAI_BASE_URL: oracleLocalAiBaseUrl,
+      SCRIPTARR_LOCALAI_EMBEDDED: oracleEmbeddedLocalAi,
+      SCRIPTARR_LOCALAI_MODELS_DIR: "/models",
+      SCRIPTARR_LOCALAI_DATA_DIR: "/data",
+      SCRIPTARR_LOCALAI_BACKENDS_PATH: "/data/backends",
+      SCRIPTARR_LOCALAI_TMP_DIR: "/data/tmp",
+      SCRIPTARR_LOCALAI_BACKEND_ASSETS_PATH: "/data/backend_data",
+      SCRIPTARR_LOCALAI_GENERATED_CONTENT_PATH: "/data/generated",
+      SCRIPTARR_LOCALAI_UPLOAD_PATH: "/data/upload",
+      SCRIPTARR_LOCALAI_GPU_LAYERS: env.SCRIPTARR_LOCALAI_GPU_LAYERS || "auto",
+      SCRIPTARR_LOCALAI_DEFAULT_MODEL: env.SCRIPTARR_LOCALAI_DEFAULT_MODEL
+        || "huggingface://bartowski/Hermes-3-Llama-3.1-8B-GGUF/Hermes-3-Llama-3.1-8B-Q4_K_S.gguf",
+      SCRIPTARR_LOCALAI_ALTERNATE_MODELS: env.SCRIPTARR_LOCALAI_ALTERNATE_MODELS
+        || "huggingface://bartowski/Hermes-3-Llama-3.1-8B-GGUF/Hermes-3-Llama-3.1-8B-Q4_K_M.gguf,huggingface://Qwen/Qwen3-8B-GGUF/Qwen3-8B-Q4_K_M.gguf",
       SCRIPTARR_ORACLE_PORT: String(oraclePort),
-      SCRIPTARR_NOONA_PERSONA_NAME: env.SCRIPTARR_NOONA_PERSONA_NAME || DEFAULT_NOONA_PERSONA_NAME
+      SCRIPTARR_NOONA_PERSONA_NAME: env.SCRIPTARR_NOONA_PERSONA_NAME || DEFAULT_NOONA_PERSONA_NAME,
+      ...oracleGpuEnv
     },
-    mounts: resolveFolderMounts(storageLayout, "scriptarr-oracle", ["logs"]),
+    mounts: [
+      ...resolveFolderMounts(storageLayout, "scriptarr-oracle", ["logs"]),
+      ...resolveFolderMounts(storageLayout, "scriptarr-localai", ["models", "data"])
+    ],
     networkAliases: ["scriptarr-oracle"],
     publishedPorts: [],
+    extraArgs: oracleLocalAiProfile.runtimeArgs || [],
     healthCheck: buildPythonHttpHealthCheck(oraclePort),
     containerPort: oraclePort
   });

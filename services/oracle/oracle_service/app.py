@@ -12,6 +12,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from .config import OracleConfig, resolve_oracle_config
+from .embedded_localai import EmbeddedLocalAiManager, default_local_ai_model_name
 from .llm import invoke_oracle
 from .runtime_settings import resolve_oracle_runtime_settings
 from .sage_client import SageClient
@@ -19,7 +20,7 @@ from .status import read_scriptarr_status
 
 LOGGER = logging.getLogger("scriptarr.oracle")
 OPENAI_MODELS_URL = "https://api.openai.com/v1/models"
-LOCALAI_DEFAULT_MODEL = "gpt-4"
+LOCALAI_DEFAULT_MODEL = "Hermes-3-Llama-3.1-8B-Q4_K_S.gguf"
 OPENAI_COMPATIBLE_PREFIXES = ("gpt-", "o1", "o3", "o4", "chatgpt-")
 OPENAI_INCOMPATIBLE_MODEL_TOKENS = (
     "audio",
@@ -149,7 +150,7 @@ def _parse_review_decision(text: str) -> dict[str, object]:
 
 def _provider_default_model(provider: str, config: OracleConfig) -> str:
     if provider == "localai":
-        return LOCALAI_DEFAULT_MODEL
+        return default_local_ai_model_name(config)
     return _normalize_string(config.open_ai_model, "gpt-4.1-mini")
 
 
@@ -268,12 +269,28 @@ def create_app(
     sage_client=None,
     probe_local_ai_fn=probe_local_ai,
     invoke_oracle_fn=invoke_oracle,
-    fetch_models_json_fn=fetch_models_json
+    fetch_models_json_fn=fetch_models_json,
+    embedded_local_ai=None
 ) -> FastAPI:
     active_logger = logger or LOGGER
     active_config = config or resolve_oracle_config()
     active_sage_client = sage_client or SageClient(active_config.sage_base_url, active_config.service_token)
+    embedded_runtime = embedded_local_ai or EmbeddedLocalAiManager(config=active_config, logger=active_logger)
     app = FastAPI()
+
+    @app.on_event("startup")
+    async def startup_embedded_local_ai() -> None:
+        await embedded_runtime.start()
+
+    @app.on_event("shutdown")
+    async def shutdown_embedded_local_ai() -> None:
+        await embedded_runtime.stop()
+
+    async def local_ai_available(runtime) -> bool:
+        if active_config.local_ai_embedded_enabled:
+            status_payload = await embedded_runtime.status()
+            return bool(status_payload.get("ready"))
+        return await probe_local_ai_fn(runtime)
 
     @app.get("/health")
     async def health() -> dict[str, object]:
@@ -290,6 +307,7 @@ def create_app(
             "model": runtime.model,
             "localAiBaseUrl": runtime.local_ai_base_url,
             "openAiApiKeyConfigured": runtime.open_ai_api_key_configured,
+            "embeddedLocalAi": await embedded_runtime.status() if active_config.local_ai_embedded_enabled else None,
             "status": status
         }
 
@@ -304,7 +322,8 @@ def create_app(
             "oracle": {
                 "enabled": runtime.enabled,
                 "provider": runtime.provider,
-                "model": runtime.model
+                "model": runtime.model,
+                "embeddedLocalAi": await embedded_runtime.status() if active_config.local_ai_embedded_enabled else None
             }
         }
 
@@ -312,6 +331,8 @@ def create_app(
     async def models(request: Request) -> dict[str, object]:
         runtime = await resolve_oracle_runtime_settings(config=active_config, sage_client=active_sage_client)
         provider = _normalize_provider(request.query_params.get("provider"), runtime.provider)
+        if provider == "localai" and active_config.local_ai_embedded_enabled:
+            return embedded_runtime.model_options_payload(_selected_model_for_provider(provider, runtime, active_config))
         return await discover_provider_models(
             provider=provider,
             runtime=runtime,
@@ -371,8 +392,7 @@ def create_app(
             }
 
         try:
-            local_ai_available = runtime.provider != "localai" or await probe_local_ai_fn(runtime)
-            if not local_ai_available:
+            if runtime.provider == "localai" and not await local_ai_available(runtime):
                 active_logger.warning(
                     "Oracle fell back because LocalAI was unavailable.",
                     extra={
@@ -437,7 +457,7 @@ def create_app(
             }
 
         try:
-            if runtime.provider == "localai" and not await probe_local_ai_fn(runtime):
+            if runtime.provider == "localai" and not await local_ai_available(runtime):
                 return {
                     **_assist_fallback(task),
                     "reason": "LocalAI probe failed."
@@ -503,6 +523,48 @@ def create_app(
                 **_assist_fallback(task),
                 "error": str(error)
             }
+
+    @app.get("/api/localai/profile")
+    async def localai_profile() -> dict[str, object]:
+        status_payload = await embedded_runtime.status()
+        return {
+            "selectedProfile": status_payload.get("configuredProfile", {}).get("key", "nvidia"),
+            "profiles": status_payload.get("profiles", []),
+            "embedded": True
+        }
+
+    @app.get("/api/localai/status")
+    async def localai_status() -> dict[str, object]:
+        return await embedded_runtime.status()
+
+    @app.post("/api/localai/probe")
+    async def localai_probe() -> dict[str, object]:
+        return await embedded_runtime.probe_generation(force=True)
+
+    @app.post("/api/localai/actions/{action}")
+    async def localai_action(action: str, request: Request):
+        normalized_action = action if action in {"install", "start", "remove"} else ""
+        if not normalized_action:
+            return JSONResponse(status_code=404, content={"error": "Unknown LocalAI action."})
+        try:
+            body = await request.json()
+        except Exception:  # noqa: BLE001
+            body = {}
+        requested_by = body.get("requestedBy") if isinstance(body, dict) else {}
+        model_url = _normalize_string(body.get("modelUrl") or body.get("model")) if isinstance(body, dict) else ""
+        job = await embedded_runtime.start_ensure_job(
+            action=normalized_action,
+            model_url=model_url or None,
+            huggingface_token=_normalize_string(body.get("huggingfaceToken")) if isinstance(body, dict) else "",
+            download_model=normalized_action == "install",
+            requested_by=requested_by if isinstance(requested_by, dict) else {}
+        )
+        status_payload = await embedded_runtime.status()
+        return {
+            "ok": True,
+            **status_payload,
+            "job": job
+        }
 
     active_logger.info(
         "Oracle app initialized.",
