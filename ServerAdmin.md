@@ -481,9 +481,9 @@ Tasks page has an `Optimize cover images` action that scans Sage-approved cover 
 entries, and is safe to rerun.
 Portal also sends requester DMs when a moderated request is approved, denied, or finishes downloading, and dedupes
 those notifications by request id plus decision state so retries and restarts do not spam Discord.
-If a release channel id is configured in `/admin/discord`, Portal also posts completed Raven downloads to that channel
-with a Moon read or title link. Release channel notifications use stable `release:<taskId>` ids and are only
-acknowledged after Discord accepts the message.
+If a release channel id is configured in `/admin/discord`, Portal also posts completed downloads to that channel with
+Moon read or title links. Release channel notifications are grouped into one compact digest per poll, show up to ten
+newest titles plus a `+N more` count, and are only acknowledged after Discord accepts the message.
 If an update channel id is configured, Sage checks `The-Noona-Project/Scriptarr` after the managed image update refresh
 inside the scheduled or manual `update-check` task. New commits since the last posted update are summarized by Oracle
 in Noona's voice, stored durably, and posted by Portal with a stable `update:<latestSha>` id. If Oracle is unavailable

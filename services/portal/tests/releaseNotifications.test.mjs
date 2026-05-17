@@ -29,6 +29,33 @@ test("release channel payload includes title, chapter, and read link", () => {
   assert.match(payload.content, /https:\/\/pax-kun.com\/reader/);
 });
 
+test("release digest payload uses compact branded copy", () => {
+  const payload = buildReleaseChannelPayload({
+    digest: true,
+    totalCount: 12,
+    hiddenCount: 2,
+    items: [{
+      titleName: "Burn the Witch",
+      chapterLabel: "Chapter 1",
+      linkUrl: "https://pax-kun.com/reader/manga/chapter-1",
+      coverUrl: "https://pax-kun.com/cover.jpg"
+    }, {
+      titleName: "Dandadan",
+      chapterLabel: "Raven download completed.",
+      linkUrl: "https://pax-kun.com/reader/manga/chapter-2"
+    }]
+  }, "https://pax-kun.com", "Scriptarr");
+
+  assert.match(payload.content, /12 new Scriptarr releases/);
+  assert.match(payload.content, /\+2 more/);
+  assert.match(payload.embeds[0].description, /Burn the Witch/);
+  assert.match(payload.embeds[0].description, /Dandadan/);
+  assert.doesNotMatch(payload.content, /Raven/);
+  assert.doesNotMatch(payload.embeds[0].description, /Raven/);
+  assert.equal(Boolean(payload.embeds[0].image), false);
+  assert.equal(payload.embeds[0].thumbnail.url, "https://pax-kun.com/cover.jpg");
+});
+
 test("downloadall payload uses compact content and grouped embed fields", () => {
   const payload = buildDownloadAllDirectMessagePayload({
     status: "paused",
@@ -81,17 +108,30 @@ test("portal release notifier sends channel messages and acks after delivery", a
           ok: true,
           payload: {
             notifications: [{
-              id: "release:task-1",
+              id: "release:digest:task-1:2",
               channelId: "channel-1",
-              titleName: "Dandadan",
-              chapterLabel: "Chapter 42",
-              readerUrl: "https://pax-kun.com/reader/manga/title/chapter"
+              digest: true,
+              totalCount: 2,
+              hiddenCount: 0,
+              newestCompletedAt: "2026-05-16T00:02:00.000Z",
+              silenceThrough: "2026-05-16T00:02:00.000Z",
+              ackItemIds: ["release:task-1", "release:task-2"],
+              items: [{
+                id: "release:task-1",
+                titleName: "Dandadan",
+                chapterLabel: "Chapter 42",
+                readerUrl: "https://pax-kun.com/reader/manga/title/chapter"
+              }, {
+                id: "release:task-2",
+                titleName: "Sakamoto Days",
+                chapterLabel: "Chapter 43"
+              }]
             }]
           }
         };
       },
-      async acknowledgeReleaseNotification(id) {
-        acked.push(id);
+      async acknowledgeReleaseNotification(id, payload) {
+        acked.push({id, payload});
       }
     },
     discord: {
@@ -110,5 +150,65 @@ test("portal release notifier sends channel messages and acks after delivery", a
   notifier.stop();
 
   assert.equal(sent[0].channelId, "channel-1");
-  assert.equal(acked[0], "release:task-1");
+  assert.equal(acked[0].id, "release:digest:task-1:2");
+  assert.deepEqual(acked[0].payload.ackItemIds, ["release:task-1", "release:task-2"]);
+  assert.equal(acked[0].payload.silenceThrough, "2026-05-16T00:02:00.000Z");
+});
+
+test("portal release notifier does not ack when Discord send fails", async () => {
+  const acked = [];
+  const notifier = createFollowNotifier({
+    sage: {
+      async listFollowNotifications() {
+        return {ok: true, payload: {notifications: []}};
+      },
+      async acknowledgeFollowNotification() {},
+      async listRequestNotifications() {
+        return {ok: true, payload: {notifications: []}};
+      },
+      async acknowledgeRequestNotification() {},
+      async listSystemNotifications() {
+        return {ok: true, payload: {notifications: []}};
+      },
+      async acknowledgeSystemNotification() {},
+      async listReleaseNotifications() {
+        return {
+          ok: true,
+          payload: {
+            notifications: [{
+              id: "release:digest:task-1:1",
+              channelId: "channel-1",
+              digest: true,
+              totalCount: 1,
+              ackItemIds: ["release:task-1"],
+              silenceThrough: "2026-05-16T00:02:00.000Z",
+              items: [{
+                id: "release:task-1",
+                titleName: "Dandadan",
+                chapterLabel: "Chapter 42"
+              }]
+            }]
+          }
+        };
+      },
+      async acknowledgeReleaseNotification(id, payload) {
+        acked.push({id, payload});
+      }
+    },
+    discord: {
+      async sendDirectMessage() {},
+      async sendChannelMessage() {
+        throw new Error("Discord rejected message.");
+      }
+    },
+    logger: {error() {}},
+    publicBaseUrl: "https://pax-kun.com",
+    pollMs: 1000
+  });
+
+  notifier.start();
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  notifier.stop();
+
+  assert.deepEqual(acked, []);
 });

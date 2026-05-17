@@ -184,9 +184,10 @@ For end-to-end Docker verification, use:
   creating parallel subscription data.
 - Portal now sends requester Discord DMs when a moderated request is approved, denied, or completed, reusing the same
   title art and Moon links the rest of the stack exposes.
-- Portal can also post completed Raven downloads to the configured Discord release channel from `/admin/discord`.
-  Those release posts use stable `release:<taskId>` notification ids and are acknowledged only after Discord accepts
-  the channel message, so restarts do not repost successful releases.
+- Portal can also post completed downloads to the configured Discord release channel from `/admin/discord`.
+  Those release posts are grouped into compact Scriptarr-branded digests, show up to ten newest titles with a
+  `+N more` count, and are acknowledged only after Discord accepts the channel message so restarts do not repost
+  successful releases.
 - Portal can also post Noona-written GitHub update summaries to a separate update channel from `/admin/discord`.
   Sage checks `The-Noona-Project/Scriptarr` during the scheduled or manual update-check task, asks Oracle for the
   summary, retries instead of posting a fallback when AI is unavailable, and exposes stable `update:<latestSha>`

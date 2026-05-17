@@ -28,6 +28,8 @@ HTTP broker.
   let Portal call Oracle or Vault directly for mention chat.
 - Keep AI tool execution Sage-governed. Oracle can assist planning, but Sage must enforce the `ai` domain, enabled
   toggles, grant checks, proposal confirmation, expiry, and durable events.
+- Portal-facing release notifications should be grouped into digest payloads with cursor-style `silenceBefore`
+  acknowledgment state, and should tolerate completed Raven tasks that no longer match a library title.
 - Portal-facing downloadall notifications should use stable ack ids and only acknowledge after Portal confirms the
   requester DM was sent.
 - Portal-facing GitHub update notifications should use stable `update:<latestSha>` ids and only acknowledge after

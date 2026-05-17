@@ -27,7 +27,8 @@ and the Oracle chat bridge.
   use the configured site name or Noona instead of internal service codenames; owner-only diagnostics may name services
   when that helps operate the stack.
 - Requester completion DMs and channel notifications should stay deduped by stable Sage acknowledgment ids so restarts
-  or retries do not spam Discord users or channels.
+  or retries do not spam Discord users or channels. Release channel notifications should render Sage digest payloads as
+  compact Scriptarr-branded posts and acknowledge digest metadata only after Discord accepts the message.
 - `downloadall` should always use Sage's durable run path, including legacy raw DM text, and Portal should DM paused,
   completed, failed, or cancelled run summaries only once after Sage exposes a stable notification id.
 - Reuse the shared `coverUrl` and Moon public base URL in Portal embeds and DMs when they are available instead of

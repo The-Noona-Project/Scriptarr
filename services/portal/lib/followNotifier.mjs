@@ -14,6 +14,25 @@ const toCount = (value, fallback = 0) => {
   const parsed = Number.parseInt(String(value ?? ""), 10);
   return Number.isFinite(parsed) ? parsed : fallback;
 };
+const isGenericReleaseChapterLabel = (value) => {
+  const normalized = normalizeString(value)
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+  return !normalized
+    || /^(raven\s+)?download(ed)?\s+completed\.?$/.test(normalized)
+    || normalized === "completed"
+    || normalized === "raven completed";
+};
+const normalizeReleaseChapterLabel = (value, fallback = "Latest chapter") => {
+  const normalized = normalizeString(value);
+  return normalized && !isGenericReleaseChapterLabel(normalized)
+    ? normalized
+    : fallback;
+};
+const escapeMarkdownLinkText = (value) => normalizeString(value)
+  .replace(/\\/g, "\\\\")
+  .replace(/\[/g, "\\[")
+  .replace(/\]/g, "\\]");
 const DOWNLOADALL_APPROVE_REACTION = "✅";
 const DOWNLOADALL_DENY_REACTION = "❌";
 
@@ -330,13 +349,53 @@ const buildDirectMessagePayload = (notification, kind, publicBaseUrl, requestCom
 };
 
 export const buildReleaseChannelPayload = (notification = {}, publicBaseUrl = "", brandName = "Scriptarr") => {
+  const digestItems = normalizeArray(notification.items);
+  if (digestItems.length || notification.digest === true) {
+    const totalCount = Math.max(toCount(notification.totalCount, digestItems.length), digestItems.length);
+    const hiddenCount = Math.max(0, toCount(notification.hiddenCount, totalCount - digestItems.length));
+    const visibleItems = digestItems.slice(0, 10);
+    const releaseWord = totalCount === 1 ? "release" : "releases";
+    const hiddenLine = hiddenCount > 0
+      ? ` +${hiddenCount} more grouped into this digest.`
+      : "";
+    const itemLines = visibleItems.map((item, index) => {
+      const itemTitle = truncate(normalizeString(item.titleName || item.title, `${brandName} title`), 120);
+      const itemChapter = truncate(
+        normalizeReleaseChapterLabel(item.chapterLabel || item.latestChapter, "Latest chapter"),
+        90
+      );
+      const itemLink = normalizeString(item.linkUrl || item.readerUrl || item.titleUrl);
+      const titleText = itemLink
+        ? `[${escapeMarkdownLinkText(itemTitle)}](${itemLink})`
+        : itemTitle;
+      return `${index + 1}. ${titleText} - ${itemChapter}`;
+    });
+    const firstCoverUrl = normalizeString(visibleItems.find((item) => normalizeString(item.coverUrl))?.coverUrl);
+    return {
+      content: truncate(`${totalCount} new ${brandName} ${releaseWord} are ready to read.${hiddenLine}`, 1900),
+      embeds: [{
+        title: `${totalCount} new ${brandName} ${releaseWord}`,
+        description: truncate(itemLines.join("\n") || `${brandName} releases are ready to read.`, 3900),
+        color: 0x5865f2,
+        thumbnail: firstCoverUrl ? {url: firstCoverUrl} : undefined,
+        fields: hiddenCount > 0
+          ? [{
+            name: "More",
+            value: `+${hiddenCount} more grouped in this digest.`
+          }]
+          : undefined,
+        footer: {text: "Grouped by Noona to keep the channel readable."}
+      }]
+    };
+  }
+
   const titleName = normalizeString(notification.titleName || notification.title, `${brandName} title`);
-  const chapterLabel = normalizeString(notification.chapterLabel || notification.latestChapter, "Latest chapter");
+  const chapterLabel = normalizeReleaseChapterLabel(notification.chapterLabel || notification.latestChapter, "Latest chapter");
   const linkUrl = normalizeString(notification.linkUrl || notification.readerUrl || notification.titleUrl)
     || (normalizeString(publicBaseUrl) ? normalizeString(publicBaseUrl).replace(/\/+$/g, "") : "");
   const coverUrl = normalizeString(notification.coverUrl);
   const linkLine = linkUrl ? `\nRead it here: ${linkUrl}` : "";
-  const description = `**${titleName}** downloaded ${chapterLabel}.${linkLine}`;
+  const description = `**${titleName}** is ready to read: ${chapterLabel}.${linkLine}`;
   return {
     content: `New ${brandName} release: ${titleName} - ${chapterLabel}${linkLine}`,
     embeds: [{
@@ -498,7 +557,10 @@ const deliverReleaseChannelNotifications = async ({
         payload
       );
       deliveredIds.add(notificationId);
-      await acknowledge(notificationId);
+      await acknowledge(notificationId, {
+        ackItemIds: normalizeArray(notification.ackItemIds),
+        silenceThrough: normalizeString(notification.silenceThrough || notification.newestCompletedAt)
+      });
     } catch (error) {
       logger?.error?.("Portal release channel notification delivery failed.", {notificationId, error});
     }
@@ -623,7 +685,7 @@ export const createFollowNotifier = ({
       });
       await deliverReleaseChannelNotifications({
         list: () => sage?.listReleaseNotifications?.(),
-        acknowledge: (id) => sage?.acknowledgeReleaseNotification?.(id),
+        acknowledge: (id, payload) => sage?.acknowledgeReleaseNotification?.(id, payload),
         discord,
         sage,
         logger,

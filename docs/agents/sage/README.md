@@ -153,8 +153,10 @@
   create expiring proposals and require an authorized admin confirmation before Sage executes the allowlisted action.
 - Sage should expose acked system-notification queues for Portal so Warden LocalAI lifecycle jobs can DM the admin who
   requested them without making Portal poll Warden directly.
-- Sage should expose acked release-channel notification queues for Portal from completed Raven download tasks. Use
-  stable `release:<taskId>` ids and only mark them acknowledged after Portal confirms the Discord channel send.
+- Sage should expose acked release-channel notification queues for Portal from completed Raven download tasks. Group
+  pending releases into stable `release:digest:<newestTaskId>:<count>` payloads, keep the durable state as
+  `ackedIds` plus the `silenceBefore` cursor, tolerate completed tasks with no matching library title, and only mark
+  them acknowledged after Portal confirms the Discord channel send.
 - Sage should expose acked update-channel notification queues for Portal from GitHub update digests. The `update-check`
   system task must call Warden's image check first, then compare `The-Noona-Project/Scriptarr` commits against the
   last posted update baseline, ask Oracle for the Noona summary, store pending retry state when Oracle is unavailable,
