@@ -15,13 +15,14 @@ import {useCallback, useEffect, useRef, useState} from "react";
  */
 export const requestJson = async (url, options = {}) => {
   try {
+    const {json, ...fetchOptions} = options;
     const response = await fetch(url, {
-      ...options,
+      ...fetchOptions,
       headers: {
-        ...(options.json == null ? {} : {"Content-Type": "application/json"}),
+        ...(json == null ? {} : {"Content-Type": "application/json"}),
         ...(options.headers || {})
       },
-      body: options.json == null ? options.body : JSON.stringify(options.json),
+      body: json == null ? options.body : JSON.stringify(json),
       cache: "no-store"
     });
 
@@ -41,6 +42,16 @@ export const requestJson = async (url, options = {}) => {
       payload
     };
   } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      return {
+        ok: false,
+        status: 0,
+        payload: {
+          aborted: true,
+          error: "This reader request was cancelled because a newer one started."
+        }
+      };
+    }
     return {
       ok: false,
       status: 0,
@@ -56,9 +67,10 @@ export const requestJson = async (url, options = {}) => {
  *
  * @template T
  * @param {string | null} url
- * @param {{enabled?: boolean, fallback?: T, deps?: unknown[]}} [options]
+ * @param {{enabled?: boolean, fallback?: T, deps?: unknown[], keepPreviousData?: boolean}} [options]
  * @returns {{
  *   loading: boolean,
+ *   refreshing: boolean,
  *   error: string,
  *   status: number,
  *   data: T,
@@ -66,43 +78,76 @@ export const requestJson = async (url, options = {}) => {
  *   setData: import("react").Dispatch<import("react").SetStateAction<T>>
  * }}
  */
-export const useMoonJson = (url, {enabled = true, fallback = /** @type {T} */ (null), deps = []} = {}) => {
+export const useMoonJson = (url, {enabled = true, fallback = /** @type {T} */ (null), deps = [], keepPreviousData = false} = {}) => {
   const [loading, setLoading] = useState(Boolean(enabled && url));
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
   const [status, setStatus] = useState(0);
   const [data, setData] = useState(fallback);
   const fallbackRef = useRef(fallback);
+  const controllerRef = useRef(null);
+  const requestSeqRef = useRef(0);
+  const hasLoadedRef = useRef(false);
   fallbackRef.current = fallback;
 
   const fetchValue = useCallback(async () => {
+    requestSeqRef.current += 1;
+    const requestSeq = requestSeqRef.current;
+    controllerRef.current?.abort?.();
+    controllerRef.current = null;
+
     if (!enabled || !url) {
       setLoading(false);
+      setRefreshing(false);
       setError("");
       setStatus(0);
       setData(fallbackRef.current);
+      hasLoadedRef.current = false;
       return;
     }
 
-    setLoading(true);
-    const result = await requestJson(url);
+    const controller = new AbortController();
+    controllerRef.current = controller;
+    const shouldRefresh = keepPreviousData && hasLoadedRef.current;
+    setLoading(!shouldRefresh);
+    setRefreshing(shouldRefresh);
+    const result = await requestJson(url, {signal: controller.signal});
+    if (requestSeq !== requestSeqRef.current) {
+      return;
+    }
+    if (result.payload?.aborted) {
+      setLoading(false);
+      setRefreshing(false);
+      return;
+    }
     if (!result.ok) {
       setError(result.payload?.error || "Scriptarr could not finish loading the reader.");
       setStatus(result.status);
+      if ([401, 403].includes(result.status)) {
+        setData(fallbackRef.current);
+        hasLoadedRef.current = false;
+      }
       setLoading(false);
+      setRefreshing(false);
       return;
     }
 
+    hasLoadedRef.current = true;
     setData(result.payload);
     setError("");
     setStatus(result.status);
     setLoading(false);
-  }, [enabled, url]);
+    setRefreshing(false);
+  }, [enabled, keepPreviousData, url]);
 
   useEffect(() => {
     void fetchValue();
+    return () => {
+      controllerRef.current?.abort?.();
+    };
   }, [fetchValue, ...deps]);
 
-  return {loading, error, status, data, refresh: fetchValue, setData};
+  return {loading, refreshing, error, status, data, refresh: fetchValue, setData};
 };
 
 const normalizeReturnTo = (returnTo = "/reader") => {

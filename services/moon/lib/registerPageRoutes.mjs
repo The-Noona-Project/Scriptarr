@@ -50,15 +50,22 @@ const INDEX_REQUEST = "/__moon_recent_chapters__";
 const MAX_RECENT_CHAPTERS = 5;
 const STATIC_ASSETS = ["/", "/manifest.webmanifest", "/icon.svg", "/icon-maskable.svg"];
 
-const isReaderChapterRequest = (requestUrl) =>
-  requestUrl.pathname.startsWith("/api/moon/v3/user/reader/title/") &&
-  /\\/chapter\\/[^/]+$/.test(requestUrl.pathname);
+const isReaderApiPath = (requestUrl) =>
+  requestUrl.pathname.startsWith("/api/moon/v3/user/reader/title/") ||
+  requestUrl.pathname.startsWith("/api/moon-v3/user/reader/title/");
 
 const isReaderPageRequest = (requestUrl) =>
-  requestUrl.pathname.startsWith("/api/moon/v3/user/reader/title/") &&
+  isReaderApiPath(requestUrl) &&
   /\\/chapter\\/[^/]+\\/page\\/\\d+$/.test(requestUrl.pathname);
 
-const chapterPrefixFromPath = (pathname) => pathname.replace(/\\/page\\/\\d+$/, "");
+const isReaderPageChunkRequest = (requestUrl) =>
+  isReaderApiPath(requestUrl) &&
+  /\\/chapter\\/[^/]+\\/pages$/.test(requestUrl.pathname) &&
+  requestUrl.searchParams.has("rev");
+
+const chapterPrefixFromPath = (pathname) => pathname
+  .replace(/\\/page\\/\\d+$/, "")
+  .replace(/\\/pages$/, "");
 
 const readRecentIndex = async () => {
   const cache = await caches.open(READER_CACHE);
@@ -141,7 +148,7 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  if (isReaderChapterRequest(requestUrl) || isReaderPageRequest(requestUrl)) {
+  if (isReaderPageRequest(requestUrl) || isReaderPageChunkRequest(requestUrl)) {
     event.respondWith((async () => {
       const cache = await caches.open(READER_CACHE);
       const cached = await cache.match(event.request);

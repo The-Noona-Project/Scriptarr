@@ -95,7 +95,9 @@ a {
 .reader-icon-button,
 .reader-bottombar button,
 .reader-settings button,
-.reader-segmented button {
+.reader-segmented button,
+.reader-loading-next button,
+.reader-page-retry button {
   border: 1px solid var(--reader-border);
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.055);
@@ -202,9 +204,76 @@ a {
 .reader-segmented button:hover,
 .reader-segmented button:focus-visible,
 .reader-empty-panel a:hover,
-.reader-empty-panel a:focus-visible {
+.reader-empty-panel a:focus-visible,
+.reader-loading-next button:hover,
+.reader-loading-next button:focus-visible,
+.reader-page-retry button:hover,
+.reader-page-retry button:focus-visible {
   border-color: rgba(255, 255, 255, 0.24);
   background: rgba(255, 255, 255, 0.1);
+}
+
+.reader-skeleton-line,
+.reader-skeleton-pill,
+.reader-skeleton-page {
+  position: relative;
+  overflow: hidden;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.075);
+}
+
+.reader-skeleton-line::after,
+.reader-skeleton-pill::after,
+.reader-skeleton-page::after {
+  position: absolute;
+  inset: 0;
+  content: "";
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.12), transparent);
+  transform: translateX(-100%);
+  animation: reader-skeleton-sheen 1.3s ease-in-out infinite;
+}
+
+.reader-skeleton-line {
+  width: 100%;
+  height: 12px;
+}
+
+.reader-skeleton-line.is-wide {
+  max-width: 320px;
+}
+
+.reader-skeleton-line.is-short {
+  max-width: 180px;
+}
+
+.reader-skeleton-pill {
+  width: 86px;
+  height: 40px;
+}
+
+.reader-stage-skeleton {
+  display: grid;
+  place-items: center;
+  padding: 86px 18px;
+}
+
+.reader-page-placeholder {
+  width: min(100%, 920px);
+  min-height: 72vh;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  align-items: center;
+  justify-items: center;
+}
+
+.reader-skeleton-page {
+  width: min(82vw, 820px);
+  min-height: 64vh;
+}
+
+@keyframes reader-skeleton-sheen {
+  100% {
+    transform: translateX(100%);
+  }
 }
 
 .reader-stage {
@@ -245,6 +314,17 @@ a {
   display: block;
   max-width: 100%;
   user-select: none;
+}
+
+.reader-page-retry {
+  display: grid;
+  place-items: center;
+  gap: 12px;
+  min-height: 50vh;
+  width: 100%;
+  color: var(--reader-muted);
+  padding: 28px;
+  text-align: center;
 }
 
 .reader-app[data-fit="width"] .reader-page-frame img {
@@ -311,8 +391,15 @@ a {
 
 .reader-loading-next {
   color: var(--reader-muted);
+  display: grid;
+  justify-items: center;
+  gap: 8px;
   padding: 20px;
   text-align: center;
+}
+
+.reader-loading-next p {
+  margin: 0;
 }
 
 .reader-bottombar input[type="range"] {

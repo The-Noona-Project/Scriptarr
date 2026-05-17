@@ -104,6 +104,24 @@ test("user chrome keeps reader route helpers out of shell imports", () => {
   assert.doesNotMatch(navigationRoutes, /titleRoutes|buildReaderPath|readerTarget/);
 });
 
+test("reader app keeps page loading split and Once UI out of the reader bundle", () => {
+  const readerClient = readMoonFile("apps/reader-next/components/ReaderAppClient.jsx");
+  const readerApi = readMoonFile("apps/reader-next/lib/api.js");
+  const serviceWorker = readMoonFile("lib/registerPageRoutes.mjs");
+
+  assert.match(readerClient, /\/session/);
+  assert.match(readerClient, /\/pages\?/);
+  assert.match(readerClient, /ReaderInitialSkeleton/);
+  assert.match(readerClient, /resolveGamepadActions/);
+  assert.doesNotMatch(readerClient, /@once-ui-system\/core/);
+  assert.match(readerApi, /AbortController/);
+  assert.match(readerApi, /requestSeqRef/);
+  assert.match(readerApi, /keepPreviousData/);
+  assert.match(serviceWorker, /isReaderPageChunkRequest/);
+  assert.match(serviceWorker, /\/api\/moon-v3\/user\/reader\/title\//);
+  assert.doesNotMatch(serviceWorker, /isReaderChapterRequest/);
+});
+
 test("user return-visit cache stays browser-local and card scoped", () => {
   const cacheSource = readMoonFile("apps/user-next/lib/persistentJsonCache.js");
   const apiSource = readMoonFile("apps/user-next/lib/api.js");

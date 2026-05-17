@@ -2272,7 +2272,32 @@ test("sage round-trips Moon branding and exposes typed Moon reader payloads", as
   assert.equal(readerChapter.preferences.readingMode, "infinite");
   assert.equal(readerChapter.preferences.layoutMode, "webtoon");
   assert.equal(readerChapter.preferences.readingDirection, "ltr");
-  assert.equal(readerChapter.pages[0].src, "/api/moon/v3/user/reader/title/dan-da-dan/chapter/dandadan-c166/page/0");
+  assert.match(readerChapter.pages[0].src, /^\/api\/moon\/v3\/user\/reader\/title\/dan-da-dan\/chapter\/dandadan-c166\/page\/0\?rev=/);
+
+  const readerSession = await fetch(`${baseUrl}/api/moon-v3/user/reader/title/dan-da-dan/chapter/dandadan-c166/session`, {
+    headers: {
+      "Authorization": `Bearer ${ownerClaim.token}`
+    }
+  }).then((response) => response.json());
+  assert.equal(readerSession.title.libraryTypeSlug, "webtoon");
+  assert.equal(Object.hasOwn(readerSession.title, "chapters"), false);
+  assert.equal(Object.hasOwn(readerSession, "manifest"), false);
+  assert.equal(Object.hasOwn(readerSession, "pages"), false);
+  assert.equal(readerSession.pageCount, 3);
+  assert.equal(readerSession.nextChapterId, "dandadan-c167");
+  assert.match(readerSession.pageRevision, /^[a-f0-9]{12}$/);
+
+  const readerPagesResponse = await fetch(`${baseUrl}/api/moon-v3/user/reader/title/dan-da-dan/chapter/dandadan-c166/pages?cursor=1&pageSize=1&rev=${readerSession.pageRevision}`, {
+    headers: {
+      "Authorization": `Bearer ${ownerClaim.token}`
+    }
+  });
+  assert.match(readerPagesResponse.headers.get("cache-control") || "", /max-age=604800/);
+  const readerPages = await readerPagesResponse.json();
+  assert.equal(readerPages.pages.length, 1);
+  assert.equal(readerPages.pages[0].index, 1);
+  assert.equal(readerPages.pageInfo.hasMore, true);
+  assert.match(readerPages.pages[0].src, /^\/api\/moon\/v3\/user\/reader\/title\/dan-da-dan\/chapter\/dandadan-c166\/page\/1\?rev=/);
 
   const savedReaderPreferences = await fetch(`${baseUrl}/api/moon-v3/user/reader/preferences`, {
     method: "PUT",

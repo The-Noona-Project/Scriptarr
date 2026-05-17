@@ -314,6 +314,39 @@ const createSageStub = ({requests = []} = {}) => Promise.resolve(http.createServ
     return;
   }
 
+  if (requestUrl.pathname === "/api/moon-v3/user/reader/title/dan-da-dan/chapter/chapter-1/session") {
+    response.writeHead(200, {"Content-Type": "application/json", "Cache-Control": "no-store"});
+    response.end(JSON.stringify({
+      title: {id: "dan-da-dan", title: "Dandadan", libraryTypeSlug: "webtoon", libraryTypeLabel: "Webtoon"},
+      chapter: {id: "chapter-1", label: "Chapter 1", pageCount: 2},
+      previousChapterId: null,
+      nextChapterId: "chapter-2",
+      pageCount: 2,
+      pageBase: "/api/moon/v3/user/reader/title/dan-da-dan/chapter/chapter-1/page",
+      pageRevision: "rev-1",
+      progress: null,
+      bookmarks: [],
+      preferences: {layoutMode: "webtoon", readingMode: "infinite", readingDirection: "ltr"}
+    }));
+    return;
+  }
+
+  if (requestUrl.pathname === "/api/moon-v3/user/reader/title/dan-da-dan/chapter/chapter-1/pages") {
+    response.writeHead(200, {"Content-Type": "application/json", "Cache-Control": requestUrl.searchParams.get("rev") ? "private, max-age=604800" : "no-store"});
+    response.end(JSON.stringify({
+      titleId: "dan-da-dan",
+      chapterId: "chapter-1",
+      pageRevision: "rev-1",
+      pages: [{
+        index: Number.parseInt(requestUrl.searchParams.get("cursor") || "0", 10) || 0,
+        label: "Page 1",
+        src: "/api/moon/v3/user/reader/title/dan-da-dan/chapter/chapter-1/page/0?rev=rev-1"
+      }],
+      pageInfo: {cursor: requestUrl.searchParams.get("cursor") || "0", nextCursor: "1", hasMore: true, pageSize: 1, totalCount: 2}
+    }));
+    return;
+  }
+
   if (requestUrl.pathname === "/api/auth/status") {
     if (authorization === "Bearer admin-token") {
       response.writeHead(200, {"Content-Type": "application/json"});
@@ -558,6 +591,7 @@ test("moon serves branded split entry documents, typed routes, PWA assets, and M
   const server = app.listen(0);
   const baseUrl = `http://127.0.0.1:${server.address().port}`;
 
+  try {
   const [userPageResponse, adminPageResponse, libraryRouteResponse, titleRouteResponse, readerRouteResponse, untypedReaderRouteResponse, profileRouteResponse] = await Promise.all([
     fetch(`${baseUrl}/`),
     fetch(`${baseUrl}/admin`),
@@ -897,6 +931,18 @@ test("moon serves branded split entry documents, typed routes, PWA assets, and M
   assert.match(pageResponse.headers.get("content-type") || "", /image\/svg\+xml/);
   assert.match(await pageResponse.text(), /reader-page/);
 
+  const readerSessionResponse = await fetch(`${baseUrl}/api/moon/v3/user/reader/title/dan-da-dan/chapter/chapter-1/session`);
+  assert.equal(readerSessionResponse.status, 200);
+  const readerSession = await readerSessionResponse.json();
+  assert.equal(readerSession.pageRevision, "rev-1");
+  assert.equal(Object.hasOwn(readerSession, "manifest"), false);
+  assert.equal(Object.hasOwn(readerSession, "pages"), false);
+
+  const readerPagesResponse = await fetch(`${baseUrl}/api/moon-v3/user/reader/title/dan-da-dan/chapter/chapter-1/pages?cursor=0&pageSize=1&rev=rev-1`);
+  assert.equal(readerPagesResponse.status, 200);
+  const readerPages = await readerPagesResponse.json();
+  assert.equal(readerPages.pages[0].src, "/api/moon/v3/user/reader/title/dan-da-dan/chapter/chapter-1/page/0?rev=rev-1");
+
   const missingApiResponse = await fetch(`${baseUrl}/api/not-a-real-route`);
   assert.equal(missingApiResponse.status, 404);
   assert.deepEqual(await missingApiResponse.json(), {error: "Not found"});
@@ -957,6 +1003,7 @@ test("moon serves branded split entry documents, typed routes, PWA assets, and M
   assert.ok(requests.some((entry) => entry.method === "POST" && entry.url === "/api/moon-v3/admin/requests/request-1/deny"));
   assert.ok(requests.some((entry) => entry.method === "GET" && entry.url === "/api/moon-v3/user/api-keys"));
 
+  } finally {
   await closeServer(server);
   await closeServer(sageStub);
   if (previousCoverCacheDir == null) {
@@ -966,6 +1013,7 @@ test("moon serves branded split entry documents, typed routes, PWA assets, and M
   }
   await fs.rm(coverCacheDir, {recursive: true, force: true});
   process.chdir(cwd);
+  }
 });
 
 test("moon redirects signed-in non-admin sessions away from admin while allowing admin sessions through", async () => {

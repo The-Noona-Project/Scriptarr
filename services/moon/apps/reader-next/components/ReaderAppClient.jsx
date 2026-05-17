@@ -1,65 +1,100 @@
 "use client";
 
 /**
- * @file Fullscreen Moon reader app client.
+ * @file Fullscreen reader client backed by split session and page-chunk APIs.
  */
 
 import {useCallback, useEffect, useMemo, useRef, useState} from "react";
-import {formatDate, formatProgress} from "../lib/date.js";
 import {loadMoonChromeContext, loadMoonLoginUrl, requestJson, useMoonJson} from "../lib/api.js";
-import {buildReaderPath, buildReaderPathForTitle, buildTitlePathForTitle} from "../lib/routes.js";
+import {
+  READER_INPUT_ACTIONS,
+  createReaderInputState,
+  resolveGamepadActions,
+  resolveKeyboardAction,
+  resolvePointerSwipe
+} from "../lib/inputController.js";
+import {buildReaderPath, buildReaderPathForTitle} from "../lib/routes.js";
+import ReaderControls from "./ReaderControls.jsx";
+import ReaderSettings from "./ReaderSettings.jsx";
+import ReaderStage from "./ReaderStage.jsx";
+import {ReaderInitialSkeleton} from "./ReaderSkeleton.jsx";
 
-const LAYOUT_MODES = [
-  {label: "Single", value: "single"},
-  {label: "Double", value: "double"},
-  {label: "Manga double", value: "manga-double"},
-  {label: "Webtoon", value: "webtoon"}
-];
+const PAGE_CHUNK_SIZE = 12;
+const CHAPTER_RAIL_PAGE_SIZE = 60;
 const PAGE_FITS = ["width", "height", "contain"];
 const DIRECTIONS = ["ltr", "rtl"];
 
-const sortManifest = (chapters) => [...(Array.isArray(chapters) ? chapters : [])].sort((left, right) => {
-  const leftNumber = Number.parseFloat(String(left?.chapterNumber || "0"));
-  const rightNumber = Number.parseFloat(String(right?.chapterNumber || "0"));
-  if (Number.isFinite(leftNumber) && Number.isFinite(rightNumber) && rightNumber !== leftNumber) {
-    return rightNumber - leftNumber;
-  }
-  return Date.parse(String(right?.releaseDate || "")) - Date.parse(String(left?.releaseDate || ""));
-});
-
 const normalizeLayoutMode = (value) => ["single", "double", "manga-double", "webtoon"].includes(value) ? value : "webtoon";
 const pagesPerStep = (layoutMode) => layoutMode === "double" || layoutMode === "manga-double" ? 2 : 1;
-const getPageRatio = (pageIndex, pages) => pageIndex / Math.max(1, (Array.isArray(pages) ? pages.length : 1) - 1);
-const clampIndex = (value, pages) => Math.max(0, Math.min(value, Math.max(0, pages.length - 1)));
+const pageRatio = (pageIndex, pageCount) => pageIndex / Math.max(1, Math.max(1, pageCount) - 1);
+const clampPage = (value, pageCount) => Math.max(0, Math.min(value, Math.max(0, pageCount - 1)));
 const cssEscape = (value) => globalThis.CSS?.escape?.(String(value)) || String(value).replace(/"/g, "\\\"");
 
-/**
- * Render a segmented button group for reader settings.
- *
- * @param {{label: string, value: string, options: Array<string | {label: string, value: string}>, onChange: (value: string) => void}} props
- * @returns {import("react").ReactNode}
- */
-const ReaderSegmented = ({label, value, options, onChange}) => (
-  <label className="reader-control-group">
-    <span>{label}</span>
-    <div className="reader-segmented">
-      {options.map((option) => {
-        const entry = typeof option === "string" ? {label: option, value: option} : option;
-        return (
-          <button
-            aria-pressed={entry.value === value}
-            className={entry.value === value ? "is-active" : ""}
-            key={entry.value}
-            type="button"
-            onClick={() => onChange(entry.value)}
-          >
-            {entry.label}
-          </button>
-        );
-      })}
-    </div>
-  </label>
-);
+const sessionUrlFor = (titleId, chapterId) =>
+  `/api/moon-v3/user/reader/title/${encodeURIComponent(titleId)}/chapter/${encodeURIComponent(chapterId)}/session`;
+
+const pagesUrlFor = (titleId, chapterId, {cursor = 0, pageSize = PAGE_CHUNK_SIZE, rev = ""} = {}) => {
+  const params = new URLSearchParams({
+    cursor: String(cursor),
+    pageSize: String(pageSize)
+  });
+  if (rev) {
+    params.set("rev", rev);
+  }
+  return `/api/moon-v3/user/reader/title/${encodeURIComponent(titleId)}/chapter/${encodeURIComponent(chapterId)}/pages?${params.toString()}`;
+};
+
+const chapterRowsUrlFor = (titleId, cursor = "") => {
+  const params = new URLSearchParams({
+    pageSize: String(CHAPTER_RAIL_PAGE_SIZE),
+    sort: "number-desc"
+  });
+  if (cursor) {
+    params.set("cursor", cursor);
+  }
+  return `/api/moon-v3/user/title/${encodeURIComponent(titleId)}/chapters?${params.toString()}`;
+};
+
+const mergePages = (current = [], incoming = []) => {
+  const byIndex = new Map();
+  for (const page of current) {
+    if (Number.isInteger(page?.index)) {
+      byIndex.set(page.index, page);
+    }
+  }
+  for (const page of incoming) {
+    if (Number.isInteger(page?.index)) {
+      byIndex.set(page.index, page);
+    }
+  }
+  return Array.from(byIndex.values()).sort((left, right) => left.index - right.index);
+};
+
+const mergeChapterRows = (current = [], incoming = []) => {
+  const byId = new Map();
+  for (const chapter of current) {
+    if (chapter?.id) {
+      byId.set(chapter.id, chapter);
+    }
+  }
+  for (const chapter of incoming) {
+    if (chapter?.id) {
+      byId.set(chapter.id, chapter);
+    }
+  }
+  return Array.from(byId.values());
+};
+
+const hasPageWindow = (pages = [], start = 0, size = 1, pageCount = 0) => {
+  const indexes = new Set(pages.map((page) => page.index));
+  const end = Math.min(Math.max(0, pageCount), start + size);
+  for (let index = start; index < end; index += 1) {
+    if (!indexes.has(index)) {
+      return false;
+    }
+  }
+  return end > start;
+};
 
 /**
  * Render the dedicated fullscreen reader app for one title chapter.
@@ -68,10 +103,17 @@ const ReaderSegmented = ({label, value, options, onChange}) => (
  * @returns {import("react").ReactNode}
  */
 export const ReaderAppClient = ({titleId, chapterId, typeSlug = ""}) => {
-  const {loading, error, status, data} = useMoonJson(
-    `/api/moon-v3/user/reader/title/${encodeURIComponent(titleId)}/chapter/${encodeURIComponent(chapterId)}`,
-    {fallback: null, deps: [titleId, chapterId]}
-  );
+  const {
+    loading,
+    refreshing,
+    error,
+    status,
+    data: initialSession
+  } = useMoonJson(sessionUrlFor(titleId, chapterId), {
+    fallback: null,
+    deps: [titleId, chapterId],
+    keepPreviousData: true
+  });
   const [chrome, setChrome] = useState({auth: null, loginUrl: "", branding: {siteName: "Scriptarr"}});
   const [layoutMode, setLayoutMode] = useState("webtoon");
   const [readingDirection, setReadingDirection] = useState("ltr");
@@ -80,22 +122,151 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = ""}) => {
   const [showPageNumbers, setShowPageNumbers] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [controlsVisible, setControlsVisible] = useState(true);
-  const [loadedChapters, setLoadedChapters] = useState([]);
-  const [chapterMap, setChapterMap] = useState(() => new Map());
+  const [sessionMap, setSessionMap] = useState(() => new Map());
+  const [pageState, setPageState] = useState(() => new Map());
+  const [webtoonChapterIds, setWebtoonChapterIds] = useState([]);
   const [bookmarks, setBookmarks] = useState([]);
   const [activeChapterId, setActiveChapterId] = useState(chapterId);
   const [activePageIndex, setActivePageIndex] = useState(0);
   const [pagedChapterId, setPagedChapterId] = useState(chapterId);
   const [pagedPageIndex, setPagedPageIndex] = useState(0);
-  const prefetchCache = useRef(new Map());
+  const [chapterRows, setChapterRows] = useState([]);
+  const [chapterPageInfo, setChapterPageInfo] = useState(null);
+  const [chapterRowsLoading, setChapterRowsLoading] = useState(false);
+  const sessionCache = useRef(new Map());
+  const pageRequestKeyRef = useRef(new Map());
   const pageObserverRef = useRef(/** @type {IntersectionObserver | null} */ (null));
   const pointerStartRef = useRef(/** @type {{x: number, y: number} | null} */ (null));
-  const gamepadRepeatRef = useRef(0);
+  const inputStateRef = useRef(createReaderInputState());
+  const settingsRef = useRef(/** @type {HTMLElement | null} */ (null));
+  const pendingScrollRef = useRef(null);
 
-  const manifest = useMemo(() => sortManifest(data?.manifest?.chapters), [data?.manifest?.chapters]);
-  const title = data?.title || null;
   const siteName = chrome.branding?.siteName || "Scriptarr";
+  const title = initialSession?.title || null;
   const isPaged = layoutMode !== "webtoon";
+  const currentPagedSession = sessionMap.get(pagedChapterId) || initialSession;
+  const activeSession = sessionMap.get(activeChapterId) || currentPagedSession || initialSession;
+  const activePageCount = Math.max(1, Number.parseInt(String(activeSession?.pageCount || 1), 10) || 1);
+  const activePageDisplayIndex = isPaged ? pagedPageIndex : activePageIndex;
+  const currentPageEntry = pageState.get(pagedChapterId) || {pages: [], pageInfo: null, loading: false, error: ""};
+  const spreadSize = pagesPerStep(layoutMode);
+  const spreadStart = layoutMode === "single" ? pagedPageIndex : Math.max(0, pagedPageIndex - (pagedPageIndex % spreadSize));
+  const spreadDirection = layoutMode === "manga-double" || readingDirection === "rtl" ? "rtl" : "ltr";
+  const visualRtl = layoutMode === "manga-double" || readingDirection === "rtl";
+
+  const spreadPages = useMemo(() => {
+    const byIndex = new Map(currentPageEntry.pages.map((page) => [page.index, page]));
+    const total = Math.max(1, Number.parseInt(String(currentPagedSession?.pageCount || 1), 10) || 1);
+    return Array.from({length: Math.min(spreadSize, Math.max(1, total - spreadStart))}, (_value, offset) => {
+      const index = spreadStart + offset;
+      return byIndex.get(index) || {index, missing: true, label: `Page ${index + 1}`};
+    });
+  }, [currentPageEntry.pages, currentPagedSession?.pageCount, spreadSize, spreadStart]);
+
+  const webtoonChapters = useMemo(() =>
+    webtoonChapterIds.map((id) => {
+      const session = sessionMap.get(id);
+      const pages = pageState.get(id);
+      return session ? {
+        ...session,
+        pages: pages?.pages || [],
+        loading: pages?.loading || false,
+        error: pages?.error || ""
+      } : null;
+    }).filter(Boolean), [pageState, sessionMap, webtoonChapterIds]);
+
+  const setSession = useCallback((session) => {
+    if (!session?.chapter?.id) {
+      return;
+    }
+    setSessionMap((current) => new Map(current).set(session.chapter.id, session));
+  }, []);
+
+  const fetchSession = useCallback(async (nextChapterId) => {
+    const key = String(nextChapterId || "").trim();
+    if (!key) {
+      return null;
+    }
+    const existing = sessionMap.get(key);
+    if (existing) {
+      return existing;
+    }
+    const cached = sessionCache.current.get(key);
+    if (cached) {
+      return cached;
+    }
+    const promise = requestJson(sessionUrlFor(titleId, key)).then((result) => {
+      if (!result.ok) {
+        throw new Error(result.payload?.error || "Could not load that chapter.");
+      }
+      setSession(result.payload);
+      return result.payload;
+    });
+    sessionCache.current.set(key, promise);
+    return promise;
+  }, [sessionMap, setSession, titleId]);
+
+  const loadPages = useCallback(async (session, {cursor = 0, replace = false, pageSize = PAGE_CHUNK_SIZE} = {}) => {
+    if (!session?.chapter?.id) {
+      return null;
+    }
+    const key = session.chapter.id;
+    const requestKey = `${key}:${cursor}:${pageSize}:${session.pageRevision || ""}:${replace ? "replace" : "append"}`;
+    pageRequestKeyRef.current.set(key, requestKey);
+    setPageState((current) => {
+      const next = new Map(current);
+      const entry = next.get(key) || {pages: [], pageInfo: null, loading: false, error: ""};
+      next.set(key, {...entry, loading: true, error: ""});
+      return next;
+    });
+
+    const result = await requestJson(pagesUrlFor(titleId, key, {
+      cursor,
+      pageSize,
+      rev: session.pageRevision || ""
+    }));
+    if (pageRequestKeyRef.current.get(key) !== requestKey) {
+      return null;
+    }
+    if (!result.ok) {
+      setPageState((current) => {
+        const next = new Map(current);
+        const entry = next.get(key) || {pages: [], pageInfo: null, loading: false, error: ""};
+        next.set(key, {...entry, loading: false, error: result.payload?.error || "Could not load these pages."});
+        return next;
+      });
+      return null;
+    }
+
+    setPageState((current) => {
+      const next = new Map(current);
+      const entry = next.get(key) || {pages: [], pageInfo: null, loading: false, error: ""};
+      next.set(key, {
+        pages: replace ? result.payload.pages || [] : mergePages(entry.pages, result.payload.pages || []),
+        pageInfo: result.payload.pageInfo || null,
+        loading: false,
+        error: "",
+        pageRevision: result.payload.pageRevision || session.pageRevision || ""
+      });
+      return next;
+    });
+    return result.payload;
+  }, [titleId]);
+
+  const ensurePageWindow = useCallback(async (nextChapterId, nextPageIndex, nextSession = null) => {
+    const session = nextSession || await fetchSession(nextChapterId);
+    if (!session) {
+      return;
+    }
+    const pageCount = Math.max(1, Number.parseInt(String(session.pageCount || 1), 10) || 1);
+    const start = Math.max(0, Math.min(nextPageIndex, pageCount - 1));
+    const alignedStart = layoutMode === "single" ? start : Math.max(0, start - (start % pagesPerStep(layoutMode)));
+    const entry = pageState.get(session.chapter.id);
+    if (entry && hasPageWindow(entry.pages, alignedStart, PAGE_CHUNK_SIZE, pageCount)) {
+      return;
+    }
+    await loadPages(session, {cursor: alignedStart, pageSize: PAGE_CHUNK_SIZE});
+  }, [fetchSession, layoutMode, loadPages, pageState]);
 
   useEffect(() => {
     let active = true;
@@ -118,28 +289,118 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = ""}) => {
     };
   }, []);
 
-  const fetchBookmarks = useCallback(async () => {
-    const result = await requestJson(`/api/moon-v3/user/reader/bookmarks?titleId=${encodeURIComponent(titleId)}`);
-    if (result.ok) {
-      setBookmarks(Array.isArray(result.payload?.bookmarks) ? result.payload.bookmarks : []);
+  useEffect(() => {
+    if (!initialSession?.chapter?.id) {
+      return;
     }
-  }, [titleId]);
+    const preferences = initialSession.preferences || {};
+    const nextLayoutMode = normalizeLayoutMode(preferences.layoutMode || (preferences.readingMode === "paged" ? "single" : "webtoon"));
+    const bookmarkPage = clampPage(
+      Number.isInteger(initialSession?.progress?.bookmark?.pageIndex) ? initialSession.progress.bookmark.pageIndex : 0,
+      initialSession.pageCount || 1
+    );
+    sessionCache.current.clear();
+    pageRequestKeyRef.current.clear();
+    setSessionMap(new Map([[initialSession.chapter.id, initialSession]]));
+    setPageState(new Map());
+    setWebtoonChapterIds([initialSession.chapter.id]);
+    setBookmarks(Array.isArray(initialSession.bookmarks) ? initialSession.bookmarks : []);
+    setLayoutMode(nextLayoutMode);
+    setReadingDirection(DIRECTIONS.includes(preferences.readingDirection) ? preferences.readingDirection : "ltr");
+    setPageFit(PAGE_FITS.includes(preferences.pageFit) ? preferences.pageFit : "width");
+    setShowSidebar(preferences.showSidebar === true);
+    setShowPageNumbers(preferences.showPageNumbers !== false);
+    setActiveChapterId(initialSession.chapter.id);
+    setActivePageIndex(nextLayoutMode === "webtoon" ? 0 : bookmarkPage);
+    setPagedChapterId(initialSession.chapter.id);
+    setPagedPageIndex(bookmarkPage);
+    const firstCursor = nextLayoutMode === "webtoon" ? 0 : Math.max(0, bookmarkPage - (bookmarkPage % pagesPerStep(nextLayoutMode)));
+    void loadPages(initialSession, {cursor: firstCursor, replace: true});
+  }, [initialSession, loadPages]);
 
-  const fetchChapterPayload = useCallback(async (nextChapterId) => {
-    const cacheKey = String(nextChapterId || "").trim();
-    if (!cacheKey) {
-      return null;
+  useEffect(() => {
+    if (!title || !activeChapterId) {
+      return;
     }
-    const cached = prefetchCache.current.get(cacheKey);
-    if (cached) {
-      return cached;
+    const nextPath = buildReaderPath(title.libraryTypeSlug || title.mediaType || typeSlug || "manga", title.id, activeChapterId);
+    if (window.location.pathname !== nextPath) {
+      window.history.replaceState(null, "", nextPath);
     }
-    const promise = requestJson(
-      `/api/moon-v3/user/reader/title/${encodeURIComponent(titleId)}/chapter/${encodeURIComponent(cacheKey)}`
-    ).then((result) => (result.ok ? result.payload : null));
-    prefetchCache.current.set(cacheKey, promise);
-    return promise;
-  }, [titleId]);
+  }, [activeChapterId, title, typeSlug]);
+
+  useEffect(() => {
+    if (!title || !activeSession?.chapter?.id) {
+      return;
+    }
+    const pageCount = Math.max(1, Number.parseInt(String(activeSession.pageCount || 1), 10) || 1);
+    const pageIndex = clampPage(activePageDisplayIndex, pageCount);
+    const timer = setTimeout(() => {
+      void requestJson("/api/moon-v3/user/reader/progress", {
+        method: "PUT",
+        json: {
+          mediaId: title.id,
+          chapterLabel: activeSession.chapter?.label || "Chapter",
+          positionRatio: pageRatio(pageIndex, pageCount),
+          bookmark: {
+            titleId: title.id,
+            chapterId: activeSession.chapter.id,
+            pageIndex
+          }
+        }
+      });
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [activePageDisplayIndex, activeSession, title]);
+
+  useEffect(() => {
+    if (isPaged) {
+      pageObserverRef.current?.disconnect();
+      pageObserverRef.current = null;
+      return;
+    }
+    const nodes = Array.from(document.querySelectorAll("[data-reader-page]"));
+    if (!nodes.length) {
+      return;
+    }
+    pageObserverRef.current?.disconnect();
+    const observer = new IntersectionObserver((entries) => {
+      const visible = entries
+        .filter((entry) => entry.isIntersecting)
+        .sort((left, right) => right.intersectionRatio - left.intersectionRatio)[0];
+      if (!visible) {
+        return;
+      }
+      const target = /** @type {HTMLElement} */ (visible.target);
+      setActiveChapterId(target.dataset.chapterId || chapterId);
+      setActivePageIndex(Number.parseInt(target.dataset.pageIndex || "0", 10) || 0);
+    }, {
+      rootMargin: "-20% 0px -55% 0px",
+      threshold: [0.15, 0.35, 0.65]
+    });
+    for (const node of nodes) {
+      observer.observe(node);
+    }
+    pageObserverRef.current = observer;
+    return () => observer.disconnect();
+  }, [chapterId, isPaged, pageState, webtoonChapterIds]);
+
+  useEffect(() => {
+    if (isPaged && currentPagedSession?.chapter?.id) {
+      void ensurePageWindow(currentPagedSession.chapter.id, pagedPageIndex, currentPagedSession);
+    }
+  }, [currentPagedSession, ensurePageWindow, isPaged, pagedPageIndex]);
+
+  useEffect(() => {
+    const pending = pendingScrollRef.current;
+    if (pending == null || isPaged) {
+      return;
+    }
+    const target = document.querySelector(`[data-chapter-id="${cssEscape(activeChapterId)}"][data-page-index="${pending}"]`);
+    if (target) {
+      pendingScrollRef.current = null;
+      target.scrollIntoView({block: "center", behavior: "smooth"});
+    }
+  }, [activeChapterId, isPaged, pageState]);
 
   const persistPreference = useCallback(async (next = {}) => {
     if (!title) {
@@ -160,150 +421,42 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = ""}) => {
     });
   }, [layoutMode, pageFit, readingDirection, showPageNumbers, showSidebar, title, typeSlug]);
 
-  useEffect(() => {
-    if (!data) {
+  const loadChapterRows = useCallback(async ({append = false} = {}) => {
+    if (!title?.id || chapterRowsLoading) {
       return;
     }
-    const preferences = data.preferences || {};
-    const nextLayoutMode = normalizeLayoutMode(preferences.layoutMode || (preferences.readingMode === "paged" ? "single" : "webtoon"));
-    setLayoutMode(nextLayoutMode);
-    setReadingDirection(DIRECTIONS.includes(preferences.readingDirection) ? preferences.readingDirection : "ltr");
-    setPageFit(PAGE_FITS.includes(preferences.pageFit) ? preferences.pageFit : "width");
-    setShowSidebar(preferences.showSidebar === true);
-    setShowPageNumbers(preferences.showPageNumbers !== false);
-    setLoadedChapters([data]);
-    setChapterMap(new Map([[data.chapter.id, data]]));
-    setActiveChapterId(data.chapter.id);
-    setActivePageIndex(Number.isInteger(data?.progress?.bookmark?.pageIndex) ? data.progress.bookmark.pageIndex : 0);
-    setPagedChapterId(data.chapter.id);
-    setPagedPageIndex(Number.isInteger(data?.progress?.bookmark?.pageIndex) ? data.progress.bookmark.pageIndex : 0);
-    void fetchBookmarks();
-  }, [data, fetchBookmarks]);
+    const cursor = append ? chapterPageInfo?.nextCursor || "" : "";
+    if (append && !cursor) {
+      return;
+    }
+    setChapterRowsLoading(true);
+    const result = await requestJson(chapterRowsUrlFor(title.id, cursor));
+    if (result.ok) {
+      setChapterRows((current) => append ? mergeChapterRows(current, result.payload?.chapters || []) : result.payload?.chapters || []);
+      setChapterPageInfo(result.payload?.pageInfo || null);
+    }
+    setChapterRowsLoading(false);
+  }, [chapterPageInfo?.nextCursor, chapterRowsLoading, title?.id]);
 
   useEffect(() => {
-    if (!title || !activeChapterId) {
-      return;
+    if ((settingsOpen || showSidebar) && title?.id && !chapterRows.length && !chapterRowsLoading) {
+      void loadChapterRows();
     }
-    const nextPath = buildReaderPath(title.libraryTypeSlug || title.mediaType || "manga", title.id, activeChapterId);
-    if (window.location.pathname !== nextPath) {
-      window.history.replaceState(null, "", nextPath);
-    }
-  }, [activeChapterId, title]);
-
-  useEffect(() => {
-    if (!title || !activeChapterId) {
-      return;
-    }
-    const currentChapter = chapterMap.get(activeChapterId) || loadedChapters.find((entry) => entry.chapter?.id === activeChapterId);
-    const pageCount = currentChapter?.pages?.length || 1;
-    const pageIndex = isPaged ? pagedPageIndex : activePageIndex;
-    const timer = setTimeout(() => {
-      void requestJson("/api/moon-v3/user/reader/progress", {
-        method: "PUT",
-        json: {
-          mediaId: title.id,
-          chapterLabel: currentChapter?.chapter?.label || "Chapter",
-          positionRatio: getPageRatio(pageIndex, currentChapter?.pages || []),
-          bookmark: {
-            titleId: title.id,
-            chapterId: activeChapterId,
-            pageIndex: Math.max(0, Math.min(pageIndex, pageCount - 1))
-          }
-        }
-      });
-    }, 350);
-    return () => clearTimeout(timer);
-  }, [activeChapterId, activePageIndex, chapterMap, isPaged, loadedChapters, pagedPageIndex, title]);
-
-  useEffect(() => {
-    if (isPaged) {
-      pageObserverRef.current?.disconnect();
-      pageObserverRef.current = null;
-      return;
-    }
-
-    const nodes = Array.from(document.querySelectorAll("[data-reader-page]"));
-    if (!nodes.length) {
-      return;
-    }
-
-    pageObserverRef.current?.disconnect();
-    const observer = new IntersectionObserver((entries) => {
-      const visible = entries
-        .filter((entry) => entry.isIntersecting)
-        .sort((left, right) => right.intersectionRatio - left.intersectionRatio)[0];
-      if (!visible) {
-        return;
-      }
-      const target = /** @type {HTMLElement} */ (visible.target);
-      setActiveChapterId(target.dataset.chapterId || chapterId);
-      setActivePageIndex(Number.parseInt(target.dataset.pageIndex || "0", 10) || 0);
-    }, {
-      rootMargin: "-20% 0px -55% 0px",
-      threshold: [0.15, 0.35, 0.65]
-    });
-
-    for (const node of nodes) {
-      observer.observe(node);
-    }
-    pageObserverRef.current = observer;
-    return () => observer.disconnect();
-  }, [chapterId, isPaged, loadedChapters]);
-
-  const ensureChapter = useCallback(async (nextChapterId) => {
-    if (!nextChapterId) {
-      return null;
-    }
-    if (chapterMap.has(nextChapterId)) {
-      return chapterMap.get(nextChapterId);
-    }
-    const payload = await fetchChapterPayload(nextChapterId);
-    if (!payload) {
-      return null;
-    }
-    setChapterMap((current) => new Map(current).set(nextChapterId, payload));
-    setLoadedChapters((current) => current.some((entry) => entry.chapter.id === nextChapterId) ? current : [...current, payload]);
-    return payload;
-  }, [chapterMap, fetchChapterPayload]);
-
-  const loadMore = useCallback(async () => {
-    if (!manifest.length || !loadedChapters.length) {
-      return false;
-    }
-    const lastLoaded = loadedChapters[loadedChapters.length - 1];
-    const index = manifest.findIndex((entry) => entry.id === lastLoaded.chapter.id);
-    const nextChapter = manifest[index + 1];
-    if (!nextChapter) {
-      return false;
-    }
-    const payload = await ensureChapter(nextChapter.id);
-    const after = manifest[index + 2];
-    if (after) {
-      void fetchChapterPayload(after.id);
-    }
-    return Boolean(payload);
-  }, [ensureChapter, fetchChapterPayload, loadedChapters, manifest]);
-
-  const currentPagedChapter = chapterMap.get(pagedChapterId) || loadedChapters.find((entry) => entry.chapter.id === pagedChapterId) || data;
-  const currentPagedPages = currentPagedChapter?.pages || [];
-  const spreadSize = pagesPerStep(layoutMode);
-  const spreadStart = layoutMode === "single" ? pagedPageIndex : Math.max(0, pagedPageIndex - (pagedPageIndex % spreadSize));
-  const spreadPages = currentPagedPages.slice(spreadStart, spreadStart + spreadSize);
-  const spreadDirection = layoutMode === "manga-double" || readingDirection === "rtl" ? "rtl" : "ltr";
-  const visualRtl = layoutMode === "manga-double" || readingDirection === "rtl";
+  }, [chapterRows.length, chapterRowsLoading, loadChapterRows, settingsOpen, showSidebar, title?.id]);
 
   const openPagedChapter = useCallback(async (nextChapterId, nextPageIndex = 0) => {
-    const payload = await ensureChapter(nextChapterId);
-    if (!payload || !title) {
+    const session = await fetchSession(nextChapterId);
+    if (!session || !title) {
       return;
     }
-    const safePageIndex = clampIndex(nextPageIndex, payload.pages || []);
+    const safePageIndex = clampPage(nextPageIndex, session.pageCount || 1);
     setPagedChapterId(nextChapterId);
     setPagedPageIndex(safePageIndex);
     setActiveChapterId(nextChapterId);
     setActivePageIndex(safePageIndex);
     window.history.replaceState(null, "", buildReaderPathForTitle(title, nextChapterId));
-  }, [ensureChapter, title]);
+    await ensurePageWindow(nextChapterId, safePageIndex, session);
+  }, [ensurePageWindow, fetchSession, title]);
 
   const goPreviousPaged = useCallback(async () => {
     const step = pagesPerStep(layoutMode);
@@ -311,33 +464,31 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = ""}) => {
       const nextIndex = Math.max(0, pagedPageIndex - step);
       setPagedPageIndex(nextIndex);
       setActivePageIndex(nextIndex);
+      await ensurePageWindow(pagedChapterId, nextIndex, currentPagedSession);
       return;
     }
-    const index = manifest.findIndex((entry) => entry.id === pagedChapterId);
-    const previous = manifest[index - 1];
-    if (!previous) {
-      return;
+    if (currentPagedSession?.previousChapterId) {
+      const previousSession = await fetchSession(currentPagedSession.previousChapterId);
+      if (previousSession) {
+        await openPagedChapter(previousSession.chapter.id, Math.max(0, (previousSession.pageCount || 1) - 1));
+      }
     }
-    const payload = await ensureChapter(previous.id);
-    if (payload) {
-      await openPagedChapter(previous.id, Math.max(0, (payload.pages?.length || 1) - 1));
-    }
-  }, [ensureChapter, layoutMode, manifest, openPagedChapter, pagedChapterId, pagedPageIndex]);
+  }, [currentPagedSession, ensurePageWindow, fetchSession, layoutMode, openPagedChapter, pagedChapterId, pagedPageIndex]);
 
   const goNextPaged = useCallback(async () => {
     const step = pagesPerStep(layoutMode);
-    if (pagedPageIndex + step < currentPagedPages.length) {
-      const nextIndex = Math.min(currentPagedPages.length - 1, pagedPageIndex + step);
+    const pageCount = Math.max(1, Number.parseInt(String(currentPagedSession?.pageCount || 1), 10) || 1);
+    if (pagedPageIndex + step < pageCount) {
+      const nextIndex = Math.min(pageCount - 1, pagedPageIndex + step);
       setPagedPageIndex(nextIndex);
       setActivePageIndex(nextIndex);
+      await ensurePageWindow(pagedChapterId, nextIndex, currentPagedSession);
       return;
     }
-    const index = manifest.findIndex((entry) => entry.id === pagedChapterId);
-    const next = manifest[index + 1];
-    if (next) {
-      await openPagedChapter(next.id, 0);
+    if (currentPagedSession?.nextChapterId) {
+      await openPagedChapter(currentPagedSession.nextChapterId, 0);
     }
-  }, [currentPagedPages.length, layoutMode, manifest, openPagedChapter, pagedChapterId, pagedPageIndex]);
+  }, [currentPagedSession, ensurePageWindow, layoutMode, openPagedChapter, pagedChapterId, pagedPageIndex]);
 
   const goVisualNext = useCallback(() => {
     if (!isPaged) {
@@ -355,111 +506,66 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = ""}) => {
     void (visualRtl ? goNextPaged() : goPreviousPaged());
   }, [goNextPaged, goPreviousPaged, isPaged, visualRtl]);
 
-  useEffect(() => {
-    const onKeyDown = (event) => {
-      const target = event.target;
-      const tagName = target instanceof HTMLElement ? target.tagName.toLowerCase() : "";
-      if (tagName === "input" || tagName === "textarea" || event.defaultPrevented) {
-        return;
-      }
-      if (["ArrowRight", "PageDown", " "].includes(event.key)) {
-        event.preventDefault();
-        goVisualNext();
-      }
-      if (["ArrowLeft", "PageUp"].includes(event.key)) {
-        event.preventDefault();
-        goVisualPrevious();
-      }
-      if (event.key.toLowerCase() === "f") {
-        event.preventDefault();
-        void document.documentElement.requestFullscreen?.();
-      }
-      if (event.key.toLowerCase() === "s") {
-        event.preventDefault();
-        setSettingsOpen((value) => !value);
-      }
-      if (event.key === "Escape") {
-        setSettingsOpen(false);
-        if (document.fullscreenElement) {
-          void document.exitFullscreen?.();
-        }
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [goVisualNext, goVisualPrevious]);
-
-  useEffect(() => {
-    let frame = 0;
-    const pollGamepad = () => {
-      const pad = navigator.getGamepads?.().find(Boolean);
-      const now = Date.now();
-      if (pad && now - gamepadRepeatRef.current > 260) {
-        if (pad.buttons[15]?.pressed) {
-          gamepadRepeatRef.current = now;
-          goVisualNext();
-        } else if (pad.buttons[14]?.pressed) {
-          gamepadRepeatRef.current = now;
-          goVisualPrevious();
-        } else if (pad.buttons[12]?.pressed || pad.buttons[13]?.pressed) {
-          gamepadRepeatRef.current = now;
-          setSettingsOpen((value) => !value);
-        }
-      }
-      frame = window.requestAnimationFrame(pollGamepad);
-    };
-    frame = window.requestAnimationFrame(pollGamepad);
-    return () => window.cancelAnimationFrame(frame);
-  }, [goVisualNext, goVisualPrevious]);
-
-  useEffect(() => {
-    const hideTimer = setTimeout(() => {
-      if (!settingsOpen) {
-        setControlsVisible(false);
-      }
-    }, 2600);
-    return () => clearTimeout(hideTimer);
-  }, [controlsVisible, settingsOpen]);
-
   const addBookmark = useCallback(async () => {
-    if (!title) {
+    if (!title || !activeSession?.chapter?.id) {
       return;
     }
-    const currentChapter = isPaged ? currentPagedChapter : (chapterMap.get(activeChapterId) || data);
     const bookmarkPage = isPaged ? pagedPageIndex : activePageIndex;
-    await requestJson("/api/moon-v3/user/reader/bookmarks", {
+    const result = await requestJson("/api/moon-v3/user/reader/bookmarks", {
       method: "POST",
       json: {
         titleId: title.id,
-        chapterId: currentChapter?.chapter?.id || activeChapterId,
+        chapterId: activeSession.chapter.id,
         pageIndex: bookmarkPage,
-        label: `${currentChapter?.chapter?.label || "Chapter"} - Page ${bookmarkPage + 1}`
+        label: `${activeSession.chapter.label || "Chapter"} - Page ${bookmarkPage + 1}`
       }
     });
-    await fetchBookmarks();
-  }, [activeChapterId, activePageIndex, chapterMap, currentPagedChapter, data, fetchBookmarks, isPaged, pagedPageIndex, title]);
-
-  const onPointerDown = (event) => {
-    pointerStartRef.current = {x: event.clientX, y: event.clientY};
-    setControlsVisible(true);
-  };
-
-  const onPointerUp = (event) => {
-    const start = pointerStartRef.current;
-    pointerStartRef.current = null;
-    if (!start) {
-      return;
-    }
-    const deltaX = event.clientX - start.x;
-    const deltaY = event.clientY - start.y;
-    if (Math.abs(deltaX) > 56 && Math.abs(deltaX) > Math.abs(deltaY)) {
-      if (deltaX < 0) {
-        goVisualNext();
-      } else {
-        goVisualPrevious();
+    if (result.ok) {
+      const bookmarksResult = await requestJson(`/api/moon-v3/user/reader/bookmarks?titleId=${encodeURIComponent(title.id)}`);
+      if (bookmarksResult.ok) {
+        setBookmarks(Array.isArray(bookmarksResult.payload?.bookmarks) ? bookmarksResult.payload.bookmarks : []);
       }
     }
-  };
+  }, [activePageIndex, activeSession, isPaged, pagedPageIndex, title]);
+
+  const loadMoreWebtoon = useCallback(async () => {
+    const lastChapterId = webtoonChapterIds[webtoonChapterIds.length - 1];
+    const lastSession = sessionMap.get(lastChapterId);
+    if (!lastSession) {
+      return false;
+    }
+    const current = pageState.get(lastChapterId);
+    if (current?.pageInfo?.hasMore) {
+      await loadPages(lastSession, {cursor: current.pageInfo.nextCursor || 0});
+      return true;
+    }
+    if (!lastSession.nextChapterId) {
+      return false;
+    }
+    const nextSession = await fetchSession(lastSession.nextChapterId);
+    if (!nextSession) {
+      return false;
+    }
+    setWebtoonChapterIds((currentIds) => currentIds.includes(nextSession.chapter.id) ? currentIds : [...currentIds, nextSession.chapter.id]);
+    await loadPages(nextSession, {cursor: 0, replace: true});
+    return true;
+  }, [fetchSession, loadPages, pageState, sessionMap, webtoonChapterIds]);
+
+  const handleSeek = useCallback((nextIndex) => {
+    const safeIndex = clampPage(nextIndex, activePageCount);
+    if (isPaged) {
+      setPagedPageIndex(safeIndex);
+      setActivePageIndex(safeIndex);
+      void ensurePageWindow(pagedChapterId, safeIndex, currentPagedSession);
+      return;
+    }
+    setActivePageIndex(safeIndex);
+    pendingScrollRef.current = safeIndex;
+    const current = pageState.get(activeChapterId);
+    if (!current || !current.pages.some((page) => page.index === safeIndex)) {
+      void loadPages(activeSession, {cursor: safeIndex});
+    }
+  }, [activeChapterId, activePageCount, activeSession, currentPagedSession, ensurePageWindow, isPaged, loadPages, pageState, pagedChapterId]);
 
   const updateLayoutMode = (value) => {
     const nextValue = normalizeLayoutMode(value);
@@ -479,8 +585,112 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = ""}) => {
     void persistPreference({pageFit: nextValue});
   };
 
-  if (loading) {
-    return <main className="reader-app"><div className="reader-empty-panel">Loading reader.</div></main>;
+  const applyAction = useCallback((action) => {
+    switch (action) {
+      case READER_INPUT_ACTIONS.NEXT:
+        if (!settingsOpen) {
+          goVisualNext();
+        }
+        break;
+      case READER_INPUT_ACTIONS.PREVIOUS:
+        if (!settingsOpen) {
+          goVisualPrevious();
+        }
+        break;
+      case READER_INPUT_ACTIONS.TOGGLE_SETTINGS:
+        setSettingsOpen((value) => !value);
+        break;
+      case READER_INPUT_ACTIONS.CLOSE_SETTINGS:
+        setSettingsOpen(false);
+        if (document.fullscreenElement) {
+          void document.exitFullscreen?.();
+        }
+        break;
+      case READER_INPUT_ACTIONS.TOGGLE_CONTROLS:
+        setControlsVisible((value) => !value);
+        break;
+      case READER_INPUT_ACTIONS.BOOKMARK:
+        void addBookmark();
+        break;
+      case READER_INPUT_ACTIONS.FULLSCREEN:
+        void document.documentElement.requestFullscreen?.();
+        break;
+      case READER_INPUT_ACTIONS.SETTINGS_SCROLL_DOWN:
+        settingsRef.current?.scrollBy?.({top: 120, behavior: "smooth"});
+        break;
+      case READER_INPUT_ACTIONS.SETTINGS_SCROLL_UP:
+        settingsRef.current?.scrollBy?.({top: -120, behavior: "smooth"});
+        break;
+      default:
+        break;
+    }
+  }, [addBookmark, goVisualNext, goVisualPrevious, settingsOpen]);
+
+  useEffect(() => {
+    const onKeyDown = (event) => {
+      const action = resolveKeyboardAction(event);
+      if (!action) {
+        return;
+      }
+      event.preventDefault();
+      applyAction(action);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [applyAction]);
+
+  useEffect(() => {
+    let frame = 0;
+    const pollGamepad = () => {
+      const actions = resolveGamepadActions(navigator.getGamepads?.() || [], inputStateRef.current, {
+        settingsOpen,
+        documentHidden: document.visibilityState === "hidden"
+      });
+      for (const action of actions) {
+        applyAction(action);
+      }
+      frame = window.requestAnimationFrame(pollGamepad);
+    };
+    const onGamepadConnected = () => {
+      inputStateRef.current.connected = true;
+    };
+    const onGamepadDisconnected = () => {
+      inputStateRef.current = createReaderInputState();
+    };
+    window.addEventListener("gamepadconnected", onGamepadConnected);
+    window.addEventListener("gamepaddisconnected", onGamepadDisconnected);
+    frame = window.requestAnimationFrame(pollGamepad);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.removeEventListener("gamepadconnected", onGamepadConnected);
+      window.removeEventListener("gamepaddisconnected", onGamepadDisconnected);
+    };
+  }, [applyAction, settingsOpen]);
+
+  useEffect(() => {
+    const hideTimer = setTimeout(() => {
+      if (!settingsOpen) {
+        setControlsVisible(false);
+      }
+    }, 2600);
+    return () => clearTimeout(hideTimer);
+  }, [controlsVisible, settingsOpen]);
+
+  const onPointerDown = (event) => {
+    pointerStartRef.current = {x: event.clientX, y: event.clientY};
+    setControlsVisible(true);
+  };
+
+  const onPointerUp = (event) => {
+    const action = resolvePointerSwipe(pointerStartRef.current, {x: event.clientX, y: event.clientY});
+    pointerStartRef.current = null;
+    if (action) {
+      applyAction(action);
+    }
+  };
+
+  if (loading && !initialSession) {
+    return <ReaderInitialSkeleton />;
   }
 
   if (status === 401 && !chrome.auth) {
@@ -496,21 +706,17 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = ""}) => {
     );
   }
 
-  if (error) {
+  if (error && !initialSession) {
     return <main className="reader-app"><div className="reader-empty-panel">{error}</div></main>;
   }
 
-  if (!title || !data) {
+  if (!title || !initialSession) {
     return <main className="reader-app"><div className="reader-empty-panel">Reader unavailable.</div></main>;
   }
 
-  const activeChapter = chapterMap.get(activeChapterId)?.chapter || currentPagedChapter?.chapter || data.chapter;
-  const activePages = isPaged ? currentPagedPages : (chapterMap.get(activeChapterId)?.pages || data.pages || []);
-  const activePageDisplay = isPaged ? pagedPageIndex + 1 : activePageIndex + 1;
-
   return (
     <main
-      className={`reader-app ${controlsVisible || settingsOpen ? "has-visible-controls" : ""}`.trim()}
+      className={`reader-app ${controlsVisible || settingsOpen || refreshing ? "has-visible-controls" : ""}`.trim()}
       data-layout={layoutMode}
       data-fit={pageFit}
       data-sidebar={showSidebar}
@@ -521,199 +727,64 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = ""}) => {
       <div className="reader-tap-zone is-previous" onClick={goVisualPrevious} aria-hidden="true" />
       <div className="reader-tap-zone is-next" onClick={goVisualNext} aria-hidden="true" />
 
-      <header className="reader-topbar">
-        <a className="reader-icon-button" href={buildTitlePathForTitle(title)}>Back</a>
-        <div className="reader-title-stack">
-          <strong>{title.title}</strong>
-          <span>{activeChapter?.label || "Chapter"} - Page {activePageDisplay} of {activePages.length || 1}</span>
-        </div>
-        <div className="reader-top-actions">
-          <button className="reader-icon-button" type="button" onClick={addBookmark}>Bookmark</button>
-          <button className="reader-icon-button" type="button" onClick={() => setSettingsOpen((value) => !value)}>Settings</button>
-          <button className="reader-icon-button" type="button" onClick={() => document.documentElement.requestFullscreen?.()}>Fullscreen</button>
-        </div>
-      </header>
+      <ReaderControls
+        title={title}
+        activeChapter={activeSession?.chapter || initialSession.chapter}
+        activePageIndex={activePageDisplayIndex}
+        pageCount={activePageCount}
+        onBookmark={addBookmark}
+        onSettings={() => setSettingsOpen((value) => !value)}
+        onFullscreen={() => document.documentElement.requestFullscreen?.()}
+        onPrevious={goVisualPrevious}
+        onNext={goVisualNext}
+        onSeek={handleSeek}
+      />
 
-      <section className="reader-stage" aria-label={`${title.title} reader`}>
-        {isPaged ? (
-          <div className="reader-spread" data-direction={spreadDirection}>
-            {spreadPages.length ? spreadPages.map((page) => (
-              <figure className="reader-page-frame" key={`${pagedChapterId}:${page.index}`}>
-                <img src={page.src} alt={page.label} draggable="false" />
-                {showPageNumbers ? <figcaption>{page.index + 1}</figcaption> : null}
-              </figure>
-            )) : (
-              <div className="reader-empty-panel">No pages are available for this chapter.</div>
-            )}
-          </div>
-        ) : (
-          <div className="reader-webtoon-flow">
-            {loadedChapters.map((chapterPayload) => (
-              <section className="reader-webtoon-chapter" key={chapterPayload.chapter.id}>
-                {chapterPayload.chapter.id === data.chapter.id ? null : (
-                  <header className="reader-chapter-divider">
-                    <strong>{chapterPayload.chapter.label}</strong>
-                    <span>{formatDate(chapterPayload.chapter.releaseDate)} - {chapterPayload.pages.length} pages</span>
-                  </header>
-                )}
-                {chapterPayload.pages.map((page) => (
-                  <figure
-                    className="reader-page-frame"
-                    data-reader-page
-                    data-chapter-id={chapterPayload.chapter.id}
-                    data-page-index={page.index}
-                    key={`${chapterPayload.chapter.id}:${page.index}`}
-                  >
-                    <img src={page.src} alt={page.label} loading="lazy" draggable="false" />
-                    {showPageNumbers ? <figcaption>{page.index + 1}</figcaption> : null}
-                  </figure>
-                ))}
-              </section>
-            ))}
-            <ReaderLoadMore loadMore={loadMore} />
-          </div>
-        )}
-      </section>
+      <ReaderStage
+        title={title}
+        layoutMode={layoutMode}
+        pageFit={pageFit}
+        spreadDirection={spreadDirection}
+        isPaged={isPaged}
+        spreadPages={spreadPages}
+        pagedChapterId={pagedChapterId}
+        webtoonChapters={webtoonChapters}
+        showPageNumbers={showPageNumbers}
+        loadingPages={currentPageEntry.loading}
+        loadMore={loadMoreWebtoon}
+      />
 
-      <footer className="reader-bottombar">
-        <button type="button" onClick={goVisualPrevious}>Previous</button>
-        <input
-          aria-label="Page progress"
-          max={Math.max(0, activePages.length - 1)}
-          min="0"
-          type="range"
-          value={Math.min(activePageDisplay - 1, Math.max(0, activePages.length - 1))}
-          onChange={(event) => {
-            const nextIndex = Number.parseInt(event.target.value, 10) || 0;
-            setPagedPageIndex(nextIndex);
-            setActivePageIndex(nextIndex);
-            if (!isPaged) {
-              const target = document.querySelector(`[data-chapter-id="${cssEscape(activeChapterId)}"][data-page-index="${nextIndex}"]`);
-              target?.scrollIntoView?.({block: "center", behavior: "smooth"});
-            }
-          }}
-        />
-        <span>{formatProgress(getPageRatio(activePageDisplay - 1, activePages))}</span>
-        <button type="button" onClick={goVisualNext}>Next</button>
-      </footer>
-
-      <aside className={`reader-settings ${settingsOpen || showSidebar ? "is-open" : ""}`.trim()} aria-label="Reader settings">
-        <div className="reader-settings-head">
-          <div>
-            <span className="reader-eyebrow">{title.libraryTypeLabel || title.mediaType || "Reader"}</span>
-            <h2>{title.title}</h2>
-          </div>
-          <button type="button" onClick={() => setSettingsOpen(false)}>Close</button>
-        </div>
-        <ReaderSegmented label="Layout" value={layoutMode} options={LAYOUT_MODES} onChange={updateLayoutMode} />
-        <ReaderSegmented label="Direction" value={readingDirection} options={DIRECTIONS} onChange={updateReadingDirection} />
-        <ReaderSegmented label="Fit" value={pageFit} options={PAGE_FITS} onChange={updatePageFit} />
-        <label className="reader-check-row">
-          <input
-            checked={showSidebar}
-            type="checkbox"
-            onChange={(event) => {
-              setShowSidebar(event.target.checked);
-              void persistPreference({showSidebar: event.target.checked});
-            }}
-          />
-          Pin chapter rail
-        </label>
-        <label className="reader-check-row">
-          <input
-            checked={showPageNumbers}
-            type="checkbox"
-            onChange={(event) => {
-              setShowPageNumbers(event.target.checked);
-              void persistPreference({showPageNumbers: event.target.checked});
-            }}
-          />
-          Page numbers
-        </label>
-        <section className="reader-settings-section">
-          <h3>Chapters</h3>
-          <div className="reader-chapter-list">
-            {manifest.map((chapter) => (
-              <button
-                className={chapter.id === activeChapterId ? "is-active" : ""}
-                key={chapter.id}
-                type="button"
-                onClick={() => {
-                  if (isPaged) {
-                    void openPagedChapter(chapter.id, 0);
-                  } else {
-                    window.location.assign(buildReaderPathForTitle(title, chapter.id));
-                  }
-                }}
-              >
-                <strong>{chapter.label}</strong>
-                <span>{formatDate(chapter.releaseDate)} - {chapter.pageCount || 0} pages</span>
-              </button>
-            ))}
-          </div>
-        </section>
-        <section className="reader-settings-section">
-          <h3>Bookmarks</h3>
-          <div className="reader-chapter-list">
-            {bookmarks.length ? bookmarks.map((bookmark) => (
-              <button
-                key={bookmark.id}
-                type="button"
-                onClick={() => {
-                  if (isPaged) {
-                    void openPagedChapter(bookmark.chapterId, bookmark.pageIndex || 0);
-                  } else {
-                    window.location.assign(buildReaderPath(title.libraryTypeSlug || title.mediaType || "manga", title.id, bookmark.chapterId));
-                  }
-                }}
-              >
-                <strong>{bookmark.label || "Bookmark"}</strong>
-                <span>Page {(bookmark.pageIndex || 0) + 1}</span>
-              </button>
-            )) : <p>No bookmarks yet.</p>}
-          </div>
-        </section>
-      </aside>
+      <ReaderSettings
+        containerRef={settingsRef}
+        title={title}
+        activeChapterId={activeChapterId}
+        bookmarks={bookmarks}
+        chapterRows={chapterRows}
+        chapterPageInfo={chapterPageInfo}
+        chapterRowsLoading={chapterRowsLoading}
+        isOpen={settingsOpen}
+        pinned={showSidebar}
+        isPaged={isPaged}
+        layoutMode={layoutMode}
+        readingDirection={readingDirection}
+        pageFit={pageFit}
+        showPageNumbers={showPageNumbers}
+        onClose={() => setSettingsOpen(false)}
+        onLayoutMode={updateLayoutMode}
+        onReadingDirection={updateReadingDirection}
+        onPageFit={updatePageFit}
+        onPinned={(value) => {
+          setShowSidebar(value);
+          void persistPreference({showSidebar: value});
+        }}
+        onPageNumbers={(value) => {
+          setShowPageNumbers(value);
+          void persistPreference({showPageNumbers: value});
+        }}
+        onOpenPagedChapter={openPagedChapter}
+        onLoadMoreChapters={() => loadChapterRows({append: true})}
+      />
     </main>
-  );
-};
-
-/**
- * Render the infinite-reader load sentinel.
- *
- * @param {{loadMore: () => Promise<boolean>}} props
- * @returns {import("react").ReactNode}
- */
-const ReaderLoadMore = ({loadMore}) => {
-  const sentinelRef = useRef(/** @type {HTMLDivElement | null} */ (null));
-  const [pending, setPending] = useState(false);
-  const [hasMore, setHasMore] = useState(true);
-
-  useEffect(() => {
-    const node = sentinelRef.current;
-    if (!node || typeof IntersectionObserver === "undefined") {
-      return undefined;
-    }
-    const observer = new IntersectionObserver((entries) => {
-      if (!hasMore || pending || !entries.some((entry) => entry.isIntersecting)) {
-        return;
-      }
-      setPending(true);
-      void Promise.resolve(loadMore()).then((result) => {
-        if (result === false) {
-          setHasMore(false);
-        }
-      }).finally(() => setPending(false));
-    }, {threshold: 0.35});
-    observer.observe(node);
-    return () => observer.disconnect();
-  }, [hasMore, loadMore, pending]);
-
-  return (
-    <>
-      <div ref={sentinelRef} className="reader-load-sentinel" aria-hidden="true" />
-      {pending ? <div className="reader-loading-next">Loading next chapter.</div> : null}
-    </>
   );
 };
 

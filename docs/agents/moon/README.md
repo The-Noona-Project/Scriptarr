@@ -71,6 +71,16 @@
 - The reader app runs through embedded Next at `apps/reader-next` with `basePath: "/reader"` and isolated
   `/reader/_next` assets. Keep it fullscreen, chrome-free, and same-origin through Moon -> Sage for payloads,
   preferences, bookmarks, progress, and page images.
+- Reader loading should use the split Moon v3 reader APIs: `/session` for title/chapter summary, progress,
+  preferences, bookmarks, adjacent chapter ids, and page count; `/pages?cursor=&pageSize=&rev=` for immutable page
+  metadata chunks; and the existing paged `/api/moon-v3/user/title/:titleId/chapters` route for the settings chapter
+  rail. Keep the old full reader chapter route only for compatibility.
+- Reader first paint should use reader-native CSS skeletons, not Once UI. The reader bundle should avoid root
+  `@once-ui-system/core` imports entirely, keep page images progressive with visible retry states, and only render the
+  current paged spread plus a small preloaded window outside webtoon mode.
+- Reader input belongs in `apps/reader-next/lib/inputController.js`. Keep keyboard, swipe, and gamepad mapping
+  testable there, including gamepad connection/disconnection, hidden-document reset, repeat timing, analog dead zone,
+  settings-open suppression of page flips, and the console-style defaults.
 - Keep the avatar dropdown intentionally small and anchored to the avatar trigger. It should only surface `Profile`,
   conditional `Admin`, and `Logout`, and it should close on outside click, Escape, and route changes.
 - `/profile` is now a tabbed account hub. Keep `Overview`, `Stats`, and `Preferences` fed from the dedicated
@@ -80,8 +90,8 @@
   likes/dislikes plus inferred taste from read history, follows, and the active bookshelf.
 - Browse and library shelves should use `/api/moon-v3/user/library?view=card` with server-side filtering and pagination
   instead of pulling full title details. User title pages should use the split summary, paged chapters, and lazy
-  requests routes instead of the compatibility full-title payload; reader routes can still load the chapter manifest
-  they need to render pages. Home shelves should stay bounded to compact card reads and hydrate full titles only for exact
+  requests routes instead of the compatibility full-title payload; reader routes should use the split session and
+  page-metadata routes instead of loading full chapter manifests up front. Home shelves should stay bounded to compact card reads and hydrate full titles only for exact
   continue-reading, read-state, or following ids. Use the compact exact-id card projection (`view=card&ids=...`) for
   those activity ids instead of fanning out into individual full title requests.
 - The user app has a browser-local return-visit JSON cache in `apps/user-next/lib/persistentJsonCache.js`. Use it only

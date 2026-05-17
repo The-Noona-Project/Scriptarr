@@ -56,6 +56,10 @@ from the same runtime.
   primitives live beside them under `apps/user-next/components`.
 - Reader pages live in `apps/reader-next`; it is a fullscreen app with its own loading/auth/error states and
   `/reader/_next` assets.
+- Reader pages should paint from `/api/moon-v3/user/reader/title/:titleId/chapter/:chapterId/session`, load page
+  metadata through `/pages?cursor=&pageSize=&rev=`, and keep the full chapter route as compatibility only. Use
+  reader-native CSS skeletons, not Once UI, and keep input behavior in `apps/reader-next/lib/inputController.js` with
+  focused tests for keyboard, touch, and gamepad support.
 - Admin pages live in `apps/admin-next/components`; shared admin API helpers, access checks, routes, event streams, and
   formatting live in `apps/admin-next/lib`.
 - Same-origin runtime and proxy routes live in `lib`. Moon should proxy or compose through Sage instead of teaching the
@@ -67,8 +71,8 @@ from the same runtime.
 - User/admin chrome should start from `/api/moon/chrome/bootstrap?returnTo=...`; fetch the Discord login URL only when
   a signed-out view needs a sign-in action.
 - User card lists should call `/api/moon-v3/user/library?view=card`, including `ids=...` for exact activity cards.
-  Title and reader pages are the places that may hydrate full title, manifest, chapter, preference, bookmark, and
-  read-state payloads.
+  Title pages may hydrate full title state only where needed; reader pages should prefer the split session and
+  page-chunk APIs over full chapter manifests.
 - `/library` is the canonical catalogue. `/browse` and `/library/:type` are compatibility entrypoints that render the
   same client and settle into `/library` URL state. Catalogue owns `q`, `type`, `letter`, `pageSize`, and `view` in the
   URL, remembers the last grid/row view locally, updates only the results chunk on search/filter changes, keeps

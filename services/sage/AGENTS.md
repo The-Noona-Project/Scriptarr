@@ -64,6 +64,9 @@ HTTP broker.
   API. Do not add MySQL access here.
 - Reader target lookups belong in `vaultClient.mjs` plus focused Moon v3 helpers. Precedence is saved progress/bookmark,
   next unread chapter, first readable chapter, then no target so Moon falls back to the title page.
+- Moon reader payloads should stay split: keep the compatibility full reader chapter route, but serve the active reader
+  from `/session` plus `/pages?cursor=&pageSize=&rev=` and the existing paged title-chapter route for the settings
+  rail. Session payloads must not include full manifests or page lists; page chunks should include revisioned image URLs.
 - User-specific Moon title, reader, bookshelf, bookmark, follow, and tag-state helpers should reuse shared user-state
   loaders instead of fanning out into repeated Vault reads.
 - Settings that have both saved state and runtime state should keep the saved payload fast, then expose a secondary
