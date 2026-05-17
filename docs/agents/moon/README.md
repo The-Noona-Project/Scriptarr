@@ -88,6 +88,11 @@
   keep auth, cookies, API keys, requests mutations, title detail, reader state, and admin data live-only.
 - `/browse` search/filter state is shareable URL state. Use `q`, `type`, and `letter`, debounce URL replacement, keep
   previously loaded cards visible while new results refresh, and load additional chunks with `cursor`/`pageSize`.
+- Browse and library list loading should use the shared user-list leaf primitives for Once UI `Skeleton` and
+  `InfiniteScroll`, imported only through direct component paths inside `TitleListLoading.jsx`. Pair automatic loading
+  with a manual fallback button, de-dupe appended compact title rows by id, avoid inline Skeleton styles that force the
+  Once layout context, and keep Once UI JavaScript out of always-mounted shell, provider, navigation, and state-view
+  files.
 - User cards have two routes by design: cover/art opens the best reader target from the server-merged `readerTarget`,
   while title/copy opens `/title/:type/:titleId`. Avoid nested anchors and keep the split accessible.
 - Card images should go through `CoverImage.jsx`, preferring `coverThumbUrl` then `coverUrl` and finally a styled

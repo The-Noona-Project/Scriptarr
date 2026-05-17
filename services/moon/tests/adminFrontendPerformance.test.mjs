@@ -72,6 +72,19 @@ test("first-load Moon shells avoid the Once UI JavaScript barrel", () => {
   }
 });
 
+test("user paged list loading keeps Once UI on direct leaf imports", () => {
+  const listLoadingSource = readMoonFile("apps/user-next/components/TitleListLoading.jsx");
+  const browseSource = readMoonFile("apps/user-next/components/pages/BrowsePageClient.jsx");
+  const librarySource = readMoonFile("apps/user-next/components/pages/LibraryPageClient.jsx");
+
+  assert.match(listLoadingSource, /import\("@once-ui-system\/core\/components\/Skeleton"\)/);
+  assert.match(listLoadingSource, /import\("@once-ui-system\/core\/components\/InfiniteScroll"\)/);
+  assert.doesNotMatch(listLoadingSource, /@once-ui-system\/core\/contexts/);
+  assert.doesNotMatch(listLoadingSource, /from\s+"@once-ui-system\/core"/);
+  assert.doesNotMatch(`${browseSource}\n${librarySource}`, /@once-ui-system\/core/);
+  assert.match(`${browseSource}\n${librarySource}`, /TitleListInfiniteScroll/);
+});
+
 test("user chrome keeps reader route helpers out of shell imports", () => {
   const chromeFiles = [
     "apps/user-next/components/MoonShell.jsx",

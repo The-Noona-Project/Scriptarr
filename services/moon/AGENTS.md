@@ -72,6 +72,10 @@ from the same runtime.
 - Browse owns `q`, `type`, and `letter` in the URL. Update only the results chunk on search/filter changes, keep
   previous card data visible while a newer same-origin request is in flight, and rely on the server-side compact card
   path for filtering/pagination.
+- Browse and library use the user-list leaf loading pattern: direct Once UI `Skeleton`/`InfiniteScroll` component-path
+  dynamic imports live in `TitleListLoading.jsx`, automatic paging keeps a manual fallback button, appended compact
+  title rows are de-duped by id, and Skeleton dimensions should come from CSS classes instead of inline styles so Once
+  UI JavaScript stays out of shells and providers.
 - Home, browse, library, and profile may use the user-next persistent JSON cache for signed-in return visits. Keep it
   browser-local, per-user, stale-while-revalidate, and limited to compact card/profile-preview payloads; never store
   card JSON in cookies or cache admin, API key, request mutation, title detail, or reader payloads there.

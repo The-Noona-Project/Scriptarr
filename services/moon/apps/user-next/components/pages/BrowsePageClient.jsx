@@ -4,7 +4,7 @@
  * @file Browse page for Moon's Next user app.
  */
 
-import {useDeferredValue, useEffect, useMemo, useRef, useState} from "react";
+import {useCallback, useDeferredValue, useEffect, useMemo, useRef, useState} from "react";
 import {requestJson, useMoonJson} from "../../lib/api.js";
 import {
   BROWSE_PAGE_SIZE,
@@ -14,8 +14,10 @@ import {
   normalizeBrowseSearchParams
 } from "../../lib/browse.js";
 import {formatTypeLabel, getLibraryTypeCount, getLibraryTypes} from "../../lib/navigationRoutes.js";
+import {mergePagedTitleRows} from "../../lib/titleList.js";
 import {useMoonChrome} from "../MoonChromeContext.jsx";
-import {AuthRequiredView, ErrorView, LoadingView} from "../StateView.jsx";
+import {AuthRequiredView, ErrorView} from "../StateView.jsx";
+import {TitleCardGridSkeleton, TitleListInfiniteScroll} from "../TitleListLoading.jsx";
 import TitleCard from "../TitleCard.jsx";
 
 /**
@@ -52,6 +54,7 @@ export const BrowsePageClient = ({initialSearchParams = {}} = {}) => {
   const [pageInfo, setPageInfo] = useState({hasMore: false, nextCursor: "", total: 0});
   const [loadingMore, setLoadingMore] = useState(false);
   const currentRequestRef = useRef("");
+  const loadMoreSeqRef = useRef(0);
   const activeQuery = deferredSearch.trim();
   const libraryUrl = useMemo(() => buildBrowseApiUrl({
     query: activeQuery,
@@ -101,7 +104,7 @@ export const BrowsePageClient = ({initialSearchParams = {}} = {}) => {
   }, []);
 
   useEffect(() => {
-    setPageTitles(Array.isArray(data?.titles) ? data.titles : []);
+    setPageTitles(mergePagedTitleRows([], data?.titles, {append: false}));
     setPageInfo(data?.pageInfo || {hasMore: false, nextCursor: "", total: 0});
   }, [data?.pageInfo, data?.titles]);
 
@@ -124,25 +127,39 @@ export const BrowsePageClient = ({initialSearchParams = {}} = {}) => {
     }
   }, [activeType, loading, refreshing, typeCounts]);
 
-  const loadMore = async () => {
-    if (!pageInfo?.hasMore || loadingMore) {
-      return;
+  const loadMore = useCallback(async () => {
+    if (loadingMore || refreshing) {
+      return Boolean(pageInfo?.hasMore);
+    }
+    const cursor = String(pageInfo?.nextCursor || "").trim();
+    if (!pageInfo?.hasMore || !cursor) {
+      return false;
     }
     setLoadingMore(true);
     const requestKey = libraryUrl;
-    const result = await requestJson(buildBrowseApiUrl({
-      query: activeQuery,
-      type: activeType,
-      letter: activeLetter,
-      pageSize: BROWSE_PAGE_SIZE,
-      cursor: String(pageInfo.nextCursor || "")
-    }));
-    if (result.ok && requestKey === currentRequestRef.current) {
-      setPageTitles((current) => [...current, ...(Array.isArray(result.payload?.titles) ? result.payload.titles : [])]);
-      setPageInfo(result.payload?.pageInfo || {hasMore: false, nextCursor: "", total: 0});
+    const requestSeq = loadMoreSeqRef.current + 1;
+    loadMoreSeqRef.current = requestSeq;
+    try {
+      const result = await requestJson(buildBrowseApiUrl({
+        query: activeQuery,
+        type: activeType,
+        letter: activeLetter,
+        pageSize: BROWSE_PAGE_SIZE,
+        cursor
+      }));
+      if (!result.ok || requestKey !== currentRequestRef.current) {
+        return Boolean(pageInfo?.hasMore);
+      }
+      const nextPageInfo = result.payload?.pageInfo || {hasMore: false, nextCursor: "", total: 0};
+      setPageTitles((current) => mergePagedTitleRows(current, result.payload?.titles, {append: true}));
+      setPageInfo(nextPageInfo);
+      return Boolean(nextPageInfo.hasMore && nextPageInfo.nextCursor);
+    } finally {
+      if (requestSeq === loadMoreSeqRef.current) {
+        setLoadingMore(false);
+      }
     }
-    setLoadingMore(false);
-  };
+  }, [activeLetter, activeQuery, activeType, libraryUrl, loadingMore, pageInfo, refreshing]);
 
   const searchLabel = useMemo(() => {
     if (!activeQuery) {
@@ -163,10 +180,6 @@ export const BrowsePageClient = ({initialSearchParams = {}} = {}) => {
     setActiveLetter(letter);
   };
 
-  if (loading && !pageTitles.length) {
-    return <LoadingView label={`${siteName} is loading the compact browse catalogue.`} />;
-  }
-
   if (status === 401 && !auth) {
     return (
       <AuthRequiredView
@@ -180,6 +193,7 @@ export const BrowsePageClient = ({initialSearchParams = {}} = {}) => {
   if (error && !pageTitles.length) {
     return <ErrorView detail={error} />;
   }
+  const showInitialSkeleton = loading && !pageTitles.length;
 
   return (
     <div className="moon-page-grid moon-browse-page">
@@ -258,13 +272,24 @@ export const BrowsePageClient = ({initialSearchParams = {}} = {}) => {
             <span className="moon-muted">{refreshing ? "Updating loaded results" : `${visibleTotal} result${visibleTotal === 1 ? "" : "s"}`}</span>
           </div>
           {error ? <div className="moon-inline-error" role="status">{error}</div> : null}
-          {pageTitles.length ? (
+          {showInitialSkeleton ? (
+            <TitleCardGridSkeleton count={12} />
+          ) : pageTitles.length ? (
             <>
               <div className="moon-browse-grid">
-                {pageTitles.map((title) => (
-                  <TitleCard key={title.id} title={title} variant="browse" />
-                ))}
+                <TitleListInfiniteScroll
+                  key={libraryUrl}
+                  items={pageTitles}
+                  loading={loadingMore}
+                  threshold={360}
+                  className="moon-infinite-list-sentinel"
+                  loadMore={loadMore}
+                  renderItem={(title) => (
+                    <TitleCard key={title.id} title={title} variant="browse" />
+                  )}
+                />
               </div>
+              {loadingMore ? <TitleCardGridSkeleton count={4} /> : null}
               {pageInfo?.hasMore ? (
                 <div className="moon-browse-load-more">
                   <button type="button" className="moon-button" onClick={loadMore} disabled={loadingMore || refreshing}>

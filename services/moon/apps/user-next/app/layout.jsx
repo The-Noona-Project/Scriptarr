@@ -5,6 +5,7 @@
 import "@once-ui-system/core/css/tokens.css";
 import "@once-ui-system/core/css/styles.css";
 import "./globals.css";
+import "./list-loading.css";
 import UserProviders from "../components/UserProviders.jsx";
 import MoonShell from "../components/MoonShell.jsx";
 

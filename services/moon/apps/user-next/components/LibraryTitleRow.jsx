@@ -1,15 +1,15 @@
 /**
- * @file Reusable series card for Moon's Next user app.
+ * @file Dense title row for Moon's user library list.
  */
 
 import Link from "next/link";
-import {buildReaderPathForTitleTarget, buildTitlePathForTitle} from "../lib/titleRoutes.js";
 import {formatCoverage} from "../lib/date.js";
+import {buildReaderPathForTitleTarget, buildTitlePathForTitle} from "../lib/titleRoutes.js";
 import {resolveReaderTargetLabel} from "../lib/titleLabels.js";
 import CoverImage from "./CoverImage.jsx";
 
 /**
- * Render a title card with full-cover treatment.
+ * Render one dense library title row.
  *
  * @param {{
  *   title: {
@@ -25,21 +25,19 @@ import CoverImage from "./CoverImage.jsx";
  *     chapterCount?: number,
  *     chaptersDownloaded?: number,
  *     readerTarget?: {chapterId?: string, label?: string, kind?: string} | null
- *   },
- *   compact?: boolean,
- *   variant?: "default" | "browse"
+ *   }
  * }} props
  * @returns {import("react").ReactNode}
  */
-export const TitleCard = ({title, compact = false, variant = "default"}) => {
+export const LibraryTitleRow = ({title}) => {
   const titleHref = buildTitlePathForTitle(title);
   const readerHref = buildReaderPathForTitleTarget(title);
   const titleText = title?.title || "Untitled";
   const readerLabel = resolveReaderTargetLabel(title);
 
   return (
-    <article className={`moon-title-card ${compact ? "is-compact" : ""} ${variant === "browse" ? "is-browse" : ""}`.trim()}>
-      <Link href={readerHref} className="moon-title-card-media" aria-label={`${readerLabel} for ${titleText}`}>
+    <article className="moon-library-title-row">
+      <Link href={readerHref} className="moon-library-title-cover" aria-label={`${readerLabel} for ${titleText}`}>
         <CoverImage
           title={titleText}
           coverUrl={title?.coverUrl || ""}
@@ -47,17 +45,22 @@ export const TitleCard = ({title, compact = false, variant = "default"}) => {
           fallbackClassName="moon-title-card-fallback"
         />
       </Link>
-      <Link href={titleHref} className="moon-title-card-copy" aria-label={`Open ${titleText} title page`}>
+      <div className="moon-library-title-main">
         <div className="moon-title-card-meta">
           <span>{title?.libraryTypeLabel || title?.mediaType || "Title"}</span>
           <span>{formatCoverage(title?.chaptersDownloaded, title?.chapterCount)}</span>
         </div>
-        <h3>{titleText}</h3>
+        <Link href={titleHref} className="moon-library-title-link" aria-label={`Open ${titleText} title page`}>
+          {titleText}
+        </Link>
         <p>{title?.summary || "Open the title page to review chapters, metadata, and reading progress."}</p>
-        <strong>{readerLabel}</strong>
-      </Link>
+      </div>
+      <div className="moon-library-title-side">
+        <span>{title?.latestChapter || "No chapter summary yet"}</span>
+        <Link href={readerHref}>{readerLabel}</Link>
+      </div>
     </article>
   );
 };
 
-export default TitleCard;
+export default LibraryTitleRow;
