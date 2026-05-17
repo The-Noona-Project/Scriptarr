@@ -79,6 +79,7 @@ export const DiscordPage = ({user}) => {
   const setOnboarding = (patch) => setDraft((current) => patchNested(current, "onboarding", patch));
   const setNotifications = (patch) => setDraft((current) => patchNested(current, "notifications", patch));
   const setNoonaChat = (patch) => setDraft((current) => patchNested(current, "noonaChat", patch));
+  const setAppa = (patch) => setDraft((current) => patchNested(current, "appa", patch));
   const setTrivia = (patch) => setDraft((current) => patchNested(current, "trivia", patch));
   const setCommand = (id, patch) => setDraft((current) => ({
     ...current,
@@ -87,6 +88,19 @@ export const DiscordPage = ({user}) => {
       [id]: {
         ...(current.commands[id] || {enabled: true, roleId: ""}),
         ...patch
+      }
+    }
+  }));
+  const setAppaCommand = (id, patch) => setDraft((current) => ({
+    ...current,
+    appa: {
+      ...current.appa,
+      commands: {
+        ...current.appa.commands,
+        [id]: {
+          ...(current.appa.commands[id] || {enabled: true, roleId: ""}),
+          ...patch
+        }
       }
     }
   }));
@@ -239,9 +253,12 @@ export const DiscordPage = ({user}) => {
   const runtime = data?.runtime || {};
   const triviaRuntime = data?.triviaRuntime || {};
   const noonaMemory = data?.noonaMemory || {};
+  const appaAudit = normalizeArray(data?.appaAudit?.events);
   const noonaUsers = normalizeArray(noonaMemory.users);
   const noonaCapability = runtime.capabilities?.noonaChat || {};
+  const appaCapability = runtime.capabilities?.appa || {};
   const noonaAllowedChannelCount = normalizeArray(draft.noonaChat.allowedChannelIds).length;
+  const appaAllowedChannelCount = normalizeArray(draft.appa.adminMentionChannelIds).length;
   const activeTriviaRound = triviaRuntime.activeRound || null;
   const latestTriviaRound = triviaRuntime.latestRound || activeTriviaRound || null;
   const triviaAnswer = normalizeString(activeTriviaRound?.answer || latestTriviaRound?.answer);
@@ -267,6 +284,7 @@ export const DiscordPage = ({user}) => {
         <div className="admin-metric-grid">
           <article className="admin-metric-card"><span>Auth</span><strong>{runtime.authConfigured ? "configured" : "missing"}</strong></article>
           <article className="admin-metric-card"><span>Bot token</span><strong>{runtime.botTokenConfigured ? "configured" : "missing"}</strong></article>
+          <article className="admin-metric-card"><span>Appa</span><strong>{runtime.appa?.connected ? "connected" : draft.appa.enabled ? formatDisplayValue(runtime.appa?.mode, "pending") : "fallback"}</strong></article>
           <article className="admin-metric-card"><span>Registered guild</span><strong>{formatDisplayValue(runtime.registeredGuildId, "unknown")}</strong></article>
           <article className="admin-metric-card"><span>Commands</span><strong>{commandCount}</strong></article>
         </div>
@@ -274,7 +292,9 @@ export const DiscordPage = ({user}) => {
           <span>Live stream: {live.state}</span>
           <span>Last sync: {formatDate(runtime.portal?.runtime?.lastSyncAt || runtime.lastSyncAt)}</span>
           <span>Default avatar: {formatDisplayValue(runtime.lastBotAvatarSyncStatus, runtime.botIdentity ? `${runtime.botIdentity} pending` : "none")}</span>
+          <span>Appa avatar: {formatDisplayValue(runtime.appa?.lastBotAvatarSyncStatus, "none")}</span>
           <span>Last Noona mention: {formatDate(runtime.lastNoonaMentionAt)}</span>
+          <span>Last Appa review: {formatDate(runtime.appa?.lastReviewAt)}</span>
           <span>Warning: {formatDisplayValue(runtime.warning || runtime.syncError || runtime.error, "none")}</span>
         </div>
       </section>
@@ -408,6 +428,80 @@ export const DiscordPage = ({user}) => {
             <button className="admin-button ghost" type="button" disabled={!canWrite || busy !== "" || (!noonaMemory.userCount && !noonaMemory.serverFactCount)} onClick={() => clearNoonaMemory("all")}>Clear all memory</button>
           </div>
           <p className="admin-muted">Message Content intent must be enabled in the Discord developer portal for mentions and trivia guesses to arrive.</p>
+        </article>
+
+        <article className="admin-panel">
+          <div className="admin-section-heading">
+            <div>
+              <div className="admin-kicker">Appa</div>
+              <h2>Admin bot and review</h2>
+              <p className="admin-muted">Appa owns admin Discord controls when configured, reviews public Noona replies, and posts only serious corrections.</p>
+            </div>
+            <AdminStatusBadge tone={draft.appa.enabled ? runtime.appa?.connected ? "good" : "warning" : "queued"}>
+              {draft.appa.enabled ? runtime.appa?.connected ? "connected" : "enabled" : "fallback"}
+            </AdminStatusBadge>
+          </div>
+          <div className="admin-task-form">
+            <label>
+              <span>Enabled</span>
+              <select disabled={!canWrite} value={draft.appa.enabled ? "true" : "false"} onChange={(event) => setAppa({enabled: event.target.value === "true"})}>
+                <option value="true">Enabled</option>
+                <option value="false">Disabled</option>
+              </select>
+            </label>
+            <label>
+              <span>Review mode</span>
+              <select disabled={!canWrite} value={draft.appa.reviewEnabled ? "true" : "false"} onChange={(event) => setAppa({reviewEnabled: event.target.value === "true"})}>
+                <option value="true">Enabled</option>
+                <option value="false">Disabled</option>
+              </select>
+            </label>
+            <label>
+              <span>Correction mode</span>
+              <select disabled={!canWrite} value={draft.appa.correctionMode} onChange={(event) => setAppa({correctionMode: event.target.value})}>
+                <option value="serious">Serious only</option>
+                <option value="off">Off</option>
+              </select>
+            </label>
+            <label>
+              <span>Admin mention channel ids</span>
+              <textarea
+                disabled={!canWrite}
+                rows={4}
+                placeholder="Empty means any guild channel"
+                value={formatChannelIds(draft.appa.adminMentionChannelIds)}
+                onChange={(event) => setAppa({adminMentionChannelIds: parseChannelIds(event.target.value)})}
+              />
+            </label>
+          </div>
+          <div className="admin-detail-grid">
+            <span><strong>Runtime</strong>{formatDisplayValue(appaCapability.status, draft.appa.enabled ? "pending" : "fallback")}</span>
+            <span><strong>Allowed scope</strong>{appaAllowedChannelCount ? `${appaAllowedChannelCount} channel${appaAllowedChannelCount === 1 ? "" : "s"}` : "any guild channel"}</span>
+            <span><strong>Last mention</strong>{formatDate(runtime.appa?.lastMentionAt)}</span>
+            <span><strong>Last mention error</strong>{formatDisplayValue(runtime.appa?.lastMentionError, "none")}</span>
+            <span><strong>Last verdict</strong>{formatDisplayValue(runtime.appa?.lastReviewVerdict, "none")}</span>
+            <span><strong>Last correction</strong>{formatDate(runtime.appa?.lastCorrectionAt)}</span>
+          </div>
+          {appaCapability.detail ? (
+            <div className="admin-log-box">
+              <div className="admin-kicker">Appa runtime</div>
+              <p>{appaCapability.detail}</p>
+            </div>
+          ) : null}
+          <AdminDenseTable
+            rows={appaAudit}
+            getKey={(row) => row.sequence || row.id || row.createdAt}
+            empty="No Appa public-review events have been recorded yet."
+            columns={[
+              {key: "createdAt", label: "Time", render: (row) => formatDate(row.createdAt)},
+              {key: "severity", label: "Severity", render: (row) => <AdminStatusBadge tone={row.severity === "warning" ? "warning" : ""}>{formatDisplayValue(row.severity, "info")}</AdminStatusBadge>},
+              {key: "message", label: "Event", render: (row) => formatDisplayValue(row.message, "review")},
+              {key: "verdict", label: "Verdict", render: (row) => formatDisplayValue(row.metadata?.verdict, "ok")}
+            ]}
+          />
+          <div className="admin-action-row">
+            <button className="admin-button solid" type="button" disabled={!canWrite || busy !== ""} onClick={save}>Save settings</button>
+          </div>
         </article>
 
         <article className="admin-panel">
@@ -558,10 +652,23 @@ export const DiscordPage = ({user}) => {
             {key: "enabled", label: "Enabled", render: (row) => (
               <input
                 aria-label={`${row.label} enabled`}
-                checked={row.enabled}
+                checked={draft.appa.enabled && row.owner === "both"
+                  ? row.enabled && draft.appa.commands[row.id]?.enabled !== false
+                  : draft.appa.enabled && row.owner === "appa"
+                    ? draft.appa.commands[row.id]?.enabled !== false
+                  : row.enabled}
                 disabled={!canWrite}
                 type="checkbox"
-                onChange={(event) => setCommand(row.id, {enabled: event.target.checked})}
+                onChange={(event) => {
+                  if (draft.appa.enabled && row.owner === "both") {
+                    setCommand(row.id, {enabled: event.target.checked});
+                    setAppaCommand(row.id, {enabled: event.target.checked});
+                  } else if (draft.appa.enabled && row.owner === "appa") {
+                    setAppaCommand(row.id, {enabled: event.target.checked});
+                  } else {
+                    setCommand(row.id, {enabled: event.target.checked});
+                  }
+                }}
               />
             )},
             {key: "command", label: "Command", render: (row) => (
@@ -572,8 +679,43 @@ export const DiscordPage = ({user}) => {
               </span>
             )},
             {key: "status", label: "Status", render: (row) => <AdminStatusBadge tone={row.registered ? "good" : "warning"}>{row.status}</AdminStatusBadge>},
-            {key: "scope", label: "Scope", render: (row) => row.ownerOnly ? "owner DM" : row.scope},
-            {key: "role", label: "Required role id", render: (row) => row.roleManaged ? (
+            {key: "scope", label: "Scope", render: (row) => `${row.ownerOnly ? "owner DM" : row.scope}${row.owner ? ` / ${row.owner}` : ""}`},
+            {key: "role", label: "Required role id", render: (row) => {
+              const appaOwned = draft.appa.enabled && row.owner === "appa";
+              const sharedOwned = draft.appa.enabled && row.owner === "both";
+              const appaSetting = draft.appa.commands[row.id] || {enabled: true, roleId: ""};
+              if (sharedOwned && row.id !== "downloadall") {
+                return (
+                  <span className="admin-command-role-stack">
+                    <input
+                      aria-label={`${row.label} Noona role id`}
+                      disabled={!canWrite || !row.enabled}
+                      value={draft.commands[row.id]?.roleId || ""}
+                      onChange={(event) => setCommand(row.id, {roleId: event.target.value})}
+                      placeholder="Noona role id"
+                    />
+                    <input
+                      aria-label={`${row.label} Appa role id`}
+                      disabled={!canWrite || appaSetting.enabled === false}
+                      value={appaSetting.roleId || ""}
+                      onChange={(event) => setAppaCommand(row.id, {roleId: event.target.value})}
+                      placeholder="Appa role id"
+                    />
+                  </span>
+                );
+              }
+              if (appaOwned && row.id !== "downloadall") {
+                return (
+                  <input
+                    aria-label={`${row.label} Appa role id`}
+                    disabled={!canWrite || appaSetting.enabled === false}
+                    value={appaSetting.roleId || ""}
+                    onChange={(event) => setAppaCommand(row.id, {roleId: event.target.value})}
+                    placeholder="Optional Appa role id"
+                  />
+                );
+              }
+              return row.roleManaged ? (
               <input
                 aria-label={`${row.label} role id`}
                 disabled={!canWrite || !row.enabled}
@@ -581,7 +723,8 @@ export const DiscordPage = ({user}) => {
                 onChange={(event) => setCommand(row.id, {roleId: event.target.value})}
                 placeholder="Optional role id"
               />
-            ) : "owner only"}
+            ) : "owner only";
+            }}
           ]}
         />
       </section>

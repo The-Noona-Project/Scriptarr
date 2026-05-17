@@ -38,6 +38,8 @@ const parseServiceTokens = (value) => {
  *   discordClientId: string,
  *   discordClientSecret: string,
  *   discordToken: string,
+ *   appaDiscordClientId: string,
+ *   appaDiscordToken: string,
  *   autoProvisionDiscordUsers: boolean
  * }}
  */
@@ -61,6 +63,8 @@ export const resolveSageConfig = () => {
     discordClientId: process.env.SCRIPTARR_DISCORD_CLIENT_ID || "",
     discordClientSecret: process.env.SCRIPTARR_DISCORD_CLIENT_SECRET || "",
     discordToken: process.env.SCRIPTARR_DISCORD_TOKEN || process.env.DISCORD_TOKEN || "",
+    appaDiscordClientId: process.env.SCRIPTARR_APPA_DISCORD_CLIENT_ID || "",
+    appaDiscordToken: process.env.SCRIPTARR_APPA_DISCORD_TOKEN || "",
     autoProvisionDiscordUsers: process.env.SCRIPTARR_AUTO_PROVISION_DISCORD_USERS !== "false"
   };
 };

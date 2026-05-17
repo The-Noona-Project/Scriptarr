@@ -1,4 +1,4 @@
-import {PORTAL_COMMAND_NAMES} from "../config.mjs";
+import {APPA_COMMAND_NAMES, PORTAL_COMMAND_NAMES} from "../config.mjs";
 
 const normalizeString = (value, fallback = "") => {
   const normalized = typeof value === "string" ? value.trim() : "";
@@ -71,6 +71,20 @@ const defaultNoonaChatSettings = Object.freeze({
   proposalMode: "conservative"
 });
 
+const defaultAppaSettings = Object.freeze({
+  enabled: false,
+  adminMentionChannelIds: [],
+  reviewEnabled: true,
+  correctionMode: "serious",
+  commands: Object.fromEntries(APPA_COMMAND_NAMES.map((commandName) => [
+    commandName,
+    {
+      enabled: true,
+      roleId: null
+    }
+  ]))
+});
+
 const normalizeTriviaSettings = (value = {}, fallback = {}) => {
   const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
   const defaults = {
@@ -130,6 +144,32 @@ const normalizeNoonaChatSettings = (value = {}, fallback = {}) => {
   };
 };
 
+const normalizeAppaSettings = (value = {}, fallback = {}) => {
+  const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  const defaults = {
+    ...defaultAppaSettings,
+    ...(fallback && typeof fallback === "object" && !Array.isArray(fallback) ? fallback : {}),
+    commands: {
+      ...defaultAppaSettings.commands,
+      ...(fallback?.commands && typeof fallback.commands === "object" && !Array.isArray(fallback.commands) ? fallback.commands : {})
+    }
+  };
+  const correctionMode = normalizeString(source.correctionMode, defaults.correctionMode).toLowerCase();
+  return {
+    enabled: normalizeBoolean(source.enabled, defaults.enabled),
+    adminMentionChannelIds: (Array.isArray(source.adminMentionChannelIds) ? source.adminMentionChannelIds : defaults.adminMentionChannelIds)
+      .map((entry) => normalizeString(entry))
+      .filter(Boolean)
+      .slice(0, 25),
+    reviewEnabled: normalizeBoolean(source.reviewEnabled, defaults.reviewEnabled),
+    correctionMode: correctionMode === "off" ? "off" : "serious",
+    commands: Object.fromEntries(APPA_COMMAND_NAMES.map((commandName) => [
+      commandName,
+      normalizeCommandSetting(source?.commands?.[commandName], defaults?.commands?.[commandName])
+    ]))
+  };
+};
+
 export const normalizePortalDiscordSettings = (value = {}, defaults = {}) => {
   const nextCommands = {};
   const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
@@ -158,6 +198,7 @@ export const normalizePortalDiscordSettings = (value = {}, defaults = {}) => {
     },
     trivia: normalizeTriviaSettings(source?.trivia, normalizedDefaults?.trivia),
     noonaChat: normalizeNoonaChatSettings(source?.noonaChat, normalizedDefaults?.noonaChat),
+    appa: normalizeAppaSettings(source?.appa, normalizedDefaults?.appa),
     commands: nextCommands
   };
 };

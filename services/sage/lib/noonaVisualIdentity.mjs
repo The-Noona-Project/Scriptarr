@@ -17,7 +17,7 @@ export const NOONA_VISUAL_IDENTITIES = Object.freeze({
   }),
   appa: Object.freeze({
     name: "Appa",
-    role: "Scriptarr's soft cloud companion identity",
+    role: "Scriptarr's admin and reviewer Discord persona",
     avatarAsset: "services/portal/assets/discord/appa-avatar.png",
     description: (
       "Appa's current avatar is a soft cloud-like companion with cream spiral clouds, a dark face mask, glowing teal eyes, "

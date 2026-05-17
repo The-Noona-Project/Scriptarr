@@ -5,13 +5,20 @@
 export const PORTAL_DISCORD_KEY = "portal.discord";
 
 export const knownPortalDiscordCommands = Object.freeze([
-  {id: "ding", name: "ding", description: "Simple bot health reply.", mode: "slash"},
+  {id: "ding", name: "ding", description: "Simple bot health reply.", mode: "slash", splitOwner: "appa"},
+  {id: "status", name: "status", description: "Read-only Scriptarr status summary.", mode: "slash", splitOwner: "appa"},
+  {id: "chat", name: "chat", description: "Legacy single-bot Noona chat slash command.", mode: "slash", splitOwner: "legacy"},
+  {id: "search", name: "search", description: "Search the current Scriptarr library.", mode: "slash", splitOwner: "noona"},
+  {id: "request", name: "request", description: "Create a moderated Scriptarr request from Discord.", mode: "slash", splitOwner: "noona"},
+  {id: "subscribe", name: "subscribe", description: "Follow a title for release notifications.", mode: "slash", splitOwner: "noona"},
+  {id: "trivia", name: "trivia", description: "Play and manage Scriptarr title trivia.", mode: "slash", splitOwner: "both"},
+  {id: "downloadall", name: "downloadall", description: "Owner-only DM-only WeebCentral downloadall run command.", mode: "dm", splitOwner: "appa", ownerOnly: true, roleManaged: false}
+]);
+
+export const knownAppaDiscordCommands = Object.freeze([
+  {id: "ding", name: "ding", description: "Simple Appa health reply.", mode: "slash"},
   {id: "status", name: "status", description: "Read-only Scriptarr status summary.", mode: "slash"},
-  {id: "chat", name: "chat", description: "Talk to Noona through Oracle.", mode: "slash"},
-  {id: "search", name: "search", description: "Search the current Scriptarr library.", mode: "slash"},
-  {id: "request", name: "request", description: "Create a moderated Scriptarr request from Discord.", mode: "slash"},
-  {id: "subscribe", name: "subscribe", description: "Follow a title for release notifications.", mode: "slash"},
-  {id: "trivia", name: "trivia", description: "Play and manage Scriptarr title trivia.", mode: "slash"},
+  {id: "trivia", name: "trivia", description: "Admin trivia start and stop controls.", mode: "slash"},
   {id: "downloadall", name: "downloadall", description: "Owner-only DM-only WeebCentral downloadall run command.", mode: "dm"}
 ]);
 
@@ -90,6 +97,25 @@ export const defaultPortalNoonaChatSettings = () => ({
 });
 
 /**
+ * Build default Appa admin/reviewer settings.
+ *
+ * @returns {Record<string, unknown>}
+ */
+export const defaultPortalAppaSettings = () => ({
+  enabled: false,
+  adminMentionChannelIds: [],
+  reviewEnabled: true,
+  correctionMode: "serious",
+  commands: Object.fromEntries(knownAppaDiscordCommands.map((command) => [
+    command.id,
+    {
+      enabled: true,
+      roleId: ""
+    }
+  ]))
+});
+
+/**
  * Normalize persisted Discord trivia settings for Portal.
  *
  * @param {Record<string, unknown>} value
@@ -157,6 +183,35 @@ export const normalizePortalNoonaChatSettings = (value = {}) => {
 };
 
 /**
+ * Normalize Appa admin/reviewer settings from the shared Discord settings row.
+ *
+ * @param {unknown} value
+ * @returns {ReturnType<typeof defaultPortalAppaSettings>}
+ */
+export const normalizePortalAppaSettings = (value = {}) => {
+  const defaults = defaultPortalAppaSettings();
+  const source = normalizeObject(value, {}) || {};
+  const requestedCommands = normalizeObject(source.commands, {}) || {};
+  const correctionMode = normalizeString(source.correctionMode, defaults.correctionMode).toLowerCase();
+  return {
+    enabled: normalizeBoolean(source.enabled, defaults.enabled),
+    adminMentionChannelIds: (Array.isArray(source.adminMentionChannelIds) ? source.adminMentionChannelIds : defaults.adminMentionChannelIds)
+      .map((entry) => normalizeString(entry))
+      .filter(Boolean)
+      .slice(0, 25),
+    reviewEnabled: normalizeBoolean(source.reviewEnabled, defaults.reviewEnabled),
+    correctionMode: correctionMode === "off" ? "off" : "serious",
+    commands: Object.fromEntries(knownAppaDiscordCommands.map((command) => {
+      const requested = normalizeObject(requestedCommands[command.id], {}) || {};
+      return [command.id, {
+        enabled: typeof requested.enabled === "boolean" ? requested.enabled : defaults.commands[command.id].enabled,
+        roleId: command.id === "downloadall" ? "" : normalizeString(requested.roleId)
+      }];
+    }))
+  };
+};
+
+/**
  * Build the default brokered Discord settings used by Portal and Moon admin.
  *
  * @returns {{
@@ -173,6 +228,7 @@ export const normalizePortalNoonaChatSettings = (value = {}) => {
  *   },
  *   trivia: ReturnType<typeof defaultPortalTriviaSettings>,
  *   noonaChat: ReturnType<typeof defaultPortalNoonaChatSettings>,
+ *   appa: ReturnType<typeof defaultPortalAppaSettings>,
  *   commands: Record<string, {enabled: boolean, roleId: string}>
  * }}
  */
@@ -190,6 +246,7 @@ export const defaultPortalDiscordSettings = () => ({
   },
   trivia: defaultPortalTriviaSettings(),
   noonaChat: defaultPortalNoonaChatSettings(),
+  appa: defaultPortalAppaSettings(),
   commands: Object.fromEntries(knownPortalDiscordCommands.map((command) => [
     command.id,
     {
@@ -227,6 +284,7 @@ export const normalizePortalDiscordSettings = (value) => {
     },
     trivia: normalizePortalTriviaSettings(source.trivia),
     noonaChat: normalizePortalNoonaChatSettings(source.noonaChat),
+    appa: normalizePortalAppaSettings(source.appa),
     commands: Object.fromEntries(knownPortalDiscordCommands.map((command) => {
       const requested = normalizeObject(requestedCommands[command.id], {}) || {};
       return [command.id, {

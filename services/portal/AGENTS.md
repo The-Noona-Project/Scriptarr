@@ -5,7 +5,7 @@ Read this before editing `services/portal`.
 ## Role
 
 Portal handles Discord onboarding, requests, notifications, subscriptions, Noona trivia, public Noona mention chat,
-and the Oracle chat bridge.
+optional Appa admin/reviewer chat, and the Oracle chat bridge through Sage.
 
 ## Hard Rules
 
@@ -14,13 +14,16 @@ and the Oracle chat bridge.
 - Oracle integration is assistive only: Portal may call Oracle through Sage for bounded helper text, but deterministic
   templates and Sage-owned state remain authoritative.
 - Portal must send first-party internal HTTP through Sage. Do not add direct Vault, Warden, Raven, or Oracle calls here.
-- Keep the current Discord command contract intact unless product requirements explicitly change it: `/ding`, `/status`,
-  `/chat`, `/search`, `/request`, `/subscribe`, `/trivia`, and DM-only `downloadall`.
+- Keep the split Discord command contract intact: Noona owns reader-facing commands and public chat; Appa owns admin
+  commands, admin mentions, DM-only `downloadall`, and serious Noona corrections. If Appa is disabled, missing env, or
+  degraded at startup, Noona must keep the legacy single-bot admin fallback.
 - Noona trivia guesses are normal guild messages in the configured channel. Portal should ignore bots, wrong channels,
   and inactive rounds; Sage owns the round, guess, score, and leaderboard state.
 - Public Noona mention chat should detect the real bot mention by Discord user id, not display name. It must ignore
   bots, wrong guilds, empty prompts, disallowed channels, and unmentioned chatter; reuse the `/chat` role gate; reply
   publicly; split long replies; and return handled so trivia does not also process the same message.
+- Appa review should happen after Noona replies and only post same-thread corrections for serious verdicts. Persist
+  review and delivery results through Sage with redacted excerpts, not raw transcripts.
 - Keep Discord workflow configuration behind the brokered `portal.discord` setting consumed from Moon admin instead of
   scattering guild, role, or onboarding logic across unrelated env vars.
 - Keep public Discord copy branded. Normal slash-command replies, requester DMs, release posts, and update posts should
@@ -40,7 +43,8 @@ and the Oracle chat bridge.
   branches, notification polling, mention chat, and trivia timers in small modules instead of expanding a single gateway
   file.
 - Portal should persist and decide shared state through Sage routes only. Use brokered settings for guild, role,
-  onboarding, release-channel, update-channel, Noona mention chat, trivia, and DM superuser configuration.
+  onboarding, release-channel, update-channel, Noona mention chat, Appa split/review behavior, trivia, and DM superuser
+  configuration.
 - Mention chat memory and proposal decisions belong to Sage and Vault. Portal may keep only short rolling/runtime
   diagnostics such as last mention time or error.
 - Request and completion notifications should keep stable acknowledgment ids so retries or restarts do not duplicate

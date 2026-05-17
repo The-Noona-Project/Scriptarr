@@ -1,7 +1,8 @@
 import {createDiscordClient} from "./discord/client.mjs";
 import {resolveDiscordBotIdentity} from "./discord/botIdentity.mjs";
-import {buildCommandInventory} from "./discord/commandCatalog.mjs";
+import {buildCommandInventory, filterCommandMap} from "./discord/commandCatalog.mjs";
 import {createPortalCommands} from "./discord/commands/index.mjs";
+import {createAppaMentionHandler} from "./discord/appaMentionChat.mjs";
 import {createDirectMessageHandler} from "./discord/directMessageRouter.mjs";
 import {normalizeBrandName} from "./discord/branding.mjs";
 import {createNoonaMentionHandler} from "./discord/noonaMentionChat.mjs";
@@ -19,6 +20,9 @@ const renderTemplate = (template, values) => Object.entries(values).reduce(
 const describeError = (error) => error instanceof Error ? error.message : String(error ?? "");
 const DOWNLOADALL_APPROVE_REACTION = "✅";
 const DOWNLOADALL_DENY_REACTION = "❌";
+
+const NOONA_SPLIT_COMMANDS = Object.freeze(["search", "request", "subscribe", "trivia"]);
+const APPA_SPLIT_COMMANDS = Object.freeze(["ding", "status", "trivia", "downloadall"]);
 
 const collectErrorText = (error) => {
   const fragments = [];
@@ -67,6 +71,9 @@ const createCapabilities = (state, settings) => {
   const triviaConfigured = Boolean(settings.trivia?.enabled && settings.trivia?.channelId);
   const noonaChatConfigured = Boolean(settings.noonaChat?.enabled);
   const updatePostsConfigured = Boolean(settings.notifications?.updateChannelId);
+  const appaConfigured = Boolean(settings.appa?.enabled);
+  const appaConnected = Boolean(state.appa?.connected);
+  const appaAuthConfigured = Boolean(state.appa?.authConfigured);
 
   const commandSync = !authConfigured
     ? {
@@ -183,6 +190,25 @@ const createCapabilities = (state, settings) => {
     onboarding,
     trivia,
     noonaChat,
+    appa: !appaConfigured
+      ? {
+        status: "disabled",
+        detail: "Appa admin bot is disabled, so Noona keeps the admin command fallback."
+      }
+      : !appaAuthConfigured
+        ? {
+          status: "missing",
+          detail: "Configure the Appa Discord token and client id before enabling the split admin bot."
+        }
+        : appaConnected
+          ? {
+            status: "available",
+            detail: "Appa is connected for admin slash commands, admin mentions, downloadall DMs, and Noona review corrections."
+          }
+          : {
+            status: state.appa?.mode === "starting" ? "pending" : "degraded",
+            detail: state.appa?.error || "Appa is not connected to Discord."
+          },
     updatePosts: !updatePostsConfigured
       ? {
         status: "disabled",
@@ -208,13 +234,43 @@ export const createPortalRuntime = ({
 }) => {
   let settings = normalizePortalDiscordSettings({}, config.discordDefaults);
   let discord = null;
+  let appaDiscord = null;
   let followNotifier = null;
   let triviaRuntime = null;
-  const botIdentity = resolveDiscordBotIdentity(config.discordBotPersona);
+  const legacyBotIdentity = resolveDiscordBotIdentity(config.discordBotPersona);
+  const noonaBotIdentity = resolveDiscordBotIdentity("noona");
+  const appaBotIdentity = resolveDiscordBotIdentity("appa");
   let state = {
     mode: config.discordToken && config.discordClientId ? "idle" : "disabled",
     connected: false,
     authConfigured: Boolean(config.discordToken && config.discordClientId),
+    splitEnabled: false,
+    appa: {
+      mode: config.appaDiscordToken && config.appaDiscordClientId ? "idle" : "disabled",
+      connected: false,
+      authConfigured: Boolean(config.appaDiscordToken && config.appaDiscordClientId),
+      enabled: false,
+      registeredGuildId: "",
+      registeredCount: 0,
+      registeredGlobalCount: 0,
+      registeredGuildCount: 0,
+      error: null,
+      syncError: null,
+      requestedIntents: [],
+      requestedPartials: [],
+      lastMentionAt: null,
+      lastMentionChannelId: null,
+      lastMentionUserId: null,
+      lastMentionError: null,
+      lastReviewAt: null,
+      lastReviewVerdict: null,
+      lastReviewSeverity: null,
+      lastCorrectionAt: null,
+      lastCorrectionError: null,
+      lastBotAvatarSyncAt: null,
+      lastBotAvatarSyncStatus: null,
+      lastBotAvatarSyncError: null
+    },
     guildId: settings.guildId,
     registeredGuildId: "",
     error: null,
@@ -231,7 +287,7 @@ export const createPortalRuntime = ({
     lastDownloadAllHandledAt: null,
     lastDownloadAllError: null,
     lastDownloadAllSource: null,
-    botIdentity: botIdentity.id,
+    botIdentity: legacyBotIdentity.id,
     lastBotAvatarSyncAt: null,
     lastBotAvatarSyncStatus: null,
     lastBotAvatarSyncError: null,
@@ -242,7 +298,7 @@ export const createPortalRuntime = ({
   };
   let brandName = "Scriptarr";
 
-  const commands = createPortalCommands({
+  const createCommands = (triviaSubcommandScope = "all") => createPortalCommands({
     sage,
     publicBaseUrl: config.publicBaseUrl,
     getBrandName: () => brandName,
@@ -251,12 +307,81 @@ export const createPortalRuntime = ({
     onRuntimeEvent: (event) => recordRuntimeEvent(event),
     onTriviaStart: (payload) => triviaRuntime?.startRoundNow(payload),
     onTriviaStop: (payload) => triviaRuntime?.stopRound(payload),
-    onTriviaLeaderboard: (windowName) => triviaRuntime?.postLeaderboard(windowName)
+    onTriviaLeaderboard: (windowName) => triviaRuntime?.postLeaderboard(windowName),
+    triviaSubcommandScope
   });
+  const commands = createCommands("all");
+  const noonaCommands = filterCommandMap(createCommands("reader"), NOONA_SPLIT_COMMANDS);
+  const appaCommands = filterCommandMap(createCommands("admin"), APPA_SPLIT_COMMANDS);
 
   const roleManager = createRoleManager({
     getSettings: () => settings
   });
+  const appaRoleManager = createRoleManager({
+    getSettings: () => settings,
+    getCommandSettings: (currentSettings, commandName) => currentSettings?.appa?.commands?.[commandName] || {}
+  });
+
+  const isAppaSplitEnabled = () =>
+    settings.appa?.enabled === true && Boolean(config.appaDiscordToken && config.appaDiscordClientId);
+
+  const appaSettings = () => ({
+    ...settings,
+    commands: settings.appa?.commands || {}
+  });
+
+  const handleNoonaReviewCandidate = async (candidate = {}) => {
+    if (!isAppaSplitEnabled() || settings.appa?.reviewEnabled === false || settings.appa?.correctionMode === "off" || !appaDiscord) {
+      return;
+    }
+    const {message: _message, ...reviewPayload} = candidate;
+    const result = await sage.reviewNoonaReply?.({
+      ...reviewPayload,
+      reviewEnabled: settings.appa.reviewEnabled,
+      correctionMode: settings.appa.correctionMode
+    });
+    const payload = result?.payload || {};
+    const decision = payload.decision || {};
+    let corrected = false;
+    let correctionError = "";
+    if (result?.ok && payload.shouldCorrect && normalizeString(payload.correctionText || decision.correctionText)) {
+      try {
+        const correctionMessage = await appaDiscord.sendChannelMessage(candidate.channelId, {
+          content: normalizeString(payload.correctionText || decision.correctionText),
+          allowedMentions: {parse: [], repliedUser: false},
+          ...(candidate.replyMessageId || candidate.messageId ? {messageReference: {messageId: candidate.replyMessageId || candidate.messageId}} : {})
+        });
+        await sage.recordNoonaReviewDelivery?.({
+          guildId: candidate.guildId,
+          channelId: candidate.channelId,
+          messageId: candidate.messageId,
+          replyMessageId: candidate.replyMessageId,
+          correctionMessageId: normalizeString(correctionMessage?.id),
+          delivered: true
+        }).catch(() => null);
+        corrected = true;
+      } catch (error) {
+        correctionError = describeError(error);
+        await sage.recordNoonaReviewDelivery?.({
+          guildId: candidate.guildId,
+          channelId: candidate.channelId,
+          messageId: candidate.messageId,
+          replyMessageId: candidate.replyMessageId,
+          delivered: false,
+          error: correctionError
+        }).catch(() => null);
+        logger?.warn?.("Portal Appa correction post failed.", {error});
+      }
+    }
+    recordRuntimeEvent({
+      type: "appa-review",
+      at: new Date().toISOString(),
+      verdict: normalizeString(decision.verdict, payload.verdict),
+      severity: normalizeString(decision.severity, payload.severity),
+      corrected,
+      error: correctionError || normalizeString(payload.error)
+    });
+  };
 
   const recordRuntimeEvent = (event = {}) => {
     if (!event?.type) {
@@ -311,12 +436,67 @@ export const createPortalRuntime = ({
     }
 
     if (event.type === "avatar-sync") {
+      if (event.clientIdentity === "appa") {
+        state = {
+          ...state,
+          appa: {
+            ...state.appa,
+            lastBotAvatarSyncAt: event.at || new Date().toISOString(),
+            lastBotAvatarSyncStatus: normalizeString(event.status),
+            lastBotAvatarSyncError: event.status === "failed" ? normalizeString(event.reason) : null
+          }
+        };
+        return;
+      }
       state = {
         ...state,
-        botIdentity: normalizeString(event.identity, botIdentity.id),
+        botIdentity: normalizeString(event.identity, legacyBotIdentity.id),
         lastBotAvatarSyncAt: event.at || new Date().toISOString(),
         lastBotAvatarSyncStatus: normalizeString(event.status),
         lastBotAvatarSyncError: event.status === "failed" ? normalizeString(event.reason) : null
+      };
+      return;
+    }
+
+    if (event.type === "appa-chat-handled") {
+      state = {
+        ...state,
+        appa: {
+          ...state.appa,
+          lastMentionAt: event.at || new Date().toISOString(),
+          lastMentionChannelId: normalizeString(event.channelId),
+          lastMentionUserId: normalizeString(event.authorId),
+          lastMentionError: null
+        }
+      };
+      return;
+    }
+
+    if (event.type === "appa-chat-error") {
+      state = {
+        ...state,
+        appa: {
+          ...state.appa,
+          lastMentionAt: event.at || new Date().toISOString(),
+          lastMentionChannelId: normalizeString(event.channelId),
+          lastMentionUserId: normalizeString(event.authorId),
+          lastMentionError: normalizeString(event.message)
+        }
+      };
+      return;
+    }
+
+    if (event.type === "appa-review") {
+      state = {
+        ...state,
+        appa: {
+          ...state.appa,
+          lastReviewAt: event.at || new Date().toISOString(),
+          lastReviewVerdict: normalizeString(event.verdict),
+          lastReviewSeverity: normalizeString(event.severity),
+          lastCorrectionAt: event.corrected ? event.at || new Date().toISOString() : state.appa.lastCorrectionAt,
+          lastCorrectionError: event.error ? normalizeString(event.error) : null
+        }
       };
       return;
     }
@@ -344,6 +524,19 @@ export const createPortalRuntime = ({
     }
 
     if (event.type === "disconnect" || event.type === "login-error") {
+      if (event.clientIdentity === "appa") {
+        state = {
+          ...state,
+          appa: {
+            ...state.appa,
+            connected: false,
+            mode: "degraded",
+            error: normalizeString(event.message || describeError(event.error)),
+            syncError: null
+          }
+        };
+        return;
+      }
       state = {
         ...state,
         connected: false,
@@ -355,6 +548,16 @@ export const createPortalRuntime = ({
     }
 
     if (event.type === "command-sync-error") {
+      if (event.clientIdentity === "appa") {
+        state = {
+          ...state,
+          appa: {
+            ...state.appa,
+            syncError: normalizeString(event.message || describeError(event.error))
+          }
+        };
+        return;
+      }
       state = {
         ...state,
         syncError: normalizeString(event.message || describeError(event.error))
@@ -364,6 +567,22 @@ export const createPortalRuntime = ({
 
     if (event.type === "client-error" || event.type === "shard-error") {
       const message = normalizeString(event.message || describeError(event.error));
+      if (event.clientIdentity === "appa") {
+        state = {
+          ...state,
+          appa: state.appa.connected
+            ? {
+              ...state.appa,
+              warning: message || state.appa.warning
+            }
+            : {
+              ...state.appa,
+              mode: "degraded",
+              error: message || state.appa.error
+            }
+        };
+        return;
+      }
       state = state.connected
         ? {
           ...state,
@@ -395,6 +614,10 @@ export const createPortalRuntime = ({
     if (discord && state.connected) {
       try {
         const sync = await discord.registerCommands();
+        let appaSync = null;
+        if (appaDiscord && state.appa?.connected) {
+          appaSync = await appaDiscord.registerCommands();
+        }
         await triviaRuntime?.refreshSettings?.();
         state = {
           ...state,
@@ -403,7 +626,21 @@ export const createPortalRuntime = ({
           registeredGlobalCount: sync.registeredGlobal || 0,
           registeredGuildCount: sync.registeredGuild || 0,
           registeredGuildId: sync.guildId || settings.guildId || "",
-          syncError: null
+          syncError: null,
+          splitEnabled: isAppaSplitEnabled(),
+          appa: {
+            ...state.appa,
+            enabled: settings.appa?.enabled === true,
+            ...(appaSync ? {
+              mode: "ready",
+              connected: true,
+              registeredCount: appaSync.registered,
+              registeredGlobalCount: appaSync.registeredGlobal || 0,
+              registeredGuildCount: appaSync.registeredGuild || 0,
+              registeredGuildId: appaSync.guildId || settings.guildId || "",
+              syncError: null
+            } : {})
+          }
         };
       } catch (error) {
         state = {
@@ -416,23 +653,25 @@ export const createPortalRuntime = ({
     return settings;
   };
 
-  const startDiscordClient = async ({enableGuildMemberEvents}) => {
+  const startDiscordClient = async ({enableGuildMemberEvents, splitOverride = null}) => {
     let nextDiscord;
+    const splitEnabled = splitOverride == null ? isAppaSplitEnabled() : Boolean(splitOverride);
     const noonaMentionHandler = createNoonaMentionHandler({
       getSettings: () => settings,
       getBotUserId: () => normalizeString(nextDiscord?.client?.user?.id),
       sage,
       roleManager,
       logger,
-      onRuntimeEvent: recordRuntimeEvent
+      onRuntimeEvent: recordRuntimeEvent,
+      onReviewCandidate: handleNoonaReviewCandidate
     });
     nextDiscord = await createDiscordClient({
       token: config.discordToken,
       clientId: config.discordClientId,
-      commandMap: commands,
+      commandMap: splitEnabled ? noonaCommands : commands,
       roleManager,
       getSettings: () => settings,
-      directMessageHandler: createDirectMessageHandler({
+      directMessageHandler: splitEnabled ? null : createDirectMessageHandler({
         getSettings: () => settings,
         sage,
         logger,
@@ -444,7 +683,7 @@ export const createPortalRuntime = ({
           await triviaRuntime?.handleGuildMessage?.(message);
         }
       },
-      reactionHandler: async (reaction, user) => {
+      reactionHandler: splitEnabled ? null : async (reaction, user) => {
         const emoji = normalizeString(reaction?.emoji?.name || reaction?.emoji || "");
         if (![DOWNLOADALL_APPROVE_REACTION, DOWNLOADALL_DENY_REACTION].includes(emoji)) {
           return;
@@ -490,15 +729,78 @@ export const createPortalRuntime = ({
         }
       } : null,
       enableGuildMemberEvents,
-      botIdentity,
+      botIdentity: splitEnabled ? noonaBotIdentity : legacyBotIdentity,
       avatarMode: config.discordAvatarMode,
-      onRuntimeEvent: recordRuntimeEvent,
+      onRuntimeEvent: (event) => recordRuntimeEvent({...event, clientIdentity: "noona"}),
       logger,
       clientFactory
     });
 
     const sync = await nextDiscord.login();
     return {nextDiscord, sync};
+  };
+
+  const startAppaClient = async () => {
+    let nextAppa;
+    const appaMentionHandler = createAppaMentionHandler({
+      getSettings: () => settings,
+      getBotUserId: () => normalizeString(nextAppa?.client?.user?.id),
+      sage,
+      roleManager: appaRoleManager,
+      logger,
+      onRuntimeEvent: recordRuntimeEvent
+    });
+    nextAppa = await createDiscordClient({
+      token: config.appaDiscordToken,
+      clientId: config.appaDiscordClientId,
+      commandMap: appaCommands,
+      roleManager: appaRoleManager,
+      getSettings: appaSettings,
+      directMessageHandler: createDirectMessageHandler({
+        getSettings: appaSettings,
+        sage,
+        logger,
+        onRuntimeEvent: recordRuntimeEvent
+      }),
+      guildMessageHandler: appaMentionHandler,
+      reactionHandler: async (reaction, user) => {
+        const emoji = normalizeString(reaction?.emoji?.name || reaction?.emoji || "");
+        if (![DOWNLOADALL_APPROVE_REACTION, DOWNLOADALL_DENY_REACTION].includes(emoji)) {
+          return;
+        }
+        const userId = normalizeString(user?.id);
+        if (!userId || user?.bot || userId !== normalizeString(settings.superuserId)) {
+          return;
+        }
+        const messageId = normalizeString(reaction?.message?.id || reaction?.messageId);
+        if (!messageId) {
+          return;
+        }
+        const result = await sage.decideDownloadAllPrompt({
+          messageId,
+          userId,
+          emoji
+        });
+        const payload = result?.payload || {};
+        if (payload.message) {
+          await nextAppa.sendDirectMessage(userId, {content: payload.message});
+        }
+        recordRuntimeEvent({
+          type: "downloadall-reaction",
+          requestedBy: userId,
+          status: payload.status || (result?.ok ? "handled" : "failed"),
+          message: payload.message || payload.error || ""
+        });
+      },
+      enableGuildMemberEvents: false,
+      botIdentity: appaBotIdentity,
+      avatarMode: config.discordAvatarMode,
+      onRuntimeEvent: (event) => recordRuntimeEvent({...event, clientIdentity: "appa"}),
+      logger,
+      clientFactory
+    });
+    const sync = await nextAppa.login();
+    return {nextAppa, sync};
   };
 
   const start = async () => {
@@ -518,6 +820,7 @@ export const createPortalRuntime = ({
     state = {
       ...state,
       mode: "starting",
+      splitEnabled: false,
       error: null,
       syncError: null,
       warning: null,
@@ -541,15 +844,46 @@ export const createPortalRuntime = ({
 
     for (const attempt of attempts) {
       try {
-        const started = await startDiscordClient(attempt);
+        let splitEnabled = isAppaSplitEnabled();
+        let started = await startDiscordClient({...attempt, splitOverride: splitEnabled});
         discord = started.nextDiscord;
+        let appaStarted = null;
+        let appaStartError = "";
+        if (splitEnabled) {
+          try {
+            appaStarted = await startAppaClient();
+            appaDiscord = appaStarted.nextAppa;
+          } catch (error) {
+            appaStartError = describeError(error);
+            error?.portalClient?.destroy?.();
+            appaDiscord = null;
+            logger?.warn?.("Portal Appa Discord runtime degraded while Noona stayed online.", {error});
+            state = {
+              ...state,
+              appa: {
+                ...state.appa,
+                enabled: true,
+                mode: "degraded",
+                connected: false,
+                error: appaStartError,
+                syncError: null
+              }
+            };
+            discord?.destroy?.();
+            discord = null;
+            splitEnabled = false;
+            started = await startDiscordClient({...attempt, splitOverride: false});
+            discord = started.nextDiscord;
+          }
+        }
         followNotifier = createFollowNotifier({
           sage,
           discord,
+          adminDiscord: appaDiscord || null,
           logger,
           publicBaseUrl: config.publicBaseUrl,
           getBrandName: () => brandName,
-          requestCommand: commands.get("request")
+          requestCommand: (splitEnabled ? noonaCommands : commands).get("request")
         });
         followNotifier.start();
         triviaRuntime = createTriviaRuntime({
@@ -574,7 +908,29 @@ export const createPortalRuntime = ({
           registeredGuildId: started.sync.guildId || settings.guildId || "",
           guildMemberEventsEnabled: attempt.enableGuildMemberEvents,
           requestedIntents: Array.isArray(started.nextDiscord.requestedIntents) ? [...started.nextDiscord.requestedIntents] : [],
-          requestedPartials: Array.isArray(started.nextDiscord.requestedPartials) ? [...started.nextDiscord.requestedPartials] : []
+          requestedPartials: Array.isArray(started.nextDiscord.requestedPartials) ? [...started.nextDiscord.requestedPartials] : [],
+          splitEnabled,
+          appa: {
+            ...state.appa,
+            enabled: settings.appa?.enabled === true,
+            mode: appaStartError
+              ? "degraded"
+              : !splitEnabled
+              ? (config.appaDiscordToken && config.appaDiscordClientId ? "idle" : "disabled")
+              : appaStarted
+                ? "ready"
+                : state.appa.mode,
+            connected: Boolean(appaStarted),
+            authConfigured: Boolean(config.appaDiscordToken && config.appaDiscordClientId),
+            registeredCount: appaStarted?.sync?.registered || 0,
+            registeredGlobalCount: appaStarted?.sync?.registeredGlobal || 0,
+            registeredGuildCount: appaStarted?.sync?.registeredGuild || 0,
+            registeredGuildId: appaStarted?.sync?.guildId || (splitEnabled ? settings.guildId || "" : ""),
+            requestedIntents: Array.isArray(appaStarted?.nextAppa?.requestedIntents) ? [...appaStarted.nextAppa.requestedIntents] : [],
+            requestedPartials: Array.isArray(appaStarted?.nextAppa?.requestedPartials) ? [...appaStarted.nextAppa.requestedPartials] : [],
+            error: appaStarted ? null : appaStartError || state.appa.error,
+            syncError: appaStarted ? null : state.appa.syncError
+          }
         };
         return state;
       } catch (error) {
@@ -583,6 +939,8 @@ export const createPortalRuntime = ({
         triviaRuntime?.stop?.();
         triviaRuntime = null;
         error?.portalClient?.destroy?.();
+        appaDiscord?.destroy?.();
+        appaDiscord = null;
         discord?.destroy?.();
         discord = null;
 
@@ -619,13 +977,21 @@ export const createPortalRuntime = ({
     followNotifier = null;
     triviaRuntime?.stop?.();
     triviaRuntime = null;
+    appaDiscord?.destroy?.();
+    appaDiscord = null;
     discord?.destroy?.();
     discord = null;
     state = {
       ...state,
       connected: false,
       guildMemberEventsEnabled: false,
-      mode: state.authConfigured ? "idle" : "disabled"
+      mode: state.authConfigured ? "idle" : "disabled",
+      splitEnabled: false,
+      appa: {
+        ...state.appa,
+        connected: false,
+        mode: state.appa.authConfigured ? "idle" : "disabled"
+      }
     };
   };
 
@@ -766,7 +1132,11 @@ export const createPortalRuntime = ({
         registeredGuildId: state.registeredGuildId || settings.guildId || "",
         registeredGlobalCount: state.registeredGlobalCount || 0,
         connectionState,
-        commandSyncState: createCapabilities(state, settings).commandSync.status
+        commandSyncState: createCapabilities(state, settings).commandSync.status,
+        splitEnabled: state.splitEnabled,
+        registeredAppaGuildId: state.appa?.registeredGuildId || settings.guildId || "",
+        registeredAppaGlobalCount: state.appa?.registeredGlobalCount || 0,
+        appaCommandSyncState: state.appa?.syncError ? "degraded" : state.appa?.connected ? "available" : "pending"
       });
       return {
         ...state,

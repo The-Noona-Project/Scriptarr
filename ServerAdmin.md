@@ -12,6 +12,8 @@ Recommended environment:
 - `SCRIPTARR_PUBLIC_BASE_URL`: public root URL for Moon, for example `https://scriptarr.example.com`
 - `SCRIPTARR_DISCORD_CLIENT_ID`: Discord OAuth application client id
 - `SCRIPTARR_DISCORD_CLIENT_SECRET`: Discord OAuth application client secret
+- `SCRIPTARR_APPA_DISCORD_TOKEN`: optional second Discord bot token for Appa, the admin/reviewer identity
+- `SCRIPTARR_APPA_DISCORD_CLIENT_ID`: optional Discord application client id for Appa
 - `SCRIPTARR_DATA_ROOT`: host path used for persistent stack data
 - `SCRIPTARR_MYSQL_URL`: `SELFHOST` for Warden-managed MySQL or `mysql://[user[:password]@]host[:port]/database` for
   an external database
@@ -48,7 +50,7 @@ Recommended container contract:
   - `<data-root>/warden/runtime:/var/lib/scriptarr`
 - recommended Linux/Unraid bind: `<data-root>:<data-root>`
 - required env: `SCRIPTARR_DATA_ROOT`, `SUPERUSER_ID`, `DISCORD_TOKEN`, `SCRIPTARR_MYSQL_URL`
-- optional env: `SCRIPTARR_PUBLIC_BASE_URL`, Discord OAuth vars, MySQL fallback vars
+- optional env: `SCRIPTARR_PUBLIC_BASE_URL`, Discord OAuth vars, Appa Discord vars, MySQL fallback vars
 - normal installs should not publish the Warden port; Moon remains the default public first-party surface
 
 Example shape:
@@ -237,7 +239,7 @@ chat even if an admin enabled them on the AI page.
   `/admin/users`
 - manage the Discord bot workflow in `/admin/discord`, including guild id, onboarding channel or template, DM
   superuser id, release notification channel, GitHub update notification channel, Noona mention chat, Noona memory
-  controls, trivia channel and scoring, and per-command role mapping
+  controls, Appa admin/review controls, trivia channel and scoring, and per-command role mapping
 - configure Raven VPN credentials and region for PIA/OpenVPN-backed downloads
 - review Raven metadata providers, with MangaDex enabled by default, Anime-Planet enabled ahead of MangaUpdates, and
   AniList, MyAnimeList, or ComicVine available for wider coverage
@@ -413,14 +415,22 @@ Moon admin now owns the Discord workflow settings that Portal uses at runtime:
   GitHub commit summaries from `The-Noona-Project/Scriptarr`.
 - Noona public mention-chat enable state, allowed channels, memory toggle, conservative proposal mode, and memory clear
   actions
+- Appa admin bot enable state, admin mention channels, review toggle, correction mode, review audit, and Appa command
+  role gates
 - trivia channel id, optional leaderboard channel id, scoring, cooldowns, hints, and AI borderline matching
 - per-command enable toggles and required Discord role ids
 
-Portal also bundles default Discord avatars for the public bot identities. `SCRIPTARR_DISCORD_BOT_PERSONA` accepts
-`noona` or `appa` and defaults to `noona`. `SCRIPTARR_DISCORD_AVATAR_MODE` defaults to `missing`, which uploads the
-bundled avatar only when the Discord bot has no custom avatar; use `off` to disable this or `force` for one deliberate
-avatar refresh. Sage passes Noona and Appa's visual descriptions to Oracle as read-only context, so Noona can answer
-appearance questions without storing image data in chat memory.
+Portal can run one Discord bot or two. If `SCRIPTARR_APPA_DISCORD_TOKEN`,
+`SCRIPTARR_APPA_DISCORD_CLIENT_ID`, and the `/admin/discord` Appa toggle are present, Noona keeps reader-facing
+commands and public chat while Appa owns admin commands, admin mentions, `downloadall`, and serious Noona corrections.
+If Appa is disabled, missing, or fails to start, Noona keeps the existing single-bot admin fallback.
+
+Portal also bundles default Discord avatars for the public bot identities. `SCRIPTARR_DISCORD_BOT_PERSONA` is now only
+a legacy single-bot avatar fallback; split mode always applies the bundled Noona avatar to the primary bot and Appa to
+the second bot. `SCRIPTARR_DISCORD_AVATAR_MODE` defaults to `missing`, which uploads the bundled avatar only when the
+Discord bot has no custom avatar; use `off` to disable this or `force` for one deliberate avatar refresh. Sage passes
+Noona and Appa's visual descriptions to Oracle as read-only context, so Noona can answer appearance questions without
+storing image data in chat memory.
 
 Noona mention chat is public by design in this version. With it enabled, users can mention the real bot user id in any
 allowed guild channel, for example `@Noona Ai are you alive?`, and Portal replies to that message after sending the
@@ -433,16 +443,15 @@ Discord's Message Content intent must be enabled in the Discord developer portal
 legacy DM text fallback handling. Scriptarr requests the intent in code, but Discord will not deliver message content
 unless the application setting allows it.
 
-The current Discord command set is:
+The split Discord command set is:
 
-- `/ding`
-- `/status`
-- `/chat`
-- `/search`
-- `/request`
-- `/subscribe`
-- `/trivia`
-- owner-only DM `/downloadall`
+- Noona: `/search`, `/request`, `/subscribe`, `/trivia status`, and `/trivia leaderboard`
+- Appa: `/ding`, `/status`, owner-only DM `/downloadall`, `/trivia start`, and `/trivia stop`
+
+When Appa is disabled or unavailable, Noona registers the legacy single-bot command set, including `/ding`, `/status`,
+`/chat`, `/search`, `/request`, `/subscribe`, `/trivia`, and owner-only DM `/downloadall`. Split mode does not
+register `/chat`; natural Noona mention chat remains the public chat surface and still reuses the saved `/chat` role
+gate.
 
 Blank role ids mean any member in the configured guild can use that slash command. `downloadall` ignores guild roles,
 is only supported in bot DMs, and only checks the configured DM superuser id.
@@ -457,7 +466,8 @@ setting as capped user facts and server lore, not raw transcripts. Users can say
 `forget me`, or `what do you remember about me?`; admins can review memory counts and clear one user, server lore, or
 all Noona memory from `/admin/discord`. The memory helper rejects obvious tokens, secrets, passwords, API keys,
 sessions, cookies, and credentials.
-Use `/downloadall run type:<type> nsfw:<true|false> titlegroup:<prefix> groupsize:<count>` in a DM with Noona as the supported bulk path.
+Use `/downloadall run type:<type> nsfw:<true|false> titlegroup:<prefix> groupsize:<count>` in a DM with Appa when the
+split admin bot is enabled, or with Noona in single-bot fallback mode.
 Every `downloadall` request creates a durable Raven run now, including single concrete type plus single `titlegroup`
 requests, so Portal can deliver delayed summaries even if the batch takes hours. `type:all` or `titlegroup:all`
 starts a multi-batch run that pauses after the configured group size. `groupsize` defaults to `1`, accepts `1-25`,
@@ -504,8 +514,8 @@ Portal now prefers a minimal Discord runtime when privileged intents are unavail
 can stay online while onboarding is marked degraded, and `/admin/discord` will show the last meaningful runtime or
 command-sync error instead of only a generic disconnected state.
 That runtime view now also surfaces the requested intents or partials, the most recent DM receive timestamp, the last
-handled `downloadall`, the last `downloadall` error, and Noona mention-chat status, last channel/user, and last error
-so owner-only DM and public chat failures are easier to trace.
+handled `downloadall`, the last `downloadall` error, Noona mention-chat status, Appa mention/review/correction status,
+and recent redacted Appa review audit events so owner-only DM and public chat failures are easier to trace.
 
 ## Public Moon API
 

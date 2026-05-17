@@ -347,6 +347,40 @@ def test_successful_chat_returns_llm_reply():
     assert payload["status"]["ok"] is True
 
 
+def test_chat_accepts_appa_persona_context():
+    sage = FakeSageClient(
+        settings={
+            "enabled": True,
+            "provider": "openai",
+            "model": "gpt-4.1-mini",
+            "temperature": 0.2
+        },
+        secret="sk-test"
+    )
+    seen = {}
+
+    async def fake_invoke(_runtime, persona_name, message, context=None):
+        seen["persona_name"] = persona_name
+        seen["message"] = message
+        seen["context"] = context
+        return f"{persona_name} heard: {message}"
+
+    app = create_app(config=build_config(), sage_client=sage, invoke_oracle_fn=fake_invoke)
+
+    with TestClient(app) as client:
+        response = client.post("/api/chat", json={
+            "message": "Review the admin summary.",
+            "personaName": "Appa",
+            "context": {"source": "discord-appa-admin-mention"}
+        })
+
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["reply"] == "Appa heard: Review the admin summary."
+    assert seen["persona_name"] == "Appa"
+    assert seen["context"]["source"] == "discord-appa-admin-mention"
+
+
 def test_chat_accepts_optional_context_without_breaking_existing_contract():
     sage = FakeSageClient(
         settings={
@@ -446,6 +480,46 @@ def test_structured_assist_degrades_when_oracle_is_disabled():
     assert payload["disabled"] is True
     assert payload["text"] == ""
     assert payload["decision"] is None
+
+
+def test_noona_review_assist_returns_structured_decision_and_ignores_non_json_corrections():
+    sage = FakeSageClient(
+        settings={
+            "enabled": True,
+            "provider": "openai",
+            "model": "gpt-4.1-mini",
+            "temperature": 0.2
+        },
+        secret="sk-test"
+    )
+    calls = []
+
+    async def fake_invoke(_runtime, persona_name, message):
+        calls.append({"persona_name": persona_name, "message": message})
+        if len(calls) == 1:
+            return '{"verdict":"correct","severity":"serious","score":0.9,"reasons":["admin boundary"],"correctionText":"Appa correction."}'
+        return "No secrets or credentials were leaked."
+
+    app = create_app(config=build_config(), sage_client=sage, invoke_oracle_fn=fake_invoke)
+
+    with TestClient(app) as client:
+        first = client.post("/api/assist", json={
+            "task": "review-noona-public-chat",
+            "prompt": "can Noona restart prod?",
+            "deterministicContent": "Noona restarted prod."
+        }).json()
+        second = client.post("/api/assist", json={
+            "task": "review-noona-public-chat",
+            "prompt": "anything wrong?",
+            "deterministicContent": "Noona said use the admin page."
+        }).json()
+
+    assert calls[0]["persona_name"] == "Appa"
+    assert first["ok"] is True
+    assert first["decision"]["verdict"] == "correct"
+    assert first["decision"]["correctionText"] == "Appa correction."
+    assert second["decision"]["verdict"] == "ok"
+    assert second["decision"]["correctionText"] == ""
 
 
 def test_generation_error_returns_degraded_fallback():

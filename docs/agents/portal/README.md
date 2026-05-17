@@ -1,16 +1,21 @@
 # Portal AI Notes
 
 - Portal owns Discord-facing request creation, moderation messaging, subscriptions, onboarding, public Noona mention
-  chat, and Oracle chat entry.
+  chat, optional Appa admin/reviewer chat, and Oracle chat entry through Sage.
 - It no longer bridges Kavita or Komf.
 - Portal is not allowed to call Vault or Oracle directly. First-party internal traffic must go through Sage's token-authenticated broker routes.
-- The live Discord command set is `/ding`, `/status`, `/chat`, `/search`, `/request`, `/subscribe`, `/trivia`, and
-  owner-only DM `/downloadall`.
+- In split mode, Noona owns reader-facing `/search`, `/request`, `/subscribe`, `/trivia status|leaderboard`, public
+  mention chat, trivia posts/guesses, onboarding, requester DMs, release posts, and update posts. Appa owns admin
+  `/ding`, `/status`, owner-only DM `/downloadall`, `/trivia start|stop`, admin mentions, legacy raw DM
+  `downloadall ...`, downloadall reactions, and serious Noona corrections.
+- If Appa is disabled, missing env, or degraded at startup, Noona must retain the legacy single-bot admin fallback,
+  including `/chat`, admin slash commands, DM `downloadall`, and downloadall reactions.
 - Portal should treat the brokered `portal.discord` setting as the source of truth for guild id, onboarding message or
-  channel, DM superuser id, release notification channel id, update notification channel id, and per-command role gates.
+  channel, DM superuser id, release notification channel id, update notification channel id, Noona/Appa settings, and
+  per-command role gates.
 - Bundled Discord avatar assets live in `services/portal/assets/discord`. Portal may upload the configured
-  `SCRIPTARR_DISCORD_BOT_PERSONA` avatar on startup according to `SCRIPTARR_DISCORD_AVATAR_MODE`, but should not write
-  avatar bytes into Vault or Discord message memory.
+  Noona/Appa avatars on startup according to `SCRIPTARR_DISCORD_AVATAR_MODE`, but should not write avatar bytes into
+  Vault or Discord message memory. `SCRIPTARR_DISCORD_BOT_PERSONA` is only a legacy single-bot avatar fallback now.
 - Portal should prefer a minimal Discord runtime over going fully dark when privileged intents are unavailable. Slash
   commands and DMs should remain online, while onboarding should degrade separately and surface the real runtime error
   or command-sync problem back through Moon admin.
@@ -32,6 +37,11 @@
 - Mention chat must call Sage's `/api/internal/portal/noona-chat` route, not Oracle directly. Sage owns durable memory,
   allowed read context, latest posted update digest context, conservative proposal detection, and Oracle fallback
   behavior.
+- Appa admin mentions must call Sage's `/api/internal/portal/appa-chat`, not Oracle directly. Appa may draft
+  Sage-governed proposals but must never execute actions from Discord.
+- Public Noona replies may trigger a background Sage `/api/internal/portal/noona-review` call. Appa should only post a
+  same-thread correction for serious verdicts, and Portal must append delivery success/failure through Sage after
+  Discord accepts or rejects the correction.
 - Noona/Appa appearance knowledge belongs in Sage's visual identity helper and is passed to Oracle as read-only
   context. Portal only owns Discord delivery and default avatar upload.
 - When mention chat handles a guild message, do not pass that same message into trivia guess handling. Unmentioned
@@ -78,4 +88,5 @@
 - Preserve `groupsize` across slash-command and legacy DM parsing as `batchesPerApproval` with bounds `1-25`.
 - Portal runtime state should keep enough DM diagnostics to explain silent failures quickly: requested intents,
   requested partials, last DM receive timestamp, last handled `downloadall`, last `downloadall` error, and last Noona
-  mention-chat time/error.
+  mention-chat time/error. Include Appa connection, mention, review, correction, and avatar sync state when split mode
+  is configured.

@@ -126,7 +126,10 @@ Architecture invariants:
 - Raven intake is now grouped by concrete provider target and edition-aware, so plain vs colored variants only stay
   separate when they truly resolve to different provider URLs.
 - Portal's Discord runtime is now live again, and the brokered `portal.discord` settings object is the source of truth
-  for guild id, onboarding, per-command role gates, release channel posts, Noona trivia, and DM superuser rules.
+  for guild id, onboarding, per-command role gates, release channel posts, Noona trivia, Noona mention chat, optional
+  Appa split/review settings, and DM superuser rules.
+- In split mode Noona is reader-facing and Appa is admin/reviewer-facing. If Appa is disabled or cannot start, Noona
+  must retain the legacy single-bot admin command fallback.
 - Moon now serves trusted API-key surfaces and plain same-origin Swagger docs. Search is public, protected calls use
   `X-Scriptarr-Api-Key`, system keys inherit assigned permission groups, user keys stay scoped to the owning reader,
   and accepted external requests must stay at the lowest queue priority.

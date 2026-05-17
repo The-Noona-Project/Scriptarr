@@ -171,9 +171,9 @@
   Raven catalog state, Raven task state, and managed Raven download folders only.
 - `/admin/discord` should surface Portal capability state honestly: command runtime, command sync, onboarding
   availability, release notification channel id, update notification channel id, Noona mention-chat enable state,
-  allowed channel ids, memory counts and clear actions, Noona trivia channel/scoring/schedule settings, last
-  mention-chat time/error, and the last meaningful runtime error should all be visible without forcing the admin to
-  read logs.
+  allowed channel ids, memory counts and clear actions, Appa enable/review/correction controls, Appa command role
+  gates, redacted Appa review audit, Noona trivia channel/scoring/schedule settings, last mention-chat time/error, and
+  the last meaningful runtime error should all be visible without forcing the admin to read logs.
 - Keep Noona mention-chat controls operational rather than decorative: the page should save the `portal.discord.noonaChat`
   settings object, make `publicReplies` visible but fixed, keep memory review counts clear, and call the Sage memory
   clear route through Moon's same-origin API. Do not call Portal, Vault, or Oracle directly from the browser.

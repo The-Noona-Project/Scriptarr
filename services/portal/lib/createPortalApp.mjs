@@ -56,7 +56,8 @@ export const createPortalApp = async ({
   });
 
   app.post("/api/runtime/discord/reload", async (_req, res) => {
-    await runtime.refreshSettings();
+    await runtime.stop();
+    await runtime.start();
     res.json(runtimeStatePayload());
   });
 
@@ -78,6 +79,8 @@ export const createPortalApp = async ({
         warning: state.warning,
         requestedIntents: state.requestedIntents,
         requestedPartials: state.requestedPartials,
+        splitEnabled: state.splitEnabled,
+        appa: state.appa,
         lastDirectMessageReceivedAt: state.lastDirectMessageReceivedAt,
         lastDownloadAllHandledAt: state.lastDownloadAllHandledAt,
         lastDownloadAllError: state.lastDownloadAllError,

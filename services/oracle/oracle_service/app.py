@@ -3,6 +3,7 @@ from __future__ import annotations
 """FastAPI entrypoint and route handlers for the Oracle service."""
 
 import asyncio
+import json
 import logging
 import re
 
@@ -80,13 +81,63 @@ def _short_string(value: object, limit: int = 600) -> str:
 
 
 def _assist_fallback(task: str) -> dict[str, object]:
-    return {
+    payload = {
         "ok": True,
         "degraded": True,
         "task": task,
         "text": "",
         "decision": None
     }
+    if task == "review-noona-public-chat":
+        payload["decision"] = {
+            "verdict": "ok",
+            "severity": "none",
+            "score": 0,
+            "reasons": ["Oracle review is unavailable; no serious issue was asserted."],
+            "correctionText": ""
+        }
+    return payload
+
+
+def _normalize_review_decision(value: object) -> dict[str, object]:
+    source = value if isinstance(value, dict) else {}
+    verdict = _normalize_string(source.get("verdict") or source.get("decision"), "ok").lower()
+    severity = _normalize_string(source.get("severity"), "serious" if verdict == "correct" else "none").lower()
+    reasons = source.get("reasons") if isinstance(source.get("reasons"), list) else []
+    if source.get("reason"):
+        reasons = [*reasons, source.get("reason")]
+    try:
+        score = float(source.get("score") or (1 if verdict == "correct" else 0))
+    except (TypeError, ValueError):
+        score = 1 if verdict == "correct" else 0
+    return {
+        "verdict": verdict if verdict in {"ok", "correct"} else "ok",
+        "severity": severity if severity in {"none", "low", "medium", "serious", "high", "critical"} else "none",
+        "score": max(0, min(1, score)),
+        "reasons": [_short_string(reason, 180) for reason in reasons if _normalize_string(reason)][:5],
+        "correctionText": _short_string(source.get("correctionText") or source.get("correction") or source.get("text"), 900)
+    }
+
+
+def _parse_review_decision(text: str) -> dict[str, object]:
+    normalized = _normalize_string(text)
+    if not normalized:
+        return _normalize_review_decision({})
+    try:
+        return _normalize_review_decision(json.loads(normalized))
+    except Exception:  # noqa: BLE001
+        match = re.search(r"\{.*\}", normalized, re.DOTALL)
+        if match:
+            try:
+                return _normalize_review_decision(json.loads(match.group(0)))
+            except Exception:  # noqa: BLE001
+                pass
+    return _normalize_review_decision({
+        "verdict": "ok",
+        "severity": "none",
+        "reasons": ["Structured review output was not valid JSON."],
+        "correctionText": ""
+    })
 
 
 def _provider_default_model(provider: str, config: OracleConfig) -> str:
@@ -254,6 +305,10 @@ def create_app(
             body = {}
         message = str((body or {}).get("message") or "").strip()
         context = (body or {}).get("context") if isinstance(body, dict) else None
+        context_persona = (context or {}).get("personaName") if isinstance(context, dict) else ""
+        persona_name = _normalize_string((body or {}).get("personaName") or context_persona, active_config.noona_persona_name)
+        if persona_name.lower() not in {"noona", "appa"}:
+            persona_name = active_config.noona_persona_name
         if not message:
             active_logger.warning("Oracle chat request was missing a message.")
             return JSONResponse(status_code=400, content={"error": "message is required."})
@@ -267,7 +322,7 @@ def create_app(
             return {
                 "ok": True,
                 "reply": (
-                    f"{active_config.noona_persona_name} checked Scriptarr. "
+                    f"{persona_name} checked Scriptarr. "
                     f"{'The stack responded.' if status_payload.get('ok') else 'The stack status is currently degraded.'}"
                     f"{f' Oracle is using {runtime.provider}.' if runtime.enabled else ' Oracle is currently off.'}"
                 ),
@@ -279,7 +334,7 @@ def create_app(
                 "ok": True,
                 "disabled": True,
                 "reply": (
-                    f"{active_config.noona_persona_name} is currently off. Add an OpenAI API key or switch to LocalAI "
+                    f"{persona_name} is currently off. Add an OpenAI API key or switch to LocalAI "
                     "from Moon admin, then enable Oracle when you're ready."
                 ),
                 "status": status_payload
@@ -289,7 +344,7 @@ def create_app(
             return {
                 "ok": True,
                 "disabled": True,
-                "reply": f"{active_config.noona_persona_name} is configured for OpenAI, but the API key has not been set yet.",
+                "reply": f"{persona_name} is configured for OpenAI, but the API key has not been set yet.",
                 "status": status_payload
             }
 
@@ -306,16 +361,16 @@ def create_app(
                 return {
                     "ok": True,
                     "degraded": True,
-                    "reply": _provider_fallback_reply(active_config.noona_persona_name, runtime.provider),
+                    "reply": _provider_fallback_reply(persona_name, runtime.provider),
                     "status": status_payload,
                     "error": "LocalAI probe failed."
                 }
 
             # Sage-curated context is background only; invoke_oracle_fn handles the guardrail prompt.
             if isinstance(context, dict) and context:
-                reply = await invoke_oracle_fn(runtime, active_config.noona_persona_name, message, context)
+                reply = await invoke_oracle_fn(runtime, persona_name, message, context)
             else:
-                reply = await invoke_oracle_fn(runtime, active_config.noona_persona_name, message)
+                reply = await invoke_oracle_fn(runtime, persona_name, message)
             return {
                 "ok": True,
                 "reply": reply,
@@ -332,7 +387,7 @@ def create_app(
             return {
                 "ok": True,
                 "degraded": True,
-                "reply": _provider_fallback_reply(active_config.noona_persona_name, runtime.provider),
+                "reply": _provider_fallback_reply(persona_name, runtime.provider),
                 "status": status_payload,
                 "error": str(error)
             }
@@ -376,6 +431,15 @@ def create_app(
                     "Return JSON with keys matched(boolean), confidence(0-1), reason(short). "
                     f"Context: {context}. Guess prompt: {prompt}"
                 )
+            elif task == "review-noona-public-chat":
+                message = (
+                    "Review Noona's public Discord reply for serious issues only: leaked secrets or credentials, "
+                    "unsafe action claims, admin-boundary mistakes, or clearly wrong operational facts. "
+                    "Return only JSON with keys verdict('ok'|'correct'), severity('none'|'low'|'medium'|'serious'|'high'|'critical'), "
+                    "score(0-1), reasons(array of short strings), correctionText(short public correction or empty). "
+                    "Do not correct style, harmless uncertainty, or minor wording. "
+                    f"User prompt excerpt: {prompt}. Noona reply excerpt: {deterministic}. Context: {context}"
+                )
             elif task == "message":
                 message = (
                     "Append one concise, non-critical sentence to this deterministic Scriptarr Discord message. "
@@ -388,7 +452,16 @@ def create_app(
                     f"Task: {task}. Prompt: {prompt}. Context: {context}"
                 )
 
-            text = await invoke_oracle_fn(runtime, active_config.noona_persona_name, message)
+            persona_name = "Appa" if task == "review-noona-public-chat" else active_config.noona_persona_name
+            text = await invoke_oracle_fn(runtime, persona_name, message)
+            if task == "review-noona-public-chat":
+                decision = _parse_review_decision(text)
+                return {
+                    "ok": True,
+                    "task": task,
+                    "text": "",
+                    "decision": decision
+                }
             return {
                 "ok": True,
                 "task": task,

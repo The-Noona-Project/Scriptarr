@@ -16,7 +16,8 @@ export const createPortalCommands = ({
   onRuntimeEvent,
   onTriviaStart,
   onTriviaStop,
-  onTriviaLeaderboard
+  onTriviaLeaderboard,
+  triviaSubcommandScope = "all"
 }) => {
   const commands = new Map();
   commands.set("ding", createDingCommand({getBrandName}));
@@ -36,7 +37,8 @@ export const createPortalCommands = ({
     sage,
     onTriviaStart,
     onTriviaStop,
-    onTriviaLeaderboard
+    onTriviaLeaderboard,
+    subcommandScope: triviaSubcommandScope
   }));
   return commands;
 };

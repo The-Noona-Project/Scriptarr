@@ -71,6 +71,11 @@
   `portal.noonaChat.memory` settings payload, natural memory commands, secret rejection, conservative read-context
   loading, latest posted GitHub update digest context, public proposal filtering, Oracle fallback, and admin-safe
   memory review/clear payloads. Portal must not call Oracle or Vault directly for this flow.
+- Broker Appa admin mentions through `/api/internal/portal/appa-chat` with Appa persona context, admin read context,
+  and conservative proposal drafting only. Appa must never execute mutations directly from Discord.
+- Broker public Noona reply review through `/api/internal/portal/noona-review`. Store a redacted review event first,
+  then let Portal record correction delivery success/failure through Sage only after Discord accepts or rejects the
+  Appa message. Do not store full prompts, replies, transcripts, tokens, or secrets.
 - Keep Noona/Appa appearance facts in `lib/noonaVisualIdentity.mjs`. Those descriptions are read-only Oracle context
   and deterministic degraded-mode replies, not durable user memory or transcript storage.
 - Public mention chat proposals are stricter than `/admin/system/ai`: allow only low-risk status-check and trivia

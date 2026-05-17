@@ -26,6 +26,9 @@ HTTP broker.
 - Keep public Noona mention chat brokered through Sage. Portal should call `/api/internal/portal/noona-chat`; Sage owns
   capped memory summaries, conservative read-context loading, public proposal allowlisting, and Oracle fallback. Do not
   let Portal call Oracle or Vault directly for mention chat.
+- Keep Appa admin chat and Noona public-reply review brokered through Sage. Portal should call
+  `/api/internal/portal/appa-chat`, `/api/internal/portal/noona-review`, and `/api/internal/portal/noona-review/delivery`;
+  Sage owns Appa persona context, redacted durable audit events, and conservative proposal boundaries.
 - Keep AI tool execution Sage-governed. Oracle can assist planning, but Sage must enforce the `ai` domain, enabled
   toggles, grant checks, proposal confirmation, expiry, and durable events.
 - Portal-facing release notifications should be grouped into digest payloads with cursor-style `silenceBefore`
@@ -54,6 +57,8 @@ HTTP broker.
 - Public Noona chat helpers live in `lib/noonaChatService.mjs` and `lib/noonaChatMemory.mjs`. Keep durable memory
   summarized in Vault settings, reject obvious secrets, and keep the public proposal allowlist stricter than the admin
   AI page.
+- Appa chat and review helpers live in `lib/appaChatService.mjs`. Keep review excerpts redacted, record correction
+  delivery separately from recommendations, and never store raw Discord transcripts.
 - Durable state reads and writes go through `lib/vaultClient.mjs`, which is the Sage-side client for Vault's service
   API. Do not add MySQL access here.
 - Reader target lookups belong in `vaultClient.mjs` plus focused Moon v3 helpers. Precedence is saved progress/bookmark,

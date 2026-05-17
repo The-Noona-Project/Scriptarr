@@ -4,11 +4,13 @@
   all tool execution and confirmations.
 - It starts disabled and OpenAI-first.
 - Oracle now runs as a FastAPI Python service while preserving the existing `/health`, `/api/status`, and `/api/chat`
-  contract for the rest of Scriptarr, plus `/api/assist` for Sage-brokered planning, trivia matching advice, and
-  concise message assistance.
-- `/api/chat` accepts optional Sage-curated context while preserving the message-only contract. Use context for
-  persona, summarized memory, and read-only status/library/trivia background only; do not store it, expose raw ids or
-  secrets, or treat it as permission to mutate anything.
+  contract for the rest of Scriptarr, plus `/api/assist` for Sage-brokered planning, trivia matching advice, concise
+  message assistance, and Appa review decisions.
+- `/api/chat` accepts optional Sage-curated context and `personaName` (`Noona` or `Appa`) while preserving the
+  message-only contract. Use context for persona, summarized memory, and read-only status/library/trivia background
+  only; do not store it, expose raw ids or secrets, or treat it as permission to mutate anything.
+- `/api/assist` task `review-noona-public-chat` must return a normalized decision for Sage. Malformed model output
+  should degrade to `ok` with no correction text, not a guessed public correction.
 - If the context includes `visualIdentity`, use it only to answer Noona/Appa appearance questions. Do not claim Oracle
   viewed the images directly; Sage owns the text descriptions and Portal owns the Discord avatar assets.
 - It still uses OpenAI-compatible wiring so LocalAI can be swapped in later.

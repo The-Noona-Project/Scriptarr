@@ -74,9 +74,10 @@ access-control console with search, filters, a protected owner state, group assi
 editor instead of a generic records view.
 Raven now keeps WeebCentral first by default, exposes MangaDex as a second normal download-provider option, and enables
 Anime-Planet ahead of MangaUpdates as a scrape-based metadata source for aliases, summaries, and lifecycle hints.
-The admin app also exposes a dedicated Discord page at `/admin/discord` for guild workflow settings, onboarding template
-or channel management, per-command role gates, release-channel posts, GitHub update-summary posts, Noona trivia, public mention-chat settings,
-Noona memory review or clears, and Portal runtime visibility without exposing Discord credentials.
+The admin app also exposes a dedicated Discord page at `/admin/discord` for guild workflow settings, onboarding
+template or channel management, per-command role gates, release-channel posts, GitHub update-summary posts, Noona
+trivia, public mention-chat settings, Noona memory review or clears, optional Appa admin/reviewer settings, and Portal
+runtime visibility without exposing Discord credentials.
 Scriptarr's user app now runs as an embedded Next.js App Router frontend with a megamenu header, avatar profile
 controls, and a simple footer, while the fullscreen reader runs as its own embedded `/reader` Next app.
 That reader supports webtoon, single-page, double-page, and manga-double layouts, LTR/RTL direction, page-fit controls,
@@ -116,7 +117,8 @@ For end-to-end Docker verification, use:
 1. Start the `scriptarr-warden` container with the Docker socket bind, `SUPERUSER_ID`, and the host data root Warden
    should use for managed service storage. On Linux and Unraid, also bind that host data root back into the container
    at the same path.
-2. Provide the Discord bot token as `DISCORD_TOKEN`.
+2. Provide the Noona Discord bot token as `DISCORD_TOKEN`. Optionally provide
+   `SCRIPTARR_APPA_DISCORD_TOKEN` and `SCRIPTARR_APPA_DISCORD_CLIENT_ID` when you want Appa as a separate admin bot.
 3. Set `SCRIPTARR_MYSQL_URL` to `SELFHOST` for managed MySQL or to `mysql://...` for an external database.
 4. Optionally set `SCRIPTARR_MYSQL_USER` if you want to override the managed app user or supply a username that is
    missing from the external MySQL URL.
@@ -155,9 +157,11 @@ For end-to-end Docker verification, use:
 - Duplicate request attempts now attach the requester to a hidden waitlist instead of creating a second visible row.
   If the title is already in the library, Scriptarr links directly to the title page. If the title is already queued,
   Scriptarr blocks the duplicate row and sends a Discord DM when the title becomes ready.
-- Portal now owns a real Discord command runtime again. The supported command set is `/ding`, `/status`, `/chat`,
-  `/search`, `/request`, `/subscribe`, `/trivia`, plus the owner-only DM `/downloadall` command for the configured Discord
-  superuser.
+- Portal now owns a real Discord command runtime again. Noona handles reader-facing `/search`, `/request`,
+  `/subscribe`, public mention chat, trivia status/leaderboards, release posts, update posts, and requester DMs. When
+  Appa is enabled with its own Discord token/client id, Appa owns admin `/ding`, `/status`, `/downloadall`,
+  `/trivia start|stop`, admin mentions, and serious corrections. If Appa is disabled or fails, Noona keeps the legacy
+  single-bot admin fallback.
 - Public guild mention chat is now optional in `/admin/discord`. When enabled, users can say `@Noona Ai are you alive?`
   in allowed guild channels and Portal will reply publicly through Sage. The flow reuses the `/chat` command role gate,
   ignores unmentioned chatter, bots, wrong guilds, and empty prompts, and keeps trivia message handling separate so one
@@ -165,6 +169,10 @@ For end-to-end Docker verification, use:
 - Scriptarr bundles default Discord avatar assets for Noona and Appa. Portal can apply the configured bundled avatar
   when the bot has no custom avatar, while Sage gives Noona read-only visual context so she can answer what she and
   Appa look like without storing image data in chat memory.
+- Appa review is optional. Noona replies first; Sage then asks Oracle for a structured Appa review and Portal posts an
+  Appa correction only for serious public-chat issues such as leaked secrets, unsafe action claims, admin-boundary
+  mistakes, or clearly wrong operational facts. Review and correction-delivery events are redacted durable audit
+  entries, not full transcripts.
 - The DM-only `downloadall` flow now stays provider-browse first but resolves metadata before queueing each title. It
   now uses a global DM slash command as the supported path: `/downloadall run ...`, `/downloadall status ...`,
   `/downloadall continue ...`, `/downloadall cancel ...`, and `/downloadall help`. Every run is durable now, including

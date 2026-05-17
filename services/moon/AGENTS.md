@@ -41,8 +41,8 @@ from the same runtime.
 - Keep the trusted public Moon API behind Moon-owned routes. `/api/public/*` and `/admin/system/api` should stay
   browser-safe, same-origin, and Sage-backed instead of reaching into internal services directly.
 - Keep `/admin/discord` as the browser-safe owner of Portal Discord settings, including release/update notification
-  channels, Noona mention chat, Noona memory review/clear controls, Noona trivia configuration, and manual trivia
-  runtime actions.
+  channels, Noona mention chat, Noona memory review/clear controls, Appa split/review controls, Noona trivia
+  configuration, and manual trivia runtime actions.
 - Keep `/admin/system/ai` as the browser-safe owner of Oracle, LocalAI, and Sage-governed AI tool proposals. Browser
   code must never call Oracle, Warden, OpenAI, or LocalAI directly.
 - Public request creation must keep using server-issued selection tokens and preserve the NSFW, already-in-library, and
@@ -62,8 +62,8 @@ from the same runtime.
   browser about Sage, Vault, Raven, Warden, Portal, Oracle, OpenAI, or LocalAI URLs.
 - Discord admin helpers live in `apps/admin-next/lib/adminDiscord.js` and `/admin/discord` UI in
   `apps/admin-next/components/DiscordPage.jsx`. Keep Noona mention-chat settings on the brokered
-  `portal.discord.noonaChat` object, keep release/update channel ids under `portal.discord.notifications`, and clear
-  memory through Moon -> Sage, never browser-direct Vault or Oracle calls.
+  `portal.discord.noonaChat` object, Appa settings on `portal.discord.appa`, release/update channel ids under
+  `portal.discord.notifications`, and clear memory through Moon -> Sage, never browser-direct Vault or Oracle calls.
 - User/admin chrome should start from `/api/moon/chrome/bootstrap?returnTo=...`; fetch the Discord login URL only when
   a signed-out view needs a sign-in action.
 - User card lists should call `/api/moon-v3/user/library?view=card`, including `ids=...` for exact activity cards.

@@ -6,6 +6,7 @@ import {knownPortalDiscordCommands, readPortalDiscordSettings} from "./portalDis
 import {createPortalTriviaService} from "./portalTrivia.mjs";
 import {buildIntakeSelection, evaluateSelectionAgainstGuardState} from "./requestSelectionGuards.mjs";
 import {buildRequestWorkConflictPayload, isRequestWorkConflictError} from "./requestConflict.mjs";
+import {createAppaChatService} from "./appaChatService.mjs";
 import {createNoonaChatService} from "./noonaChatService.mjs";
 import {
   buildNoonaVisualIdentityContext,
@@ -1160,6 +1161,13 @@ export const registerInternalBrokerRoutes = (app, {
     triviaService,
     readPortalDiscordSettings: () => readPortalDiscordSettings(vaultClient)
   });
+  const appaChatService = createAppaChatService({
+    config,
+    vaultClient,
+    serviceJson,
+    triviaService,
+    readPortalDiscordSettings: () => readPortalDiscordSettings(vaultClient)
+  });
   const appendServiceEvent = (serviceName, payload) => appendDurableEvent(vaultClient, {
     ...buildServiceActor(serviceName),
     ...payload
@@ -1805,6 +1813,21 @@ export const registerInternalBrokerRoutes = (app, {
 
   app.post("/api/internal/portal/noona-chat", withService(requireService, ["scriptarr-portal"], async (req, res) => {
     const result = await noonaChatService.handlePortalMention(req.body || {});
+    res.status(result.status || (result.ok === false ? 400 : 200)).json(result);
+  }));
+
+  app.post("/api/internal/portal/appa-chat", withService(requireService, ["scriptarr-portal"], async (req, res) => {
+    const result = await appaChatService.handlePortalAdminMention(req.body || {});
+    res.status(result.status || (result.ok === false ? 400 : 200)).json(result);
+  }));
+
+  app.post("/api/internal/portal/noona-review", withService(requireService, ["scriptarr-portal"], async (req, res) => {
+    const result = await appaChatService.reviewNoonaPublicReply(req.body || {});
+    res.status(result.status || (result.ok === false ? 400 : 200)).json(result);
+  }));
+
+  app.post("/api/internal/portal/noona-review/delivery", withService(requireService, ["scriptarr-portal"], async (req, res) => {
+    const result = await appaChatService.recordNoonaReviewDelivery(req.body || {});
     res.status(result.status || (result.ok === false ? 400 : 200)).json(result);
   }));
 

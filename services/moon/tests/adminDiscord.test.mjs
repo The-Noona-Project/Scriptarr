@@ -54,3 +54,51 @@ test("discord command rows merge runtime inventory with draft settings", () => {
   assert.equal(request.roleId, "role-1");
   assert.equal(request.description, "Requests");
 });
+
+test("discord settings helper preserves Appa command gates and split ownership", () => {
+  const settings = normalizeDiscordSettings({
+    appa: {
+      enabled: true,
+      adminMentionChannelIds: [" admins ", "", "ops"],
+      reviewEnabled: false,
+      correctionMode: "off",
+      commands: {
+        status: {enabled: false, roleId: "role-appa-status"},
+        trivia: {enabled: true, roleId: "role-appa-trivia"},
+        downloadall: {enabled: true, roleId: "ignored"}
+      }
+    },
+    commands: {
+      trivia: {enabled: false, roleId: "role-noona-trivia"}
+    }
+  });
+  const rows = buildDiscordCommandRows(settings, [{
+    id: "trivia",
+    name: "trivia",
+    label: "/trivia",
+    splitOwner: "both",
+    roleManaged: true,
+    appaRoleId: "runtime-appa-role"
+  }, {
+    id: "status",
+    name: "status",
+    label: "/status",
+    splitOwner: "appa",
+    roleManaged: true
+  }], []);
+  const trivia = rows.find((row) => row.id === "trivia");
+  const status = rows.find((row) => row.id === "status");
+
+  assert.equal(settings.appa.enabled, true);
+  assert.deepEqual(settings.appa.adminMentionChannelIds, ["admins", "ops"]);
+  assert.equal(settings.appa.reviewEnabled, false);
+  assert.equal(settings.appa.commands.downloadall.roleId, "");
+  assert.equal(trivia.owner, "both");
+  assert.equal(trivia.enabled, false);
+  assert.equal(trivia.appaEnabled, true);
+  assert.equal(trivia.roleId, "role-noona-trivia");
+  assert.equal(trivia.appaRoleId, "role-appa-trivia");
+  assert.equal(status.owner, "appa");
+  assert.equal(status.appaEnabled, false);
+  assert.equal(status.appaRoleId, "role-appa-status");
+});

@@ -291,6 +291,27 @@ export const createSageClient = (config) => {
         timeoutMs: 30000
       });
     },
+    appaChat(payload) {
+      return requestJson(config.sageBaseUrl, jsonHeaders, "/api/internal/portal/appa-chat", {
+        method: "POST",
+        body: payload,
+        timeoutMs: 30000
+      });
+    },
+    reviewNoonaReply(payload) {
+      return requestJson(config.sageBaseUrl, jsonHeaders, "/api/internal/portal/noona-review", {
+        method: "POST",
+        body: payload,
+        timeoutMs: 20000
+      });
+    },
+    recordNoonaReviewDelivery(payload) {
+      return requestJson(config.sageBaseUrl, jsonHeaders, "/api/internal/portal/noona-review/delivery", {
+        method: "POST",
+        body: payload,
+        timeoutMs: 10000
+      });
+    },
     assistOracle(payload) {
       return requestJson(config.sageBaseUrl, jsonHeaders, "/api/internal/oracle/assist", {
         method: "POST",

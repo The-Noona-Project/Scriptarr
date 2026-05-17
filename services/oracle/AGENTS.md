@@ -6,7 +6,8 @@ Read this before editing `services/oracle`.
 
 ## Role
 
-Oracle is the Noona AI persona for Scriptarr, backed by FastAPI with OpenAI-first defaults and optional LocalAI.
+Oracle provides Scriptarr's Noona and Appa AI replies, backed by FastAPI with OpenAI-first defaults and optional
+LocalAI.
 
 ## Hard Rules
 
@@ -21,9 +22,11 @@ Oracle is the Noona AI persona for Scriptarr, backed by FastAPI with OpenAI-firs
   - `GET /api/status`
   - `POST /api/chat`
   - `POST /api/assist`
-- `POST /api/chat` may receive an optional Sage-curated `context` object. Treat it as read-only background for
-  response quality, preserve the old message-only contract, and never use context to execute tools or reveal secrets,
-  raw Discord ids, credentials, or admin-only internals.
+- `POST /api/chat` may receive an optional `personaName` plus Sage-curated `context` object. Treat both as read-only
+  background for response quality, preserve the old message-only contract, and never use context to execute tools or
+  reveal secrets, raw Discord ids, credentials, or admin-only internals.
+- `POST /api/assist` task `review-noona-public-chat` should return a normalized Appa review decision. If model output
+  is malformed, default to `ok` with empty correction text instead of guessing a public correction.
 
 ## Coding Map
 

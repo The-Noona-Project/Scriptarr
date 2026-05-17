@@ -218,6 +218,220 @@ test("portal runtime syncs enabled commands and exposes Discord runtime state", 
   }
 });
 
+test("portal runtime splits reader and admin commands when Appa is enabled", async () => {
+  const clients = [new FakeDiscordClient(), new FakeDiscordClient()];
+  const sage = {
+    async getDiscordSettings() {
+      return {
+        ok: true,
+        payload: {
+          guildId: "guild-1",
+          appa: {
+            enabled: true,
+            commands: {
+              ding: {enabled: true, roleId: "role-appa"},
+              status: {enabled: true, roleId: "role-appa"},
+              trivia: {enabled: true, roleId: "role-appa"},
+              downloadall: {enabled: true, roleId: ""}
+            }
+          }
+        }
+      };
+    },
+    async listFollowNotifications() {
+      return {ok: true, payload: {notifications: []}};
+    }
+  };
+
+  const runtime = createPortalRuntime({
+    config: {
+      ...baseConfig,
+      appaDiscordToken: "appa-token",
+      appaDiscordClientId: "appa-client-id"
+    },
+    sage,
+    logger: createLogger(),
+    clientFactory: async (options = {}) => {
+      const client = clients.shift();
+      client.options = options;
+      return client;
+    }
+  });
+
+  try {
+    await runtime.start();
+    const state = runtime.getState();
+    assert.equal(state.splitEnabled, true);
+    assert.equal(state.appa.connected, true);
+    assert.equal(state.capabilities.appa.status, "available");
+    const triviaRow = state.commands.find((command) => command.name === "trivia");
+    assert.equal(triviaRow.status, "Registered to Noona + Appa");
+    assert.deepEqual(state.commands.filter((command) => command.registered).map((command) => command.name).sort(), [
+      "ding",
+      "downloadall",
+      "request",
+      "search",
+      "status",
+      "subscribe",
+      "trivia"
+    ]);
+  } finally {
+    await runtime.stop();
+  }
+});
+
+test("portal runtime asks Appa to review Noona public replies and posts serious corrections", async () => {
+  const noonaClient = new FakeDiscordClient();
+  const appaClient = new FakeDiscordClient();
+  const reviewPayloads = [];
+  const deliveryPayloads = [];
+  const replies = [];
+  const sage = {
+    async getDiscordSettings() {
+      return {
+        ok: true,
+        payload: {
+          guildId: "guild-1",
+          noonaChat: {
+            enabled: true,
+            memoryEnabled: true,
+            proposalMode: "conservative",
+            allowedChannelIds: []
+          },
+          appa: {
+            enabled: true,
+            reviewEnabled: true,
+            correctionMode: "serious",
+            commands: {
+              status: {enabled: true, roleId: ""}
+            }
+          },
+          commands: {
+            chat: {enabled: true, roleId: ""}
+          }
+        }
+      };
+    },
+    async listFollowNotifications() {
+      return {ok: true, payload: {notifications: []}};
+    },
+    async noonaChat() {
+      return {ok: true, payload: {reply: "Noona handled that."}};
+    },
+    async reviewNoonaReply(payload) {
+      reviewPayloads.push(payload);
+      assert.equal(payload.message, undefined);
+      return {
+        ok: true,
+        payload: {
+          shouldCorrect: true,
+          correctionText: "Appa correction: use the admin page for that action.",
+          decision: {
+            verdict: "correct",
+            severity: "serious"
+          }
+        }
+      };
+    },
+    async recordNoonaReviewDelivery(payload) {
+      deliveryPayloads.push(payload);
+      return {ok: true, payload: {ok: true}};
+    }
+  };
+
+  const clients = [noonaClient, appaClient];
+  const runtime = createPortalRuntime({
+    config: {
+      ...baseConfig,
+      appaDiscordToken: "appa-token",
+      appaDiscordClientId: "appa-client-id"
+    },
+    sage,
+    logger: createLogger(),
+    clientFactory: async () => clients.shift()
+  });
+
+  try {
+    await runtime.start();
+    noonaClient.emit("messageCreate", {
+      id: "guild-message-mention-1",
+      guildId: "guild-1",
+      channelId: "chat-channel",
+      content: "<@bot-1> can you restart everything?",
+      author: {id: "user-1", username: "Reader", bot: false},
+      member: {roles: {cache: new Set()}},
+      mentions: {users: new Set(["bot-1"]), has: (id) => id === "bot-1"},
+      channel: {id: "chat-channel", sendTyping: async () => {}},
+      reply: async (payload) => {
+        replies.push(payload);
+        return {id: "noona-reply-1", ...payload};
+      }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 40));
+
+    assert.equal(replies[0].content, "Noona handled that.");
+    assert.equal(reviewPayloads.length, 1);
+    assert.equal(deliveryPayloads.length, 1);
+    assert.equal(deliveryPayloads[0].delivered, true);
+    assert.equal(appaClient.sentChannelMessages[0].content, "Appa correction: use the admin page for that action.");
+    assert.deepEqual(appaClient.sentChannelMessages[0].messageReference, {messageId: "noona-reply-1"});
+    const state = runtime.getState();
+    assert.equal(state.appa.lastReviewVerdict, "correct");
+    assert.equal(state.appa.lastCorrectionError, null);
+  } finally {
+    await runtime.stop();
+  }
+});
+
+test("portal runtime keeps Noona admin fallback when Appa startup fails", async () => {
+  const clients = [new FakeDiscordClient(), new FakeDiscordClient(), new FakeDiscordClient()];
+  clients[1].login = async () => {
+    throw new Error("Appa token rejected.");
+  };
+  const sage = {
+    async getDiscordSettings() {
+      return {
+        ok: true,
+        payload: {
+          guildId: "guild-1",
+          appa: {enabled: true}
+        }
+      };
+    },
+    async listFollowNotifications() {
+      return {ok: true, payload: {notifications: []}};
+    }
+  };
+
+  const runtime = createPortalRuntime({
+    config: {
+      ...baseConfig,
+      appaDiscordToken: "bad-appa-token",
+      appaDiscordClientId: "appa-client-id"
+    },
+    sage,
+    logger: createLogger(),
+    clientFactory: async (options = {}) => {
+      const client = clients.shift();
+      client.options = options;
+      return client;
+    }
+  });
+
+  try {
+    await runtime.start();
+    const state = runtime.getState();
+    assert.equal(state.connected, true);
+    assert.equal(state.splitEnabled, false);
+    assert.equal(state.appa.mode, "degraded");
+    assert.match(state.appa.error, /Appa token rejected/);
+    assert.equal(state.commands.find((command) => command.name === "chat").registered, true);
+    assert.equal(state.commands.find((command) => command.name === "downloadall").registered, true);
+  } finally {
+    await runtime.stop();
+  }
+});
+
 test("portal runtime queues forced trivia leaderboards without waiting on Discord send", async () => {
   const fakeClient = new FakeDiscordClient();
   fakeClient.channels.fetch = async (channelId) => ({

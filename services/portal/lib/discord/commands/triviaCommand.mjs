@@ -30,18 +30,23 @@ export const createTriviaCommand = ({
   sage,
   onTriviaStart,
   onTriviaStop,
-  onTriviaLeaderboard
+  onTriviaLeaderboard,
+  subcommandScope = "all"
 }) => ({
   definition: {
     name: "trivia",
     description: "Manage Noona title-summary trivia.",
     options: [
-      subcommand("status", "Show the active trivia round and settings."),
-      subcommand("leaderboard", "Show the trivia leaderboard.", [
-        stringOption("window", "Leaderboard window.", false, WINDOW_CHOICES)
+      ...(subcommandScope === "admin" ? [] : [
+        subcommand("status", "Show the active trivia round and settings."),
+        subcommand("leaderboard", "Show the trivia leaderboard.", [
+          stringOption("window", "Leaderboard window.", false, WINDOW_CHOICES)
+        ])
       ]),
-      subcommand("start", "Start a trivia round now."),
-      subcommand("stop", "Stop the current trivia round.")
+      ...(subcommandScope === "reader" ? [] : [
+        subcommand("start", "Start a trivia round now."),
+        subcommand("stop", "Stop the current trivia round.")
+      ])
     ]
   },
   access: {
@@ -50,6 +55,20 @@ export const createTriviaCommand = ({
   async execute(interaction) {
     const subcommandName = interaction.options?.getSubcommand?.(false) || "status";
     await interaction.deferReply?.({flags: 64});
+    const allowedSubcommands = subcommandScope === "reader"
+      ? new Set(["status", "leaderboard"])
+      : subcommandScope === "admin"
+        ? new Set(["start", "stop"])
+        : new Set(["status", "leaderboard", "start", "stop"]);
+    if (!allowedSubcommands.has(subcommandName)) {
+      await sendInteractionReply(interaction, {
+        content: subcommandScope === "admin"
+          ? "Appa handles trivia start and stop controls. Ask Noona for trivia status or leaderboard."
+          : "Noona handles trivia status and leaderboard. Ask Appa to start or stop rounds.",
+        ephemeral: true
+      });
+      return;
+    }
 
     if (subcommandName === "leaderboard") {
       const windowName = interaction.options?.getString?.("window") || "all";

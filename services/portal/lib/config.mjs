@@ -45,6 +45,13 @@ export const PORTAL_COMMAND_NAMES = Object.freeze([
   "downloadall"
 ]);
 
+export const APPA_COMMAND_NAMES = Object.freeze([
+  "ding",
+  "status",
+  "trivia",
+  "downloadall"
+]);
+
 const resolveCommandDefaults = (env) =>
   Object.fromEntries(PORTAL_COMMAND_NAMES.map((name) => [
     name,
@@ -62,6 +69,8 @@ export const resolvePortalConfig = (env = process.env) => ({
   publicBaseUrl: normalizeUrl(env.SCRIPTARR_PUBLIC_BASE_URL || env.SCRIPTARR_MOON_BASE_URL, ""),
   discordToken: normalizeString(env.SCRIPTARR_DISCORD_TOKEN || env.DISCORD_TOKEN || "", ""),
   discordClientId: normalizeString(env.SCRIPTARR_DISCORD_CLIENT_ID || "", ""),
+  appaDiscordToken: normalizeString(env.SCRIPTARR_APPA_DISCORD_TOKEN || "", ""),
+  appaDiscordClientId: normalizeString(env.SCRIPTARR_APPA_DISCORD_CLIENT_ID || "", ""),
   discordBotPersona: normalizeString(env.SCRIPTARR_DISCORD_BOT_PERSONA, "noona").toLowerCase(),
   discordAvatarMode: normalizeString(env.SCRIPTARR_DISCORD_AVATAR_MODE, "missing").toLowerCase(),
   discordDefaults: {
@@ -99,6 +108,19 @@ export const resolvePortalConfig = (env = process.env) => ({
         monthly: true,
         hour: 20
       }
+    },
+    appa: {
+      enabled: false,
+      adminMentionChannelIds: [],
+      reviewEnabled: true,
+      correctionMode: "serious",
+      commands: Object.fromEntries(APPA_COMMAND_NAMES.map((name) => [
+        name,
+        {
+          enabled: true,
+          roleId: normalizeOptionalString(env[`REQUIRED_ROLE_APPA_${normalizeCommandEnvKey(name)}`])
+        }
+      ]))
     },
     commands: resolveCommandDefaults(env)
   }

@@ -12,7 +12,9 @@ test("service plan exposes the fixed Scriptarr network and selfhost mysql by def
       SCRIPTARR_MYSQL_URL: "SELFHOST",
       SCRIPTARR_MYSQL_USER: "scriptarr",
       SCRIPTARR_MYSQL_PASSWORD: "secret",
-      SUPERUSER_ID: "owner-1"
+      SUPERUSER_ID: "owner-1",
+      SCRIPTARR_APPA_DISCORD_TOKEN: "appa-token",
+      SCRIPTARR_APPA_DISCORD_CLIENT_ID: "appa-client-id"
     }
   });
 
@@ -26,6 +28,10 @@ test("service plan exposes the fixed Scriptarr network and selfhost mysql by def
   assert.equal(plan.services.find((service) => service.name === "scriptarr-raven").env.SCRIPTARR_SAGE_BASE_URL, "http://scriptarr-sage:3004");
   assert.deepEqual(plan.services.find((service) => service.name === "scriptarr-raven").extraArgs, ["--cap-add", "NET_ADMIN", "--device", "/dev/net/tun"]);
   assert.equal(plan.services.find((service) => service.name === "scriptarr-portal").env.SCRIPTARR_SAGE_BASE_URL, "http://scriptarr-sage:3004");
+  assert.equal(plan.services.find((service) => service.name === "scriptarr-sage").env.SCRIPTARR_APPA_DISCORD_TOKEN, "appa-token");
+  assert.equal(plan.services.find((service) => service.name === "scriptarr-sage").env.SCRIPTARR_APPA_DISCORD_CLIENT_ID, "appa-client-id");
+  assert.equal(plan.services.find((service) => service.name === "scriptarr-portal").env.SCRIPTARR_APPA_DISCORD_TOKEN, "appa-token");
+  assert.equal(plan.services.find((service) => service.name === "scriptarr-portal").env.SCRIPTARR_APPA_DISCORD_CLIENT_ID, "appa-client-id");
   assert.equal(plan.services.find((service) => service.name === "scriptarr-oracle").env.SCRIPTARR_SAGE_BASE_URL, "http://scriptarr-sage:3004");
   assert.match(plan.services.find((service) => service.name === "scriptarr-mysql").healthCheck.command, /mysqladmin ping/);
   assert.match(plan.services.find((service) => service.name === "scriptarr-moon").healthCheck.command, /127\.0\.0\.1:3000\/health/);

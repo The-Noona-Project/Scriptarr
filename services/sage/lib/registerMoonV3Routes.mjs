@@ -2624,6 +2624,8 @@ export const registerMoonV3Routes = (app, {
     return {
       authConfigured: Boolean(config.discordClientId && config.discordClientSecret),
       botTokenConfigured: Boolean(config.discordToken),
+      appaAuthConfigured: Boolean(config.appaDiscordClientId),
+      appaBotTokenConfigured: Boolean(config.appaDiscordToken),
       configuredGuildId: normalizeString(settings?.guildId),
       connected: Boolean(healthPayload?.runtime?.connected ?? healthPayload?.connected),
       connectionState: normalizeString(healthPayload?.runtime?.connectionState, normalizeString(healthPayload?.discord, "degraded")),
@@ -2631,6 +2633,7 @@ export const registerMoonV3Routes = (app, {
       error: normalizeString(healthPayload?.runtime?.error),
       syncError: normalizeString(healthPayload?.runtime?.syncError),
       warning: normalizeString(healthPayload?.runtime?.warning),
+      appa: healthPayload?.runtime?.appa || {},
       capabilities: healthPayload?.runtime?.capabilities || {},
       commandInventory: normalizeArray(commands?.payload?.commands || commands?.commands).length > 0
         ? normalizeArray(commands?.payload?.commands || commands?.commands)
@@ -2663,16 +2666,24 @@ export const registerMoonV3Routes = (app, {
   const buildDiscordPayload = async (adminUser = null) => {
     const settings = normalizePortalDiscordSettings(await readPortalDiscordSettings());
     const canRevealTriviaAnswer = hasDomainAccess(adminUser, "discord", "root");
-    const [runtime, triviaRuntime, noonaMemory] = await Promise.all([
+    const [runtime, triviaRuntime, noonaMemory, appaAudit] = await Promise.all([
       loadPortalDiscordRuntime(settings),
       triviaService.getAdminState({includeActiveAnswer: canRevealTriviaAnswer}),
-      buildNoonaMemoryAdminPayload(vaultClient)
+      buildNoonaMemoryAdminPayload(vaultClient),
+      vaultClient.listEvents({
+        domain: "discord",
+        eventType: "noona-public-review",
+        limit: 10
+      }).catch(() => [])
     ]);
     return {
       settings,
       runtime,
       triviaRuntime,
       noonaMemory,
+      appaAudit: {
+        events: normalizeArray(appaAudit).slice(0, 10)
+      },
       commandCatalog: knownPortalDiscordCommands
     };
   };
@@ -2701,6 +2712,9 @@ export const registerMoonV3Routes = (app, {
         noonaChatChannelCount: normalizeArray(nextSettings.noonaChat.allowedChannelIds).length,
         noonaChatMemoryEnabled: nextSettings.noonaChat.memoryEnabled,
         noonaChatProposalMode: nextSettings.noonaChat.proposalMode,
+        appaEnabled: nextSettings.appa.enabled,
+        appaReviewEnabled: nextSettings.appa.reviewEnabled,
+        appaAdminMentionChannelCount: normalizeArray(nextSettings.appa.adminMentionChannelIds).length,
         triviaEnabled: nextSettings.trivia.enabled,
         triviaChannelId: nextSettings.trivia.channelId
       }

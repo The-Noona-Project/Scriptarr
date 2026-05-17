@@ -135,8 +135,8 @@ Read this before editing Scriptarr.
   bootstrap/event streams, lightweight admin status, route-level dynamic admin loading, and measured bundle reduction.
   Do not add browser-direct calls to internal services as a shortcut.
 - Portal's Discord runtime is brokered through Moon admin's `/admin/discord` settings page. Keep guild id, onboarding,
-  DM superuser id, release/update notification channels, Noona trivia settings, and per-command role mapping behind that
-  settings object instead of drifting back to scattered env-only behavior.
+  DM superuser id, release/update notification channels, Noona trivia settings, Appa split/review settings, and
+  per-command role mapping behind that settings object instead of drifting back to scattered env-only behavior.
 - Portal now sends request completion DMs. Preserve the single-send acknowledgment flow so retries or restarts do not
   spam the requester.
 - Portal trivia should reconcile one active Sage-backed round clock. Reloads, repeated `/trivia start`, and settings

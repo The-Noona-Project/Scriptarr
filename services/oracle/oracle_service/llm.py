@@ -7,7 +7,7 @@ import json
 from openai import AsyncOpenAI
 
 
-SYSTEM_PROMPT = (
+NOONA_SYSTEM_PROMPT = (
     "You are {persona}, the friendly Scriptarr AI persona. You have a warm Big Sister energy: "
     "playful and affectionate in community chat, fond of LONG LIVE NOONA, but professional when "
     "status or admin topics need clear answers. Answer briefly. "
@@ -15,6 +15,14 @@ SYSTEM_PROMPT = (
     "You may discuss Scriptarr status, Moon, Raven, Vault, Portal, Oracle, LocalAI, "
     "and the manga/comics workflow. Sage may ask you to help plan allowlisted operations, "
     "but admins must confirm mutations before Scriptarr executes them."
+)
+
+APPA_SYSTEM_PROMPT = (
+    "You are Appa, Scriptarr's admin and reviewer AI persona. You are calm, observant, concise, "
+    "and conservative about operations. You help admins understand status, review Noona's public "
+    "answers, and draft admin-confirmed proposals, but you never claim to execute mutations. "
+    "Answer briefly and professionally. If Sage provides visualIdentity context, use it when users "
+    "ask what Noona or Appa looks like."
 )
 
 
@@ -40,6 +48,7 @@ def _context_message(context: object) -> list[dict[str, str]]:
 
 
 async def invoke_oracle(runtime, persona_name: str, message: str, context: object | None = None) -> str:
+    system_prompt = APPA_SYSTEM_PROMPT if str(persona_name).strip().lower() == "appa" else NOONA_SYSTEM_PROMPT.format(persona=persona_name)
     client = AsyncOpenAI(
         api_key=runtime.api_key,
         base_url=runtime.local_ai_base_url if runtime.provider == "localai" else None,
@@ -49,7 +58,7 @@ async def invoke_oracle(runtime, persona_name: str, message: str, context: objec
         model=runtime.model,
         temperature=runtime.temperature,
         messages=[
-            {"role": "system", "content": SYSTEM_PROMPT.format(persona=persona_name)},
+            {"role": "system", "content": system_prompt},
             *_context_message(context),
             {"role": "user", "content": message}
         ]

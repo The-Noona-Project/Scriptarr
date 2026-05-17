@@ -3,13 +3,13 @@
  */
 
 export const portalCommandCatalog = Object.freeze([
-  {name: "ding", label: "/ding", description: "Quick bot health reply.", scope: "Guild slash command", mode: "slash", roleManaged: true, registrationScope: "guild"},
-  {name: "status", label: "/status", description: "Read-only Scriptarr runtime summary.", scope: "Guild slash command", mode: "slash", roleManaged: true, registrationScope: "guild"},
-  {name: "chat", label: "/chat", description: "Talk to Noona.", scope: "Guild slash command", mode: "slash", roleManaged: true, registrationScope: "guild"},
-  {name: "search", label: "/search", description: "Search the current Scriptarr library.", scope: "Guild slash command", mode: "slash", roleManaged: true, registrationScope: "guild"},
-  {name: "request", label: "/request", description: "Search intake matches and file a moderated request.", scope: "Guild slash command", mode: "slash", roleManaged: true, registrationScope: "guild"},
-  {name: "subscribe", label: "/subscribe", description: "Follow a library title for Discord notifications.", scope: "Guild slash command", mode: "slash", roleManaged: true, registrationScope: "guild"},
-  {name: "trivia", label: "/trivia", description: "Play and manage Scriptarr title trivia.", scope: "Guild slash command", mode: "slash", roleManaged: true, registrationScope: "guild"},
+  {name: "ding", label: "/ding", description: "Quick bot health reply.", scope: "Guild slash command", mode: "slash", roleManaged: true, registrationScope: "guild", splitOwner: "appa"},
+  {name: "status", label: "/status", description: "Read-only Scriptarr runtime summary.", scope: "Guild slash command", mode: "slash", roleManaged: true, registrationScope: "guild", splitOwner: "appa"},
+  {name: "chat", label: "/chat", description: "Legacy single-bot Noona chat.", scope: "Guild slash command", mode: "slash", roleManaged: true, registrationScope: "guild", splitOwner: "legacy"},
+  {name: "search", label: "/search", description: "Search the current Scriptarr library.", scope: "Guild slash command", mode: "slash", roleManaged: true, registrationScope: "guild", splitOwner: "noona"},
+  {name: "request", label: "/request", description: "Search intake matches and file a moderated request.", scope: "Guild slash command", mode: "slash", roleManaged: true, registrationScope: "guild", splitOwner: "noona"},
+  {name: "subscribe", label: "/subscribe", description: "Follow a library title for Discord notifications.", scope: "Guild slash command", mode: "slash", roleManaged: true, registrationScope: "guild", splitOwner: "noona"},
+  {name: "trivia", label: "/trivia", description: "Play and manage Scriptarr title trivia.", scope: "Guild slash command", mode: "slash", roleManaged: true, registrationScope: "guild", splitOwner: "both"},
   {
     name: "downloadall",
     label: "/downloadall",
@@ -20,7 +20,8 @@ export const portalCommandCatalog = Object.freeze([
     ownerOnly: true,
     dmOnly: true,
     legacyTextAlias: true,
-    registrationScope: "global"
+    registrationScope: "global",
+    splitOwner: "appa"
   }
 ]);
 
@@ -46,6 +47,12 @@ export const normalizeCommandMap = (commands = new Map()) => {
     return new Map(Object.entries(commands));
   }
   return new Map();
+};
+
+export const filterCommandMap = (commands = new Map(), names = []) => {
+  const source = normalizeCommandMap(commands);
+  const allowed = new Set(names);
+  return new Map(Array.from(source.entries()).filter(([name]) => allowed.has(name)));
 };
 
 /**
@@ -98,34 +105,82 @@ export const buildCommandInventory = ({
   registeredGuildId = "",
   registeredGlobalCount = 0,
   connectionState = "missing",
-  commandSyncState = "pending"
+  commandSyncState = "pending",
+  splitEnabled = false,
+  registeredAppaGuildId = "",
+  registeredAppaGlobalCount = 0,
+  appaCommandSyncState = "pending"
 } = {}) =>
-  portalCommandCatalog.map((command) => ({
-    ...command,
-    enabled: isCommandEnabled(settings, command.name),
-    roleId: command.roleManaged ? (settings?.commands?.[command.name]?.roleId || "") : "",
-    registered: command.registrationScope === "global"
-      ? isCommandEnabled(settings, command.name) && registeredGlobalCount > 0 && commandSyncState === "available"
-      : isCommandEnabled(settings, command.name) && Boolean(registeredGuildId) && commandSyncState === "available",
-    status: command.registrationScope === "global"
-      ? registeredGlobalCount > 0
-        ? "Registered"
-        : commandSyncState === "degraded"
-          ? "Sync issue"
-          : connectionState === "connected"
-            ? "Pending"
+  portalCommandCatalog.map((command) => {
+    const noonaEnabled = isCommandEnabled(settings, command.name);
+    const appaEnabled = settings?.appa?.commands?.[command.name]?.enabled !== false;
+    const owner = splitEnabled ? command.splitOwner : "noona";
+    const legacyHidden = splitEnabled && command.splitOwner === "legacy";
+    const appaOwned = splitEnabled && command.splitOwner === "appa";
+    const bothOwned = splitEnabled && command.splitOwner === "both";
+    const noonaGuildRegistered = noonaEnabled && Boolean(registeredGuildId) && commandSyncState === "available";
+    const appaGuildRegistered = appaEnabled && Boolean(registeredAppaGuildId) && appaCommandSyncState === "available";
+    const noonaGlobalRegistered = noonaEnabled && registeredGlobalCount > 0 && commandSyncState === "available";
+    const appaGlobalRegistered = appaEnabled && registeredAppaGlobalCount > 0 && appaCommandSyncState === "available";
+    const noonaRegistered = command.registrationScope === "global" ? noonaGlobalRegistered : noonaGuildRegistered;
+    const appaRegistered = command.registrationScope === "global" ? appaGlobalRegistered : appaGuildRegistered;
+    const syncDegraded = commandSyncState === "degraded" || (splitEnabled && appaCommandSyncState === "degraded");
+    const registered = legacyHidden
+      ? false
+      : appaOwned
+        ? appaRegistered
+        : bothOwned
+          ? noonaRegistered && appaRegistered
+          : noonaRegistered;
+    const status = legacyHidden
+      ? "Not registered in split mode"
+      : appaOwned
+        ? appaRegistered
+          ? "Registered to Appa"
+          : appaCommandSyncState === "degraded"
+            ? "Appa sync issue"
             : "Pending"
-      : commandSyncState === "available" && Boolean(registeredGuildId)
-        ? "Registered"
-        : commandSyncState === "degraded"
-          ? "Sync issue"
-          : "Pending",
-    guildId: command.registrationScope === "guild" ? registeredGuildId || settings?.guildId || "" : ""
-  }));
+        : bothOwned
+          ? noonaRegistered && appaRegistered
+            ? "Registered to Noona + Appa"
+            : syncDegraded
+              ? "Sync issue"
+              : noonaRegistered
+                ? "Noona synced, Appa pending"
+                : appaRegistered
+                  ? "Appa synced, Noona pending"
+                  : "Pending"
+          : noonaRegistered
+            ? splitEnabled ? "Registered to Noona" : "Registered"
+            : commandSyncState === "degraded"
+              ? "Sync issue"
+              : connectionState === "connected"
+                ? "Pending"
+                : "Pending";
+
+    return {
+      ...command,
+      enabled: noonaEnabled,
+      owner,
+      appaEnabled,
+      appaRoleId: settings?.appa?.commands?.[command.name]?.roleId || "",
+      roleId: command.roleManaged ? (settings?.commands?.[command.name]?.roleId || "") : "",
+      registered,
+      status,
+      guildId: command.registrationScope === "guild"
+        ? appaOwned
+          ? registeredAppaGuildId || settings?.guildId || ""
+          : bothOwned && registeredAppaGuildId
+            ? `${registeredGuildId || settings?.guildId || ""} / ${registeredAppaGuildId}`
+            : registeredGuildId || settings?.guildId || ""
+        : ""
+    };
+  });
 
 export default {
   portalCommandCatalog,
   normalizeCommandMap,
+  filterCommandMap,
   extractCommandDefinitions,
   extractGuildDefinitions,
   extractGlobalDefinitions,

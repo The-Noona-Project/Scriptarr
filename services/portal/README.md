@@ -1,7 +1,7 @@
 # Portal
 
 Portal handles Discord onboarding, requests, notifications, subscriptions, Noona trivia, public Noona mention chat,
-and Oracle chat routing.
+optional Appa admin/reviewer chat, and Oracle chat routing through Sage.
 
 Portal can run in full Discord mode or in API-only degraded mode when Discord auth is missing or fails.
 When Discord rejects privileged intents, Portal now falls back to a minimal slash-command and DM runtime instead of
@@ -12,16 +12,16 @@ Portal does not call other first-party services directly. Discord request creati
 durable downloadall runs, onboarding settings, public Noona mention chat, and Oracle chat traffic are brokered through
 Sage's internal service routes.
 
-Portal's supported Discord command set is:
+Portal can run one Discord bot or two. In the default/fallback single-bot shape, Noona keeps the whole command set so
+existing installs do not lose admin controls. When Appa is enabled and `SCRIPTARR_APPA_DISCORD_TOKEN` plus
+`SCRIPTARR_APPA_DISCORD_CLIENT_ID` are configured, Portal starts a second Discord client:
 
-- `/ding`
-- `/status`
-- `/chat`
-- `/search`
-- `/request`
-- `/subscribe`
-- `/trivia`
-- owner-only DM `/downloadall`
+- Noona owns reader-facing `/search`, `/request`, `/subscribe`, `/trivia status`, `/trivia leaderboard`, public
+  mention chat, trivia posts and guesses, onboarding, request DMs, release posts, and update posts.
+- Appa owns admin `/ding`, `/status`, owner-only DM `/downloadall`, `/trivia start`, `/trivia stop`, admin mentions,
+  legacy raw DM `downloadall ...`, downloadall reactions, and serious public corrections after Noona replies.
+- Split mode does not register the legacy `/chat` slash command; Noona's natural mention chat still reuses that saved
+  command gate for role checks.
 
 Discord `/request` now mirrors Moon's web flow instead of using a one-shot fuzzy picker. Portal first shows raw
 metadata-provider matches, then lets the requester submit one exact metadata choice with optional notes. Staff later
@@ -44,17 +44,19 @@ already-current, appended, adult-content, no-metadata, ambiguous-metadata, inval
 DM summary. For `nsfw:false`, Raven only queues titles whose WeebCentral detail page explicitly says
 `Adult Content: No`; adult or unverified titles are skipped.
 
-Guild id, onboarding settings, release notification channel id, GitHub update channel id, DM superuser id, Noona mention-chat settings, and
-per-command role gates are managed from Moon admin at `/admin/discord`. Discord bot credentials remain env-managed.
-Portal also bundles default Discord avatars for `noona` and `appa` under `assets/discord`. Set
-`SCRIPTARR_DISCORD_BOT_PERSONA` to `noona` or `appa`; Portal defaults to `noona`. `SCRIPTARR_DISCORD_AVATAR_MODE`
-defaults to `missing`, which uploads the bundled avatar only when the bot has no custom avatar. Use `off` to disable
+Guild id, onboarding settings, release notification channel id, GitHub update channel id, DM superuser id, Noona
+mention-chat settings, Appa split/review settings, and per-command role gates are managed from Moon admin at
+`/admin/discord`. Discord bot credentials remain env-managed. `SCRIPTARR_DISCORD_BOT_PERSONA` is now only a legacy
+single-bot avatar fallback; split mode always treats the primary bot as Noona and the second bot as Appa.
+Portal bundles default Discord avatars for Noona and Appa under `assets/discord`. `SCRIPTARR_DISCORD_AVATAR_MODE`
+defaults to `missing`, which uploads the bundled avatar only when a bot has no custom avatar. Use `off` to disable
 runtime avatar sync or `force` for one intentional avatar refresh.
 
-Moon admin also surfaces the live Discord runtime state from Portal, including command-sync health, onboarding
-capability, requested intents or partials, the most recent DM receive timestamp, the last handled `downloadall`
-timestamp, the last `downloadall` error text, Noona mention-chat availability, last channel/user, last error, and the
-last default-avatar sync result, plus the last meaningful Discord runtime error when the bot disconnects.
+Moon admin also surfaces the live Discord runtime state from Portal, including Noona and Appa connection state,
+command-sync health, onboarding capability, requested intents or partials, the most recent DM receive timestamp, the
+last handled `downloadall` timestamp, the last `downloadall` error text, Noona mention-chat availability, Appa
+mention/review/correction state, default-avatar sync results, and the last meaningful Discord runtime error when a bot
+disconnects.
 
 Noona mention chat lets guild users talk naturally to the real bot user id, such as `@Noona Ai are you alive?`. Portal
 detects the bot mention by Discord user id, removes the mention from the prompt, checks the same `/chat` role gate used
@@ -69,6 +71,14 @@ The `portal.discord.noonaChat` setting owns the rollout shape:
 - `memoryEnabled`: defaults to `true` once mention chat is enabled
 - `publicReplies`: fixed `true` for this version
 - `proposalMode`: `conservative` or `off`
+
+The `portal.discord.appa` setting owns the optional admin split:
+
+- `enabled`: defaults to `false`
+- `adminMentionChannelIds`: empty means every channel in the configured guild
+- `reviewEnabled`: lets Appa review public Noona mention-chat replies
+- `correctionMode`: `serious` or `off`
+- `commands`: Appa-specific enable and role gates for `/ding`, `/status`, `/trivia start|stop`, and `/downloadall`
 
 Discord's Message Content intent must be enabled in the Discord developer portal for mention chat, trivia guesses, and
 legacy DM text fallback handling. Portal requests the gateway intent, but Discord will not deliver message content
@@ -85,6 +95,11 @@ Public chat never executes mutations. Sage gives it a conservative read context 
 and library search, and can draft only low-risk proposals such as status checks or trivia start/stop for later admin
 confirmation. LocalAI lifecycle, root/system, destructive, and arbitrary broadcast actions stay out of the public-chat
 allowlist even if the admin AI page has them enabled.
+
+When Appa review is enabled, Noona still replies first. Portal then asks Sage to have Appa review that public reply in
+the background. Appa posts a same-thread correction only for serious issues such as leaked secrets, unsafe action
+claims, admin-boundary mistakes, or clearly wrong operational facts. Sage stores redacted review and delivery events in
+Vault; it never stores full Discord transcripts.
 
 Portal also watches request-linked moderation, Raven completion state, and Sage system notifications. When a request is
 approved, denied, or finished and the requester has a Discord id, Portal sends one deduped DM with the shared title art

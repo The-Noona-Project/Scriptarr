@@ -73,10 +73,12 @@ const resolveUserId = (interaction) =>
  * @param {{getSettings: () => {guildId?: string, superuserId?: string, commands?: Record<string, {enabled?: boolean, roleId?: string}>}}} options
  * @returns {{checkAccess: (interaction: any, commandName: string, command?: any) => {allowed: boolean, message?: string, reason?: string}}}
  */
-export const createRoleManager = ({getSettings}) => ({
+export const createRoleManager = ({getSettings, getCommandSettings}) => ({
   checkAccess(interaction, commandName, command = {}) {
     const settings = typeof getSettings === "function" ? (getSettings() || {}) : {};
-    const commandSettings = settings?.commands?.[commandName] || {};
+    const commandSettings = typeof getCommandSettings === "function"
+      ? (getCommandSettings(settings, commandName) || {})
+      : settings?.commands?.[commandName] || {};
     if (commandSettings.enabled === false) {
       return {
         allowed: false,
@@ -90,7 +92,7 @@ export const createRoleManager = ({getSettings}) => ({
       return {
         allowed: false,
         reason: "dm",
-        message: "This command only works in a direct message with Noona."
+        message: "This command only works in a direct message with the configured Discord bot."
       };
     }
 

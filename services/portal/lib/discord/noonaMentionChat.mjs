@@ -98,6 +98,7 @@ const buildUserPayload = (author = {}, member = {}) => ({
  *   roleManager: {checkAccess: Function},
  *   logger?: {warn?: Function, error?: Function},
  *   onRuntimeEvent?: Function,
+ *   onReviewCandidate?: Function,
  *   rateLimitMs?: number
  * }} options
  * @returns {(message: any) => Promise<boolean>}
@@ -109,6 +110,7 @@ export const createNoonaMentionHandler = ({
   roleManager,
   logger,
   onRuntimeEvent,
+  onReviewCandidate,
   rateLimitMs = DEFAULT_RATE_LIMIT_MS
 }) => {
   const lastByUser = new Map();
@@ -180,9 +182,10 @@ export const createNoonaMentionHandler = ({
         proposalMode: normalizeString(noonaChat.proposalMode, "conservative")
       });
       const payload = response?.payload || {};
-      await sendPublicReply(message, payload.reply || (response?.ok
+      const reply = payload.reply || (response?.ok
         ? "Noona is here."
-        : payload.error || "Noona is unavailable right now."));
+        : payload.error || "Noona is unavailable right now.");
+      const replies = await sendPublicReply(message, reply);
       onRuntimeEvent?.({
         type: response?.ok ? "noona-chat-handled" : "noona-chat-error",
         at: new Date().toISOString(),
@@ -190,6 +193,21 @@ export const createNoonaMentionHandler = ({
         channelId,
         message: payload.error || ""
       });
+      if (response?.ok && typeof onReviewCandidate === "function") {
+        void Promise.resolve(onReviewCandidate({
+          message,
+          prompt,
+          reply,
+          replyMessageId: normalizeString(replies?.[0]?.id),
+          guildId,
+          channelId,
+          messageId: normalizeString(message?.id),
+          user: buildUserPayload(message?.author, message?.member),
+          oracle: payload.oracle || null
+        })).catch((error) => {
+          logger?.warn?.("Portal Appa review callback failed.", {error});
+        });
+      }
       return true;
     } catch (error) {
       const messageText = error instanceof Error ? error.message : String(error);

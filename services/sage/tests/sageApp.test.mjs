@@ -4129,6 +4129,17 @@ test("sage round-trips brokered Portal Discord settings and exposes them in admi
         releaseChannelId: "release-789",
         updateChannelId: "updates-789"
       },
+      appa: {
+        enabled: true,
+        adminMentionChannelIds: ["admins"],
+        reviewEnabled: false,
+        commands: {
+          status: {
+            enabled: true,
+            roleId: "role-appa-status"
+          }
+        }
+      },
       commands: {
         request: {
           enabled: true,
@@ -4148,6 +4159,10 @@ test("sage round-trips brokered Portal Discord settings and exposes them in admi
   assert.equal(savedDiscord.commands.subscribe.enabled, false);
   assert.equal(savedDiscord.notifications.releaseChannelId, "release-789");
   assert.equal(savedDiscord.notifications.updateChannelId, "updates-789");
+  assert.equal(savedDiscord.appa.enabled, true);
+  assert.equal(savedDiscord.appa.reviewEnabled, false);
+  assert.deepEqual(savedDiscord.appa.adminMentionChannelIds, ["admins"]);
+  assert.equal(savedDiscord.appa.commands.status.roleId, "role-appa-status");
   assert.equal(savedDiscord.runtime.authConfigured, true);
   assert.equal(savedDiscord.runtime.botTokenConfigured, true);
 
@@ -4166,6 +4181,8 @@ test("sage round-trips brokered Portal Discord settings and exposes them in admi
   assert.equal(discordPayload.settings.notifications.releaseChannelId, "release-789");
   assert.equal(discordPayload.settings.notifications.updateChannelId, "updates-789");
   assert.ok(discordPayload.commandCatalog.some((command) => command.id === "request"));
+  assert.equal(discordPayload.commandCatalog.find((command) => command.id === "status")?.splitOwner, "appa");
+  assert.equal(discordPayload.commandCatalog.find((command) => command.id === "trivia")?.splitOwner, "both");
 
   const savedV3 = await fetch(`${baseUrl}/api/moon-v3/admin/discord`, {
     method: "PUT",

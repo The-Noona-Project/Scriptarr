@@ -2,7 +2,7 @@
 
 # Oracle
 
-Oracle is the Noona AI persona for Scriptarr.
+Oracle provides Scriptarr's read-only AI replies for Noona and Appa.
 
 Oracle now runs as a small FastAPI service. It starts disabled on install, defaults to OpenAI configuration, and stays
 read-only in v1. Moon admin can later switch Oracle to a Warden-managed LocalAI runtime when the server admin is ready
@@ -18,10 +18,10 @@ Oracle preserves the same internal contract used elsewhere in Scriptarr:
 - `POST /api/chat`
 
 `POST /api/chat` still accepts the existing `{ "message": "..." }` payload. Sage may also include an optional
-`context` object for brokered surfaces such as public Discord mention chat. That context can carry persona hints,
-summarized Noona memory, user display information, and read-only status/library/trivia context. Oracle treats it as
-background only; it does not store memory, execute tools, mutate Scriptarr, or reveal raw identifiers/secrets back to
-Discord.
+`personaName` (`Noona` or `Appa`) and `context` object for brokered surfaces such as public Discord mention chat and
+Appa admin mentions. That context can carry persona hints, summarized Noona memory, user display information, and
+read-only status/library/trivia context. Oracle treats it as background only; it does not store memory, execute tools,
+mutate Scriptarr, or reveal raw identifiers/secrets back to Discord.
 Sage may also include a small `visualIdentity` context for Noona and Appa appearance questions; Oracle treats those
 descriptions as read-only persona background and does not inspect image files directly.
 
@@ -31,7 +31,8 @@ to the browser.
 
 Oracle also exposes `GET /api/models?provider=openai|localai` for Sage-brokered admin model discovery. OpenAI models
 are filtered to Oracle-compatible text or chat families, while LocalAI models are read from the OpenAI-compatible
-`/v1/models` endpoint.
+`/v1/models` endpoint. `POST /api/assist` includes the bounded `review-noona-public-chat` task, which returns a
+normalized Appa review decision for Sage; Oracle does not post corrections or write audit events itself.
 
 Oracle returns provider-specific degraded replies when OpenAI or LocalAI fails. The LLM call timeout defaults to 60
 seconds and can be tuned with `SCRIPTARR_ORACLE_LLM_TIMEOUT_SECONDS`, which gives CPU-only LocalAI enough room for
