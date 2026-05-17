@@ -163,7 +163,8 @@ Architecture invariants:
   with an exact recovery action if a stale running title task cannot be cancelled into retryable work.
 - Oracle is now a FastAPI Python service that keeps the same Sage-facing wire contract plus `/api/assist` for bounded
   structured assistance. It never executes mutations directly.
-- Warden-managed LocalAI presets use the LocalAI AIO images and must wait for readiness before surfacing success.
+- Warden-managed LocalAI presets use the LocalAI AIO images and must wait for a usable chat-completion readiness probe
+  before surfacing success.
 - Raven VPN fails closed when enabled, and the internal `raven.naming` setting now controls chapter and page naming.
 - `raven.naming` is now profile-based by library type, and Moon admin exposes it through `/admin/mediamanagement`
   instead of burying it in the generic settings page.

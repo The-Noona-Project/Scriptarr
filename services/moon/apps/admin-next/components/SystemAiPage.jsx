@@ -263,6 +263,7 @@ const defaultModelForProvider = (provider) => normalizeString(provider).toLowerC
 const AI_ENDPOINT = "/api/moon/v3/admin/system/ai";
 const AI_RUNTIME_ENDPOINT = "/api/moon/v3/admin/system/ai/runtime";
 const AI_MODELS_ENDPOINT = "/api/moon/v3/admin/system/ai/models";
+const LOCAL_AI_NETWORK_ERROR_PATTERN = /name or service not known|temporary failure in name resolution|connection refused|all connection attempts failed|fetch failed/i;
 
 const fallbackModelOptions = (provider, currentModel, error) => {
   const selectedModel = normalizeString(currentModel, defaultModelForProvider(provider));
@@ -274,6 +275,32 @@ const fallbackModelOptions = (provider, currentModel, error) => {
     ok: false,
     error
   };
+};
+
+/**
+ * Convert model-discovery failures into operator-friendly admin copy.
+ *
+ * @param {any} payload
+ * @param {any} localAi
+ * @returns {string}
+ */
+const formatModelWarning = (payload, localAi) => {
+  const error = normalizeString(payload?.error);
+  if (normalizeString(payload?.provider).toLowerCase() !== "localai") {
+    return formatDisplayValue(error, "Moon could not load available models.");
+  }
+
+  const phase = normalizeString(localAi?.phase).toLowerCase();
+  const jobStatus = normalizeString(resolveLocalAiJob(localAi)?.status).toLowerCase();
+  if (["installing", "starting"].includes(phase) || jobStatus === "running") {
+    return "LocalAI is still starting. The current model is kept until the live model list is ready.";
+  }
+
+  if (LOCAL_AI_NETWORK_ERROR_PATTERN.test(error)) {
+    return "LocalAI is not reachable yet. Start LocalAI and wait for readiness, then refresh the model list.";
+  }
+
+  return formatDisplayValue(error, "Moon could not load available models.");
 };
 
 /**
@@ -638,7 +665,7 @@ export const SystemAiPage = ({user}) => {
   const modelChoices = resolveModelChoices(modelPayload);
   const modelSelectValue = modelChoices.some((choice) => choice.id === draft.model) ? draft.model : "";
   const modelWarning = !modelLoading && modelPayload?.ok === false
-    ? formatDisplayValue(modelPayload.error, "Moon could not load available models.")
+    ? formatModelWarning(modelPayload, data?.localAi)
     : "";
   const localAiTask = resolveLocalAiJobTask(localAiJob);
   const localAiProgress = resolveLocalAiProgress(localAiJob);

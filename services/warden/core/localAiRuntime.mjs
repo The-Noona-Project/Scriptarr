@@ -38,6 +38,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const ORACLE_SETTINGS_KEY = "oracle.settings";
 const LOCALAI_CONFIG_CACHE_FILE = "localai-config.json";
 const LOCALAI_JOB_KIND = "localai-lifecycle";
+const LOCALAI_READINESS_MODEL = "gpt-4";
 const nowIso = () => new Date().toISOString();
 const clampPercent = (value) => Math.min(100, Math.max(0, Number.parseInt(String(value), 10) || 0));
 
@@ -146,6 +147,64 @@ const probeHttpOk = async (fetchImpl, url) => {
   }
 };
 
+const readJsonBody = async (response) => {
+  try {
+    if (typeof response.json === "function") {
+      return await response.json();
+    }
+    if (typeof response.text === "function") {
+      const body = await response.text();
+      return body ? JSON.parse(body) : null;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+};
+
+const hasUsableChatCompletion = (payload) => {
+  if (!payload || typeof payload !== "object" || payload.error) {
+    return false;
+  }
+  const choices = Array.isArray(payload.choices) ? payload.choices : [];
+  return choices.some((choice) => normalizeString(
+    choice?.message?.content
+    || choice?.text
+    || choice?.delta?.content
+  ));
+};
+
+const probeLocalAiChat = async (fetchImpl, baseUrl) => {
+  const url = `${baseUrl}/v1/chat/completions`;
+  try {
+    const response = await fetchImpl(url, {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({
+        model: LOCALAI_READINESS_MODEL,
+        messages: [{role: "user", content: "Reply with ok."}],
+        temperature: 0,
+        max_tokens: 4
+      }),
+      signal: AbortSignal.timeout(15000)
+    });
+    const payload = await readJsonBody(response);
+    const ok = Boolean(response.ok && hasUsableChatCompletion(payload));
+    const errorDetail = normalizeString(payload?.error?.message || payload?.error || payload?.message);
+    return {
+      ok,
+      detail: ok
+        ? `${url} -> usable chat completion`
+        : `${url} -> HTTP ${response.status}${errorDetail ? ` (${errorDetail})` : " without usable chat completion"}`
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      detail: `${url} -> ${error instanceof Error ? error.message : String(error)}`
+    };
+  }
+};
+
 const waitForLocalAiReady = async ({
   fetchImpl,
   baseUrl,
@@ -162,24 +221,48 @@ const waitForLocalAiReady = async ({
     attempt += 1;
     const readyz = await probeHttpOk(fetchImpl, `${baseUrl}/readyz`);
     if (readyz.ok) {
+      const chat = await probeLocalAiChat(fetchImpl, baseUrl);
+      if (chat.ok) {
+        await onProgress?.({
+          attempt,
+          elapsedMs: Date.now() - startedAt,
+          percent: 100,
+          detail: chat.detail
+        });
+        return;
+      }
+      lastDetail = `${readyz.detail}; ${chat.detail}`;
       await onProgress?.({
         attempt,
         elapsedMs: Date.now() - startedAt,
-        percent: 100,
-        detail: readyz.detail
+        percent: Math.min(95, Math.max(30, Math.round(((Date.now() - startedAt) / timeoutMs) * 90))),
+        detail: lastDetail
       });
-      return;
+      await sleep(intervalMs);
+      continue;
     }
 
     const models = await probeHttpOk(fetchImpl, `${baseUrl}/v1/models`);
     if (models.ok) {
+      const chat = await probeLocalAiChat(fetchImpl, baseUrl);
+      if (chat.ok) {
+        await onProgress?.({
+          attempt,
+          elapsedMs: Date.now() - startedAt,
+          percent: 100,
+          detail: chat.detail
+        });
+        return;
+      }
+      lastDetail = `${models.detail}; ${chat.detail}`;
       await onProgress?.({
         attempt,
         elapsedMs: Date.now() - startedAt,
-        percent: 100,
-        detail: models.detail
+        percent: Math.min(95, Math.max(30, Math.round(((Date.now() - startedAt) / timeoutMs) * 90))),
+        detail: lastDetail
       });
-      return;
+      await sleep(intervalMs);
+      continue;
     }
 
     lastDetail = `${readyz.detail}; ${models.detail}`;
@@ -198,11 +281,11 @@ const waitForLocalAiReady = async ({
 const probeLocalAiReady = async ({fetchImpl, baseUrl}) => {
   const readyz = await probeHttpOk(fetchImpl, `${baseUrl}/readyz`);
   if (readyz.ok) {
-    return true;
+    return (await probeLocalAiChat(fetchImpl, baseUrl)).ok;
   }
 
   const models = await probeHttpOk(fetchImpl, `${baseUrl}/v1/models`);
-  return models.ok;
+  return models.ok && (await probeLocalAiChat(fetchImpl, baseUrl)).ok;
 };
 
 /**

@@ -38,6 +38,13 @@ OPENAI_INCOMPATIBLE_MODEL_TOKENS = (
     "tts",
     "whisper"
 )
+LOCALAI_MODEL_DISCOVERY_NETWORK_ERRORS = (
+    "name or service not known",
+    "temporary failure in name resolution",
+    "connection refused",
+    "all connection attempts failed",
+    "connection aborted"
+)
 
 
 def _localai_models_url(base_url: str) -> str:
@@ -193,6 +200,20 @@ def _fallback_models_payload(provider: str, selected_model: str, config: OracleC
     }
 
 
+def _model_discovery_error_message(provider: str, error: Exception) -> str:
+    raw_error = str(error)
+    if provider != "localai":
+        return raw_error
+    lowered = raw_error.lower()
+    is_network_error = isinstance(error, (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout))
+    if is_network_error or any(token in lowered for token in LOCALAI_MODEL_DISCOVERY_NETWORK_ERRORS):
+        return (
+            "LocalAI is not reachable yet. Install or start LocalAI and wait for the runtime to report ready, "
+            "then refresh the model list."
+        )
+    return raw_error
+
+
 def _models_payload(provider: str, model_ids: list[str], selected_model: str, config: OracleConfig) -> dict[str, object]:
     unique_ids = sorted(dict.fromkeys(model_ids), key=lambda value: value.lower())
     if not unique_ids:
@@ -236,7 +257,8 @@ async def discover_provider_models(*, provider: str, runtime, config: OracleConf
         model_ids = [model_id for model_id in _extract_model_ids(payload) if _is_oracle_compatible_openai_model(model_id)]
         return _models_payload(normalized_provider, model_ids, selected_model, config)
     except Exception as error:  # noqa: BLE001
-        return _fallback_models_payload(normalized_provider, selected_model, config, str(error))
+        message = _model_discovery_error_message(normalized_provider, error)
+        return _fallback_models_payload(normalized_provider, selected_model, config, message)
 
 
 def create_app(

@@ -183,9 +183,11 @@ Oracle-safe text-generation preload set instead of the full default AIO bundle s
 speech, image, or other bundled models. When a lifecycle job completes or fails, Portal sends one Discord DM to the
 admin who requested it when that admin has a Discord-backed user id.
 
-Readiness means the LocalAI HTTP runtime and model catalog are available. CPU-only generation may still take tens of
-seconds per prompt, so Oracle uses a longer provider-call timeout and Moon's admin test broker waits long enough for a
-small LocalAI response before reporting the selected provider as degraded.
+Readiness means the LocalAI HTTP runtime responds and a tiny OpenAI-compatible chat completion can be generated with
+the Scriptarr LocalAI alias. CPU-only generation may still take tens of seconds per prompt, so Oracle uses a longer
+provider-call timeout and Moon's admin test broker waits long enough for a small LocalAI response before reporting the
+selected provider as degraded. If the model catalog responds but the chat backend cannot load, Warden keeps LocalAI out
+of the ready state and surfaces the loader error in the lifecycle job.
 
 If GPU-specific startup is unavailable, the rest of Scriptarr should stay healthy while AI features remain disabled or
 temporarily unavailable.

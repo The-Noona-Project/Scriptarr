@@ -141,7 +141,7 @@ test("localai runtime install pulls the Sage-selected custom image", async () =>
   assert.equal(status.job.progressPercent, 100);
 });
 
-test("localai runtime start mounts persistent folders, applies hardware flags, and accepts the models fallback probe", async () => {
+test("localai runtime start mounts persistent folders, applies hardware flags, and requires chat readiness", async () => {
   /** @type {Record<string, unknown> | null} */
   let descriptor = null;
   /** @type {string[]} */
@@ -174,6 +174,13 @@ test("localai runtime start mounts persistent folders, applies hardware flags, a
     }),
     fetchImpl: async (url) => {
       requestedUrls.push(String(url));
+      if (String(url).endsWith("/v1/chat/completions")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({choices: [{message: {content: "ok"}}]})
+        };
+      }
       return {
         ok: String(url).endsWith("/v1/models"),
         status: String(url).endsWith("/v1/models") ? 200 : 404
@@ -207,6 +214,49 @@ test("localai runtime start mounts persistent folders, applies hardware flags, a
   });
   assert.equal(requestedUrls.some((url) => url.endsWith("/readyz")), true);
   assert.equal(requestedUrls.some((url) => url.endsWith("/v1/models")), true);
+  assert.equal(requestedUrls.some((url) => url.endsWith("/v1/chat/completions")), true);
+});
+
+test("localai runtime start fails when HTTP probes pass but chat generation is unavailable", async () => {
+  const runtimeDir = await fs.mkdtemp(path.join(os.tmpdir(), "scriptarr-warden-localai-"));
+  const runtime = createLocalAiRuntime({
+    env: {
+      SCRIPTARR_DATA_ROOT: runtimeDir
+    },
+    logger: createLogger(),
+    brokerClient: {
+      async getSetting() {
+        return null;
+      }
+    },
+    dockerOps: createDockerOps({
+      imageExists: async () => true,
+      containerExists: async () => true
+    }),
+    fetchImpl: async (url) => {
+      if (String(url).endsWith("/v1/chat/completions")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({error: {message: "grpc service not ready"}})
+        };
+      }
+      return {
+        ok: String(url).endsWith("/readyz") || String(url).endsWith("/v1/models"),
+        status: 200
+      };
+    },
+    runtimeDir,
+    readinessTimeoutMs: 25,
+    readinessIntervalMs: 1
+  });
+
+  const initialStatus = await runtime.start();
+  assert.equal(initialStatus.phase, "starting");
+  const status = await waitForStatus(runtime, (current) => current.job?.status === "failed");
+  assert.equal(status.running, true);
+  assert.equal(status.ready, false);
+  assert.match(status.lastError, /grpc service not ready|Timed out waiting for LocalAI readiness/);
 });
 
 test("localai runtime start fails when the container never becomes ready", async () => {

@@ -241,8 +241,9 @@ For end-to-end Docker verification, use:
 - Oracle starts disabled and OpenAI-first. LocalAI is enabled later from Moon admin when the admin is ready for a slow
   install or start cycle.
 - Warden-managed LocalAI presets now use the LocalAI AIO image family and only report startup success once the LocalAI
-  runtime is actually ready. Warden now starts those AIO images with the Oracle-safe text-generation preload set
-  instead of the full bundled model list so first startup does not get stuck on optional speech or media models.
+  runtime can answer a tiny OpenAI-compatible chat probe. Warden now starts those AIO images with the Oracle-safe
+  text-generation preload set instead of the full bundled model list so first startup does not get stuck on optional
+  speech or media models.
 - CPU LocalAI can still take tens of seconds to answer even after readiness succeeds. Oracle keeps provider-specific
   degraded replies and waits longer for brokered admin test prompts before treating the selected AI provider as down.
 - Moon's AI page now discovers provider models through Moon -> Sage -> Oracle and constrains the Oracle model field to

@@ -249,6 +249,35 @@ def test_model_discovery_falls_back_when_localai_request_fails():
     assert payload["error"] == "LocalAI offline"
 
 
+def test_model_discovery_sanitizes_localai_network_errors():
+    sage = FakeSageClient(
+        settings={
+            "enabled": True,
+            "provider": "localai",
+            "model": "custom-local",
+            "temperature": 0.2
+        }
+    )
+
+    async def broken_models_fetch(_url, _headers=None):
+        raise RuntimeError("[Errno -2] Name or service not known")
+
+    app = create_app(config=build_config(), sage_client=sage, fetch_models_json_fn=broken_models_fetch)
+
+    with TestClient(app) as client:
+        response = client.get("/api/models?provider=localai")
+
+    payload = response.json()
+    assert payload["ok"] is False
+    assert payload["provider"] == "localai"
+    assert payload["selectedModel"] == "custom-local"
+    assert payload["models"] == [{"id": "custom-local", "label": "custom-local"}]
+    assert payload["error"] == (
+        "LocalAI is not reachable yet. Install or start LocalAI and wait for the runtime to report ready, "
+        "then refresh the model list."
+    )
+
+
 def test_status_keywords_return_read_only_status_reply_without_llm_call():
     sage = FakeSageClient()
     invoked = {"count": 0}
