@@ -190,21 +190,16 @@ class EmbeddedLocalAiManager:
             config_path.write_text(body, encoding="utf-8")
         return str(config_path)
 
-    async def start(self) -> None:
-        if not self.enabled:
-            self._mark(message="Embedded LocalAI is disabled.")
-            return
-        if self.process and self.process.returncode is None:
-            return
-        await self.prepare()
-        args = [self.config.local_ai_bin, *shlex.split(self.config.local_ai_args)]
-        env = {
+    def _runtime_env(self) -> dict[str, str]:
+        return {
             **os.environ,
             "LOCALAI_MODELS_PATH": self.config.local_ai_models_dir,
             "MODELS_PATH": self.config.local_ai_models_dir,
             "LOCALAI_DATA_PATH": self.config.local_ai_data_dir,
             "LOCALAI_BACKENDS_PATH": self.config.local_ai_backends_path,
             "BACKENDS_PATH": self.config.local_ai_backends_path,
+            "LOCALAI_BACKENDS_SYSTEM_PATH": self.config.local_ai_backends_path,
+            "BACKEND_SYSTEM_PATH": self.config.local_ai_backends_path,
             "LOCALAI_BACKEND_ASSETS_PATH": self.config.local_ai_backend_assets_path,
             "BACKEND_ASSETS_PATH": self.config.local_ai_backend_assets_path,
             "LOCALAI_GENERATED_CONTENT_PATH": self.config.local_ai_generated_content_path,
@@ -216,10 +211,19 @@ class EmbeddedLocalAiManager:
             "TEMP": self.config.local_ai_tmp_dir,
             "LOCALAI_DISABLE_WEBUI": "true"
         }
+
+    async def start(self) -> None:
+        if not self.enabled:
+            self._mark(message="Embedded LocalAI is disabled.")
+            return
+        if self.process and self.process.returncode is None:
+            return
+        await self.prepare()
+        args = [self.config.local_ai_bin, *shlex.split(self.config.local_ai_args)]
         try:
             self.process = await asyncio.create_subprocess_exec(
                 *args,
-                env=env,
+                env=self._runtime_env(),
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.DEVNULL
             )
@@ -242,6 +246,53 @@ class EmbeddedLocalAiManager:
         Path(self.config.local_ai_upload_path).mkdir(parents=True, exist_ok=True)
         self._write_model_config()
         self._mark(message="Embedded LocalAI cache prepared.")
+
+    def backend_present(self) -> bool:
+        backend = _normalize_string(self.config.local_ai_backend, "llama-cpp")
+        backends_path = Path(self.config.local_ai_backends_path)
+        if not backends_path.exists():
+            return False
+        candidates = [
+            backends_path / backend,
+            backends_path / f"{backend}.run"
+        ]
+        return any(candidate.exists() for candidate in candidates) or any(
+            backend in path.name for path in backends_path.rglob("*")
+        )
+
+    async def ensure_backend(self) -> dict[str, Any]:
+        backend = _normalize_string(self.config.local_ai_backend, "llama-cpp")
+        if self.backend_present():
+            return {"status": "present", "backend": backend, "path": self.config.local_ai_backends_path}
+        args = [
+            self.config.local_ai_bin,
+            "backends",
+            "install",
+            backend,
+            "--backends-path",
+            self.config.local_ai_backends_path,
+            "--backends-system-path",
+            self.config.local_ai_backends_path
+        ]
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *args,
+                env=self._runtime_env(),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=600)
+        except asyncio.TimeoutError as error:
+            raise EmbeddedLocalAiError(f"Timed out installing LocalAI backend {backend}.") from error
+        if process.returncode != 0:
+            detail = _safe_text((stderr or stdout).decode("utf-8", "replace"), 800)
+            raise EmbeddedLocalAiError(detail or f"LocalAI backend install failed for {backend}.")
+        return {
+            "status": "installed",
+            "backend": backend,
+            "path": self.config.local_ai_backends_path,
+            "message": _safe_text((stdout or stderr).decode("utf-8", "replace"), 240)
+        }
 
     async def stop(self) -> None:
         if self.process and self.process.returncode is None:
@@ -436,6 +487,8 @@ class EmbeddedLocalAiManager:
                     raise EmbeddedLocalAiError("The selected LocalAI model is not downloaded yet.")
                 download = {"status": "present", "path": model["path"], "bytes": model["bytes"]}
             self._write_model_config(model_url)
+            await self._update_job(job_id, message="Ensuring LocalAI llama-cpp backend.", progressPercent=82, percent=82)
+            backend = await self.ensure_backend()
             await self._update_job(job_id, message="Starting embedded LocalAI.", progressPercent=85, percent=85)
             await self.start()
             await self._update_job(job_id, message="Waiting for embedded LocalAI API readiness.", progressPercent=88, percent=88)
@@ -454,6 +507,7 @@ class EmbeddedLocalAiManager:
             job["result"] = {
                 "model": self.model_status(model_url),
                 "download": download,
+                "backend": backend,
                 "ready": probe
             }
             await self._update_job(job_id, message="Embedded LocalAI model is ready.")

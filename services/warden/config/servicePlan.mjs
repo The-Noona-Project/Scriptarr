@@ -380,6 +380,8 @@ export const resolveServicePlan = ({env = process.env, containerNamePrefix = ""}
       SCRIPTARR_LOCALAI_MODELS_DIR: "/models",
       SCRIPTARR_LOCALAI_DATA_DIR: "/data",
       SCRIPTARR_LOCALAI_BACKENDS_PATH: "/data/backends",
+      LOCALAI_BACKENDS_SYSTEM_PATH: "/data/backends",
+      BACKEND_SYSTEM_PATH: "/data/backends",
       SCRIPTARR_LOCALAI_TMP_DIR: "/data/tmp",
       SCRIPTARR_LOCALAI_BACKEND_ASSETS_PATH: "/data/backend_data",
       SCRIPTARR_LOCALAI_GENERATED_CONTENT_PATH: "/data/generated",
