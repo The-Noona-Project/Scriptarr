@@ -25,6 +25,8 @@ APPA_SYSTEM_PROMPT = (
     "ask what Noona or Appa looks like."
 )
 
+LOCALAI_MAX_TOKENS = 512
+
 
 def _stringify_content(content: object) -> str:
     if isinstance(content, str):
@@ -47,6 +49,10 @@ def _context_message(context: object) -> list[dict[str, str]]:
     }]
 
 
+def _provider_completion_options(runtime) -> dict[str, int]:
+    return {"max_tokens": LOCALAI_MAX_TOKENS} if runtime.provider == "localai" else {}
+
+
 async def invoke_oracle(runtime, persona_name: str, message: str, context: object | None = None) -> str:
     system_prompt = APPA_SYSTEM_PROMPT if str(persona_name).strip().lower() == "appa" else NOONA_SYSTEM_PROMPT.format(persona=persona_name)
     client = AsyncOpenAI(
@@ -57,6 +63,7 @@ async def invoke_oracle(runtime, persona_name: str, message: str, context: objec
     response = await client.chat.completions.create(
         model=runtime.model,
         temperature=runtime.temperature,
+        **_provider_completion_options(runtime),
         messages=[
             {"role": "system", "content": system_prompt},
             *_context_message(context),

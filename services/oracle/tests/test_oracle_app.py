@@ -8,6 +8,8 @@ from fastapi.testclient import TestClient
 from oracle_service.app import create_app
 from oracle_service.config import OracleConfig
 from oracle_service.embedded_localai import EmbeddedLocalAiManager
+from oracle_service.llm import LOCALAI_MAX_TOKENS, _provider_completion_options
+from oracle_service.runtime_settings import OracleRuntimeSettings
 
 
 class FakeSageClient:
@@ -161,6 +163,26 @@ def build_embedded_config() -> OracleConfig:
         local_ai_embedded_enabled=True,
         model="Hermes-3-Llama-3.1-8B-Q4_K_S.gguf"
     )
+
+
+def test_localai_completion_options_are_bounded():
+    runtime = OracleRuntimeSettings(
+        enabled=True,
+        provider="localai",
+        model="Hermes-3-Llama-3.1-8B-Q4_K_S.gguf",
+        temperature=0.2,
+        open_ai_api_key_configured=False,
+        local_ai_profile_key="nvidia",
+        local_ai_image_mode="preset",
+        local_ai_custom_image="",
+        local_ai_base_url="http://127.0.0.1:8080/v1",
+        local_ai_api_key="localai",
+        open_ai_api_key="",
+        api_key="localai",
+        llm_timeout_seconds=180.0
+    )
+
+    assert _provider_completion_options(runtime) == {"max_tokens": LOCALAI_MAX_TOKENS}
 
 
 def test_oracle_starts_disabled_and_reports_off_state_cleanly_through_sage():
