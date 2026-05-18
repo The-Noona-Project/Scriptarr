@@ -21,6 +21,9 @@
   not expose `/dev/nvidia0` by itself.
 - LocalAI install, start, remove, and readiness actions are Oracle-owned embedded runtime jobs brokered through Sage.
   Warden should not recreate the standalone `scriptarr-localai` sidecar path by default.
+- If the next AI startup pass auto-starts embedded LocalAI after Oracle restarts, keep that implementation in Oracle.
+  Warden should only provide the correct service-plan mounts, environment, GPU flags, update reconciliation, and drift
+  detection for `scriptarr-oracle`.
 - AI acceleration is optional; safe fallback is required.
 - The repo-level Docker test stack is Warden-managed, starts a containerized Warden first, and should stay aligned with
   the runtime service plan.

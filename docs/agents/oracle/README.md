@@ -15,6 +15,11 @@
   viewed the images directly; Sage owns the text descriptions and Portal owns the Discord avatar assets.
 - It uses OpenAI-compatible wiring for both OpenAI and embedded LocalAI. Embedded LocalAI runs in the Oracle container,
   starts with no preloaded model, and downloads the selected GGUF once into persistent storage.
+- Embedded LocalAI should not be considered usable until a real generation probe returns the expected readiness text.
+  A healthy process, `/readyz`, or any random non-empty completion is not enough.
+- The next startup hardening pass should make deploy/restart behavior less manual: if Oracle is enabled, provider is
+  `localai`, and the selected model is already installed, Oracle may start embedded LocalAI and verify generation in
+  the background while keeping `/health` healthy and admin runtime status honest.
 - It should gracefully return disabled or degraded responses when OpenAI or LocalAI is unavailable.
 - Keep degraded replies provider-specific so OpenAI failures are not reported as LocalAI outages, and keep the
   provider call timeout long enough for CPU-only LocalAI admin tests.
@@ -24,6 +29,9 @@
   Warden clients.
 - When Oracle is configured for LocalAI and the model is left blank or still has a legacy OpenAI-style alias, use
   `Hermes-3-Llama-3.1-8B-Q4_K_S.gguf`.
+- The model YAML written into `/models` must remain OpenAI-chat compatible. Preserve the `chat_message` template when
+  changing LocalAI model config generation; broken templates can make the model answer from stale-looking prompt text
+  even while the API returns HTTP 200.
 - Moon admin now manages Oracle from `/admin/system/ai` through Sage. Keep `/api/status` and `/api/chat` suitable for
   health display and the admin test prompt, and keep disabled or degraded responses friendly rather than making the
   broader stack unhealthy.

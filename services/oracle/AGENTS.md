@@ -17,6 +17,12 @@ LocalAI.
 - Keep Oracle off by default on fresh installs.
 - Keep LocalAI communication OpenAI-compatible. Oracle owns the embedded LocalAI model cache/runtime; Warden only
   injects container mounts and GPU/runtime flags.
+- Embedded LocalAI readiness must mean a real generation probe passed, not merely that `/readyz` returned or any
+  non-empty text was generated. If model templates change, verify the generated YAML under `/models` uses the
+  OpenAI-compatible chat message template and that the probe returns `scriptarr-ok`.
+- For deploy safety, prefer an Oracle-owned startup path that can auto-start embedded LocalAI when Oracle is enabled,
+  provider is `localai`, the selected model is already installed, and the admin has not requested removal. Do not make
+  the whole Scriptarr stack unhealthy while LocalAI warms.
 - Route Oracle's first-party Scriptarr HTTP through Sage; do not add direct Vault or Warden calls here.
 - Preserve Oracle's internal wire contract when changing implementation details:
   - `GET /health`
@@ -33,6 +39,8 @@ LocalAI.
 
 - FastAPI app and route behavior live under `oracle_service`. Provider configuration and embedded LocalAI handling
   should stay isolated from Sage-facing response shapes.
+- Embedded LocalAI lifecycle code lives in `oracle_service/embedded_localai.py`; chat prompt/provider behavior lives in
+  `oracle_service/llm.py`; runtime settings normalization lives in `oracle_service/runtime_settings.py`.
 - Oracle may read Scriptarr status through Sage, but it must not execute mutations or bypass Sage to Vault, Warden, or
   other first-party services.
 - LocalAI is optional. Missing, slow, or unhealthy AI dependencies should degrade Oracle responses without making the

@@ -81,6 +81,11 @@
 - Reader smoothness is readiness-driven. Keep adaptive preload policy and decoded image state in the reader helper
   layer, warm ahead of the visible page, and hold paged navigation on the current spread until the destination spread's
   metadata and images are ready. Do not mark a failed warm-up as permanently complete; failures must remain retryable.
+- The next reader pass should add evidence before changing behavior. Useful counters/timings are session fetch,
+  page-metadata chunk fetch, image stream fetch, browser decode, queued/in-flight warmups, decoded pages ahead/behind,
+  retryable failures, and "caught buffer" waits where navigation or scroll reaches an unready page.
+- Keep reader instrumentation local to the reader app and same-origin APIs. Do not send browser telemetry directly to
+  Sage/Raven/Vault; if durable diagnostics are needed, add a Moon -> Sage route with explicit redaction and bounds.
 - Reader page images are revisioned immutable assets. Moon and Sage should stream page image responses and preserve
   image cache/content headers, while sessions, progress, bookmarks, and other mutable reader data stay live-only.
 - Reader input belongs in `apps/reader-next/lib/inputController.js`. Keep keyboard, swipe, and gamepad mapping
@@ -119,6 +124,10 @@
 - For the next Moon speed pass, build a fresh timing table before editing. Watch document load, Next JS/CSS chunk size,
   chrome/session/bootstrap calls, main route payload, admin event-stream startup, image or cover-cache work, and
   downstream Sage/Raven/Vault latency separately so the fix targets the real bottleneck.
+- For reader browser QA, open a real `/reader/:type/:titleId/:chapterId` route and exercise webtoon, single, double,
+  and manga-double modes. Verify page chunks load ahead before visible, the bottom range does not advance into blank
+  pages, failed images can retry, reload honors revisioned cache, and next/previous chapter buttons follow numeric
+  reading order.
 - Use `services/moon/scripts/report-bundles.mjs` for bundle reports and keep admin route chunks dynamically loaded
   after auth/grant checks. If bundle size is still high, remove always-mounted shell dependencies before trimming leaf
   page code that is already lazy.

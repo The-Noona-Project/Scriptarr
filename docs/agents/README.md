@@ -19,6 +19,18 @@ Start a task like this:
 4. Sketch the request path before changing code so Moon, Sage, Vault, Portal, Raven, Oracle, and Warden keep their
    ownership boundaries.
 
+Current next-chat focus:
+
+- AI startup: make Oracle's embedded LocalAI lifecycle restart-safe. Start from Oracle status and model/runtime
+  readiness, then trace Sage and Moon admin AI controls, and only then touch Warden service-plan behavior.
+- Reader smoothness: instrument before editing. Measure session fetch, page metadata chunks, streamed image fetch,
+  browser decode, preload queue depth, and cases where navigation waits for the buffer.
+- Reader browser QA: use the real `/reader/:type/:titleId/:chapterId` route in a browser. Smoke webtoon scrolling,
+  single/double/manga-double layouts, reload/cache behavior, retries, controller/keyboard paths, and numeric next/prev
+  chapter semantics.
+- Noona tone: treat Noona voice as a Portal -> Sage -> Oracle workflow. Update prompts/guards in Sage and Oracle,
+  verify Discord delivery in Portal, and use Appa diagnostics/review for live checks without storing raw transcripts.
+
 Service ownership:
 
 - Moon owns browser-facing user, reader, and admin pages, same-origin proxies, public API docs, and Next builds.
@@ -110,6 +122,15 @@ Production rollout rules:
 - Before restarting Raven, check active downloads and `/downloadall` state so long-running work is not interrupted.
 - Use Warden for prod updates and verify both stack health and the exact browser or Discord workflow that changed.
 - Keep secrets out of terminal summaries, docs, commits, and final messages.
+
+Next-chat handoff hygiene:
+
+- For handoff-only work, update the relevant `AGENTS.md` and `docs/agents/*/README.md` files, run at least
+  `git diff --check`, and commit docs separately from runtime code.
+- Do not deploy docs-only changes unless a generated site/runtime artifact changed. If runtime code changes, publish
+  only affected images, update through Warden, and smoke the exact changed public/admin/Discord surface.
+- Cold-start prompts should name the docs to read, the exact workstreams, the same-origin and Sage-broker invariants,
+  the prod URL to smoke, and the test ladder.
 
 Verification defaults:
 

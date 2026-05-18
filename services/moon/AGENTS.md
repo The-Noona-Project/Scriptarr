@@ -63,6 +63,12 @@ from the same runtime.
 - Reader page images should stay readiness-first: adaptive preload warms a decoded buffer ahead of the visible page,
   paged navigation should wait for destination image readiness, and revisioned page image responses should stream
   through Moon instead of being buffered like JSON payloads.
+- For the next reader speed pass, add measurements before policy changes. Capture session latency, page chunk latency,
+  image fetch latency, decode latency, preload window depth, retry counts, and how often the user reaches an unready
+  target page. Keep these diagnostics lightweight and browser-safe.
+- Reader browser QA should use the real app, not only API smoke: webtoon scroll past chunk boundaries, single/double
+  page next/previous, manga-double direction, reload/cache refresh, failed image retry, keyboard/touch/controller
+  input, and numeric chapter navigation.
 - Admin pages live in `apps/admin-next/components`; shared admin API helpers, access checks, routes, event streams, and
   formatting live in `apps/admin-next/lib`.
 - Same-origin runtime and proxy routes live in `lib`. Moon should proxy or compose through Sage instead of teaching the

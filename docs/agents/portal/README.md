@@ -27,6 +27,8 @@
 - Portal also owns update channel posts for Sage-created GitHub update digests. Poll Sage's update-notification queue,
   post Noona's AI-written summary to the configured update channel, and acknowledge only after Discord accepts the
   message. Portal must not call GitHub or Oracle directly for this workflow.
+- Noona update posts should feel like a channel announcement, not a raw changelog dump. Keep the AI summary once,
+  keep traceability in embed fields, and avoid duplicate content above and inside the embed.
 - Portal owns Noona trivia runtime delivery. It should start/stop rounds through Sage, treat normal messages in the
   configured trivia channel as guesses, post quiet reactions for wrong guesses, announce the first correct winner, and
   acknowledge leaderboard posts only after Discord accepts the message.
@@ -42,6 +44,8 @@
 - Appa Discord diagnostics must stay Appa-owned. `/discord inspect` may read recent messages only from configured
   Noona/Appa-allowed channels, return short sanitized snippets plus metadata, and record a redacted audit event through
   Sage. `/discord testpost` should send only the admin-supplied test text to an allowed channel and audit the result.
+- When tuning Noona voice live, use Appa as the admin/reviewer identity in a configured dev/admin channel. Capture
+  only sanitized examples in tests or docs, and prefer a small tone fixture matrix over one-off prompt tweaks.
 - Public Noona replies may trigger a background Sage `/api/internal/portal/noona-review` call. Appa should only post a
   same-thread correction for serious verdicts, and Portal must append delivery success/failure through Sage after
   Discord accepts or rejects the correction.

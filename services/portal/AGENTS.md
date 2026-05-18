@@ -33,6 +33,9 @@ optional Appa admin/reviewer chat, and the Oracle chat bridge through Sage.
   when that helps operate the stack.
 - Keep Noona public copy human and compact. Do not duplicate AI summaries above and inside embeds, do not expose raw
   commit rows as Noona's voice, and keep repository/commit traceability in clearly labeled embed fields.
+- For live Noona tone QA, use Appa diagnostics/review from an allowed admin/dev channel when configured. Keep snippets
+  short and redacted, and do not persist raw Discord transcripts. Test both public mention replies and GitHub update
+  posts because Portal formatting can make a good Oracle summary feel noisy.
 - Requester completion DMs and channel notifications should stay deduped by stable Sage acknowledgment ids so restarts
   or retries do not spam Discord users or channels. Release channel notifications should render Sage digest payloads as
   compact Scriptarr-branded posts and acknowledge digest metadata only after Discord accepts the message.
@@ -51,6 +54,8 @@ optional Appa admin/reviewer chat, and the Oracle chat bridge through Sage.
   configuration.
 - Mention chat memory and proposal decisions belong to Sage and Vault. Portal may keep only short rolling/runtime
   diagnostics such as last mention time or error.
+- Update-notification delivery lives in `lib/followNotifier.mjs`. Portal should render one concise Noona summary plus
+  metadata fields; do not duplicate the AI-written body in message content and embed description.
 - Request and completion notifications should keep stable acknowledgment ids so retries or restarts do not duplicate
   requester DMs, release posts, or GitHub update-summary posts.
 - Trivia runtime must reconcile one Sage-backed active round clock. Refreshes, repeated starts, and settings reloads

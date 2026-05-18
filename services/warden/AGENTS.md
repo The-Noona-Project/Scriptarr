@@ -35,6 +35,9 @@ managed services.
   Oracle/LocalAI settings.
 - Do not revive the standalone `scriptarr-localai` sidecar by default. Warden should mount persistent LocalAI models
   and data into `scriptarr-oracle`, then let Oracle's embedded runtime handle install/start/remove/readiness.
+- For the next AI startup hardening pass, Warden's expected role is plan validation only: confirm Oracle receives the
+  model/data mounts, NVIDIA `--gpus all`/device flags, and env needed for embedded LocalAI. Do not make Warden start
+  LocalAI; that belongs in Oracle.
 - Keep Oracle LocalAI runtime mounts and hardware flags aligned with the selected preset:
   - `cpu`: no extra device flags
   - `nvidia`: `--runtime nvidia --gpus all` plus `/dev/nvidia0`, `/dev/nvidiactl`, `/dev/nvidia-uvm`, and

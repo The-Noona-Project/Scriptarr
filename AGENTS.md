@@ -110,6 +110,15 @@ Read this before editing Scriptarr.
 ## Workflow Notes
 
 - Browsers should stay behind Moon. Do not casually add browser calls to internal services.
+- For the next AI/reader quality pass, keep four tracks distinct but coordinated:
+  1. Oracle/embedded LocalAI startup should become deploy-safe, preferably auto-starting only when Oracle is enabled,
+     provider is `localai`, the selected model is installed, and the generation probe can pass.
+  2. Reader speed work should measure page metadata chunk time, image stream time, image decode time, preload queue
+     depth, and "reader caught the buffer" moments before changing preload policy again.
+  3. Reader QA should use the real browser route and user interactions, not only route status checks: webtoon scroll,
+     single/double/manga-double modes, reload/cache behavior, failed-image retry, and numeric chapter navigation.
+  4. Noona tone work should run through Sage/Oracle prompts plus Portal delivery, with Appa diagnostics/review used
+     for live Discord checks and all excerpts redacted in durable events.
 - Vault is the only supported broker and the only first-party service allowed to touch the shared MySQL database.
 - First-party service-to-service HTTP must go through Sage. Direct exceptions are limited to Vault -> MySQL, Warden ->
   Docker or host runtime, Oracle -> OpenAI or LocalAI, and Raven -> external source, metadata, and VPN providers.

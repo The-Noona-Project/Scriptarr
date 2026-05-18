@@ -71,6 +71,10 @@
   `portal.noonaChat.memory` settings payload, natural memory commands, secret rejection, conservative read-context
   loading, latest posted GitHub update digest context, public proposal filtering, Oracle fallback, and admin-safe
   memory review/clear payloads. Portal must not call Oracle or Vault directly for this flow.
+- The next Noona tone pass should use a repeatable fixture set instead of one-off prompt tweaks: casual greeting,
+  "are you alive", update/how-to question, admin-ish status question, requester help, lore/catchphrase, and a degraded
+  provider case. Keep public copy warm and direct while preserving secret rejection, internal-codename boundaries, and
+  conservative proposal limits.
 - Broker Appa admin mentions through `/api/internal/portal/appa-chat` with Appa persona context, admin read context,
   and conservative proposal drafting only. Appa must never execute mutations directly from Discord.
 - Broker public Noona reply review through `/api/internal/portal/noona-review`. Store a redacted review event first,
@@ -172,6 +176,9 @@
   last posted update baseline, ask Oracle for the Noona summary, store pending retry state when Oracle is unavailable
   or returns degraded/disabled fallback copy, and use stable `update:<latestSha>` ids that are acknowledged only after
   Portal confirms the Discord channel send.
+- Keep the GitHub update digest guard strict while tuning tone. A summary with disabled/degraded/fallback text, raw
+  commit rows, SHAs, timestamps, compare URLs, character-count notes, or support-bot closers should stay pending and
+  retry later instead of reaching Portal.
 - Sage should expose acked downloadall notification queues for Portal from Raven durable run jobs. Use stable
   `downloadall:<runId>:<batchId>:<status>` ids and only mark them acknowledged after Portal confirms the requester DM.
 - Sage also owns downloadall reaction decision prompts. Store the paused-notification DM message id, owner id, run id,

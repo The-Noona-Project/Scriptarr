@@ -49,6 +49,9 @@ HTTP broker.
 - Noona's public Discord voice should read like a warm person in the channel, not raw automation output. For update
   summaries, reject provider fallback text, raw commit rows, SHAs, timestamps, compare links, character-count notes, or
   generic support-bot closers; Portal renders traceability metadata separately.
+- For the next Noona tone pass, keep the test matrix in Sage as well as Oracle: casual mention, "are you alive",
+  update/how-to question, admin-ish status question, request-help question, and lore/catchphrase. Noona should sound
+  warm and specific without becoming a support-ticket closer or exposing internal codenames.
 - Keep full JSDoc on exported Sage `.mjs` source and test files. `npm test` should enforce that gate.
 
 ## Coding Map
@@ -63,6 +66,9 @@ HTTP broker.
 - Public Noona chat helpers live in `lib/noonaChatService.mjs` and `lib/noonaChatMemory.mjs`. Keep durable memory
   summarized in Vault settings, reject obvious secrets, and keep the public proposal allowlist stricter than the admin
   AI page.
+- GitHub update digest prompt/guard logic lives in `lib/githubUpdateDigest.mjs`; if Noona tone changes, keep the
+  "real AI only" guard intact so degraded, disabled, empty, fallback, or raw metadata-shaped summaries stay pending
+  instead of being posted to Discord.
 - Appa chat and review helpers live in `lib/appaChatService.mjs`. Keep review excerpts redacted, record correction
   delivery separately from recommendations, and never store raw Discord transcripts.
 - Durable state reads and writes go through `lib/vaultClient.mjs`, which is the Sage-side client for Vault's service
