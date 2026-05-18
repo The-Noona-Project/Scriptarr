@@ -162,6 +162,23 @@ export const actualDevicesForInspect = (inspect) =>
     .sort();
 
 /**
+ * Resolve the requested Docker runtime from descriptor extra Docker arguments.
+ *
+ * @param {string[]} extraArgs Docker CLI arguments
+ * @returns {string} runtime name, or empty string when none is requested
+ */
+export const desiredRuntimeForExtraArgs = (extraArgs = []) =>
+  valuesForOption(extraArgs, "--runtime")[0] || "";
+
+/**
+ * Resolve the actual Docker runtime from Docker inspect output.
+ *
+ * @param {Record<string, unknown>} inspect Docker inspect payload
+ * @returns {string} runtime name, or empty string when Docker used its default runtime
+ */
+export const actualRuntimeForInspect = (inspect) => normalizeString(inspect?.HostConfig?.Runtime);
+
+/**
  * Detect whether a Docker descriptor requested GPU access through CLI-style args.
  *
  * @param {string[]} [extraArgs] container runtime args
@@ -440,6 +457,11 @@ export const createManagedStackRuntime = ({env = process.env, logger}) => {
     const desiredDevices = desiredDevicesForExtraArgs(descriptor.extraArgs);
     if (desiredDevices.length && !includesAll(actualDevicesForInspect(inspect), desiredDevices)) {
       reasons.push("devices");
+    }
+
+    const desiredRuntime = desiredRuntimeForExtraArgs(descriptor.extraArgs);
+    if (desiredRuntime && actualRuntimeForInspect(inspect) !== desiredRuntime) {
+      reasons.push("runtime");
     }
 
     if (desiredGpuRequestForExtraArgs(descriptor.extraArgs) && !actualGpuRequestForInspect(inspect)) {

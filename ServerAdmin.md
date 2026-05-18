@@ -176,8 +176,8 @@ only reports ready after a tiny OpenAI-compatible generation probe succeeds.
 
 Warden plans the `scriptarr-oracle` container instead of a `scriptarr-localai` sidecar. It mounts persistent
 `localai/models` and `localai/data` folders into Oracle and passes hardware flags for the selected profile. NVIDIA
-hosts should run Oracle with `--gpus all`, `NVIDIA_VISIBLE_DEVICES=all`, and compute/utility driver capabilities;
-CPU-only hosts can still use LocalAI, but generation may be slow.
+hosts should run Oracle with `--runtime nvidia --gpus all`, `NVIDIA_VISIBLE_DEVICES=all`, and compute/utility driver
+capabilities; CPU-only hosts can still use LocalAI, but generation may be slow.
 
 If GPU-specific startup is unavailable, the rest of Scriptarr should stay healthy while AI features remain disabled or
 temporarily unavailable.
