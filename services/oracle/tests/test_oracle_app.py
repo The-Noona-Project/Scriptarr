@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import replace
 
 from fastapi.testclient import TestClient
 
 from oracle_service.app import create_app
 from oracle_service.config import OracleConfig
+from oracle_service.embedded_localai import EmbeddedLocalAiManager
 
 
 class FakeSageClient:
@@ -535,6 +537,30 @@ def test_embedded_localai_requires_generation_probe_before_chat():
     assert payload["degraded"] is True
     assert payload["reply"] == "Noona is in read-only fallback mode because LocalAI is unavailable right now."
     assert payload["error"] == "LocalAI probe failed."
+
+
+def test_embedded_localai_verify_generation_retries_first_load_failure():
+    class Logger:
+        def warning(self, *args, **kwargs):
+            return None
+
+    manager = EmbeddedLocalAiManager(config=build_embedded_config(), logger=Logger())
+    probes = [
+        {"ready": False, "status": "not_ready", "reason": "generation_error"},
+        {"ready": True, "status": "ready", "reason": "generated", "sample": "ready"}
+    ]
+
+    async def fake_probe_generation(*, force=False, model_url=None):
+        assert force is True
+        return probes.pop(0)
+
+    manager.probe_generation = fake_probe_generation
+
+    result = asyncio.run(manager.verify_generation(attempts=2, delay_seconds=0))
+
+    assert result["ready"] is True
+    assert result["attempt"] == 2
+    assert probes == []
 
 
 def test_successful_chat_returns_llm_reply():

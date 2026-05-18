@@ -22,6 +22,8 @@ from .config import OracleConfig
 GENERATION_PROBE_EXPECTED_TEXT = "scriptarr-ok"
 GENERATION_PROBE_TTL_SECONDS = 60
 GENERATION_PROBE_TIMEOUT_SECONDS = 45
+GENERATION_PROBE_ATTEMPTS = 3
+GENERATION_PROBE_RETRY_DELAY_SECONDS = 10
 LOCALAI_READY_WAIT_SECONDS = 180
 LOCALAI_READY_WAIT_INTERVAL_SECONDS = 2
 
@@ -496,7 +498,7 @@ class EmbeddedLocalAiManager:
             if not ready.get("ready"):
                 raise EmbeddedLocalAiError(_safe_text(ready.get("error") or ready.get("reason"), 400) or "LocalAI API did not become ready.")
             await self._update_job(job_id, message="Verifying chat generation.", progressPercent=90, percent=90)
-            probe = await self.probe_generation(force=True, model_url=model_url)
+            probe = await self.verify_generation(model_url=model_url)
             if not probe.get("ready"):
                 raise EmbeddedLocalAiError(_safe_text(probe.get("error") or probe.get("reason"), 400) or "LocalAI generation probe failed.")
             job = self._download_jobs[job_id]
@@ -607,9 +609,34 @@ class EmbeddedLocalAiManager:
                 "error": _safe_text(error),
                 "checkedAt": _now_iso()
             }
+        if result.get("ready"):
+            self._mark(message="Embedded LocalAI model is ready.", error="")
         self._generation_probe = {**result, "_checked_monotonic": time.monotonic()}
         self._generation_probe_key = cache_key
         return result
+
+    async def verify_generation(
+        self,
+        *,
+        model_url: str | None = None,
+        attempts: int = GENERATION_PROBE_ATTEMPTS,
+        delay_seconds: int = GENERATION_PROBE_RETRY_DELAY_SECONDS
+    ) -> dict[str, Any]:
+        """Probe generation with retries for first-load backend/model warmup."""
+
+        last: dict[str, Any] = {
+            "ready": False,
+            "status": "not_ready",
+            "reason": "not_checked"
+        }
+        for attempt in range(1, max(1, attempts) + 1):
+            last = await self.probe_generation(force=True, model_url=model_url)
+            last = {**last, "attempt": attempt, "attempts": max(1, attempts)}
+            if last.get("ready"):
+                return last
+            if attempt < max(1, attempts):
+                await asyncio.sleep(delay_seconds)
+        return last
 
     async def status(self) -> dict[str, Any]:
         if self.enabled and not self.running():
