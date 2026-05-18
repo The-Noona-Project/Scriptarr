@@ -288,8 +288,7 @@ def create_app(
 
     async def local_ai_available(runtime) -> bool:
         if active_config.local_ai_embedded_enabled:
-            status_payload = await embedded_runtime.status()
-            return bool(status_payload.get("ready"))
+            return await embedded_runtime.is_ready()
         return await probe_local_ai_fn(runtime)
 
     @app.get("/health")

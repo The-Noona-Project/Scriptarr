@@ -22,6 +22,7 @@ from .config import OracleConfig
 GENERATION_PROBE_EXPECTED_TEXT = "scriptarr-ok"
 GENERATION_PROBE_TTL_SECONDS = 60
 GENERATION_PROBE_TIMEOUT_SECONDS = 45
+GENERATION_PROBE_MAX_TOKENS = 16
 GENERATION_PROBE_ATTEMPTS = 3
 GENERATION_PROBE_RETRY_DELAY_SECONDS = 10
 LOCALAI_READY_WAIT_SECONDS = 180
@@ -107,7 +108,7 @@ def _has_nvidia_device() -> bool:
 def _resolve_gpu_layers(value: str) -> int:
     text = _normalize_string(value).lower()
     if not text or text == "auto":
-        return 24 if _has_nvidia_device() else 0
+        return 32 if _has_nvidia_device() else 0
     try:
         return max(0, int(text))
     except ValueError:
@@ -571,7 +572,9 @@ class EmbeddedLocalAiManager:
                 {"role": "system", "content": "Reply with exactly scriptarr-ok."},
                 {"role": "user", "content": "generation readiness probe"}
             ],
-            "temperature": 0
+            "temperature": 0,
+            "max_tokens": GENERATION_PROBE_MAX_TOKENS,
+            "stream": False
         }
         started = time.monotonic()
         try:
@@ -614,6 +617,31 @@ class EmbeddedLocalAiManager:
         self._generation_probe = {**result, "_checked_monotonic": time.monotonic()}
         self._generation_probe_key = cache_key
         return result
+
+    def generation_status(self) -> dict[str, Any]:
+        if not self._generation_probe:
+            return {
+                "ready": False,
+                "status": "unknown",
+                "reason": "not_checked",
+                "stale": True
+            }
+        checked_at = self._generation_probe.get("_checked_monotonic", 0)
+        result = {key: value for key, value in self._generation_probe.items() if not key.startswith("_")}
+        result["stale"] = time.monotonic() - checked_at >= GENERATION_PROBE_TTL_SECONDS
+        return result
+
+    async def is_ready(self) -> bool:
+        if not self.enabled or not self.running():
+            return False
+        model = self.model_status(self.config.local_ai_default_model_url)
+        if not model["downloaded"]:
+            return False
+        probe = self.generation_status()
+        if probe.get("ready"):
+            return True
+        ready = await self.check_ready()
+        return ready.get("status") == "ready" and bool(probe.get("ready"))
 
     async def verify_generation(
         self,

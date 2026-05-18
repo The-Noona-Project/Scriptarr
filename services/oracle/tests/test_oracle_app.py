@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 from oracle_service.app import create_app
 from oracle_service.config import OracleConfig
 from oracle_service.embedded_localai import EmbeddedLocalAiManager
-from oracle_service.llm import LOCALAI_MAX_TOKENS, _provider_completion_options
+from oracle_service.llm import LOCALAI_MAX_TOKENS, LOCALAI_STOP_SEQUENCES, _provider_completion_options
 from oracle_service.runtime_settings import OracleRuntimeSettings
 
 
@@ -182,7 +182,11 @@ def test_localai_completion_options_are_bounded():
         llm_timeout_seconds=180.0
     )
 
-    assert _provider_completion_options(runtime) == {"max_tokens": LOCALAI_MAX_TOKENS}
+    assert _provider_completion_options(runtime) == {
+        "max_tokens": LOCALAI_MAX_TOKENS,
+        "stop": LOCALAI_STOP_SEQUENCES,
+        "stream": False
+    }
 
 
 def test_oracle_starts_disabled_and_reports_off_state_cleanly_through_sage():
