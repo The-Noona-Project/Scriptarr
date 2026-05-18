@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 from oracle_service.app import create_app
 from oracle_service.config import OracleConfig
+import oracle_service.embedded_localai as embedded_localai_module
 from oracle_service.embedded_localai import EmbeddedLocalAiManager
 from oracle_service.llm import LOCALAI_MAX_TOKENS, LOCALAI_STOP_SEQUENCES, _provider_completion_options
 from oracle_service.runtime_settings import OracleRuntimeSettings
@@ -163,6 +164,62 @@ def build_embedded_config() -> OracleConfig:
         local_ai_embedded_enabled=True,
         model="Hermes-3-Llama-3.1-8B-Q4_K_S.gguf"
     )
+
+
+def test_embedded_localai_model_config_formats_chat_messages(tmp_path):
+    class Logger:
+        def warning(self, *args, **kwargs):
+            return None
+
+    config = replace(build_embedded_config(), local_ai_models_dir=str(tmp_path))
+    manager = EmbeddedLocalAiManager(config=config, logger=Logger())
+
+    config_path = manager._write_model_config()
+    body = open(config_path, encoding="utf-8").read()
+
+    assert "chat_message:" in body
+    assert "{{.Input}}" in body
+    assert ".RoleName" in body
+    assert "{{.System}}" not in body
+
+
+def test_embedded_localai_generation_probe_requires_expected_text(monkeypatch):
+    class Logger:
+        def warning(self, *args, **kwargs):
+            return None
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return {
+                "choices": [
+                    {"message": {"content": "Hello from a model, but not the readiness phrase."}}
+                ]
+            }
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            return None
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def post(self, *args, **kwargs):
+            return FakeResponse()
+
+    monkeypatch.setattr(embedded_localai_module.httpx, "AsyncClient", FakeClient)
+    manager = EmbeddedLocalAiManager(config=build_embedded_config(), logger=Logger())
+
+    result = asyncio.run(manager.probe_generation(force=True))
+
+    assert result["ready"] is False
+    assert result["status"] == "not_ready"
+    assert result["reason"] == "unexpected_completion"
+    assert result["expectedTextPresent"] is False
 
 
 def test_localai_completion_options_are_bounded():

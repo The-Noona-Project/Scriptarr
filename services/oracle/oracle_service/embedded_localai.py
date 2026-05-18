@@ -174,13 +174,11 @@ class EmbeddedLocalAiManager:
             f"  model: {_yaml_string(model_ref.local_name)}",
             "template:",
             "  chat: |",
-            "    <|im_start|>system",
-            "    {{.System}}<|im_end|>",
-            "    {{range .Messages}}",
-            "    <|im_start|>{{.Role}}",
-            "    {{.Content}}<|im_end|>",
-            "    {{end}}",
+            "    {{.Input}}",
             "    <|im_start|>assistant",
+            "  chat_message: |",
+            "    <|im_start|>{{if eq .RoleName \"assistant\"}}assistant{{else if eq .RoleName \"system\"}}system{{else if eq .RoleName \"tool\"}}tool{{else if eq .RoleName \"user\"}}user{{end}}",
+            "    {{.Content}}<|im_end|>",
             "  completion: |",
             "    {{.Input}}",
             "  reply_prefix: \"\"",
@@ -586,17 +584,18 @@ class EmbeddedLocalAiManager:
             choices = body.get("choices") if isinstance(body, dict) else []
             if choices and isinstance(choices[0], dict):
                 content = _normalize_string((choices[0].get("message") or {}).get("content"))
-            ready = response.status_code < 500 and bool(content)
+            expected_present = GENERATION_PROBE_EXPECTED_TEXT in content.lower()
+            ready = response.status_code < 500 and expected_present
             result = {
                 "ready": ready,
                 "status": "ready" if ready else "not_ready",
                 "model": model_name,
                 "backend": self.config.local_ai_backend,
                 "expectedText": GENERATION_PROBE_EXPECTED_TEXT,
-                "expectedTextPresent": GENERATION_PROBE_EXPECTED_TEXT in content.lower(),
+                "expectedTextPresent": expected_present,
                 "latencyMs": latency_ms,
                 "statusCode": response.status_code,
-                "reason": "generated" if ready else "empty_completion",
+                "reason": "generated" if ready else "unexpected_completion" if content else "empty_completion",
                 "sample": _safe_text(content, 160),
                 "checkedAt": _now_iso()
             }
