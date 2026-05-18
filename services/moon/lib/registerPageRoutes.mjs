@@ -56,7 +56,8 @@ const isReaderApiPath = (requestUrl) =>
 
 const isReaderPageRequest = (requestUrl) =>
   isReaderApiPath(requestUrl) &&
-  /\\/chapter\\/[^/]+\\/page\\/\\d+$/.test(requestUrl.pathname);
+  /\\/chapter\\/[^/]+\\/page\\/\\d+$/.test(requestUrl.pathname) &&
+  requestUrl.searchParams.has("rev");
 
 const isReaderPageChunkRequest = (requestUrl) =>
   isReaderApiPath(requestUrl) &&

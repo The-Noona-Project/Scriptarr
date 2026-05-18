@@ -60,6 +60,9 @@ from the same runtime.
   metadata through `/pages?cursor=&pageSize=&rev=`, and keep the full chapter route as compatibility only. Use
   reader-native CSS skeletons, not Once UI, and keep input behavior in `apps/reader-next/lib/inputController.js` with
   focused tests for keyboard, touch, and gamepad support.
+- Reader page images should stay readiness-first: adaptive preload warms a decoded buffer ahead of the visible page,
+  paged navigation should wait for destination image readiness, and revisioned page image responses should stream
+  through Moon instead of being buffered like JSON payloads.
 - Admin pages live in `apps/admin-next/components`; shared admin API helpers, access checks, routes, event streams, and
   formatting live in `apps/admin-next/lib`.
 - Same-origin runtime and proxy routes live in `lib`. Moon should proxy or compose through Sage instead of teaching the

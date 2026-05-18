@@ -33,6 +33,14 @@ const FALLBACK_SUMMARY_PATTERNS = Object.freeze([
   /\b(unavailable|disabled|not configured|quiet|off)\b.*\b(localai|openai|oracle|ai provider)\b/i
 ]);
 
+const RAW_UPDATE_COPY_PATTERNS = Object.freeze([
+  /^\s*(?:\d+[\.)]\s*)?[a-f0-9]{7,40}\s+.+$/im,
+  /\([^)]+,\s*20\d{2}-\d{2}-\d{2}T\d{2}:\d{2}/i,
+  /\[\s*\d+\s*\/\s*\d+\s*chars?\s*\]/i,
+  /^compare:\s*https?:\/\//im,
+  /```/
+]);
+
 /**
  * Decide whether an Oracle reply is a real Noona update summary rather than
  * degraded provider copy that should stay queued for retry.
@@ -46,7 +54,7 @@ export const isUsableGithubUpdateSummary = (summary, payload = {}) => {
   if (!normalized || payload?.degraded === true || payload?.disabled === true) {
     return false;
   }
-  return !FALLBACK_SUMMARY_PATTERNS.some((pattern) => pattern.test(normalized));
+  return ![...FALLBACK_SUMMARY_PATTERNS, ...RAW_UPDATE_COPY_PATTERNS].some((pattern) => pattern.test(normalized));
 };
 
 /**
@@ -154,8 +162,10 @@ const fetchCommitsSince = async ({fetchImpl, token, branch, baselineSha}) => {
 };
 
 const buildOracleMessage = ({branch, baseSha, compareUrl, commits, truncated}) => [
-  "Write a public Discord update announcement as Noona, Scriptarr's warm Big Sister AI. Keep it under 900 characters.",
-  "Use 3 short bullets: what changed, how to use it, and that people can ask Noona follow-up questions.",
+  "Write only the human-facing Discord update summary as Noona, Scriptarr's warm Big Sister AI. Keep it under 700 characters.",
+  "Open with one friendly sentence, then use 2-3 short bullets focused on what changed and how readers/admins use it.",
+  "Portal will attach repository, compare link, latest SHA, and commit metadata separately; do not include raw SHAs, authors, dates, compare links, numbered commit rows, or character-count notes.",
+  "Avoid generic support-bot lines like 'let me know if you have questions' or 'ask me anything'. A natural 'ask Noona what changed' line is okay if it fits.",
   "Do not invent features beyond the commit titles. Do not mention secrets, private infrastructure, or internal logs.",
   `Repository: ${GITHUB_UPDATE_REPOSITORY.owner}/${GITHUB_UPDATE_REPOSITORY.repo}`,
   `Branch: ${branch}`,
@@ -174,7 +184,7 @@ const requestOracleSummary = async ({config, serviceJson, branch, baseSha, compa
       message: buildOracleMessage({branch, baseSha, compareUrl, commits, truncated}),
       context: {
         source: "github-update-check",
-        personaStyle: "Noona is warm, playful, and clear. For update summaries, she is practical and explains how to use what changed.",
+        personaStyle: "Noona is warm, playful, and clear. For update summaries, she translates commit titles into useful reader/admin outcomes and never repeats raw commit metadata.",
         repository: GITHUB_UPDATE_REPOSITORY,
         branch,
         compareUrl

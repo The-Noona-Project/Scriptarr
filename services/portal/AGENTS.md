@@ -31,6 +31,8 @@ optional Appa admin/reviewer chat, and the Oracle chat bridge through Sage.
 - Keep public Discord copy branded. Normal slash-command replies, requester DMs, release posts, and update posts should
   use the configured site name or Noona instead of internal service codenames; owner-only diagnostics may name services
   when that helps operate the stack.
+- Keep Noona public copy human and compact. Do not duplicate AI summaries above and inside embeds, do not expose raw
+  commit rows as Noona's voice, and keep repository/commit traceability in clearly labeled embed fields.
 - Requester completion DMs and channel notifications should stay deduped by stable Sage acknowledgment ids so restarts
   or retries do not spam Discord users or channels. Release channel notifications should render Sage digest payloads as
   compact Scriptarr-branded posts and acknowledge digest metadata only after Discord accepts the message.

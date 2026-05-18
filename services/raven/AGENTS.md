@@ -33,6 +33,9 @@ Raven is Scriptarr's Java download, library, metadata, and VPN-aware download en
 - Page-level source damage should become catalog quality data, not a whole-title dead end: refresh page lists after
   image 404s, generate Scriptarr missing-page placeholders when needed, and mark partial, missing-content, or
   bad-source quality states deterministically.
+- Reader page serving should reuse cached archive indexes for page count, media type, and page order lookups. Do not
+  repeatedly sort the same CBZ for every page image request, and keep controller endpoints thin while LibraryService
+  owns the reader archive behavior.
 - Startup recovery should reconcile finished `downloaded/<type>/...` archives back into the catalog and collapse
   duplicate restorable tasks for the same logical request or title, but it must run after Raven exposes health so a
   large catalog or slow broker write cannot keep the container unhealthy.

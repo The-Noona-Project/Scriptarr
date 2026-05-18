@@ -5,7 +5,7 @@ import http from "node:http";
 process.env.NODE_ENV = "test";
 
 const {createPortalApp} = await import("../lib/createPortalApp.mjs");
-const {createFollowNotifier} = await import("../lib/followNotifier.mjs");
+const {buildUpdateChannelPayload, createFollowNotifier} = await import("../lib/followNotifier.mjs");
 
 const withPortalEnv = async (overrides, handler) => {
   const keys = [
@@ -456,7 +456,7 @@ test("portal notifier delivers follow, approval, denial, and completion DMs once
   assert.ok(sent.some((entry) => entry.payload?.content.includes("moved it back into staff review")));
   assert.ok(sent.some((entry) => entry.payload?.content.includes("expired after 90 days")));
   assert.ok(sent.some((entry) => entry.payload?.content.includes("LocalAI startup completed")));
-  assert.ok(sent.some((entry) => entry.channelId === "updates-channel" && entry.payload?.content.includes("new update is ready")));
+  assert.ok(sent.some((entry) => entry.channelId === "updates-channel" && entry.payload?.content.includes("New Scriptarr update from Noona")));
   assert.ok(sent.some((entry) => entry.payload?.content.includes("https://pax-kun.com/myrequests")));
   assert.ok(sent.some((entry) => entry.payload?.embeds?.[0]?.image?.url === "https://images.example/solo.jpg"));
   assert.deepEqual(acknowledged.sort(), [
@@ -471,4 +471,27 @@ test("portal notifier delivers follow, approval, denial, and completion DMs once
     "system:localai:job-1:completed",
     "update:update:abc123def456"
   ]);
+});
+
+test("update channel payload keeps Noona summary out of duplicate message content", () => {
+  const payload = buildUpdateChannelPayload({
+    repository: "The-Noona-Project/Scriptarr",
+    branch: "main",
+    summary: "Noona tuned the reader so pages are ready before you turn them.",
+    compareUrl: "https://github.com/The-Noona-Project/Scriptarr/compare/base...main",
+    commitCount: 2,
+    latestSha: "abc123def456",
+    commits: [{
+      sha: "abc123def456",
+      title: "Preload reader pages",
+      url: "https://github.com/The-Noona-Project/Scriptarr/commit/abc123def456"
+    }]
+  }, "https://pax-kun.com", "Scriptarr");
+
+  assert.match(payload.content, /New Scriptarr update from Noona/);
+  assert.doesNotMatch(payload.content, /pages are ready before you turn them/);
+  assert.equal(payload.embeds[0].title, "New in Scriptarr");
+  assert.equal(payload.embeds[0].description, "Noona tuned the reader so pages are ready before you turn them.");
+  assert.match(payload.embeds[0].fields[0].value, /2 commits/);
+  assert.equal(payload.embeds[0].fields.some((field) => field.name === "Included commits"), false);
 });

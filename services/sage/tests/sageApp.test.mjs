@@ -674,7 +674,10 @@ const createDependencyStub = ({
     }
 
     if (request.url?.startsWith("/v1/reader/") && request.url.includes("/page/")) {
-      response.writeHead(200, {"Content-Type": "image/svg+xml"});
+      response.writeHead(200, {
+        "Content-Type": "image/svg+xml",
+        "ETag": "\"raven-reader-page\""
+      });
       response.end("<svg xmlns=\"http://www.w3.org/2000/svg\"><text>reader-page</text></svg>");
       return;
     }
@@ -2374,6 +2377,16 @@ test("sage round-trips Moon branding and exposes typed Moon reader payloads", as
   assert.equal(readerPages.pages[0].index, 1);
   assert.equal(readerPages.pageInfo.hasMore, true);
   assert.match(readerPages.pages[0].src, /^\/api\/moon\/v3\/user\/reader\/title\/dan-da-dan\/chapter\/dandadan-c166\/page\/1\?rev=/);
+
+  const readerPageResponse = await fetch(`${baseUrl}/api/moon-v3/user/reader/title/dan-da-dan/chapter/dandadan-c166/page/1`, {
+    headers: {
+      "Authorization": `Bearer ${ownerClaim.token}`
+    }
+  });
+  assert.equal(readerPageResponse.status, 200);
+  assert.match(readerPageResponse.headers.get("cache-control") || "", /max-age=604800/);
+  assert.equal(readerPageResponse.headers.get("etag"), "\"raven-reader-page\"");
+  assert.match(await readerPageResponse.text(), /reader-page/);
 
   const savedReaderPreferences = await fetch(`${baseUrl}/api/moon-v3/user/reader/preferences`, {
     method: "PUT",

@@ -8,6 +8,16 @@ import {proxyRequest, proxyStream} from "./proxy.mjs";
 const COVER_CACHE_MAX_BYTES = 8 * 1024 * 1024;
 const COVER_CACHE_TIMEOUT_MS = 10_000;
 const COVER_CACHE_CONTENT_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
+const HOP_BY_HOP_HEADERS = new Set([
+  "connection",
+  "keep-alive",
+  "proxy-authenticate",
+  "proxy-authorization",
+  "te",
+  "trailer",
+  "transfer-encoding",
+  "upgrade"
+]);
 
 /**
  * Normalize an Express splat parameter into a slash-delimited path segment.
@@ -42,6 +52,19 @@ const toQueryString = (query) => {
   return params.toString();
 };
 
+const isReaderPageImagePath = (targetPath) =>
+  /^user\/reader\/title\/[^/]+\/chapter\/[^/]+\/page\/\d+$/.test(String(targetPath || ""));
+
+const forwardResponseHeaders = (res, headers = {}, {stream = false} = {}) => {
+  for (const [key, value] of Object.entries(headers || {})) {
+    const normalized = String(key).toLowerCase();
+    if (HOP_BY_HOP_HEADERS.has(normalized) || (stream && normalized === "content-length")) {
+      continue;
+    }
+    res.setHeader(key, value);
+  }
+};
+
 /**
  * Register the generic Moon v3 proxy route that forwards every admin and user
  * data request through Sage while preserving JSON and reader image responses.
@@ -73,13 +96,29 @@ export const registerMoonV3ProxyRoutes = (app, {config, getSessionToken}) => {
         headers: forwardedHeaders(req)
       });
       res.status(response.status);
-      for (const [key, value] of Object.entries(response.headers)) {
-        if (["transfer-encoding", "content-length"].includes(String(key).toLowerCase())) {
-          continue;
-        }
-        res.setHeader(key, value);
+      forwardResponseHeaders(res, response.headers, {stream: true});
+      if (!response.body) {
+        res.end();
+        return;
       }
-      response.body?.pipe(res);
+      response.body.pipe(res);
+      return;
+    }
+    if (req.method === "GET" && isReaderPageImagePath(targetPath)) {
+      const response = await proxyStream({
+        baseUrl: config.sageBaseUrl,
+        path: `/api/moon-v3/${targetPath}${query ? `?${query}` : ""}`,
+        method: req.method,
+        sessionToken: getSessionToken(req),
+        headers: forwardedHeaders(req)
+      });
+      res.status(response.status);
+      forwardResponseHeaders(res, response.headers, {stream: true});
+      if (!response.body) {
+        res.end();
+        return;
+      }
+      response.body.pipe(res);
       return;
     }
     const response = await proxyRequest({

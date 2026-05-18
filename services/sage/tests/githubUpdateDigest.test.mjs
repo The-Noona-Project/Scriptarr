@@ -6,7 +6,8 @@ import assert from "node:assert/strict";
 
 import {
   GITHUB_UPDATE_DIGEST_SETTING_KEY,
-  createGithubUpdateDigestService
+  createGithubUpdateDigestService,
+  isUsableGithubUpdateSummary
 } from "../lib/githubUpdateDigest.mjs";
 
 const createVault = async (initial = {}) => {
@@ -87,6 +88,7 @@ test("GitHub update digest creates an Oracle-backed pending Discord update", asy
     serviceJson: async (_baseUrl, path, options) => {
       assert.equal(path, "/api/chat");
       assert.match(options.body.message, /Add Noona update summaries/);
+      assert.match(options.body.message, /do not include raw SHAs/i);
       return {
         ok: true,
         status: 200,
@@ -241,4 +243,19 @@ test("GitHub update digest retries pending AI summaries without advancing the po
   assert.equal(oracleCalls, 2);
   assert.equal(readyState.pending.status, "ready");
   assert.equal(readyState.pending.summary, "Noona retried the update summary.");
+});
+
+test("GitHub update digest rejects raw metadata copy as Noona summary", () => {
+  assert.equal(
+    isUsableGithubUpdateSummary("3. 5d5b5f8d5a9e Add LocalAI chat completion example to README (Captainpax, 2026-05-18T02:11:33Z)"),
+    false
+  );
+  assert.equal(
+    isUsableGithubUpdateSummary("Noona here!\n- Reader pages preload more smoothly\n[399/900 chars]"),
+    false
+  );
+  assert.equal(
+    isUsableGithubUpdateSummary("Noona tuned the reader so pages are ready before you turn them. Ask her what changed when you want the details."),
+    true
+  );
 });

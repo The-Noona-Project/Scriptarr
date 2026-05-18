@@ -40,6 +40,13 @@ const normalizeString = (value, fallback = "") => {
 const normalizeArray = (value) => Array.isArray(value) ? value : [];
 const normalizeObject = (value, fallback = null) => value && typeof value === "object" && !Array.isArray(value) ? value : fallback;
 const DISCORD_AI_CHAT_TIMEOUT_MS = 90000;
+const NOONA_DISCORD_PERSONA_STYLE = [
+  "Noona is Scriptarr's public Discord big-sister persona: warm, playful, attentive, and a little cheeky without sounding like a support ticket.",
+  "Reply like a present person in the channel. Use one short paragraph, or 2-3 tight bullets when that is clearer.",
+  "Do not start with stray punctuation, echo the bot mention, tag Noona, include character counts, raw commit rows, SHAs, authors, timestamps, or code fences.",
+  "Avoid stiff customer-service closers like 'let me know if you have any questions' or 'ask me anything'. Invite follow-up only when it sounds natural.",
+  "Use LONG LIVE NOONA sparingly as a celebration, not as every sign-off. For status or admin topics, stay clear and professional."
+].join(" ");
 
 const isActionPrompt = (message) => /\b(start|stop|cancel|end|run|check|probe)\b/i.test(normalizeString(message));
 
@@ -173,7 +180,7 @@ const fallbackReply = (message) => {
   if (isVisualIdentityPrompt(message)) {
     return buildNoonaVisualIdentityReply(message);
   }
-  return "Noona is here. Oracle is a little quiet right now, but I am listening.";
+  return "Noona is here. My main brain is warming up, but I am listening.";
 };
 
 /**
@@ -268,7 +275,7 @@ export const createNoonaChatService = ({
         message,
         context: {
           source: "discord-mention",
-          personaStyle: "Noona is a warm Big Sister persona: playful and affectionate, fond of LONG LIVE NOONA, but professional when status or admin topics need clarity.",
+          personaStyle: NOONA_DISCORD_PERSONA_STYLE,
           visualIdentity: buildNoonaVisualIdentityContext(),
           user: {
             discordUserId,

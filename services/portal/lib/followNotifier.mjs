@@ -419,34 +419,43 @@ export const buildUpdateChannelPayload = (notification = {}, publicBaseUrl = "",
   const commitCount = toCount(notification.commitCount, normalizeArray(notification.commits).length);
   const latestSha = normalizeString(notification.latestSha);
   const commitLines = normalizeArray(notification.commits)
-    .slice(0, 5)
+    .slice(0, 3)
     .map((commit) => {
       const sha = normalizeString(commit.sha);
       const title = normalizeString(commit.title, "Untitled commit");
       const url = normalizeString(commit.url);
       return url ? `[${sha}](${url}) ${title}` : `${sha} ${title}`.trim();
     });
-  const linkLine = compareUrl ? `\nCompare: ${compareUrl}` : adminUrl ? `\nOpen updates: ${adminUrl}` : "";
   return {
-    content: truncate(`${summary}${linkLine}`, 1900),
+    content: truncate(`New ${brandName} update from Noona. Mention Noona for the plain-language version of what changed.`, 1900),
     embeds: [{
-      title: `${brandName} update from Noona`,
+      title: `New in ${brandName}`,
       description: summary,
       url: compareUrl || adminUrl || undefined,
       color: 0x8b5cf6,
       fields: [
-        {name: "Repository", value: `${repository} (${branch})`, inline: true},
-        {name: "Commits", value: String(commitCount), inline: true},
-        latestSha ? {name: "Latest", value: latestSha, inline: true} : null,
+        {
+          name: "Traceability",
+          value: [
+            `${repository} (${branch})`,
+            `${commitCount} commit${commitCount === 1 ? "" : "s"}${latestSha ? ` · latest ${latestSha}` : ""}`
+          ].join("\n"),
+          inline: false
+        },
+        compareUrl ? {
+          name: "Compare",
+          value: `[Open compare](${compareUrl})`,
+          inline: true
+        } : null,
         commitLines.length ? {
-          name: "Included commits",
+          name: "Recent commits",
           value: commitLines.join("\n").slice(0, 1000),
           inline: false
         } : null,
         adminUrl ? {
-          name: brandName,
+          name: `${brandName} admin`,
           value: `[Open updates](${adminUrl})`,
-          inline: false
+          inline: true
         } : null
       ].filter(Boolean),
       footer: {text: "Mention Noona to ask what changed or how to use it."}

@@ -16,9 +16,12 @@ import {
 import {
   beginReaderPageRequest,
   completeReaderPageRequest,
+  hasReaderPageImages,
   hasReaderPageWindow,
   hasReaderPageRequestForChapter,
   mergeReaderPageRequestPages,
+  resolvePagedReaderWindowIndexes,
+  resolveReaderPreloadConfig,
   resolveReaderPreloadPlan,
   resolveWebtoonLoadMoreAction,
   warmReaderPageImages
@@ -31,6 +34,7 @@ import {ReaderInitialSkeleton} from "./ReaderSkeleton.jsx";
 
 const PAGE_CHUNK_SIZE = 12;
 const CHAPTER_RAIL_PAGE_SIZE = 60;
+const DEFAULT_PRELOAD_CONFIG = resolveReaderPreloadConfig();
 const PAGE_FITS = ["width", "height", "contain"];
 const DIRECTIONS = ["ltr", "rtl"];
 
@@ -117,16 +121,20 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = ""}) => {
   const [chapterRows, setChapterRows] = useState([]);
   const [chapterPageInfo, setChapterPageInfo] = useState(null);
   const [chapterRowsLoading, setChapterRowsLoading] = useState(false);
+  const [preloadConfig, setPreloadConfig] = useState(DEFAULT_PRELOAD_CONFIG);
+  const [preparingMessage, setPreparingMessage] = useState("");
   const sessionCache = useRef(new Map());
+  const pageStateRef = useRef(new Map());
   const pageRequestTokensRef = useRef(new Set());
   const pageRequestSeqRef = useRef(0);
   const pageLoadEpochRef = useRef(0);
-  const warmedImageKeyRef = useRef(new Set());
+  const imageWarmStateRef = useRef(new Map());
   const pageObserverRef = useRef(/** @type {IntersectionObserver | null} */ (null));
   const pointerStartRef = useRef(/** @type {{x: number, y: number} | null} */ (null));
   const inputStateRef = useRef(createReaderInputState());
   const settingsRef = useRef(/** @type {HTMLElement | null} */ (null));
   const pendingScrollRef = useRef(null);
+  const activeWebtoonPageRef = useRef({chapterId, pageIndex: 0});
 
   const siteName = chrome.branding?.siteName || "Scriptarr";
   const title = initialSession?.title || null;
@@ -183,6 +191,14 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = ""}) => {
     setSessionMap((current) => new Map(current).set(session.chapter.id, session));
   }, []);
 
+  const setReaderPageState = useCallback((updater) => {
+    setPageState((current) => {
+      const next = updater(current);
+      pageStateRef.current = next;
+      return next;
+    });
+  }, []);
+
   const fetchSession = useCallback(async (nextChapterId) => {
     const key = String(nextChapterId || "").trim();
     if (!key) {
@@ -223,7 +239,7 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = ""}) => {
       replace,
       requestId: pageRequestSeqRef.current
     });
-    setPageState((current) => {
+    setReaderPageState((current) => {
       const next = new Map(current);
       const entry = next.get(key) || {pages: [], pageInfo: null, loading: false, error: ""};
       next.set(key, {...entry, loading: true, error: ""});
@@ -243,7 +259,7 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = ""}) => {
       chapterId: key
     });
     if (!result.ok) {
-      setPageState((current) => {
+      setReaderPageState((current) => {
         const next = new Map(current);
         const entry = next.get(key) || {pages: [], pageInfo: null, loading: false, error: ""};
         next.set(key, {...entry, loading: stillLoading, error: result.payload?.error || "Could not load these pages."});
@@ -252,7 +268,7 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = ""}) => {
       return null;
     }
 
-    setPageState((current) => {
+    setReaderPageState((current) => {
       const next = new Map(current);
       const entry = next.get(key) || {pages: [], pageInfo: null, loading: false, error: ""};
       const pageRevision = result.payload.pageRevision || session.pageRevision || "";
@@ -272,7 +288,7 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = ""}) => {
       return next;
     });
     return result.payload;
-  }, [titleId]);
+  }, [setReaderPageState, titleId]);
 
   const ensurePageWindow = useCallback(async (nextChapterId, nextPageIndex, nextSession = null) => {
     const session = nextSession || await fetchSession(nextChapterId);
@@ -282,7 +298,7 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = ""}) => {
     const pageCount = Math.max(1, Number.parseInt(String(session.pageCount || 1), 10) || 1);
     const start = Math.max(0, Math.min(nextPageIndex, pageCount - 1));
     const alignedStart = layoutMode === "single" ? start : Math.max(0, start - (start % pagesPerStep(layoutMode)));
-    const entry = pageState.get(session.chapter.id);
+    const entry = pageStateRef.current.get(session.chapter.id);
     const plan = resolveReaderPreloadPlan({
       layoutMode,
       activeIndex: alignedStart,
@@ -298,32 +314,99 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = ""}) => {
     await Promise.all(plan.metadataRequests.map((request) =>
       loadPages(session, {cursor: request.cursor, pageSize: request.pageSize})
     ));
-  }, [fetchSession, layoutMode, loadPages, pageState]);
+  }, [fetchSession, layoutMode, loadPages]);
 
-  const warmPageImages = useCallback((session, indexes = []) => {
+  const warmPageImages = useCallback(async (session, indexes = [], {retryFailures = false} = {}) => {
     if (!session?.chapter?.id || !indexes.length) {
-      return;
+      return [];
     }
-    const entry = pageState.get(session.chapter.id);
+    const entry = pageStateRef.current.get(session.chapter.id);
     if (!entry?.pages?.length) {
-      return;
+      return [];
     }
-    const pendingIndexes = indexes.filter((index) => {
+    const warmJobs = indexes.map((index) => {
       const page = entry.pages.find((candidate) => candidate.index === index && candidate.src);
       if (!page) {
-        return false;
+        return null;
       }
       const warmKey = `${session.chapter.id}:${page.index}:${page.src}`;
-      if (warmedImageKeyRef.current.has(warmKey)) {
+      const current = imageWarmStateRef.current.get(warmKey);
+      if (current?.status === "ready") {
+        return Promise.resolve({index: page.index, ok: true, cached: true});
+      }
+      if (current?.status === "loading" && current.promise) {
+        return current.promise;
+      }
+      if (current?.status === "error" && !retryFailures) {
+        return Promise.resolve({index: page.index, ok: false, cached: true});
+      }
+      const promise = warmReaderPageImages([page], [page.index]).then((results) => {
+        const result = results[0] || {index: page.index, ok: false};
+        imageWarmStateRef.current.set(warmKey, {
+          status: result.ok ? "ready" : "error",
+          updatedAt: Date.now()
+        });
+        return result;
+      }, () => {
+        imageWarmStateRef.current.set(warmKey, {
+          status: "error",
+          updatedAt: Date.now()
+        });
+        return {index: page.index, ok: false};
+      });
+      imageWarmStateRef.current.set(warmKey, {
+        status: "loading",
+        promise,
+        updatedAt: Date.now()
+      });
+      return promise;
+    }).filter(Boolean);
+
+    return Promise.all(warmJobs);
+  }, []);
+
+  const waitForPageImageMetadata = useCallback((session, indexes = [], {timeoutMs = 5000} = {}) => new Promise((resolve) => {
+    if (!session?.chapter?.id || !indexes.length) {
+      resolve(false);
+      return;
+    }
+    const startedAt = Date.now();
+    const tick = () => {
+      const entry = pageStateRef.current.get(session.chapter.id);
+      if (hasReaderPageImages(entry?.pages || [], indexes)) {
+        resolve(true);
+        return;
+      }
+      if (!entry?.loading || Date.now() - startedAt >= timeoutMs) {
+        resolve(false);
+        return;
+      }
+      window.setTimeout(tick, 50);
+    };
+    tick();
+  }), []);
+
+  const preparePagedPage = useCallback(async (session, pageIndex, {message = "Preparing page."} = {}) => {
+    if (!session?.chapter?.id) {
+      return false;
+    }
+    const pageCount = Math.max(1, Number.parseInt(String(session.pageCount || 1), 10) || 1);
+    const indexes = resolvePagedReaderWindowIndexes({layoutMode, pageIndex, pageCount});
+    if (!indexes.length) {
+      return false;
+    }
+    setPreparingMessage(message);
+    try {
+      await ensurePageWindow(session.chapter.id, indexes[0], session);
+      if (!await waitForPageImageMetadata(session, indexes)) {
         return false;
       }
-      warmedImageKeyRef.current.add(warmKey);
-      return true;
-    });
-    if (pendingIndexes.length) {
-      void warmReaderPageImages(entry.pages, pendingIndexes);
+      const results = await warmPageImages(session, indexes, {retryFailures: true});
+      return indexes.every((index) => results.some((result) => result.index === index && result.ok));
+    } finally {
+      setPreparingMessage("");
     }
-  }, [pageState]);
+  }, [ensurePageWindow, layoutMode, waitForPageImageMetadata, warmPageImages]);
 
   useEffect(() => {
     let active = true;
@@ -347,6 +430,27 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = ""}) => {
   }, []);
 
   useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection || {};
+    const readEnvironment = () => ({
+      saveData: connection.saveData === true,
+      effectiveType: connection.effectiveType || "",
+      viewportWidth: window.innerWidth,
+      deviceMemory: navigator.deviceMemory || 0
+    });
+    const updatePreloadConfig = () => setPreloadConfig(resolveReaderPreloadConfig(readEnvironment()));
+    updatePreloadConfig();
+    window.addEventListener("resize", updatePreloadConfig);
+    connection.addEventListener?.("change", updatePreloadConfig);
+    return () => {
+      window.removeEventListener("resize", updatePreloadConfig);
+      connection.removeEventListener?.("change", updatePreloadConfig);
+    };
+  }, []);
+
+  useEffect(() => {
     if (!initialSession?.chapter?.id) {
       return;
     }
@@ -359,9 +463,9 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = ""}) => {
     sessionCache.current.clear();
     pageLoadEpochRef.current += 1;
     pageRequestTokensRef.current.clear();
-    warmedImageKeyRef.current.clear();
+    imageWarmStateRef.current.clear();
     setSessionMap(new Map([[initialSession.chapter.id, initialSession]]));
-    setPageState(new Map());
+    setReaderPageState(() => new Map());
     setWebtoonChapterIds([initialSession.chapter.id]);
     setBookmarks(Array.isArray(initialSession.bookmarks) ? initialSession.bookmarks : []);
     setLayoutMode(nextLayoutMode);
@@ -370,12 +474,14 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = ""}) => {
     setShowSidebar(preferences.showSidebar === true);
     setShowPageNumbers(preferences.showPageNumbers !== false);
     setActiveChapterId(initialSession.chapter.id);
+    activeWebtoonPageRef.current = {chapterId: initialSession.chapter.id, pageIndex: 0};
+    scrollDirectionRef.current = "forward";
     setActivePageIndex(nextLayoutMode === "webtoon" ? 0 : bookmarkPage);
     setPagedChapterId(initialSession.chapter.id);
     setPagedPageIndex(bookmarkPage);
     const firstCursor = nextLayoutMode === "webtoon" ? 0 : Math.max(0, bookmarkPage - (bookmarkPage % pagesPerStep(nextLayoutMode)));
     void loadPages(initialSession, {cursor: firstCursor, replace: true});
-  }, [initialSession, loadPages]);
+  }, [initialSession, loadPages, setReaderPageState]);
 
   useEffect(() => {
     if (!title || !activeChapterId) {
@@ -430,8 +536,13 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = ""}) => {
         return;
       }
       const target = /** @type {HTMLElement} */ (visible.target);
-      setActiveChapterId(target.dataset.chapterId || chapterId);
-      setActivePageIndex(Number.parseInt(target.dataset.pageIndex || "0", 10) || 0);
+      const nextChapterId = target.dataset.chapterId || chapterId;
+      const nextPageIndex = Number.parseInt(target.dataset.pageIndex || "0", 10) || 0;
+      const previous = activeWebtoonPageRef.current;
+      activeWebtoonPageRef.current = {chapterId: nextChapterId, pageIndex: nextPageIndex};
+      scrollDirectionRef.current = nextChapterId === previous.chapterId && nextPageIndex < previous.pageIndex ? "backward" : "forward";
+      setActiveChapterId(nextChapterId);
+      setActivePageIndex(nextPageIndex);
     }, {
       rootMargin: "-20% 0px -55% 0px",
       threshold: [0.15, 0.35, 0.65]
@@ -456,14 +567,17 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = ""}) => {
       activeIndex,
       pageCount,
       loadedPages: entry?.pages || [],
-      chunkSize: PAGE_CHUNK_SIZE
+      chunkSize: PAGE_CHUNK_SIZE,
+      aheadCount: preloadConfig.aheadCount,
+      previousCushion: preloadConfig.previousCushion,
+      scrollDirection: scrollDirectionRef.current
     });
     if (!entry?.loading) {
       for (const request of plan.metadataRequests) {
         void loadPages(session, {cursor: request.cursor, pageSize: request.pageSize});
       }
     }
-    warmPageImages(session, plan.warmIndexes);
+    void warmPageImages(session, plan.warmIndexes);
     if (!isPaged || !plan.prefetchNextChapter || !session.nextChapterId) {
       return;
     }
@@ -487,6 +601,8 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = ""}) => {
     loadPages,
     pageState,
     pagedPageIndex,
+    preloadConfig.aheadCount,
+    preloadConfig.previousCushion,
     warmPageImages
   ]);
 
@@ -550,21 +666,27 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = ""}) => {
       return;
     }
     const safePageIndex = clampPage(nextPageIndex, session.pageCount || 1);
+    const ready = await preparePagedPage(session, safePageIndex, {message: "Preparing chapter."});
+    if (!ready) {
+      return;
+    }
     setPagedChapterId(nextChapterId);
     setPagedPageIndex(safePageIndex);
     setActiveChapterId(nextChapterId);
     setActivePageIndex(safePageIndex);
     window.history.replaceState(null, "", buildReaderPathForTitle(title, nextChapterId));
-    await ensurePageWindow(nextChapterId, safePageIndex, session);
-  }, [ensurePageWindow, fetchSession, title]);
+  }, [fetchSession, preparePagedPage, title]);
 
   const goPreviousPaged = useCallback(async () => {
     const step = pagesPerStep(layoutMode);
     if (pagedPageIndex > 0) {
       const nextIndex = Math.max(0, pagedPageIndex - step);
+      const ready = await preparePagedPage(currentPagedSession, nextIndex, {message: "Preparing previous page."});
+      if (!ready) {
+        return;
+      }
       setPagedPageIndex(nextIndex);
       setActivePageIndex(nextIndex);
-      await ensurePageWindow(pagedChapterId, nextIndex, currentPagedSession);
       return;
     }
     if (currentPagedSession?.previousChapterId) {
@@ -573,22 +695,25 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = ""}) => {
         await openPagedChapter(previousSession.chapter.id, Math.max(0, (previousSession.pageCount || 1) - 1));
       }
     }
-  }, [currentPagedSession, ensurePageWindow, fetchSession, layoutMode, openPagedChapter, pagedChapterId, pagedPageIndex]);
+  }, [currentPagedSession, fetchSession, layoutMode, openPagedChapter, pagedPageIndex, preparePagedPage]);
 
   const goNextPaged = useCallback(async () => {
     const step = pagesPerStep(layoutMode);
     const pageCount = Math.max(1, Number.parseInt(String(currentPagedSession?.pageCount || 1), 10) || 1);
     if (pagedPageIndex + step < pageCount) {
       const nextIndex = Math.min(pageCount - 1, pagedPageIndex + step);
+      const ready = await preparePagedPage(currentPagedSession, nextIndex, {message: "Preparing next page."});
+      if (!ready) {
+        return;
+      }
       setPagedPageIndex(nextIndex);
       setActivePageIndex(nextIndex);
-      await ensurePageWindow(pagedChapterId, nextIndex, currentPagedSession);
       return;
     }
     if (currentPagedSession?.nextChapterId) {
       await openPagedChapter(currentPagedSession.nextChapterId, 0);
     }
-  }, [currentPagedSession, ensurePageWindow, layoutMode, openPagedChapter, pagedChapterId, pagedPageIndex]);
+  }, [currentPagedSession, layoutMode, openPagedChapter, pagedPageIndex, preparePagedPage]);
 
   const goVisualNext = useCallback(() => {
     if (!isPaged) {
@@ -658,9 +783,14 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = ""}) => {
   const handleSeek = useCallback((nextIndex) => {
     const safeIndex = clampPage(nextIndex, activePageCount);
     if (isPaged) {
-      setPagedPageIndex(safeIndex);
-      setActivePageIndex(safeIndex);
-      void ensurePageWindow(pagedChapterId, safeIndex, currentPagedSession);
+      void (async () => {
+        const ready = await preparePagedPage(currentPagedSession, safeIndex, {message: "Preparing page."});
+        if (!ready) {
+          return;
+        }
+        setPagedPageIndex(safeIndex);
+        setActivePageIndex(safeIndex);
+      })();
       return;
     }
     setActivePageIndex(safeIndex);
@@ -669,7 +799,7 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = ""}) => {
     if (!current || !current.pages.some((page) => page.index === safeIndex)) {
       void loadPages(activeSession, {cursor: safeIndex});
     }
-  }, [activeChapterId, activePageCount, activeSession, currentPagedSession, ensurePageWindow, isPaged, loadPages, pageState, pagedChapterId]);
+  }, [activeChapterId, activePageCount, activeSession, currentPagedSession, isPaged, loadPages, pageState, preparePagedPage]);
 
   const updateLayoutMode = (value) => {
     const nextValue = normalizeLayoutMode(value);
@@ -859,6 +989,12 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = ""}) => {
         loadMoreKey={webtoonLoadMoreKey}
         loadMore={loadMoreWebtoon}
       />
+
+      {preparingMessage ? (
+        <div className="reader-preparing" role="status" aria-live="polite">
+          {preparingMessage}
+        </div>
+      ) : null}
 
       <ReaderSettings
         containerRef={settingsRef}

@@ -78,6 +78,11 @@
 - Reader first paint should use reader-native CSS skeletons, not Once UI. The reader bundle should avoid root
   `@once-ui-system/core` imports entirely, keep page images progressive with visible retry states, and only render the
   current paged spread plus a small preloaded window outside webtoon mode.
+- Reader smoothness is readiness-driven. Keep adaptive preload policy and decoded image state in the reader helper
+  layer, warm ahead of the visible page, and hold paged navigation on the current spread until the destination spread's
+  metadata and images are ready. Do not mark a failed warm-up as permanently complete; failures must remain retryable.
+- Reader page images are revisioned immutable assets. Moon and Sage should stream page image responses and preserve
+  image cache/content headers, while sessions, progress, bookmarks, and other mutable reader data stay live-only.
 - Reader input belongs in `apps/reader-next/lib/inputController.js`. Keep keyboard, swipe, and gamepad mapping
   testable there, including gamepad connection/disconnection, hidden-document reset, repeat timing, analog dead zone,
   settings-open suppression of page flips, and the console-style defaults.

@@ -29,6 +29,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -58,6 +59,7 @@ public final class LibraryService {
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final AtomicBoolean startupCatalogScanStarted = new AtomicBoolean(false);
     private final ExecutorService startupCatalogScanExecutor = Executors.newSingleThreadExecutor(new StartupScanThreadFactory());
+    private final Map<String, ReaderArchiveIndex> readerArchiveIndexes = new ConcurrentHashMap<>();
 
     /**
      * Create the shared Raven library service.
@@ -462,7 +464,7 @@ public final class LibraryService {
         }
 
         int chapterIndex = manifest.chapters().indexOf(chapter);
-        int pageCount = resolvePageCount(chapter);
+        int pageCount = resolvePageCount(manifest.title(), chapter);
         List<ReaderPage> pages = java.util.stream.IntStream.range(0, pageCount)
             .mapToObj((index) -> new ReaderPage(
                 index,
@@ -1132,10 +1134,10 @@ public final class LibraryService {
         return existing != null && existing.status() != null && !existing.status().isBlank() ? existing.status() : "active";
     }
 
-    private int resolvePageCount(LibraryChapter chapter) {
+    private int resolvePageCount(LibraryTitle title, LibraryChapter chapter) {
         if (chapter.archivePath() != null && !chapter.archivePath().isBlank()) {
             try {
-                return countArchivePages(Path.of(chapter.archivePath()));
+                return readerArchiveIndex(title, Path.of(chapter.archivePath())).entries().size();
             } catch (Exception ignored) {
             }
         }
@@ -1153,12 +1155,17 @@ public final class LibraryService {
     }
 
     private byte[] readArchivePage(LibraryTitle title, Path archivePath, int pageIndex) throws IOException {
+        ReaderArchiveIndex index = readerArchiveIndex(title, archivePath);
+        if (pageIndex < 0 || pageIndex >= index.entries().size()) {
+            return null;
+        }
+        String entryName = index.entries().get(pageIndex).name();
         try (ZipFile zipFile = new ZipFile(archivePath.toFile())) {
-            List<? extends ZipEntry> entries = sortArchiveEntries(zipFile, title);
-            if (pageIndex < 0 || pageIndex >= entries.size()) {
+            ZipEntry entry = zipFile.getEntry(entryName);
+            if (entry == null) {
                 return null;
             }
-            try (InputStream stream = zipFile.getInputStream(entries.get(pageIndex))) {
+            try (InputStream stream = zipFile.getInputStream(entry)) {
                 return stream.readAllBytes();
             }
         }
@@ -1169,21 +1176,12 @@ public final class LibraryService {
             return "image/svg+xml";
         }
 
-        try (ZipFile zipFile = new ZipFile(Path.of(chapter.archivePath()).toFile())) {
-            List<? extends ZipEntry> entries = sortArchiveEntries(zipFile, title);
+        try {
+            List<ReaderArchiveEntry> entries = readerArchiveIndex(title, Path.of(chapter.archivePath())).entries();
             if (pageIndex < 0 || pageIndex >= entries.size()) {
                 return "image/jpeg";
             }
-            String name = entries.get(pageIndex).getName().toLowerCase(Locale.ROOT);
-            if (name.endsWith(".png")) {
-                return "image/png";
-            }
-            if (name.endsWith(".webp")) {
-                return "image/webp";
-            }
-            if (name.endsWith(".gif")) {
-                return "image/gif";
-            }
+            return entries.get(pageIndex).mediaType();
         } catch (Exception ignored) {
         }
 
@@ -1403,6 +1401,56 @@ public final class LibraryService {
         }
     }
 
+    /**
+     * Return the number of cached reader archive indexes.
+     *
+     * @return reader archive index cache size
+     */
+    int readerArchiveIndexCacheSize() {
+        return readerArchiveIndexes.size();
+    }
+
+    private ReaderArchiveIndex readerArchiveIndex(LibraryTitle title, Path archivePath) throws IOException {
+        String key = readerArchiveIndexKey(archivePath);
+        ReaderArchiveIndex cached = readerArchiveIndexes.get(key);
+        if (cached != null) {
+            return cached;
+        }
+
+        try (ZipFile zipFile = new ZipFile(archivePath.toFile())) {
+            ReaderArchiveIndex index = new ReaderArchiveIndex(sortArchiveEntries(zipFile, title).stream()
+                .map((entry) -> new ReaderArchiveEntry(entry.getName(), mediaTypeForArchiveEntry(entry.getName())))
+                .toList());
+            if (readerArchiveIndexes.size() > 256) {
+                readerArchiveIndexes.clear();
+            }
+            readerArchiveIndexes.put(key, index);
+            return index;
+        }
+    }
+
+    private String readerArchiveIndexKey(Path archivePath) throws IOException {
+        Path absolutePath = archivePath.toAbsolutePath().normalize();
+        return absolutePath + "#" + Files.size(absolutePath) + "#" + Files.getLastModifiedTime(absolutePath).toMillis();
+    }
+
+    private String mediaTypeForArchiveEntry(String name) {
+        String normalized = Optional.ofNullable(name).orElse("").toLowerCase(Locale.ROOT);
+        if (normalized.endsWith(".png")) {
+            return "image/png";
+        }
+        if (normalized.endsWith(".webp")) {
+            return "image/webp";
+        }
+        if (normalized.endsWith(".gif")) {
+            return "image/gif";
+        }
+        if (normalized.endsWith(".svg")) {
+            return "image/svg+xml";
+        }
+        return "image/jpeg";
+    }
+
     private List<? extends ZipEntry> sortArchiveEntries(ZipFile zipFile, LibraryTitle title) {
         RavenNamingSettings namingSettings = settingsService.getNamingSettings();
         return zipFile.stream()
@@ -1417,6 +1465,17 @@ public final class LibraryService {
                     .thenComparing(ZipEntry::getName)
             )
             .toList();
+    }
+
+    private record ReaderArchiveIndex(
+        List<ReaderArchiveEntry> entries
+    ) {
+    }
+
+    private record ReaderArchiveEntry(
+        String name,
+        String mediaType
+    ) {
     }
 
     private record TitleQuality(

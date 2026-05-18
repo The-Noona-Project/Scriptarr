@@ -17,6 +17,59 @@ const clampIndex = (value, pageCount) => {
   return Math.max(0, Math.min(index, Math.max(0, pageCount - 1)));
 };
 
+const normalizeConnectionType = (value) => String(value || "").trim().toLowerCase();
+
+/**
+ * Resolve the reader's page warm-ahead budget for the current device.
+ *
+ * @param {{saveData?: boolean, effectiveType?: string, viewportWidth?: number, deviceMemory?: number}} [environment]
+ * @returns {{aheadCount: number, previousCushion: number, profile: "conservative" | "standard"}}
+ */
+export const resolveReaderPreloadConfig = (environment = {}) => {
+  const connectionType = normalizeConnectionType(environment.effectiveType);
+  const constrainedNetwork = environment.saveData === true || ["slow-2g", "2g"].includes(connectionType);
+  const constrainedViewport = Number.isFinite(environment.viewportWidth) && environment.viewportWidth > 0 && environment.viewportWidth <= 760;
+  const constrainedMemory = Number.isFinite(environment.deviceMemory) && environment.deviceMemory > 0 && environment.deviceMemory <= 4;
+
+  if (constrainedNetwork || constrainedViewport || constrainedMemory) {
+    return {aheadCount: 3, previousCushion: 1, profile: "conservative"};
+  }
+
+  return {aheadCount: 6, previousCushion: 2, profile: "standard"};
+};
+
+/**
+ * List the spread page indexes that must be ready before paged navigation lands.
+ *
+ * @param {{layoutMode?: string, pageIndex?: number, pageCount?: number}} [options]
+ * @returns {number[]}
+ */
+export const resolvePagedReaderWindowIndexes = ({layoutMode = "single", pageIndex = 0, pageCount = 0} = {}) => {
+  const total = toPositiveInteger(pageCount, 0);
+  if (!total) {
+    return [];
+  }
+  const active = clampIndex(pageIndex, total);
+  const spreadSize = layoutMode === "double" || layoutMode === "manga-double" ? 2 : 1;
+  const start = layoutMode === "single" ? active : Math.max(0, active - (active % spreadSize));
+  return Array.from({length: Math.min(spreadSize, total - start)}, (_value, offset) => start + offset);
+};
+
+/**
+ * Check whether a page window has loaded metadata with image URLs.
+ *
+ * @param {Array<{index?: number, src?: string}>} [pages]
+ * @param {number[]} [indexes]
+ * @returns {boolean}
+ */
+export const hasReaderPageImages = (pages = [], indexes = []) => {
+  const byIndex = new Map(pages.map((page) => [page?.index, page]));
+  return indexes.length > 0 && indexes.every((index) => {
+    const page = byIndex.get(index);
+    return Boolean(page?.src);
+  });
+};
+
 /**
  * Merge reader page metadata by page index while preserving numeric page order.
  *
@@ -161,7 +214,8 @@ export const resolveReaderPreloadPlan = ({
   loadedPages = [],
   chunkSize = 12,
   aheadCount = 3,
-  previousCushion = 1
+  previousCushion = 1,
+  scrollDirection = "forward"
 } = {}) => {
   const total = toPositiveInteger(pageCount, 0);
   if (!total) {
@@ -173,11 +227,13 @@ export const resolveReaderPreloadPlan = ({
   const warmIndexes = [];
 
   if (isWebtoon) {
-    for (let index = active - previousCushion; index < active; index += 1) {
+    const behindCount = scrollDirection === "backward" ? Math.max(previousCushion, aheadCount) : previousCushion;
+    const forwardCount = scrollDirection === "backward" ? Math.max(1, previousCushion) : aheadCount;
+    for (let index = active - behindCount; index < active; index += 1) {
       metadataIndexes.push(index);
       warmIndexes.push(index);
     }
-    for (let index = active + 1; index <= active + aheadCount; index += 1) {
+    for (let index = active + 1; index <= active + forwardCount; index += 1) {
       metadataIndexes.push(index);
       warmIndexes.push(index);
     }
@@ -274,9 +330,12 @@ export default {
   createReaderPageRequestToken,
   hasReaderPageWindow,
   hasReaderPageRequestForChapter,
+  hasReaderPageImages,
   mergeReaderPageRequestPages,
   mergeReaderPages,
+  resolvePagedReaderWindowIndexes,
   resolveReaderPreloadPlan,
+  resolveReaderPreloadConfig,
   warmReaderPageImages,
   resolveWebtoonLoadMoreAction
 };

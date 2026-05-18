@@ -190,6 +190,56 @@ class LibraryServiceTest {
     }
 
     /**
+     * Verify Raven reuses the sorted archive index and media type metadata for
+     * repeated reader page renders from the same chapter archive.
+     *
+     * @param tempDir temporary test directory
+     * @throws Exception when the archive fixture cannot be prepared
+     */
+    @Test
+    void readerArchiveIndexCacheReusesPageMetadata(@TempDir Path tempDir) throws Exception {
+        FakeRavenBrokerClient brokerClient = new FakeRavenBrokerClient();
+        brokerClient.setSetting("raven.naming", Map.of(
+            "chapterTemplate", "{title} c{chapter_padded}.cbz",
+            "pageTemplate", "{chapter_padded}_p{page}{ext}",
+            "chapterPad", 3,
+            "pagePad", 2,
+            "volumePad", 2
+        ));
+        ScriptarrLogger logger = mock(ScriptarrLogger.class);
+        when(logger.getDownloadsRoot()).thenReturn(tempDir);
+        LibraryService service = new LibraryService(brokerClient, new RavenSettingsService(brokerClient, logger, List.of()), logger);
+
+        Path titleFolder = tempDir.resolve("downloaded").resolve("manga").resolve("Frieren");
+        Files.createDirectories(titleFolder);
+        Path archive = writeArchive(titleFolder.resolve("Frieren c001.cbz"), Map.of(
+            "001_p3.webp", new byte[]{3},
+            "001_p1.jpg", new byte[]{1},
+            "001_p2.png", new byte[]{2}
+        ));
+        LibraryTitle title = service.recordDownloadedTitle(
+            "Frieren",
+            "Manga",
+            "https://weebcentral.com/series/frieren",
+            "",
+            null,
+            List.of(new LibraryChapter("", "Chapter 1", "1", 3, null, true, archive.toString(), "", null)),
+            titleFolder,
+            titleFolder
+        );
+
+        RenderedPage secondPage = service.renderReaderPage(title.id(), title.chapters().getFirst().id(), 1);
+        RenderedPage thirdPage = service.renderReaderPage(title.id(), title.chapters().getFirst().id(), 2);
+
+        assertEquals(1, service.readerArchiveIndexCacheSize());
+        assertArrayEquals(new byte[]{2}, secondPage.bytes());
+        assertEquals("image/png", secondPage.mediaType());
+        assertArrayEquals(new byte[]{3}, thirdPage.bytes());
+        assertEquals("image/webp", thirdPage.mediaType());
+        assertEquals(1, service.readerArchiveIndexCacheSize());
+    }
+
+    /**
      * Verify Raven sorts persisted reader manifests newest-first even when the
      * stored chapter payload order is stale or inconsistent.
      */

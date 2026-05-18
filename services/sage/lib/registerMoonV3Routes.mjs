@@ -2,6 +2,7 @@
  * @file Scriptarr Sage module: services/sage/lib/registerMoonV3Routes.mjs.
  */
 import {createHash, randomBytes} from "node:crypto";
+import {Readable} from "node:stream";
 import {ADMIN_ACCESS_DOMAINS} from "@scriptarr/access";
 import {hasDomainAccess, hasPermission} from "./auth.mjs";
 import {
@@ -5328,11 +5329,26 @@ export const registerMoonV3Routes = (app, {
       }
     );
 
-    const buffer = Buffer.from(await response.arrayBuffer());
     res.status(response.status);
     res.setHeader("Cache-Control", "private, max-age=604800");
     res.setHeader("Content-Type", response.headers.get("content-type") || "application/octet-stream");
-    res.send(buffer);
+    const contentLength = response.headers.get("content-length");
+    const etag = response.headers.get("etag");
+    const lastModified = response.headers.get("last-modified");
+    if (contentLength) {
+      res.setHeader("Content-Length", contentLength);
+    }
+    if (etag) {
+      res.setHeader("ETag", etag);
+    }
+    if (lastModified) {
+      res.setHeader("Last-Modified", lastModified);
+    }
+    if (!response.body) {
+      res.end();
+      return;
+    }
+    Readable.fromWeb(response.body).pipe(res);
   }));
 };
 

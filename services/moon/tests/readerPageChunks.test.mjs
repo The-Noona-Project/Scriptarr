@@ -6,10 +6,13 @@ import assert from "node:assert/strict";
 import {
   beginReaderPageRequest,
   completeReaderPageRequest,
+  hasReaderPageImages,
   hasReaderPageWindow,
   hasReaderPageRequestForChapter,
   mergeReaderPageRequestPages,
   mergeReaderPages,
+  resolvePagedReaderWindowIndexes,
+  resolveReaderPreloadConfig,
   resolveReaderPreloadPlan,
   resolveWebtoonLoadMoreAction,
   warmReaderPageImages
@@ -34,6 +37,41 @@ test("reader page window detects missing chunk metadata", () => {
 
   assert.equal(hasReaderPageWindow(loaded, 0, 12, 71), true);
   assert.equal(hasReaderPageWindow(loaded, 12, 12, 71), false);
+});
+
+test("reader preload config adapts to constrained devices", () => {
+  assert.deepEqual(resolveReaderPreloadConfig({
+    effectiveType: "4g",
+    viewportWidth: 1440,
+    deviceMemory: 16
+  }), {aheadCount: 6, previousCushion: 2, profile: "standard"});
+  assert.deepEqual(resolveReaderPreloadConfig({
+    saveData: true,
+    effectiveType: "4g",
+    viewportWidth: 1440,
+    deviceMemory: 16
+  }), {aheadCount: 3, previousCushion: 1, profile: "conservative"});
+  assert.deepEqual(resolveReaderPreloadConfig({
+    effectiveType: "2g",
+    viewportWidth: 1440,
+    deviceMemory: 16
+  }), {aheadCount: 3, previousCushion: 1, profile: "conservative"});
+});
+
+test("paged reader window requires spread image metadata before navigation lands", () => {
+  assert.deepEqual(resolvePagedReaderWindowIndexes({
+    layoutMode: "manga-double",
+    pageIndex: 7,
+    pageCount: 10
+  }), [6, 7]);
+  assert.equal(hasReaderPageImages([
+    {index: 6, src: "/page-6.jpg"},
+    {index: 7, src: "/page-7.jpg"}
+  ], [6, 7]), true);
+  assert.equal(hasReaderPageImages([
+    {index: 6, src: "/page-6.jpg"},
+    {index: 7}
+  ], [6, 7]), false);
 });
 
 test("reader page request merge keeps appended chunks when initial replace finishes late", () => {
@@ -136,6 +174,23 @@ test("webtoon preload plans the next three pages plus a previous cushion", () =>
   assert.deepEqual(plan.warmIndexes, [9, 11, 12, 13]);
   assert.deepEqual(plan.metadataRequests, [{cursor: 12, pageSize: 12}]);
   assert.equal(plan.prefetchNextChapter, false);
+});
+
+test("webtoon preload favors the scroll direction while keeping a small opposite cushion", () => {
+  const loaded = Array.from({length: 12}, (_value, index) => ({index}));
+  const plan = resolveReaderPreloadPlan({
+    layoutMode: "webtoon",
+    activeIndex: 10,
+    pageCount: 30,
+    loadedPages: loaded,
+    chunkSize: 12,
+    aheadCount: 4,
+    previousCushion: 1,
+    scrollDirection: "backward"
+  });
+
+  assert.deepEqual(plan.warmIndexes, [6, 7, 8, 9, 11]);
+  assert.deepEqual(plan.metadataRequests, []);
 });
 
 test("paged preload reaches three pages ahead and asks for next chapter prefetch near the end", () => {

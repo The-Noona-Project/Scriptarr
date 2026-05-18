@@ -116,6 +116,7 @@ test("Noona chat sends curated memory and read context to Oracle without mutatin
   assert.equal(oracleCall.baseUrl, "http://oracle.test");
   assert.equal(oracleCall.options.method, "POST");
   assert.equal(oracleCall.options.body.context.source, "discord-mention");
+  assert.match(oracleCall.options.body.context.personaStyle, /not raw automation output|support ticket|raw commit rows/i);
   assert.deepEqual(oracleCall.options.body.context.memory.userFacts, ["I read late at night"]);
   assert.equal(oracleCall.options.body.context.readContext.serviceHealth.oracle.ok, true);
   assert.equal(oracleCall.options.body.context.readContext.library.results[0].title, "Yotsuba&!");
@@ -201,6 +202,23 @@ test("Noona chat uses a graceful fallback when Oracle is degraded", async () => 
   assert.equal(result.oracle.degraded, true);
   assert.equal(result.reply, "LONG LIVE NOONA. Big sister heard you loud and clear.");
   assert.match(result.error, /Oracle offline/i);
+});
+
+test("Noona chat generic fallback avoids public internal service names", async () => {
+  const vault = createMemoryVault();
+  const service = createNoonaChatService({
+    config: {oracleBaseUrl: "http://oracle.test"},
+    vaultClient: vault,
+    serviceJson: async () => {
+      throw new Error("Oracle offline");
+    }
+  });
+
+  const result = await service.handlePortalMention(mentionPayload("how are you feeling?"));
+
+  assert.equal(result.ok, true);
+  assert.doesNotMatch(result.reply, /Oracle|LocalAI/i);
+  assert.match(result.reply, /Noona is here/i);
 });
 
 test("Noona chat can describe visual identity when Oracle is degraded", async () => {

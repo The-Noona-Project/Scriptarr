@@ -402,6 +402,23 @@ a {
   margin: 0;
 }
 
+.reader-preparing {
+  position: fixed;
+  left: 50%;
+  bottom: 78px;
+  z-index: 34;
+  border: 1px solid rgba(244, 177, 110, 0.34);
+  border-radius: 999px;
+  background: rgba(5, 7, 10, 0.82);
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.34);
+  color: var(--reader-text);
+  font-size: 0.86rem;
+  font-weight: 700;
+  padding: 8px 14px;
+  pointer-events: none;
+  transform: translateX(-50%);
+}
+
 .reader-bottombar input[type="range"] {
   width: 100%;
   accent-color: var(--reader-amber);

@@ -309,7 +309,11 @@ const createSageStub = ({requests = []} = {}) => Promise.resolve(http.createServ
   }
 
   if (requestUrl.pathname === "/api/moon-v3/user/reader/title/dan-da-dan/chapter/chapter-1/page/0") {
-    response.writeHead(200, {"Content-Type": "image/svg+xml"});
+    response.writeHead(200, {
+      "Content-Type": "image/svg+xml",
+      "Cache-Control": "private, max-age=604800",
+      "ETag": "\"reader-page-rev-1\""
+    });
     response.end("<svg xmlns=\"http://www.w3.org/2000/svg\"><text>reader-page</text></svg>");
     return;
   }
@@ -674,6 +678,8 @@ test("moon serves branded split entry documents, typed routes, PWA assets, and M
   const serviceWorkerSource = await serviceWorkerResponse.text();
   assert.match(serviceWorkerSource, /moon-static-/);
   assert.match(serviceWorkerSource, /moon-reader-/);
+  assert.match(serviceWorkerSource, /isReaderPageRequest[\s\S]*searchParams\.has\("rev"\)/);
+  assert.match(serviceWorkerSource, /isReaderPageChunkRequest[\s\S]*searchParams\.has\("rev"\)/);
   assert.doesNotMatch(serviceWorkerSource, /<!doctype html>/i);
 
   const brandingResponse = await fetch(`${baseUrl}/api/moon/v3/public/branding`);
@@ -929,6 +935,8 @@ test("moon serves branded split entry documents, typed routes, PWA assets, and M
   const pageResponse = await fetch(`${baseUrl}/api/moon/v3/user/reader/title/dan-da-dan/chapter/chapter-1/page/0`);
   assert.equal(pageResponse.status, 200);
   assert.match(pageResponse.headers.get("content-type") || "", /image\/svg\+xml/);
+  assert.match(pageResponse.headers.get("cache-control") || "", /max-age=604800/);
+  assert.equal(pageResponse.headers.get("etag"), "\"reader-page-rev-1\"");
   assert.match(await pageResponse.text(), /reader-page/);
 
   const readerSessionResponse = await fetch(`${baseUrl}/api/moon/v3/user/reader/title/dan-da-dan/chapter/chapter-1/session`);
