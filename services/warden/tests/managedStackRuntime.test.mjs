@@ -8,10 +8,13 @@ import {
   actualCapabilitiesForInspect,
   actualDevicesForInspect,
   actualGpuRequestForInspect,
+  actualGpuRequestsForInspect,
   actualRuntimeForInspect,
   desiredCapabilitiesForExtraArgs,
   desiredDevicesForExtraArgs,
   desiredGpuRequestForExtraArgs,
+  desiredGpuRequestsForExtraArgs,
+  gpuRequestsMatchExtraArgs,
   desiredRuntimeForExtraArgs
 } from "../core/managedStackRuntime.mjs";
 
@@ -53,6 +56,16 @@ test("managed stack runtime detects Docker GPU request and runtime drift", () =>
     HostConfig: {
       Runtime: "nvidia",
       DeviceRequests: [{
+        Count: -1,
+        Capabilities: [["gpu", "utility", "compute"]]
+      }]
+    }
+  };
+  const withSingleGpu = {
+    HostConfig: {
+      Runtime: "nvidia",
+      DeviceRequests: [{
+        Count: 1,
         Capabilities: [["gpu", "utility", "compute"]]
       }]
     }
@@ -70,4 +83,10 @@ test("managed stack runtime detects Docker GPU request and runtime drift", () =>
   assert.equal(desiredGpuRequestForExtraArgs(desiredArgs), true);
   assert.equal(actualGpuRequestForInspect(withGpu), true);
   assert.equal(actualGpuRequestForInspect(withoutGpu), false);
+  assert.deepEqual(desiredGpuRequestsForExtraArgs(desiredArgs), ["all"]);
+  assert.deepEqual(actualGpuRequestsForInspect(withGpu), ["all"]);
+  assert.deepEqual(actualGpuRequestsForInspect(withSingleGpu), ["1"]);
+  assert.equal(gpuRequestsMatchExtraArgs(desiredArgs, withGpu), true);
+  assert.equal(gpuRequestsMatchExtraArgs(desiredArgs, withSingleGpu), false);
+  assert.equal(gpuRequestsMatchExtraArgs(desiredArgs, withoutGpu), false);
 });

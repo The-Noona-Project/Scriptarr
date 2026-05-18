@@ -39,6 +39,7 @@ const normalizeString = (value, fallback = "") => {
 };
 const normalizeArray = (value) => Array.isArray(value) ? value : [];
 const normalizeObject = (value, fallback = null) => value && typeof value === "object" && !Array.isArray(value) ? value : fallback;
+const DISCORD_AI_CHAT_TIMEOUT_MS = 90000;
 
 const isActionPrompt = (message) => /\b(start|stop|cancel|end|run|check|probe)\b/i.test(normalizeString(message));
 
@@ -278,7 +279,7 @@ export const createNoonaChatService = ({
           readContext
         }
       },
-      timeoutMs: 30000
+      timeoutMs: DISCORD_AI_CHAT_TIMEOUT_MS
     }).catch((error) => ({
       ok: false,
       status: 503,

@@ -18,6 +18,8 @@ const normalizeString = (value, fallback = "") => {
 };
 const normalizeArray = (value) => Array.isArray(value) ? value : [];
 const normalizeObject = (value, fallback = null) => value && typeof value === "object" && !Array.isArray(value) ? value : fallback;
+const DISCORD_AI_CHAT_TIMEOUT_MS = 90000;
+const DISCORD_AI_REVIEW_TIMEOUT_MS = 60000;
 
 const isActionPrompt = (message) => /\b(start|stop|cancel|end|run|check|probe)\b/i.test(normalizeString(message));
 
@@ -205,7 +207,7 @@ export const createAppaChatService = ({
           readContext
         }
       },
-      timeoutMs: 30000
+      timeoutMs: DISCORD_AI_CHAT_TIMEOUT_MS
     }).catch((error) => ({
       ok: false,
       status: 503,
@@ -248,7 +250,7 @@ export const createAppaChatService = ({
           }
         }
       },
-      timeoutMs: 15000
+      timeoutMs: DISCORD_AI_REVIEW_TIMEOUT_MS
     }).catch((error) => ({
       ok: false,
       status: 503,

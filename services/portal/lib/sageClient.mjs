@@ -21,6 +21,9 @@ const withQuery = (path, query = {}) => {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+const DISCORD_AI_CHAT_TIMEOUT_MS = 90000;
+const DISCORD_AI_REVIEW_TIMEOUT_MS = 60000;
+
 const isRetryableNetworkError = (error) => {
   if (!(error instanceof Error)) {
     return false;
@@ -288,14 +291,14 @@ export const createSageClient = (config) => {
       return requestJson(config.sageBaseUrl, jsonHeaders, "/api/internal/portal/noona-chat", {
         method: "POST",
         body: payload,
-        timeoutMs: 30000
+        timeoutMs: DISCORD_AI_CHAT_TIMEOUT_MS
       });
     },
     appaChat(payload) {
       return requestJson(config.sageBaseUrl, jsonHeaders, "/api/internal/portal/appa-chat", {
         method: "POST",
         body: payload,
-        timeoutMs: 30000
+        timeoutMs: DISCORD_AI_CHAT_TIMEOUT_MS
       });
     },
     recordAppaDiscordDiagnostic(payload) {
@@ -309,7 +312,7 @@ export const createSageClient = (config) => {
       return requestJson(config.sageBaseUrl, jsonHeaders, "/api/internal/portal/noona-review", {
         method: "POST",
         body: payload,
-        timeoutMs: 20000
+        timeoutMs: DISCORD_AI_REVIEW_TIMEOUT_MS
       });
     },
     recordNoonaReviewDelivery(payload) {
@@ -323,7 +326,7 @@ export const createSageClient = (config) => {
       return requestJson(config.sageBaseUrl, jsonHeaders, "/api/internal/oracle/assist", {
         method: "POST",
         body: payload,
-        timeoutMs: 15000
+        timeoutMs: DISCORD_AI_REVIEW_TIMEOUT_MS
       });
     },
     getTriviaState() {

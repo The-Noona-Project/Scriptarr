@@ -188,15 +188,77 @@ export const desiredGpuRequestForExtraArgs = (extraArgs = []) =>
   valuesForOption(extraArgs, "--gpus").some(Boolean);
 
 /**
+ * Resolve the requested Docker GPU bindings from descriptor extra arguments.
+ *
+ * @param {string[]} extraArgs Docker CLI arguments
+ * @returns {string[]} normalized GPU request values
+ */
+export const desiredGpuRequestsForExtraArgs = (extraArgs = []) =>
+  valuesForOption(extraArgs, "--gpus")
+    .map((entry) => normalizeString(entry).toLowerCase())
+    .filter(Boolean)
+    .sort();
+
+const hasGpuCapability = (entry) =>
+  (entry?.Capabilities || [])
+    .some((capabilitySet) => (capabilitySet || []).map((value) => normalizeString(value).toLowerCase()).includes("gpu"));
+
+/**
+ * Resolve the actual Docker GPU bindings from Docker inspect data.
+ *
+ * @param {Record<string, unknown> | null | undefined} inspect Docker inspect payload
+ * @returns {string[]} normalized GPU request values
+ */
+export const actualGpuRequestsForInspect = (inspect) =>
+  (inspect?.HostConfig?.DeviceRequests || [])
+    .filter(hasGpuCapability)
+    .map((entry) => {
+      const count = Number(entry?.Count);
+      if (count === -1) {
+        return "all";
+      }
+      const deviceIds = (entry?.DeviceIDs || [])
+        .map((value) => normalizeString(value))
+        .filter(Boolean)
+        .sort();
+      if (deviceIds.length > 0) {
+        return `device=${deviceIds.join(",")}`;
+      }
+      if (Number.isInteger(count) && count > 0) {
+        return String(count);
+      }
+      return "present";
+    })
+    .filter(Boolean)
+    .sort();
+
+/**
  * Detect whether Docker inspect data shows an assigned GPU device request.
  *
  * @param {Record<string, unknown> | null | undefined} inspect Docker inspect payload
  * @returns {boolean} true when a gpu capability set is present
  */
 export const actualGpuRequestForInspect = (inspect) =>
-  (inspect?.HostConfig?.DeviceRequests || [])
-    .some((entry) => (entry?.Capabilities || [])
-      .some((capabilitySet) => (capabilitySet || []).map((value) => normalizeString(value).toLowerCase()).includes("gpu")));
+  actualGpuRequestsForInspect(inspect).length > 0;
+
+/**
+ * Compare requested Docker GPU bindings with Docker's actual assignment.
+ *
+ * @param {string[]} extraArgs Docker CLI arguments
+ * @param {Record<string, unknown> | null | undefined} inspect Docker inspect payload
+ * @returns {boolean} true when the actual request satisfies the desired request
+ */
+export const gpuRequestsMatchExtraArgs = (extraArgs = [], inspect) => {
+  const desired = desiredGpuRequestsForExtraArgs(extraArgs);
+  if (desired.length === 0) {
+    return true;
+  }
+  const actual = actualGpuRequestsForInspect(inspect);
+  if (actual.length === 0) {
+    return false;
+  }
+  return desired.every((entry) => entry === "all" ? actual.includes("all") : actual.includes(entry) || actual.includes("all"));
+};
 
 const toNanoseconds = (value) => {
   const normalized = normalizeString(value).toLowerCase();
@@ -464,7 +526,7 @@ export const createManagedStackRuntime = ({env = process.env, logger}) => {
       reasons.push("runtime");
     }
 
-    if (desiredGpuRequestForExtraArgs(descriptor.extraArgs) && !actualGpuRequestForInspect(inspect)) {
+    if (!gpuRequestsMatchExtraArgs(descriptor.extraArgs, inspect)) {
       reasons.push("gpus");
     }
 
