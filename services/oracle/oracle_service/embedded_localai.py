@@ -22,6 +22,8 @@ from .config import OracleConfig
 GENERATION_PROBE_EXPECTED_TEXT = "scriptarr-ok"
 GENERATION_PROBE_TTL_SECONDS = 60
 GENERATION_PROBE_TIMEOUT_SECONDS = 45
+LOCALAI_READY_WAIT_SECONDS = 180
+LOCALAI_READY_WAIT_INTERVAL_SECONDS = 2
 
 
 class EmbeddedLocalAiError(RuntimeError):
@@ -436,6 +438,10 @@ class EmbeddedLocalAiManager:
             self._write_model_config(model_url)
             await self._update_job(job_id, message="Starting embedded LocalAI.", progressPercent=85, percent=85)
             await self.start()
+            await self._update_job(job_id, message="Waiting for embedded LocalAI API readiness.", progressPercent=88, percent=88)
+            ready = await self.wait_until_ready()
+            if not ready.get("ready"):
+                raise EmbeddedLocalAiError(_safe_text(ready.get("error") or ready.get("reason"), 400) or "LocalAI API did not become ready.")
             await self._update_job(job_id, message="Verifying chat generation.", progressPercent=90, percent=90)
             probe = await self.probe_generation(force=True, model_url=model_url)
             if not probe.get("ready"):
@@ -474,6 +480,25 @@ class EmbeddedLocalAiManager:
             return {"status": "ready" if response.status_code < 500 else "not_ready", "statusCode": response.status_code}
         except Exception as error:  # noqa: BLE001
             return {"status": "not_ready", "error": _safe_text(error)}
+
+    async def wait_until_ready(self, *, timeout_seconds: int = LOCALAI_READY_WAIT_SECONDS) -> dict[str, Any]:
+        started = time.monotonic()
+        last: dict[str, Any] = {"status": "not_ready", "reason": "not_checked"}
+        while time.monotonic() - started < timeout_seconds:
+            last = await self.check_ready()
+            if last.get("status") == "ready":
+                return {
+                    **last,
+                    "ready": True,
+                    "latencyMs": int((time.monotonic() - started) * 1000)
+                }
+            await asyncio.sleep(LOCALAI_READY_WAIT_INTERVAL_SECONDS)
+        return {
+            **last,
+            "ready": False,
+            "latencyMs": int((time.monotonic() - started) * 1000),
+            "reason": last.get("error") or last.get("reason") or "ready_timeout"
+        }
 
     async def probe_generation(self, *, force: bool = False, model_url: str | None = None) -> dict[str, Any]:
         selected = model_url or self.config.local_ai_default_model_url
