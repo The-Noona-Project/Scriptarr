@@ -241,8 +241,8 @@ For end-to-end Docker verification, use:
 - Oracle starts disabled and OpenAI-first. When LocalAI is selected, Oracle now runs an embedded OpenAI-compatible
   LocalAI runtime inside the `scriptarr-oracle` container instead of relying on a standalone sidecar.
 - Warden still plans the Oracle container mounts and GPU flags. NVIDIA installs should give `scriptarr-oracle`
-  `--runtime nvidia --gpus all` plus compute/utility driver capabilities, while CPU-only hosts should keep AI degraded
-  without making the stack unhealthy.
+  `--runtime nvidia --gpus all`, explicit `/dev/nvidia*` device bindings, and compute/utility driver capabilities,
+  while CPU-only hosts should keep AI degraded without making the stack unhealthy.
 - Embedded LocalAI prepares its cache with no model preload. Moon admin can ask Oracle to ensure the selected GGUF
   model; Oracle writes the model YAML, downloads it once into the persistent `localai/models` folder, starts LocalAI
   for that explicit lifecycle action, and reports ready only after a tiny OpenAI-compatible generation probe succeeds.

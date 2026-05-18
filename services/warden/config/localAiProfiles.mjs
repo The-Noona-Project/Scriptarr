@@ -15,7 +15,14 @@ const PROFILE_MAP = Object.freeze({
     key: "nvidia",
     image: "localai/localai:latest-aio-gpu-nvidia-cuda-12",
     reason: "Detected an NVIDIA GPU; using the LocalAI AIO CUDA 12 image.",
-    runtimeArgs: ["--runtime", "nvidia", "--gpus", "all"]
+    runtimeArgs: [
+      "--runtime", "nvidia",
+      "--gpus", "all",
+      "--device", "/dev/nvidia0",
+      "--device", "/dev/nvidiactl",
+      "--device", "/dev/nvidia-uvm",
+      "--device", "/dev/nvidia-uvm-tools"
+    ]
   },
   intel: {
     key: "intel",

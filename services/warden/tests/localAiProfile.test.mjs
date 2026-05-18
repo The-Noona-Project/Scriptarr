@@ -19,7 +19,14 @@ test("resolve localai profile uses explicit NVIDIA runtime and gpu all binding",
   const {resolveLocalAiProfile} = await import(`../config/localAiProfiles.mjs?${Date.now()}`);
   const profile = resolveLocalAiProfile();
   assert.equal(profile.key, "nvidia");
-  assert.deepEqual(profile.runtimeArgs, ["--runtime", "nvidia", "--gpus", "all"]);
+  assert.deepEqual(profile.runtimeArgs, [
+    "--runtime", "nvidia",
+    "--gpus", "all",
+    "--device", "/dev/nvidia0",
+    "--device", "/dev/nvidiactl",
+    "--device", "/dev/nvidia-uvm",
+    "--device", "/dev/nvidia-uvm-tools"
+  ]);
   delete process.env.SCRIPTARR_GPU_HINT;
 });
 

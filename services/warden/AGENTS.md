@@ -37,7 +37,8 @@ managed services.
   and data into `scriptarr-oracle`, then let Oracle's embedded runtime handle install/start/remove/readiness.
 - Keep Oracle LocalAI runtime mounts and hardware flags aligned with the selected preset:
   - `cpu`: no extra device flags
-  - `nvidia`: `--runtime nvidia --gpus all`
+  - `nvidia`: `--runtime nvidia --gpus all` plus `/dev/nvidia0`, `/dev/nvidiactl`, `/dev/nvidia-uvm`, and
+    `/dev/nvidia-uvm-tools` device bindings
   - `intel`: `--device /dev/dri --group-add video`
   - `amd`: `--device /dev/kfd --device /dev/dri --group-add video`
 - If service boot order, network topology, embedded LocalAI runtime planning, first-boot auth, or Docker test mode changes,

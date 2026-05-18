@@ -17,7 +17,8 @@
 - LocalAI is manual in 3.0: no first-boot model pull, install, or start.
 - Embedded LocalAI now lives inside Oracle. Warden must mount persistent `localai/models` and `localai/data` into the
   Oracle container and pass the correct hardware flags for the selected profile, especially NVIDIA
-  `--runtime nvidia --gpus all`.
+  `--runtime nvidia --gpus all` plus explicit `/dev/nvidia*` device bindings on hosts where Docker's GPU request does
+  not expose `/dev/nvidia0` by itself.
 - LocalAI install, start, remove, and readiness actions are Oracle-owned embedded runtime jobs brokered through Sage.
   Warden should not recreate the standalone `scriptarr-localai` sidecar path by default.
 - AI acceleration is optional; safe fallback is required.

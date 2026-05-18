@@ -58,7 +58,14 @@ test("service plan gives embedded Oracle LocalAI NVIDIA runtime args when hinted
   });
 
   const oracle = plan.services.find((service) => service.name === "scriptarr-oracle");
-  assert.deepEqual(oracle.extraArgs, ["--runtime", "nvidia", "--gpus", "all"]);
+  assert.deepEqual(oracle.extraArgs, [
+    "--runtime", "nvidia",
+    "--gpus", "all",
+    "--device", "/dev/nvidia0",
+    "--device", "/dev/nvidiactl",
+    "--device", "/dev/nvidia-uvm",
+    "--device", "/dev/nvidia-uvm-tools"
+  ]);
   assert.equal(oracle.env.NVIDIA_VISIBLE_DEVICES, "all");
   assert.equal(oracle.env.NVIDIA_DRIVER_CAPABILITIES, "compute,utility");
   assert.equal(oracle.env.SCRIPTARR_LOCALAI_BASE_URL, "http://127.0.0.1:8080/v1");
