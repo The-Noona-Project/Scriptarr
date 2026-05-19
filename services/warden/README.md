@@ -35,6 +35,9 @@ Warden also ships the Docker-backed test stack used by repo contributors:
 - required persistent folders:
   - `warden/logs -> /var/log/scriptarr`
   - `warden/runtime -> /var/lib/scriptarr`
+- managed Moon folders that Warden mounts for derived browser assets:
+  - `moon/cover-cache -> /app/cover-cache`
+  - `moon/reader-page-cache -> /app/reader-page-cache`
 - optional LocalAI folders that Warden mounts when admins start LocalAI:
   - `localai/models -> /models`
   - `localai/data -> /data`

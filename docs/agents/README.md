@@ -28,6 +28,9 @@ Current next-chat focus:
 - Reader browser QA: use the real `/reader/:type/:titleId/:chapterId` route in a browser. Smoke webtoon scrolling,
   single/double/manga-double layouts, reload/cache behavior, retries, controller/keyboard paths, and numeric next/prev
   chapter semantics.
+- Reader reliability now includes Moon's successful-only revisioned page-image cache and Raven's redacted page probe.
+  Warden mounts Moon's reader page cache as managed storage. Failed page responses must stay `no-store`, and durable
+  diagnostics must not include filesystem paths or raw image URLs.
 - Noona tone: treat Noona voice as a Portal -> Sage -> Oracle workflow. Update prompts/guards in Sage and Oracle,
   verify Discord delivery in Portal, and use Appa diagnostics/review for live checks without storing raw transcripts.
 

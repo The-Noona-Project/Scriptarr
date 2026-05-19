@@ -44,18 +44,18 @@ test("reader preload config adapts to constrained devices", () => {
     effectiveType: "4g",
     viewportWidth: 1440,
     deviceMemory: 16
-  }), {aheadCount: 6, previousCushion: 2, profile: "standard"});
+  }), {aheadCount: 10, previousCushion: 3, profile: "standard"});
   assert.deepEqual(resolveReaderPreloadConfig({
     saveData: true,
     effectiveType: "4g",
     viewportWidth: 1440,
     deviceMemory: 16
-  }), {aheadCount: 3, previousCushion: 1, profile: "conservative"});
+  }), {aheadCount: 4, previousCushion: 1, profile: "conservative"});
   assert.deepEqual(resolveReaderPreloadConfig({
     effectiveType: "2g",
     viewportWidth: 1440,
     deviceMemory: 16
-  }), {aheadCount: 3, previousCushion: 1, profile: "conservative"});
+  }), {aheadCount: 4, previousCushion: 1, profile: "conservative"});
 });
 
 test("paged reader window requires spread image metadata before navigation lands", () => {

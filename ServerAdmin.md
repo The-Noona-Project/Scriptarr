@@ -77,6 +77,8 @@ container.
 On Linux and Unraid, binding `<data-root>` back into the Warden container at the same absolute path lets Warden create
 the full storage tree directly before it starts the sibling services. Unraid installs can also save this container as a
 user template after the first successful boot if you want to reuse the same contract later.
+Warden also mounts Moon's derived browser asset folders from this tree, including `moon/cover-cache` and
+`moon/reader-page-cache`, so successful revisioned reader pages can survive Moon container replacements.
 
 ## Install Shape
 
@@ -309,7 +311,9 @@ and Logout, a dedicated `/profile` page for local StylePanel preferences and ins
 The dedicated reader app is fullscreen, has its own overlays and settings drawer, and supports webtoon, single,
 double, manga double, LTR/RTL, and page-fit controls. Reader performance diagnostics keep detailed timings in the
 browser-local `window.__scriptarrReaderTelemetry` buffer and persist only redacted slow/retry/caught-buffer summaries
-as `reader` events for admin review. `/profile` is now a tabbed account
+as `reader` events for admin review. Revisioned page images are cached only after successful same-origin loads through
+Moon in a bounded derived cache, failed page-image responses remain `no-store`, and redacted page probes distinguish
+stream failures from missing or corrupt archive entries without exposing filesystem paths or raw image URLs. `/profile` is now a tabbed account
 hub with `Overview`, `Stats`, and `Preferences` instead of one long mixed settings panel. Library type links now live
 inside the `Library` mega menu and canonical `/library?type=...` URL state, while `/browse` still opens the same
 catalogue for old links. The catalogue keeps a quick-jump letter rail on the left, tighter search against titles,

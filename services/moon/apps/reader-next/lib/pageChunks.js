@@ -33,10 +33,10 @@ export const resolveReaderPreloadConfig = (environment = {}) => {
   const constrainedMemory = Number.isFinite(environment.deviceMemory) && environment.deviceMemory > 0 && environment.deviceMemory <= 4;
 
   if (constrainedNetwork || constrainedViewport || constrainedMemory) {
-    return {aheadCount: 3, previousCushion: 1, profile: "conservative"};
+    return {aheadCount: 4, previousCushion: 1, profile: "conservative"};
   }
 
-  return {aheadCount: 6, previousCushion: 2, profile: "standard"};
+  return {aheadCount: 10, previousCushion: 3, profile: "standard"};
 };
 
 /**

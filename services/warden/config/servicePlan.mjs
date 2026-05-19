@@ -314,9 +314,10 @@ export const resolveServicePlan = ({env = process.env, containerNamePrefix = ""}
     env: {
       SCRIPTARR_SAGE_BASE_URL: `http://scriptarr-sage:${sagePort}`,
       SCRIPTARR_MOON_PORT: String(moonPort),
-      SCRIPTARR_MOON_COVER_CACHE_DIR: "/app/cover-cache"
+      SCRIPTARR_MOON_COVER_CACHE_DIR: "/app/cover-cache",
+      SCRIPTARR_MOON_READER_PAGE_CACHE_DIR: "/app/reader-page-cache"
     },
-    mounts: resolveFolderMounts(storageLayout, "scriptarr-moon", ["coverCache", "logs"]),
+    mounts: resolveFolderMounts(storageLayout, "scriptarr-moon", ["coverCache", "readerPageCache", "logs"]),
     networkAliases: ["scriptarr-moon"],
     publishedPorts: [{hostPort: moonPublicPort, containerPort: moonPort}],
     healthCheck: buildNodeHttpHealthCheck(moonPort),

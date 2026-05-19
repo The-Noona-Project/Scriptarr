@@ -23,6 +23,7 @@ test("service plan exposes the fixed Scriptarr network and selfhost mysql by def
   assert.equal(plan.mysql.mode, "selfhost");
   assert.equal(plan.services.some((service) => service.name === "scriptarr-mysql"), true);
   const oracle = plan.services.find((service) => service.name === "scriptarr-oracle");
+  const moon = plan.services.find((service) => service.name === "scriptarr-moon");
   assert.equal(plan.services.find((service) => service.name === "scriptarr-moon").publishedPorts[0].hostPort, 3000);
   assert.equal(plan.services.find((service) => service.name === "scriptarr-vault").env.SUPERUSER_ID, "owner-1");
   assert.equal(plan.services.find((service) => service.name === "scriptarr-raven").env.SCRIPTARR_RAVEN_LOG_DIR, "/app/logs");
@@ -33,6 +34,8 @@ test("service plan exposes the fixed Scriptarr network and selfhost mysql by def
   assert.equal(plan.services.find((service) => service.name === "scriptarr-sage").env.SCRIPTARR_APPA_DISCORD_CLIENT_ID, "appa-client-id");
   assert.equal(plan.services.find((service) => service.name === "scriptarr-portal").env.SCRIPTARR_APPA_DISCORD_TOKEN, "appa-token");
   assert.equal(plan.services.find((service) => service.name === "scriptarr-portal").env.SCRIPTARR_APPA_DISCORD_CLIENT_ID, "appa-client-id");
+  assert.equal(moon.env.SCRIPTARR_MOON_READER_PAGE_CACHE_DIR, "/app/reader-page-cache");
+  assert.equal(moon.mounts.some((mount) => mount.containerPath === "/app/reader-page-cache"), true);
   assert.equal(oracle.env.SCRIPTARR_SAGE_BASE_URL, "http://scriptarr-sage:3004");
   assert.equal(oracle.env.SCRIPTARR_LOCALAI_EMBEDDED, "true");
   assert.equal(oracle.env.SCRIPTARR_LOCALAI_BASE_URL, "http://127.0.0.1:8080/v1");

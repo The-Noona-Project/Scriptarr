@@ -8,6 +8,7 @@ import com.scriptarr.raven.downloader.DownloaderService;
 import com.scriptarr.raven.library.ReaderChapterPayload;
 import com.scriptarr.raven.library.ReaderManifest;
 import com.scriptarr.raven.library.LibraryService;
+import com.scriptarr.raven.library.ReaderPageProbe;
 import com.scriptarr.raven.library.RenderedPage;
 import com.scriptarr.raven.metadata.MetadataService;
 import com.scriptarr.raven.settings.RavenSettingsService;
@@ -298,6 +299,23 @@ public class RavenController {
             return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("error", "Reader chapter not found."));
         }
         return ResponseEntity.ok(payload);
+    }
+
+    /**
+     * Probe a single reader page without exposing archive paths or source URLs.
+     *
+     * @param titleId title id to resolve
+     * @param chapterId chapter id to resolve
+     * @param pageIndex zero-based page index
+     * @return redacted page diagnostic payload
+     */
+    @GetMapping("/v1/reader/{titleId}/{chapterId}/page/{pageIndex}/status")
+    public ResponseEntity<ReaderPageProbe> readerPageStatus(
+        @PathVariable("titleId") String titleId,
+        @PathVariable("chapterId") String chapterId,
+        @PathVariable("pageIndex") int pageIndex
+    ) {
+        return ResponseEntity.ok(libraryService.probeReaderPage(titleId, chapterId, pageIndex));
     }
 
     /**

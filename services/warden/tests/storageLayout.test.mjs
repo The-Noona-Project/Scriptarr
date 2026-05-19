@@ -28,6 +28,8 @@ test("build scriptarr storage layout keeps per-service folders small and explici
   const layout = buildScriptarrStorageLayout("/mnt/user/scriptarr");
   assert.equal(layout.services["scriptarr-mysql"].data.containerPath, "/var/lib/mysql");
   assert.equal(layout.services["scriptarr-raven"].downloads.containerPath, "/downloads");
+  assert.equal(layout.services["scriptarr-moon"].readerPageCache.containerPath, "/app/reader-page-cache");
+  assert.equal(layout.services["scriptarr-moon"].readerPageCache.hostPath, path.normalize("/mnt/user/scriptarr/moon/reader-page-cache"));
   assert.equal(layout.services["scriptarr-warden"].runtime.hostPath, path.normalize("/mnt/user/scriptarr/warden/runtime"));
   assert.equal(layout.services["scriptarr-warden"].runtime.containerPath, "/var/lib/scriptarr");
 });

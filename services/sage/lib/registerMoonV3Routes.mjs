@@ -138,6 +138,7 @@ const READER_TELEMETRY_SLOW_THRESHOLDS_MS = Object.freeze({
   "page-chunk-fetch": 900,
   "image-stream-fetch": 1500,
   "image-decode": 350,
+  "page-probe": 900,
   "caught-buffer": 250
 });
 const READER_TELEMETRY_TYPES = new Set([
@@ -145,7 +146,11 @@ const READER_TELEMETRY_TYPES = new Set([
   "page-chunk-fetch",
   "image-stream-fetch",
   "image-decode",
+  "image-auto-retry",
   "image-retry",
+  "page-probe",
+  "page-cache-hit",
+  "page-cache-miss",
   "caught-buffer"
 ]);
 const ORACLE_ADMIN_TEST_TIMEOUT_MS = 75000;
@@ -221,11 +226,31 @@ const sanitizeReaderTelemetryPayload = (payload = {}) => {
     receivedAt: new Date().toISOString()
   };
 };
+
+const sanitizeReaderPageProbePayload = (payload = {}, {fallbackStatus = 0, fallbackPageIndex = -1, durationMs = 0} = {}) => {
+  const source = normalizeObject(payload, {}) || {};
+  const status = normalizeTelemetryInteger(source.status, fallbackStatus);
+  return {
+    ok: source.ok === true,
+    status: status > 0 ? status : fallbackStatus,
+    pageIndex: normalizeTelemetryInteger(source.pageIndex, fallbackPageIndex),
+    contentTypeFamily: normalizeTelemetryLabel(source.contentTypeFamily, 40),
+    contentLength: Math.max(0, normalizeTelemetryInteger(source.contentLength, 0)),
+    cacheable: source.cacheable === true,
+    failureCode: normalizeTelemetryLabel(source.failureCode || source.reason, 120),
+    source: normalizeTelemetryLabel(source.source, 40),
+    durationMs: normalizeTelemetryDuration(durationMs)
+  };
+};
+
 const shouldPersistReaderTelemetry = (event) => {
   if (!event.type) {
     return false;
   }
-  if (event.type === "image-retry" || event.type === "caught-buffer" || event.retryCount > 0) {
+  if (event.type === "image-retry" || event.type === "image-auto-retry" || event.type === "caught-buffer" || event.retryCount > 0) {
+    return true;
+  }
+  if ((event.type === "page-probe" || event.type === "page-cache-miss") && event.ok === false) {
     return true;
   }
   const threshold = READER_TELEMETRY_SLOW_THRESHOLDS_MS[event.type];
@@ -5515,6 +5540,37 @@ export const registerMoonV3Routes = (app, {
       bookmarks: context.bookmarks,
       preferences: context.preferences
     });
+  }));
+
+  app.get("/api/moon-v3/user/reader/title/:titleId/chapter/:chapterId/page/:pageIndex/status", withUser(requireUser, async (req, res) => {
+    const startedAt = Date.now();
+    const pageIndex = Number.parseInt(String(req.params.pageIndex || "-1"), 10);
+    res.setHeader("Cache-Control", "no-store");
+    try {
+      const result = await serviceJson(
+        config.ravenBaseUrl,
+        `/v1/reader/${encodeURIComponent(req.params.titleId)}/${encodeURIComponent(req.params.chapterId)}/page/${encodeURIComponent(req.params.pageIndex)}/status`,
+        {timeoutMs: 5000}
+      );
+      res.status(result.status >= 500 ? 502 : 200).json(sanitizeReaderPageProbePayload(result.payload, {
+        fallbackStatus: result.status,
+        fallbackPageIndex: Number.isFinite(pageIndex) ? pageIndex : -1,
+        durationMs: Date.now() - startedAt
+      }));
+    } catch (error) {
+      const failureCode = error instanceof Error && error.name === "TimeoutError" ? "stream_timeout" : "unknown";
+      res.status(502).json(sanitizeReaderPageProbePayload({
+        ok: false,
+        status: 0,
+        pageIndex: Number.isFinite(pageIndex) ? pageIndex : -1,
+        failureCode,
+        source: "raven"
+      }, {
+        fallbackStatus: 0,
+        fallbackPageIndex: Number.isFinite(pageIndex) ? pageIndex : -1,
+        durationMs: Date.now() - startedAt
+      }));
+    }
   }));
 
   app.get("/api/moon-v3/user/reader/title/:titleId/chapter/:chapterId/page/:pageIndex", withUser(requireUser, async (req, res) => {

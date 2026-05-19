@@ -11,6 +11,7 @@ const SLOW_THRESHOLDS_MS = Object.freeze({
   "page-chunk-fetch": 900,
   "image-stream-fetch": 1500,
   "image-decode": 350,
+  "page-probe": 900,
   "caught-buffer": 250
 });
 
@@ -160,7 +161,10 @@ export const sanitizeReaderTelemetryEvent = (event = {}) => ({
  */
 export const shouldPersistReaderTelemetryEvent = (event = {}) => {
   const type = normalizeString(event.type);
-  if (type === "image-retry" || type === "caught-buffer") {
+  if (type === "image-retry" || type === "image-auto-retry" || type === "caught-buffer") {
+    return true;
+  }
+  if ((type === "page-probe" || type === "page-cache-miss") && event.ok === false) {
     return true;
   }
   if (normalizeInteger(event.retryCount, 0) > 0) {

@@ -42,6 +42,12 @@ test("reader telemetry sanitizes identifiers and keeps durable-worthy events nar
   assert.equal(shouldPersistReaderTelemetryEvent(event), true);
   assert.equal(shouldPersistReaderTelemetryEvent({...event, durationMs: 100}), false);
   assert.equal(shouldPersistReaderTelemetryEvent({type: "image-retry", retryCount: 1}), true);
+  assert.equal(shouldPersistReaderTelemetryEvent({type: "image-auto-retry", retryCount: 1}), true);
+  assert.equal(shouldPersistReaderTelemetryEvent({type: "page-probe", ok: false}), true);
+  assert.equal(shouldPersistReaderTelemetryEvent({type: "page-probe", ok: true, durationMs: 100}), false);
+  assert.equal(shouldPersistReaderTelemetryEvent({type: "page-cache-hit", ok: true}), false);
+  assert.equal(shouldPersistReaderTelemetryEvent({type: "page-cache-miss", ok: true}), false);
+  assert.equal(shouldPersistReaderTelemetryEvent({type: "page-cache-miss", ok: false}), true);
   assert.equal(shouldPersistReaderTelemetryEvent({type: "caught-buffer"}), true);
 });
 
@@ -61,9 +67,10 @@ test("reader telemetry writes a fixed local buffer and posts only slow summaries
 
   recordReaderTelemetry({type: "image-decode", titleId: "title", chapterId: "chapter", pageIndex: 1, durationMs: 350});
   recordReaderTelemetry({type: "image-retry", titleId: "title", chapterId: "chapter", pageIndex: 1, retryCount: 1});
+  recordReaderTelemetry({type: "page-probe", titleId: "title", chapterId: "chapter", pageIndex: 1, ok: false, reason: "decode_or_corrupt"});
 
-  assert.equal(sent.length, 2);
-  assert.deepEqual(sent.map((entry) => entry.type), ["image-decode", "image-retry"]);
+  assert.equal(sent.length, 3);
+  assert.deepEqual(sent.map((entry) => entry.type), ["image-decode", "image-retry", "page-probe"]);
   assert.equal(sent.every((entry) => Object.hasOwn(entry, "src") === false), true);
 });
 

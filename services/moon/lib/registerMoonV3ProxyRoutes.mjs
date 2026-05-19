@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import nodeFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import express from "express";
@@ -8,6 +9,10 @@ import {proxyRequest, proxyStream} from "./proxy.mjs";
 const COVER_CACHE_MAX_BYTES = 8 * 1024 * 1024;
 const COVER_CACHE_TIMEOUT_MS = 10_000;
 const COVER_CACHE_CONTENT_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
+const READER_PAGE_CACHE_MAX_BYTES = 32 * 1024 * 1024;
+const READER_PAGE_CACHE_MAX_TOTAL_BYTES = 1024 * 1024 * 1024;
+const READER_PAGE_CACHE_PRUNE_TARGET_BYTES = Math.round(READER_PAGE_CACHE_MAX_TOTAL_BYTES * 0.85);
+const READER_PAGE_CACHE_CONTENT_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif", "image/svg+xml"]);
 const HOP_BY_HOP_HEADERS = new Set([
   "connection",
   "keep-alive",
@@ -54,6 +59,213 @@ const toQueryString = (query) => {
 
 const isReaderPageImagePath = (targetPath) =>
   /^user\/reader\/title\/[^/]+\/chapter\/[^/]+\/page\/\d+$/.test(String(targetPath || ""));
+
+const isReaderPageStatusPath = (targetPath) =>
+  /^user\/reader\/title\/[^/]+\/chapter\/[^/]+\/page\/\d+\/status$/.test(String(targetPath || ""));
+
+const toReaderPageImagePath = (targetPath) => String(targetPath || "").replace(/\/status$/, "");
+
+const safeCacheToken = (value, limit = 120) => String(value || "")
+  .replace(/[^a-zA-Z0-9_-]/g, "_")
+  .slice(0, limit);
+
+const safeInteger = (value, fallback = 0) => {
+  const parsed = Number.parseInt(String(value), 10);
+  return Number.isFinite(parsed) ? parsed : fallback;
+};
+
+const sanitizeReaderPageStatusPayload = (payload, {cacheFiles = null, cached = null} = {}) => ({
+  ok: payload?.ok === true,
+  status: Math.max(0, safeInteger(payload?.status, 0)),
+  pageIndex: Math.max(0, safeInteger(payload?.pageIndex, 0)),
+  revision: safeCacheToken(payload?.revision, 64),
+  contentTypeFamily: safeCacheToken(payload?.contentTypeFamily, 40),
+  byteLength: Math.max(0, safeInteger(cached?.stat?.size || payload?.byteLength, 0)),
+  durationMs: Math.max(0, safeInteger(payload?.durationMs, 0)),
+  cacheable: payload?.cacheable === true,
+  failureCode: safeCacheToken(payload?.failureCode, 80),
+  source: safeCacheToken(payload?.source, 40),
+  cacheHit: Boolean(cached),
+  cacheState: cacheFiles ? (cached ? "hit" : "miss") : "bypass"
+});
+
+const resolveReaderPageCacheFiles = (config, targetPath, query) => {
+  const revision = String(query?.rev || "").trim();
+  if (!revision) {
+    return null;
+  }
+  const safeRevision = safeCacheToken(revision, 64);
+  if (!safeRevision) {
+    return null;
+  }
+  const key = crypto
+    .createHash("sha256")
+    .update(`${targetPath}?rev=${safeRevision}`)
+    .digest("hex");
+  const root = path.resolve(config.readerPageCacheDir || "data/moon-reader-page-cache");
+  const directory = path.join(root, key.slice(0, 2));
+  return {
+    key,
+    directory,
+    dataFile: path.join(directory, `${key}.bin`),
+    metaFile: path.join(directory, `${key}.json`),
+    tempFile: path.join(directory, `${key}.${process.pid}.${Date.now()}.tmp`)
+  };
+};
+
+const listReaderPageCacheFiles = async (root) => {
+  const entries = [];
+  const pending = [root];
+  while (pending.length) {
+    const directory = pending.pop();
+    let children = [];
+    try {
+      children = await fs.readdir(directory, {withFileTypes: true});
+    } catch {
+      continue;
+    }
+    for (const child of children) {
+      const childPath = path.join(directory, child.name);
+      if (child.isDirectory()) {
+        pending.push(childPath);
+        continue;
+      }
+      if (!child.isFile() || !child.name.endsWith(".bin")) {
+        continue;
+      }
+      try {
+        const stat = await fs.stat(childPath);
+        entries.push({path: childPath, metaPath: childPath.replace(/\.bin$/, ".json"), size: stat.size, mtimeMs: stat.mtimeMs});
+      } catch {
+        // Ignore files racing with another writer or pruner.
+      }
+    }
+  }
+  return entries;
+};
+
+const pruneReaderPageCache = async (root) => {
+  const entries = await listReaderPageCacheFiles(root);
+  let totalBytes = entries.reduce((total, entry) => total + entry.size, 0);
+  if (totalBytes <= READER_PAGE_CACHE_MAX_TOTAL_BYTES) {
+    return;
+  }
+  const oldestFirst = entries.sort((left, right) => left.mtimeMs - right.mtimeMs);
+  for (const entry of oldestFirst) {
+    if (totalBytes <= READER_PAGE_CACHE_PRUNE_TARGET_BYTES) {
+      break;
+    }
+    totalBytes -= entry.size;
+    await Promise.all([
+      fs.rm(entry.path, {force: true}).catch(() => null),
+      fs.rm(entry.metaPath, {force: true}).catch(() => null)
+    ]);
+  }
+};
+
+const readReaderPageCacheEntry = async (files) => {
+  if (!files) {
+    return null;
+  }
+  try {
+    const [metadataRaw, stat] = await Promise.all([
+      fs.readFile(files.metaFile, "utf8"),
+      fs.stat(files.dataFile)
+    ]);
+    const metadata = JSON.parse(metadataRaw);
+    if (!stat.isFile() || metadata?.status !== 200) {
+      return null;
+    }
+    return {metadata, stat};
+  } catch {
+    return null;
+  }
+};
+
+const sendReaderPageCacheHit = (res, files, entry) => {
+  const metadata = entry.metadata || {};
+  res.status(200);
+  res.setHeader("Content-Type", metadata.contentType || "application/octet-stream");
+  res.setHeader("Cache-Control", metadata.cacheControl || "private, max-age=604800");
+  res.setHeader("Content-Length", String(entry.stat.size));
+  res.setHeader("X-Scriptarr-Reader-Cache", "hit");
+  if (metadata.etag) {
+    res.setHeader("ETag", metadata.etag);
+  }
+  if (metadata.lastModified) {
+    res.setHeader("Last-Modified", metadata.lastModified);
+  }
+  nodeFs.createReadStream(files.dataFile).pipe(res);
+};
+
+const isCacheableReaderPageResponse = (response) => {
+  if (!response || response.status !== 200) {
+    return false;
+  }
+  const contentType = String(response.headers?.["content-type"] || "").split(";")[0].trim().toLowerCase();
+  if (!READER_PAGE_CACHE_CONTENT_TYPES.has(contentType)) {
+    return false;
+  }
+  const contentLength = Number.parseInt(String(response.headers?.["content-length"] || "0"), 10);
+  return !Number.isFinite(contentLength) || contentLength <= 0 || contentLength <= READER_PAGE_CACHE_MAX_BYTES;
+};
+
+const startReaderPageCacheWrite = async (files, response) => {
+  if (!files || !isCacheableReaderPageResponse(response)) {
+    return null;
+  }
+  await fs.mkdir(files.directory, {recursive: true});
+  const writer = nodeFs.createWriteStream(files.tempFile);
+  let byteLength = 0;
+  let aborted = false;
+  const abort = () => {
+    if (aborted) {
+      return;
+    }
+    aborted = true;
+    writer.destroy();
+    void fs.rm(files.tempFile, {force: true}).catch(() => null);
+  };
+  writer.on("error", abort);
+  writer.on("finish", () => {
+    if (aborted) {
+      return;
+    }
+    const metadata = {
+      status: 200,
+      contentType: response.headers["content-type"] || "application/octet-stream",
+      cacheControl: response.headers["cache-control"] || "private, max-age=604800",
+      etag: response.headers.etag || "",
+      lastModified: response.headers["last-modified"] || "",
+      byteLength,
+      cachedAt: new Date().toISOString()
+    };
+    const root = path.dirname(files.directory);
+    void fs.rename(files.tempFile, files.dataFile)
+      .then(() => fs.writeFile(files.metaFile, JSON.stringify(metadata)))
+      .then(() => pruneReaderPageCache(root))
+      .catch(() => fs.rm(files.tempFile, {force: true}).catch(() => null));
+  });
+  return {
+    write(chunk) {
+      if (aborted) {
+        return;
+      }
+      byteLength += Buffer.byteLength(chunk);
+      if (byteLength > READER_PAGE_CACHE_MAX_BYTES) {
+        abort();
+        return;
+      }
+      writer.write(chunk);
+    },
+    finish() {
+      if (!aborted) {
+        writer.end();
+      }
+    },
+    abort
+  };
+};
 
 const forwardResponseHeaders = (res, headers = {}, {stream = false} = {}) => {
   for (const [key, value] of Object.entries(headers || {})) {
@@ -105,6 +317,12 @@ export const registerMoonV3ProxyRoutes = (app, {config, getSessionToken}) => {
       return;
     }
     if (req.method === "GET" && isReaderPageImagePath(targetPath)) {
+      const cacheFiles = resolveReaderPageCacheFiles(config, targetPath, req.query);
+      const cached = await readReaderPageCacheEntry(cacheFiles);
+      if (cached) {
+        sendReaderPageCacheHit(res, cacheFiles, cached);
+        return;
+      }
       const response = await proxyStream({
         baseUrl: config.sageBaseUrl,
         path: `/api/moon-v3/${targetPath}${query ? `?${query}` : ""}`,
@@ -114,11 +332,61 @@ export const registerMoonV3ProxyRoutes = (app, {config, getSessionToken}) => {
       });
       res.status(response.status);
       forwardResponseHeaders(res, response.headers, {stream: true});
+      res.setHeader("X-Scriptarr-Reader-Cache", cacheFiles ? "miss" : "bypass");
       if (!response.body) {
         res.end();
         return;
       }
+      let cacheWriter = null;
+      try {
+        cacheWriter = await startReaderPageCacheWrite(cacheFiles, response);
+      } catch {
+        cacheWriter = null;
+      }
+      if (cacheWriter) {
+        response.body.on("data", (chunk) => cacheWriter.write(chunk));
+        response.body.on("end", () => cacheWriter.finish());
+        response.body.on("error", () => cacheWriter.abort());
+      }
       response.body.pipe(res);
+      return;
+    }
+    if (req.method === "GET" && isReaderPageStatusPath(targetPath)) {
+      const imageTargetPath = toReaderPageImagePath(targetPath);
+      const cacheFiles = resolveReaderPageCacheFiles(config, imageTargetPath, req.query);
+      const cached = await readReaderPageCacheEntry(cacheFiles);
+      const response = await proxyRequest({
+        baseUrl: config.sageBaseUrl,
+        path: `/api/moon-v3/${targetPath}${query ? `?${query}` : ""}`,
+        method: req.method,
+        sessionToken: getSessionToken(req),
+        headers: forwardedHeaders(req)
+      });
+      const responseBody = Buffer.isBuffer(response.body) ? response.body.toString("utf8") : String(response.body || "");
+      const contentType = response.headers["content-type"] || "application/json; charset=utf-8";
+      res.status(response.status);
+      forwardResponseHeaders(res, response.headers);
+      res.setHeader("X-Scriptarr-Reader-Cache", cacheFiles ? (cached ? "hit" : "miss") : "bypass");
+      if (!/^application\/json\b/i.test(String(contentType)) || !responseBody.trim()) {
+        if (!res.hasHeader("Content-Type")) {
+          res.setHeader("Content-Type", contentType);
+        }
+        res.send(response.body);
+        return;
+      }
+      let payload = null;
+      try {
+        payload = JSON.parse(responseBody);
+      } catch {
+        payload = null;
+      }
+      if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+        res.setHeader("Content-Type", contentType);
+        res.send(response.body);
+        return;
+      }
+      res.setHeader("Content-Type", "application/json; charset=utf-8");
+      res.json(sanitizeReaderPageStatusPayload(payload, {cacheFiles, cached}));
       return;
     }
     const response = await proxyRequest({

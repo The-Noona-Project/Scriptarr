@@ -33,8 +33,9 @@ import ReaderSettings from "./ReaderSettings.jsx";
 import ReaderStage from "./ReaderStage.jsx";
 import {ReaderInitialSkeleton} from "./ReaderSkeleton.jsx";
 
-const PAGE_CHUNK_SIZE = 12;
+const PAGE_CHUNK_SIZE = 18;
 const CHAPTER_RAIL_PAGE_SIZE = 60;
+const WARM_IMAGE_CONCURRENCY = 4;
 const DEFAULT_PRELOAD_CONFIG = resolveReaderPreloadConfig();
 const PAGE_FITS = ["width", "height", "contain"];
 const DIRECTIONS = ["ltr", "rtl"];
@@ -83,6 +84,20 @@ const mergeChapterRows = (current = [], incoming = []) => {
     }
   }
   return Array.from(byId.values());
+};
+
+const runWarmImageJobs = async (jobs = []) => {
+  const results = [];
+  let cursor = 0;
+  const workers = Array.from({length: Math.min(WARM_IMAGE_CONCURRENCY, jobs.length)}, async () => {
+    while (cursor < jobs.length) {
+      const jobIndex = cursor;
+      cursor += 1;
+      results[jobIndex] = await jobs[jobIndex]();
+    }
+  });
+  await Promise.all(workers);
+  return results.filter(Boolean);
 };
 
 /**
@@ -342,53 +357,55 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = ""}) => {
       if (!page) {
         return null;
       }
-      const warmKey = `${session.chapter.id}:${page.index}:${page.src}`;
-      const current = imageWarmStateRef.current.get(warmKey);
-      if (current?.status === "ready") {
-        return Promise.resolve({index: page.index, ok: true, cached: true});
-      }
-      if (current?.status === "loading" && current.promise) {
-        return current.promise;
-      }
-      if (current?.status === "error" && !retryFailures) {
-        return Promise.resolve({index: page.index, ok: false, cached: true});
-      }
-      const promise = warmReaderPageImages([page], [page.index], {
-        onMetric: (metric) => recordReaderTelemetry({
-          ...metric,
-          titleId: title?.id || "",
-          chapterId: session.chapter.id,
-          layoutMode
-        })
-      }).then((results) => {
-        const result = results[0] || {index: page.index, ok: false};
+      return () => {
+        const warmKey = `${session.chapter.id}:${page.index}:${page.src}`;
+        const current = imageWarmStateRef.current.get(warmKey);
+        if (current?.status === "ready") {
+          return Promise.resolve({index: page.index, ok: true, cached: true});
+        }
+        if (current?.status === "loading" && current.promise) {
+          return current.promise;
+        }
+        if (current?.status === "error" && !retryFailures) {
+          return Promise.resolve({index: page.index, ok: false, cached: true});
+        }
+        const promise = warmReaderPageImages([page], [page.index], {
+          onMetric: (metric) => recordReaderTelemetry({
+            ...metric,
+            titleId: title?.id || "",
+            chapterId: session.chapter.id,
+            layoutMode
+          })
+        }).then((results) => {
+          const result = results[0] || {index: page.index, ok: false};
+          imageWarmStateRef.current.set(warmKey, {
+            status: result.ok ? "ready" : "error",
+            chapterId: session.chapter.id,
+            pageIndex: page.index,
+            updatedAt: Date.now()
+          });
+          return result;
+        }, () => {
+          imageWarmStateRef.current.set(warmKey, {
+            status: "error",
+            chapterId: session.chapter.id,
+            pageIndex: page.index,
+            updatedAt: Date.now()
+          });
+          return {index: page.index, ok: false};
+        });
         imageWarmStateRef.current.set(warmKey, {
-          status: result.ok ? "ready" : "error",
+          status: "loading",
           chapterId: session.chapter.id,
           pageIndex: page.index,
+          promise,
           updatedAt: Date.now()
         });
-        return result;
-      }, () => {
-        imageWarmStateRef.current.set(warmKey, {
-          status: "error",
-          chapterId: session.chapter.id,
-          pageIndex: page.index,
-          updatedAt: Date.now()
-        });
-        return {index: page.index, ok: false};
-      });
-      imageWarmStateRef.current.set(warmKey, {
-        status: "loading",
-        chapterId: session.chapter.id,
-        pageIndex: page.index,
-        promise,
-        updatedAt: Date.now()
-      });
-      return promise;
+        return promise;
+      };
     }).filter(Boolean);
 
-    return Promise.all(warmJobs);
+    return runWarmImageJobs(warmJobs);
   }, [layoutMode, title?.id]);
 
   const waitForPageImageMetadata = useCallback((session, indexes = [], {timeoutMs = 5000} = {}) => new Promise((resolve) => {

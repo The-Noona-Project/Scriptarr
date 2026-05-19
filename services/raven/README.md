@@ -106,5 +106,8 @@ the incomplete managed `downloading/<type>` working folder.
 When an upstream page image returns `404`, Raven now skips same-URL image retries, refreshes the chapter page list on
 the next chapter attempt, and leaves a clearer source-image failure if the refreshed source still points at missing
 images.
+Reader page serving reuses cached archive indexes for page order and media types. Raven also exposes a redacted page
+probe for Moon, validates archive-backed JPEG, PNG, GIF, and SVG pages on first read, renders a Scriptarr fallback page
+for missing or corrupt page entries, and marks those pages as possible missing content for `/admin/wanted/missing-content`.
 For long-running WeebCentral series, Raven now follows the source page's HTMX full-chapter-list flow instead of only
 the initial visible subset, which fixes partial-history titles such as Tomb Raider King.

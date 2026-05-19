@@ -13,6 +13,8 @@ import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 
+import javax.imageio.ImageIO;
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
@@ -60,6 +62,7 @@ public final class LibraryService {
     private final AtomicBoolean startupCatalogScanStarted = new AtomicBoolean(false);
     private final ExecutorService startupCatalogScanExecutor = Executors.newSingleThreadExecutor(new StartupScanThreadFactory());
     private final Map<String, ReaderArchiveIndex> readerArchiveIndexes = new ConcurrentHashMap<>();
+    private final Map<String, PageValidationResult> readerPageValidations = new ConcurrentHashMap<>();
 
     /**
      * Create the shared Raven library service.
@@ -488,6 +491,23 @@ public final class LibraryService {
     }
 
     /**
+     * Probe a reader page and return redacted diagnostics suitable for Moon.
+     *
+     * @param titleId title id to resolve
+     * @param chapterId chapter id to resolve
+     * @param pageIndex zero-based page index to probe
+     * @return redacted page probe payload
+     */
+    public ReaderPageProbe probeReaderPage(String titleId, String chapterId, int pageIndex) {
+        ReaderChapterPayload payload = readerChapter(titleId, chapterId);
+        if (payload == null || pageIndex < 0 || pageIndex >= (payload == null ? 0 : payload.pages().size())) {
+            return new ReaderPageProbe(false, 404, pageIndex, "", 0, false, "missing_page", "archive");
+        }
+        ReaderPageReadResult result = resolveReaderPageRead(payload, pageIndex);
+        return result.probe();
+    }
+
+    /**
      * Render a real archive-backed page when available, or Raven's SVG fallback
      * when the chapter has no imported art yet.
      *
@@ -502,17 +522,23 @@ public final class LibraryService {
             return null;
         }
 
-        LibraryChapter chapter = payload.chapter();
-        if (chapter.archivePath() != null && !chapter.archivePath().isBlank()) {
-            try {
-                byte[] bytes = readArchivePage(payload.title(), Path.of(chapter.archivePath()), pageIndex);
-                if (bytes != null) {
-                    return new RenderedPage(bytes, payload.pages().get(pageIndex).mediaType());
-                }
-            } catch (Exception error) {
-                logger.warn("LIBRARY", "Failed to read archive-backed page.", error.getMessage());
-            }
+        ReaderPageReadResult result = resolveReaderPageRead(payload, pageIndex);
+        if (result.probe().ok() && result.bytes() != null) {
+            return new RenderedPage(result.bytes(), result.mediaType());
         }
+        if (!result.probe().ok() && "archive".equals(result.probe().source())) {
+            markReaderPageIssue(payload, pageIndex, result.probe().failureCode());
+        }
+
+        return renderReaderFallbackPage(payload, pageIndex, result.probe().failureCode());
+    }
+
+    private RenderedPage renderReaderFallbackPage(ReaderChapterPayload payload, int pageIndex, String reason) {
+        String message = switch (Optional.ofNullable(reason).orElse("")) {
+            case "missing_page" -> "Scriptarr could not find this imported page.";
+            case "decode_or_corrupt" -> "Scriptarr found this page, but the image data did not pass validation.";
+            default -> "Scriptarr could not load imported page art for this chapter yet.";
+        };
 
         String svg = """
             <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1700" viewBox="0 0 1200 1700">
@@ -528,8 +554,8 @@ public final class LibraryService {
               <text x="120" y="340" fill="#ffffff" font-family="Space Grotesk, Arial, sans-serif" font-size="96" font-weight="700">%s</text>
               <text x="120" y="430" fill="rgba(255,255,255,0.86)" font-family="IBM Plex Sans, Arial, sans-serif" font-size="44">%s</text>
               <text x="120" y="510" fill="rgba(255,255,255,0.64)" font-family="IBM Plex Sans, Arial, sans-serif" font-size="32">Page %d of %d</text>
-              <text x="120" y="650" fill="rgba(255,255,255,0.92)" font-family="IBM Plex Sans, Arial, sans-serif" font-size="56" font-weight="700">Moon native reader fallback</text>
-              <text x="120" y="740" fill="rgba(255,255,255,0.72)" font-family="IBM Plex Sans, Arial, sans-serif" font-size="34">Raven could not find imported page art for this chapter yet, so it is rendering the reader fallback page.</text>
+              <text x="120" y="650" fill="rgba(255,255,255,0.92)" font-family="IBM Plex Sans, Arial, sans-serif" font-size="56" font-weight="700">Scriptarr reader fallback</text>
+              <text x="120" y="740" fill="rgba(255,255,255,0.72)" font-family="IBM Plex Sans, Arial, sans-serif" font-size="34">%s</text>
               <circle cx="960" cy="430" r="150" fill="rgba(255,255,255,0.08)" />
               <circle cx="960" cy="430" r="94" fill="rgba(255,255,255,0.18)" />
               <text x="960" y="450" text-anchor="middle" fill="#ffffff" font-family="Space Grotesk, Arial, sans-serif" font-size="88" font-weight="700">%d</text>
@@ -541,6 +567,7 @@ public final class LibraryService {
             escapeSvg(payload.chapter().label()),
             pageIndex + 1,
             payload.pages().size(),
+            escapeSvg(message),
             pageIndex + 1,
             Instant.now().toString()
         );
@@ -1154,6 +1181,93 @@ public final class LibraryService {
         }
     }
 
+    private ReaderPageReadResult resolveReaderPageRead(ReaderChapterPayload payload, int pageIndex) {
+        LibraryChapter chapter = payload.chapter();
+        String mediaType = payload.pages().get(pageIndex).mediaType();
+        if (chapter.archivePath() == null || chapter.archivePath().isBlank()) {
+            return new ReaderPageReadResult(
+                null,
+                "image/svg+xml",
+                new ReaderPageProbe(true, 200, pageIndex, "image", 0, true, "", "fallback")
+            );
+        }
+
+        try {
+            byte[] bytes = readArchivePage(payload.title(), Path.of(chapter.archivePath()), pageIndex);
+            if (bytes == null || bytes.length == 0) {
+                return failedReaderPageRead(pageIndex, mediaType, "missing_page", "archive");
+            }
+            PageValidationResult validation = validateReaderPageBytesCached(Path.of(chapter.archivePath()), pageIndex, bytes, mediaType);
+            if (!validation.ok()) {
+                return failedReaderPageRead(pageIndex, mediaType, validation.failureCode(), "archive");
+            }
+            return new ReaderPageReadResult(
+                bytes,
+                mediaType,
+                new ReaderPageProbe(true, 200, pageIndex, contentTypeFamily(mediaType), bytes.length, true, "", "archive")
+            );
+        } catch (Exception error) {
+            logger.warn("LIBRARY", "Failed to read archive-backed page.", error.getMessage());
+            return failedReaderPageRead(pageIndex, mediaType, "unknown", "archive");
+        }
+    }
+
+    private ReaderPageReadResult failedReaderPageRead(int pageIndex, String mediaType, String failureCode, String source) {
+        return new ReaderPageReadResult(
+            null,
+            mediaType == null || mediaType.isBlank() ? "application/octet-stream" : mediaType,
+            new ReaderPageProbe(false, "missing_page".equals(failureCode) ? 404 : 422, pageIndex, contentTypeFamily(mediaType), 0, false, failureCode, source)
+        );
+    }
+
+    private PageValidationResult validateReaderPageBytes(byte[] bytes, String mediaType) {
+        if (bytes == null || bytes.length == 0) {
+            return new PageValidationResult(false, "decode_or_corrupt");
+        }
+        String normalized = Optional.ofNullable(mediaType).orElse("").toLowerCase(Locale.ROOT);
+        if (normalized.contains("svg")) {
+            String sample = new String(bytes, 0, Math.min(bytes.length, 512), StandardCharsets.UTF_8).toLowerCase(Locale.ROOT);
+            return sample.contains("<svg") ? new PageValidationResult(true, "") : new PageValidationResult(false, "decode_or_corrupt");
+        }
+        if (normalized.contains("jpeg") || normalized.contains("jpg") || normalized.contains("png") || normalized.contains("gif")) {
+            try {
+                return ImageIO.read(new ByteArrayInputStream(bytes)) == null
+                    ? new PageValidationResult(false, "decode_or_corrupt")
+                    : new PageValidationResult(true, "");
+            } catch (IOException error) {
+                return new PageValidationResult(false, "decode_or_corrupt");
+            }
+        }
+        return new PageValidationResult(true, "");
+    }
+
+    private PageValidationResult validateReaderPageBytesCached(
+        Path archivePath,
+        int pageIndex,
+        byte[] bytes,
+        String mediaType
+    ) throws IOException {
+        String key = readerArchiveIndexKey(archivePath) + "#" + pageIndex;
+        PageValidationResult cached = readerPageValidations.get(key);
+        if (cached != null) {
+            return cached;
+        }
+        PageValidationResult validation = validateReaderPageBytes(bytes, mediaType);
+        if (readerPageValidations.size() > 4096) {
+            readerPageValidations.clear();
+        }
+        readerPageValidations.put(key, validation);
+        return validation;
+    }
+
+    private String contentTypeFamily(String mediaType) {
+        String normalized = Optional.ofNullable(mediaType).orElse("").toLowerCase(Locale.ROOT);
+        if (normalized.startsWith("image/")) {
+            return "image";
+        }
+        return normalized.isBlank() ? "" : "binary";
+    }
+
     private byte[] readArchivePage(LibraryTitle title, Path archivePath, int pageIndex) throws IOException {
         ReaderArchiveIndex index = readerArchiveIndex(title, archivePath);
         if (pageIndex < 0 || pageIndex >= index.entries().size()) {
@@ -1186,6 +1300,79 @@ public final class LibraryService {
         }
 
         return "image/jpeg";
+    }
+
+    private void markReaderPageIssue(ReaderChapterPayload payload, int pageIndex, String failureCode) {
+        LibraryTitle title = payload.title();
+        LibraryChapter chapter = payload.chapter();
+        int pageNumber = pageIndex + 1;
+        if (Optional.ofNullable(chapter.missingPages()).orElse(List.of()).contains(pageNumber)
+            && !"clean".equals(normalizeChapterQuality(chapter.qualityStatus()))) {
+            return;
+        }
+
+        List<Integer> missingPages = mergeMissingPages(chapter.missingPages(), List.of(pageNumber));
+        List<String> qualityNotes = mergeQualityNotes(
+            chapter.qualityNotes(),
+            List.of("Reader page " + pageNumber + " failed validation: " + firstNonBlank(failureCode, "unknown") + ".")
+        );
+        LibraryChapter updatedChapter = new LibraryChapter(
+            chapter.id(),
+            chapter.label(),
+            chapter.chapterNumber(),
+            chapter.pageCount(),
+            chapter.releaseDate(),
+            chapter.available(),
+            chapter.archivePath(),
+            chapter.sourceUrl(),
+            "possible_missing_page",
+            Math.max(Math.max(chapter.expectedPageCount(), chapter.pageCount()), payload.pages().size()),
+            missingPages.size(),
+            missingPages,
+            qualityNotes,
+            Instant.now().toString()
+        );
+        List<LibraryChapter> nextChapters = Optional.ofNullable(title.chapters()).orElse(List.of()).stream()
+            .map((entry) -> Objects.equals(entry.id(), chapter.id()) ? updatedChapter : entry)
+            .toList();
+        TitleQuality titleQuality = summarizeTitleQuality(nextChapters);
+        LibraryTitle updatedTitle = new LibraryTitle(
+            title.id(),
+            title.title(),
+            title.mediaType(),
+            title.libraryTypeLabel(),
+            title.libraryTypeSlug(),
+            title.status(),
+            resolveLatestChapter(nextChapters),
+            title.coverAccent(),
+            title.summary(),
+            title.releaseLabel(),
+            nextChapters.size(),
+            title.chaptersDownloaded(),
+            title.author(),
+            title.tags(),
+            title.aliases(),
+            title.metadataProvider(),
+            title.metadataMatchedAt(),
+            title.relations(),
+            title.sourceUrl(),
+            title.coverUrl(),
+            title.workingRoot(),
+            title.downloadRoot(),
+            nextChapters,
+            titleQuality.status(),
+            titleQuality.cleanChapterCount(),
+            titleQuality.partialChapterCount(),
+            titleQuality.missingContentCount(),
+            titleQuality.summary(),
+            Instant.now().toString()
+        );
+        try {
+            upsertTitle(updatedTitle);
+            replaceChapters(title.id(), nextChapters);
+        } catch (Exception error) {
+            logger.warn("LIBRARY", "Failed to persist reader page quality marker.", error.getMessage());
+        }
     }
 
     private TitleQuality summarizeTitleQuality(List<LibraryChapter> chapters) {
@@ -1475,6 +1662,19 @@ public final class LibraryService {
     private record ReaderArchiveEntry(
         String name,
         String mediaType
+    ) {
+    }
+
+    private record ReaderPageReadResult(
+        byte[] bytes,
+        String mediaType,
+        ReaderPageProbe probe
+    ) {
+    }
+
+    private record PageValidationResult(
+        boolean ok,
+        String failureCode
     ) {
     }
 

@@ -682,6 +682,24 @@ const createDependencyStub = ({
       return;
     }
 
+    if (request.url?.startsWith("/v1/reader/") && request.url.includes("/page/") && request.url.endsWith("/status")) {
+      const parts = String(request.url).split("/").filter(Boolean);
+      const pageIndex = Number.parseInt(parts[5] || "0", 10) || 0;
+      response.writeHead(200, {"Content-Type": "application/json"});
+      response.end(JSON.stringify({
+        ok: false,
+        status: 422,
+        pageIndex,
+        contentTypeFamily: "image",
+        contentLength: 0,
+        cacheable: false,
+        failureCode: "decode_or_corrupt",
+        source: "archive",
+        rawPath: "/downloaded/secret.cbz"
+      }));
+      return;
+    }
+
     if (request.url?.startsWith("/v1/reader/") && request.url.includes("/page/")) {
       response.writeHead(200, {
         "Content-Type": "image/svg+xml",
@@ -2489,6 +2507,27 @@ test("sage round-trips Moon branding and exposes typed Moon reader payloads", as
   assert.match(readerPageResponse.headers.get("cache-control") || "", /max-age=604800/);
   assert.equal(readerPageResponse.headers.get("etag"), "\"raven-reader-page\"");
   assert.match(await readerPageResponse.text(), /reader-page/);
+
+  const readerPageProbeResponse = await fetch(`${baseUrl}/api/moon-v3/user/reader/title/dan-da-dan/chapter/dandadan-c166/page/1/status`, {
+    headers: {
+      "Authorization": `Bearer ${ownerClaim.token}`
+    }
+  });
+  assert.equal(readerPageProbeResponse.status, 200);
+  assert.match(readerPageProbeResponse.headers.get("cache-control") || "", /no-store/);
+  const readerPageProbe = await readerPageProbeResponse.json();
+  assert.deepEqual(readerPageProbe, {
+    ok: false,
+    status: 422,
+    pageIndex: 1,
+    contentTypeFamily: "image",
+    contentLength: 0,
+    cacheable: false,
+    failureCode: "decode_or_corrupt",
+    source: "archive",
+    durationMs: readerPageProbe.durationMs
+  });
+  assert.equal(Object.hasOwn(readerPageProbe, "rawPath"), false);
 
   const fastTelemetry = await fetch(`${baseUrl}/api/moon-v3/user/reader/telemetry`, {
     method: "POST",

@@ -52,7 +52,7 @@ export const ReaderLoadMore = ({loadMore, label = "Load next", ready = true, res
         return;
       }
       void runLoad();
-    }, {rootMargin: "360px 0px", threshold: 0.01});
+    }, {rootMargin: "1200px 0px", threshold: 0.01});
     observer.observe(node);
     return () => observer.disconnect();
   }, [hasMore, pending, ready]);

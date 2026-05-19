@@ -69,6 +69,10 @@ The reader also keeps a bounded local debug telemetry buffer at `window.__script
 page chunk fetch, image load/decode, preload queue depth, retry counts, decoded pages ahead/behind, and caught-buffer
 waits are measured before preload policy changes; only redacted slow/retry/caught-buffer summaries are brokered through
 Moon -> Sage as durable reader events.
+Reader page images now auto-retry transient load failures before showing a manual retry panel, and Moon caches only
+successful revisioned page-image responses under its bounded Warden-mounted derived reader page cache. Failed image responses
+stay `no-store`, and the same-origin page probe classifies failures without exposing archive paths, tokens, or raw
+image URLs.
 Moon title pages now paint from chunked same-origin reads: the cover-led hero and action strip call the lightweight
 `/api/moon-v3/user/title/<titleId>/summary` route first, chapter rows stream through the paged
 `/chapters?cursor=&pageSize=&sort=&filter=&q=` route, and request history waits until the Requests tab opens. The

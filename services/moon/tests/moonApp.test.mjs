@@ -318,6 +318,22 @@ const createSageStub = ({requests = []} = {}) => Promise.resolve(http.createServ
     return;
   }
 
+  if (requestUrl.pathname === "/api/moon-v3/user/reader/title/dan-da-dan/chapter/chapter-1/page/0/status") {
+    response.writeHead(200, {"Content-Type": "application/json", "Cache-Control": "no-store"});
+    response.end(JSON.stringify({
+      ok: true,
+      status: 200,
+      pageIndex: 0,
+      revision: requestUrl.searchParams.get("rev") || "",
+      contentTypeFamily: "image",
+      byteLength: 1024,
+      cacheable: true,
+      failureCode: "",
+      rawPath: "/downloads/secret/title.cbz"
+    }));
+    return;
+  }
+
   if (requestUrl.pathname === "/api/moon-v3/user/reader/title/dan-da-dan/chapter/chapter-1/session") {
     response.writeHead(200, {"Content-Type": "application/json", "Cache-Control": "no-store"});
     response.end(JSON.stringify({
@@ -582,8 +598,11 @@ test("moon serves branded split entry documents, typed routes, PWA assets, and M
   const cwd = process.cwd();
   process.chdir(path.join(path.dirname(fileURLToPath(import.meta.url)), ".."));
   const previousCoverCacheDir = process.env.SCRIPTARR_MOON_COVER_CACHE_DIR;
+  const previousReaderPageCacheDir = process.env.SCRIPTARR_MOON_READER_PAGE_CACHE_DIR;
   const coverCacheDir = path.join(process.cwd(), ".tmp-cover-cache-test");
+  const readerPageCacheDir = path.join(process.cwd(), ".tmp-reader-page-cache-test");
   process.env.SCRIPTARR_MOON_COVER_CACHE_DIR = coverCacheDir;
+  process.env.SCRIPTARR_MOON_READER_PAGE_CACHE_DIR = readerPageCacheDir;
 
   const requests = [];
   const sageStub = await createSageStub({requests});
@@ -932,12 +951,28 @@ test("moon serves branded split entry documents, typed routes, PWA assets, and M
   });
   assert.equal(denyResponse.status, 200);
 
-  const pageResponse = await fetch(`${baseUrl}/api/moon/v3/user/reader/title/dan-da-dan/chapter/chapter-1/page/0`);
+  const pageResponse = await fetch(`${baseUrl}/api/moon/v3/user/reader/title/dan-da-dan/chapter/chapter-1/page/0?rev=rev-1`);
   assert.equal(pageResponse.status, 200);
   assert.match(pageResponse.headers.get("content-type") || "", /image\/svg\+xml/);
   assert.match(pageResponse.headers.get("cache-control") || "", /max-age=604800/);
   assert.equal(pageResponse.headers.get("etag"), "\"reader-page-rev-1\"");
+  assert.equal(pageResponse.headers.get("x-scriptarr-reader-cache"), "miss");
   assert.match(await pageResponse.text(), /reader-page/);
+
+  await new Promise((resolve) => setTimeout(resolve, 75));
+  const cachedPageResponse = await fetch(`${baseUrl}/api/moon/v3/user/reader/title/dan-da-dan/chapter/chapter-1/page/0?rev=rev-1`);
+  assert.equal(cachedPageResponse.status, 200);
+  assert.equal(cachedPageResponse.headers.get("x-scriptarr-reader-cache"), "hit");
+  assert.match(cachedPageResponse.headers.get("cache-control") || "", /max-age=604800/);
+  assert.match(await cachedPageResponse.text(), /reader-page/);
+
+  const pageStatusResponse = await fetch(`${baseUrl}/api/moon/v3/user/reader/title/dan-da-dan/chapter/chapter-1/page/0/status?rev=rev-1`);
+  assert.equal(pageStatusResponse.status, 200);
+  assert.equal(pageStatusResponse.headers.get("x-scriptarr-reader-cache"), "hit");
+  const pageStatus = await pageStatusResponse.json();
+  assert.equal(pageStatus.cacheHit, true);
+  assert.equal(pageStatus.cacheState, "hit");
+  assert.equal(Object.hasOwn(pageStatus, "rawPath"), false);
 
   const readerSessionResponse = await fetch(`${baseUrl}/api/moon/v3/user/reader/title/dan-da-dan/chapter/chapter-1/session`);
   assert.equal(readerSessionResponse.status, 200);
@@ -1012,6 +1047,10 @@ test("moon serves branded split entry documents, typed routes, PWA assets, and M
   assert.ok(requests.some((entry) => entry.method === "GET" && entry.url === "/api/moon-v3/admin/requests"));
   assert.ok(requests.some((entry) => entry.method === "POST" && entry.url === "/api/moon-v3/admin/requests/request-1/deny"));
   assert.ok(requests.some((entry) => entry.method === "GET" && entry.url === "/api/moon-v3/user/api-keys"));
+  assert.equal(
+    requests.filter((entry) => entry.method === "GET" && entry.url === "/api/moon-v3/user/reader/title/dan-da-dan/chapter/chapter-1/page/0?rev=rev-1").length,
+    1
+  );
 
   } finally {
   await closeServer(server);
@@ -1021,7 +1060,13 @@ test("moon serves branded split entry documents, typed routes, PWA assets, and M
   } else {
     process.env.SCRIPTARR_MOON_COVER_CACHE_DIR = previousCoverCacheDir;
   }
+  if (previousReaderPageCacheDir == null) {
+    delete process.env.SCRIPTARR_MOON_READER_PAGE_CACHE_DIR;
+  } else {
+    process.env.SCRIPTARR_MOON_READER_PAGE_CACHE_DIR = previousReaderPageCacheDir;
+  }
   await fs.rm(coverCacheDir, {recursive: true, force: true});
+  await fs.rm(readerPageCacheDir, {recursive: true, force: true});
   process.chdir(cwd);
   }
 });

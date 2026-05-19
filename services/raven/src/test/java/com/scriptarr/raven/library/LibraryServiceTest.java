@@ -7,7 +7,11 @@ import com.scriptarr.raven.support.ScriptarrLogger;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import javax.imageio.ImageIO;
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
@@ -171,9 +175,9 @@ class LibraryServiceTest {
         Path titleFolder = tempDir.resolve("downloaded").resolve("manga").resolve("Blue_Box");
         Files.createDirectories(titleFolder);
         Path archive = writeArchive(titleFolder.resolve("Blue Box c001.cbz"), Map.of(
-            "001_p10.jpg", new byte[]{10},
-            "001_p2.jpg", new byte[]{2},
-            "001_p1.jpg", new byte[]{1}
+            "001_p10.png", pngPage(10),
+            "001_p2.png", pngPage(2),
+            "001_p1.png", pngPage(1)
         ));
         LibraryTitle title = service.recordDownloadedTitle(
             "Blue Box",
@@ -186,7 +190,7 @@ class LibraryServiceTest {
             titleFolder
         );
 
-        assertArrayEquals(new byte[]{2}, service.renderReaderPage(title.id(), title.chapters().getFirst().id(), 1).bytes());
+        assertArrayEquals(pngPage(2), service.renderReaderPage(title.id(), title.chapters().getFirst().id(), 1).bytes());
     }
 
     /**
@@ -213,9 +217,9 @@ class LibraryServiceTest {
         Path titleFolder = tempDir.resolve("downloaded").resolve("manga").resolve("Frieren");
         Files.createDirectories(titleFolder);
         Path archive = writeArchive(titleFolder.resolve("Frieren c001.cbz"), Map.of(
-            "001_p3.webp", new byte[]{3},
-            "001_p1.jpg", new byte[]{1},
-            "001_p2.png", new byte[]{2}
+            "001_p3.png", pngPage(3),
+            "001_p1.png", pngPage(1),
+            "001_p2.png", pngPage(2)
         ));
         LibraryTitle title = service.recordDownloadedTitle(
             "Frieren",
@@ -232,11 +236,56 @@ class LibraryServiceTest {
         RenderedPage thirdPage = service.renderReaderPage(title.id(), title.chapters().getFirst().id(), 2);
 
         assertEquals(1, service.readerArchiveIndexCacheSize());
-        assertArrayEquals(new byte[]{2}, secondPage.bytes());
+        assertArrayEquals(pngPage(2), secondPage.bytes());
         assertEquals("image/png", secondPage.mediaType());
-        assertArrayEquals(new byte[]{3}, thirdPage.bytes());
-        assertEquals("image/webp", thirdPage.mediaType());
+        assertArrayEquals(pngPage(3), thirdPage.bytes());
+        assertEquals("image/png", thirdPage.mediaType());
         assertEquals(1, service.readerArchiveIndexCacheSize());
+    }
+
+    /**
+     * Verify corrupt archive bytes become deterministic reader diagnostics and
+     * durable missing-content quality markers instead of broken image panels.
+     *
+     * @param tempDir temporary test directory
+     * @throws Exception when the archive fixture cannot be prepared
+     */
+    @Test
+    void readerPageProbeMarksCorruptArchivePageQuality(@TempDir Path tempDir) throws Exception {
+        FakeRavenBrokerClient brokerClient = new FakeRavenBrokerClient();
+        ScriptarrLogger logger = mock(ScriptarrLogger.class);
+        when(logger.getDownloadsRoot()).thenReturn(tempDir);
+        LibraryService service = new LibraryService(brokerClient, new RavenSettingsService(brokerClient, logger, List.of()), logger);
+
+        Path titleFolder = tempDir.resolve("downloaded").resolve("manga").resolve("Witch_Watch");
+        Files.createDirectories(titleFolder);
+        Path archive = writeArchive(titleFolder.resolve("Witch Watch c001.cbz"), Map.of(
+            "001.jpg", new byte[]{1, 2, 3}
+        ));
+        LibraryTitle title = service.recordDownloadedTitle(
+            "Witch Watch",
+            "Manga",
+            "https://weebcentral.com/series/witch-watch",
+            "",
+            null,
+            List.of(new LibraryChapter("", "Chapter 1", "1", 1, null, true, archive.toString(), "", null)),
+            titleFolder,
+            titleFolder
+        );
+
+        ReaderPageProbe probe = service.probeReaderPage(title.id(), title.chapters().getFirst().id(), 0);
+        assertEquals(false, probe.ok());
+        assertEquals(422, probe.status());
+        assertEquals("decode_or_corrupt", probe.failureCode());
+
+        RenderedPage rendered = service.renderReaderPage(title.id(), title.chapters().getFirst().id(), 0);
+        assertEquals("image/svg+xml", rendered.mediaType());
+        assertTrue(new String(rendered.bytes(), StandardCharsets.UTF_8).contains("Scriptarr reader fallback"));
+
+        LibraryChapter marked = service.findTitle(title.id()).chapters().getFirst();
+        assertEquals("possible_missing_page", marked.qualityStatus());
+        assertEquals(1, marked.missingPageCount());
+        assertEquals(List.of(1), marked.missingPages());
     }
 
     /**
@@ -521,5 +570,14 @@ class LibraryServiceTest {
             }
         }
         return archivePath;
+    }
+
+    private byte[] pngPage(int shade) throws IOException {
+        BufferedImage image = new BufferedImage(1, 1, BufferedImage.TYPE_INT_RGB);
+        int value = Math.max(0, Math.min(255, shade));
+        image.setRGB(0, 0, (value << 16) | (value << 8) | value);
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        ImageIO.write(image, "png", output);
+        return output.toByteArray();
     }
 }
