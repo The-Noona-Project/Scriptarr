@@ -344,6 +344,10 @@ const resolveEquivalentReaderChapterId = (chapters = [], requestedChapterId = ""
   })?.id);
 };
 
+const waitForReaderChapterRetry = () => new Promise((resolve) => {
+  setTimeout(resolve, 250);
+});
+
 const resolveReaderAdjacentChapterIds = (chapters = [], chapterId = "") => {
   const currentId = normalizeString(chapterId);
   const readableChapters = normalizeArray(chapters)
@@ -5312,7 +5316,8 @@ export const registerMoonV3Routes = (app, {
       const fallbackChapterId = manifest.ok
         ? resolveEquivalentReaderChapterId(manifest.payload?.chapters, requestedChapterId)
         : "";
-      if (fallbackChapterId && fallbackChapterId !== requestedChapterId) {
+      if (fallbackChapterId) {
+        await waitForReaderChapterRetry();
         const fallbackChapter = await serviceJson(
           config.ravenBaseUrl,
           `/v1/reader/${encodeURIComponent(titleId)}/${encodeURIComponent(fallbackChapterId)}`

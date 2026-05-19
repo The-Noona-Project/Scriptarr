@@ -204,14 +204,15 @@ const defaultIntakePayload = Object.freeze({
  * Create a small dependency stub for Sage's Raven, Warden, Portal, and Oracle
  * calls so the Moon v3 broker routes can be tested in isolation.
  *
- * @param {{libraryTitles?: Array<Record<string, unknown>>, downloadTasks?: Array<Record<string, unknown>>, downloadRuntimeReloadStatus?: number, syncLinkedRequestOnQueue?: boolean}} [options]
+ * @param {{libraryTitles?: Array<Record<string, unknown>>, downloadTasks?: Array<Record<string, unknown>>, downloadRuntimeReloadStatus?: number, syncLinkedRequestOnQueue?: boolean, readerChapterTransientMisses?: Record<string, number>}} [options]
  * @returns {Promise<{server: http.Server, calls: Record<string, number>}>}
  */
 const createDependencyStub = ({
   libraryTitles = [defaultLibraryTitle],
   downloadTasks = [],
   downloadRuntimeReloadStatus = 200,
-  syncLinkedRequestOnQueue = false
+  syncLinkedRequestOnQueue = false,
+  readerChapterTransientMisses = {}
 } = {}) => {
   const calls = {
     health: 0,
@@ -658,6 +659,14 @@ const createDependencyStub = ({
       if (!chapterId) {
         response.writeHead(200, {"Content-Type": "application/json"});
         response.end(JSON.stringify(buildReaderManifest(title)));
+        return;
+      }
+
+      const transientMissKey = `${titleId}/${chapterId}`;
+      if (readerChapterTransientMisses[transientMissKey] > 0) {
+        readerChapterTransientMisses[transientMissKey] -= 1;
+        response.writeHead(404, {"Content-Type": "application/json"});
+        response.end(JSON.stringify({error: "Reader chapter not found."}));
         return;
       }
 
@@ -1270,7 +1279,12 @@ test("sage reader session recovers equivalent numeric chapter ids from the manif
     }]
   };
 
-  const dependencyStub = await createDependencyStub({libraryTitles: [paddedReaderTitle]});
+  const dependencyStub = await createDependencyStub({
+    libraryTitles: [paddedReaderTitle],
+    readerChapterTransientMisses: {
+      "padded-reader-title/padded-reader-title-c002": 1
+    }
+  });
   dependencyStub.server.listen(0);
   const dependencyPort = dependencyStub.server.address().port;
 
@@ -1307,6 +1321,14 @@ test("sage reader session recovers equivalent numeric chapter ids from the manif
     headers
   }).then((response) => response.json());
   assert.match(readerPages.pages[0].src, /padded-reader-title-c001\/page\/0\?rev=/);
+
+  const transientSessionResponse = await fetch(`${baseUrl}/api/moon-v3/user/reader/title/padded-reader-title/chapter/padded-reader-title-c002/session`, {
+    headers
+  });
+  const transientSession = await transientSessionResponse.json();
+  assert.equal(transientSessionResponse.status, 200);
+  assert.equal(transientSession.chapter.id, "padded-reader-title-c002");
+  assert.equal(transientSession.pageCount, 9);
 
   const missingSessionResponse = await fetch(`${baseUrl}/api/moon-v3/user/reader/title/padded-reader-title/chapter/padded-reader-title-c999/session`, {
     headers
