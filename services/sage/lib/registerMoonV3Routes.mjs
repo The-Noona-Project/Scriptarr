@@ -344,8 +344,10 @@ const resolveEquivalentReaderChapterId = (chapters = [], requestedChapterId = ""
   })?.id);
 };
 
-const waitForReaderChapterRetry = () => new Promise((resolve) => {
-  setTimeout(resolve, 250);
+const READER_CHAPTER_RETRY_DELAYS_MS = Object.freeze([250, 750, 1500, 3000]);
+
+const waitForReaderChapterRetry = (delayMs = 250) => new Promise((resolve) => {
+  setTimeout(resolve, delayMs);
 });
 
 const resolveReaderAdjacentChapterIds = (chapters = [], chapterId = "") => {
@@ -5312,19 +5314,21 @@ export const registerMoonV3Routes = (app, {
     let chapter = initialChapter;
 
     if (!chapter.ok && chapter.status === 404) {
-      const manifest = await serviceJson(config.ravenBaseUrl, `/v1/reader/${encodeURIComponent(titleId)}`);
-      const fallbackChapterId = manifest.ok
-        ? resolveEquivalentReaderChapterId(manifest.payload?.chapters, requestedChapterId)
-        : "";
-      if (fallbackChapterId) {
-        await waitForReaderChapterRetry();
-        const fallbackChapter = await serviceJson(
+      let retryChapterId = requestedChapterId;
+      for (const delayMs of READER_CHAPTER_RETRY_DELAYS_MS) {
+        const manifest = await serviceJson(config.ravenBaseUrl, `/v1/reader/${encodeURIComponent(titleId)}`);
+        retryChapterId = manifest.ok
+          ? resolveEquivalentReaderChapterId(manifest.payload?.chapters, requestedChapterId) || retryChapterId
+          : retryChapterId;
+        await waitForReaderChapterRetry(delayMs);
+        const retryChapter = await serviceJson(
           config.ravenBaseUrl,
-          `/v1/reader/${encodeURIComponent(titleId)}/${encodeURIComponent(fallbackChapterId)}`
+          `/v1/reader/${encodeURIComponent(titleId)}/${encodeURIComponent(retryChapterId)}`
         );
-        if (fallbackChapter.ok) {
-          chapter = fallbackChapter;
-          resolvedChapterId = fallbackChapterId;
+        if (retryChapter.ok) {
+          chapter = retryChapter;
+          resolvedChapterId = retryChapterId;
+          break;
         }
       }
     }

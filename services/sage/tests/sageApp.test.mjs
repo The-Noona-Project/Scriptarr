@@ -1282,7 +1282,7 @@ test("sage reader session recovers equivalent numeric chapter ids from the manif
   const dependencyStub = await createDependencyStub({
     libraryTitles: [paddedReaderTitle],
     readerChapterTransientMisses: {
-      "padded-reader-title/padded-reader-title-c002": 1
+      "padded-reader-title/padded-reader-title-c002": 2
     }
   });
   dependencyStub.server.listen(0);
