@@ -1239,6 +1239,86 @@ test("sage reader session normalizes adjacent chapters to reading order", async 
   await closeServer(dependencyStub.server);
 });
 
+test("sage reader session recovers equivalent numeric chapter ids from the manifest", async () => {
+  const {app: vaultApp} = await createVaultApp();
+  const vaultServer = vaultApp.listen(0);
+  const vaultPort = vaultServer.address().port;
+  const paddedReaderTitle = {
+    ...defaultLibraryTitle,
+    id: "padded-reader-title",
+    title: "Padded Reader Title",
+    mediaType: "manga",
+    libraryTypeLabel: "Manga",
+    libraryTypeSlug: "manga",
+    latestChapter: "2",
+    chapterCount: 2,
+    chaptersDownloaded: 2,
+    chapters: [{
+      id: "padded-reader-title-c002",
+      label: "Chapter 2",
+      chapterNumber: "2",
+      pageCount: 9,
+      releaseDate: "2026-04-22",
+      available: true
+    }, {
+      id: "padded-reader-title-c001",
+      label: "Chapter 1",
+      chapterNumber: "1",
+      pageCount: 7,
+      releaseDate: "2026-04-21",
+      available: true
+    }]
+  };
+
+  const dependencyStub = await createDependencyStub({libraryTitles: [paddedReaderTitle]});
+  dependencyStub.server.listen(0);
+  const dependencyPort = dependencyStub.server.address().port;
+
+  process.env.SCRIPTARR_VAULT_BASE_URL = `http://127.0.0.1:${vaultPort}`;
+  process.env.SCRIPTARR_WARDEN_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_PORTAL_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_ORACLE_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_RAVEN_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_PUBLIC_BASE_URL = "https://pax-kun.com";
+  process.env.SCRIPTARR_DISCORD_CLIENT_ID = "discord-client-id";
+  process.env.SCRIPTARR_DISCORD_CLIENT_SECRET = "discord-client-secret";
+
+  installDiscordFetchStub();
+
+  const {app: sageApp} = await createSageApp();
+  const sageServer = sageApp.listen(0);
+  const sagePort = sageServer.address().port;
+  const baseUrl = `http://127.0.0.1:${sagePort}`;
+  const ownerClaim = await signInViaDiscord(baseUrl);
+  const headers = {
+    "Authorization": `Bearer ${ownerClaim.token}`
+  };
+
+  const readerSessionResponse = await fetch(`${baseUrl}/api/moon-v3/user/reader/title/padded-reader-title/chapter/padded-reader-title-c1/session`, {
+    headers
+  });
+  const readerSession = await readerSessionResponse.json();
+  assert.equal(readerSessionResponse.status, 200);
+  assert.equal(readerSession.chapter.id, "padded-reader-title-c001");
+  assert.equal(readerSession.pageCount, 7);
+  assert.match(readerSession.pageBase, /padded-reader-title-c001\/page$/);
+
+  const readerPages = await fetch(`${baseUrl}/api/moon-v3/user/reader/title/padded-reader-title/chapter/padded-reader-title-c1/pages?cursor=0&pageSize=1&rev=${readerSession.pageRevision}`, {
+    headers
+  }).then((response) => response.json());
+  assert.match(readerPages.pages[0].src, /padded-reader-title-c001\/page\/0\?rev=/);
+
+  const missingSessionResponse = await fetch(`${baseUrl}/api/moon-v3/user/reader/title/padded-reader-title/chapter/padded-reader-title-c999/session`, {
+    headers
+  });
+  assert.equal(missingSessionResponse.status, 404);
+  assert.match(missingSessionResponse.headers.get("cache-control") || "", /no-store/);
+
+  await closeServer(sageServer);
+  await closeServer(vaultServer);
+  await closeServer(dependencyStub.server);
+});
+
 test("sage signs in the first owner through the Discord callback and moderates requests", async () => {
   const {app: vaultApp} = await createVaultApp();
   const vaultServer = vaultApp.listen(0);

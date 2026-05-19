@@ -293,6 +293,57 @@ const compareReaderChaptersByNumber = (left = {}, right = {}) => {
   );
 };
 
+const normalizeReaderChapterNumberKey = (value = "") => {
+  const normalized = normalizeString(value);
+  if (!normalized) {
+    return "";
+  }
+  const parsed = Number.parseFloat(normalized);
+  if (Number.isFinite(parsed)) {
+    return String(parsed);
+  }
+  return normalized.toLowerCase();
+};
+
+const inferReaderChapterNumberKey = (value = "") => {
+  const normalized = normalizeString(value);
+  if (!normalized) {
+    return "";
+  }
+  const explicitMatch = normalized.match(/(?:^|[-_\s])(?:c|ch|chapter)[-_\s]*(\d+(?:\.\d+)?)/i);
+  if (explicitMatch?.[1]) {
+    return normalizeReaderChapterNumberKey(explicitMatch[1]);
+  }
+  const trailingMatch = normalized.match(/(\d+(?:\.\d+)?)$/);
+  return trailingMatch?.[1] ? normalizeReaderChapterNumberKey(trailingMatch[1]) : "";
+};
+
+const resolveEquivalentReaderChapterId = (chapters = [], requestedChapterId = "") => {
+  const currentId = normalizeString(requestedChapterId);
+  if (!currentId) {
+    return "";
+  }
+  const readableChapters = normalizeArray(chapters)
+    .map(toChapterSummary)
+    .filter((entry) => entry.available !== false && normalizeString(entry.id));
+  const exact = readableChapters.find((entry) => normalizeString(entry.id) === currentId);
+  if (exact?.id) {
+    return exact.id;
+  }
+  const requestedNumberKey = inferReaderChapterNumberKey(currentId);
+  if (!requestedNumberKey) {
+    return "";
+  }
+  return normalizeString(readableChapters.find((entry) => {
+    const candidates = [
+      entry.chapterNumber,
+      entry.label,
+      entry.id
+    ].map(inferReaderChapterNumberKey).filter(Boolean);
+    return candidates.includes(requestedNumberKey);
+  })?.id);
+};
+
 const resolveReaderAdjacentChapterIds = (chapters = [], chapterId = "") => {
   const currentId = normalizeString(chapterId);
   const readableChapters = normalizeArray(chapters)
@@ -5246,12 +5297,32 @@ export const registerMoonV3Routes = (app, {
   }));
 
   const loadReaderChapterContext = async ({titleId, chapterId, discordUserId}) => {
-    const [chapter, userInputs, bookmarks, storedPreferences] = await Promise.all([
+    const requestedChapterId = normalizeString(chapterId);
+    let resolvedChapterId = requestedChapterId;
+    const [initialChapter, userInputs, bookmarks, storedPreferences] = await Promise.all([
       serviceJson(config.ravenBaseUrl, `/v1/reader/${encodeURIComponent(titleId)}/${encodeURIComponent(chapterId)}`),
       loadUserStateInputs(discordUserId),
       readUserScopedSetting(vaultClient, "moon.reader.bookmarks", discordUserId, []),
       readUserScopedSetting(vaultClient, "moon.reader.preferences", discordUserId, {})
     ]);
+    let chapter = initialChapter;
+
+    if (!chapter.ok && chapter.status === 404) {
+      const manifest = await serviceJson(config.ravenBaseUrl, `/v1/reader/${encodeURIComponent(titleId)}`);
+      const fallbackChapterId = manifest.ok
+        ? resolveEquivalentReaderChapterId(manifest.payload?.chapters, requestedChapterId)
+        : "";
+      if (fallbackChapterId && fallbackChapterId !== requestedChapterId) {
+        const fallbackChapter = await serviceJson(
+          config.ravenBaseUrl,
+          `/v1/reader/${encodeURIComponent(titleId)}/${encodeURIComponent(fallbackChapterId)}`
+        );
+        if (fallbackChapter.ok) {
+          chapter = fallbackChapter;
+          resolvedChapterId = fallbackChapterId;
+        }
+      }
+    }
 
     if (!chapter.ok) {
       return {
@@ -5267,11 +5338,11 @@ export const registerMoonV3Routes = (app, {
     const fullTitle = titleState?.title || rawTitle;
     const chapterSummary = toChapterSummary(payload.chapter);
     const fullChapters = normalizeArray(fullTitle?.chapters);
-    const enrichedChapter = fullChapters.find((entry) => entry.id === chapterId) || chapterSummary;
+    const enrichedChapter = fullChapters.find((entry) => entry.id === resolvedChapterId) || chapterSummary;
     const pages = normalizeArray(payload.pages);
     const pageCount = pages.length || enrichedChapter.pageCount || chapterSummary.pageCount || 0;
-    const chapterIndex = fullChapters.findIndex((entry) => entry.id === chapterId);
-    const adjacentChapterIds = resolveReaderAdjacentChapterIds(fullChapters, chapterId);
+    const chapterIndex = fullChapters.findIndex((entry) => entry.id === resolvedChapterId);
+    const adjacentChapterIds = resolveReaderAdjacentChapterIds(fullChapters, resolvedChapterId);
     const previousChapterId = adjacentChapterIds.matched
       ? adjacentChapterIds.previousChapterId
       : normalizeString(payload.previousChapterId) || (chapterIndex > 0 ? normalizeString(fullChapters[chapterIndex - 1]?.id) : "");
@@ -5281,12 +5352,13 @@ export const registerMoonV3Routes = (app, {
     const typeSlug = normalizeTypeSlug(fullTitle.libraryTypeSlug || fullTitle.mediaType);
     const titleProgressId = normalizeString(payload.title?.id || fullTitle.id || titleId);
     const progressEntry = normalizeArray(userInputs.progress).find((entry) => normalizeString(entry.mediaId) === titleProgressId);
-    const pageBase = buildReaderPageBase(titleId, chapterId);
+    const pageBase = buildReaderPageBase(titleId, resolvedChapterId);
     const pageRevision = buildReaderPageRevision({
       title: fullTitle,
       chapter: enrichedChapter,
       pages
     });
+    const stateChapterIds = new Set([requestedChapterId, resolvedChapterId].filter(Boolean));
 
     return {
       ok: true,
@@ -5306,10 +5378,15 @@ export const registerMoonV3Routes = (app, {
       progress: progressEntry || null,
       bookmarks: normalizeArray(bookmarks).filter((entry) =>
         normalizeString(entry.titleId) === normalizeString(titleId)
-        && normalizeString(entry.chapterId) === normalizeString(chapterId)
+        && stateChapterIds.has(normalizeString(entry.chapterId))
       ),
       preferences: resolveReaderPreferences(storedPreferences, typeSlug, titleId)
     };
+  };
+
+  const sendReaderContextError = (res, context) => {
+    res.setHeader("Cache-Control", "no-store");
+    res.status(context.status).json(context.payload);
   };
 
   app.get("/api/moon-v3/user/reader/title/:titleId/chapter/:chapterId/session", withUser(requireUser, async (req, res) => {
@@ -5319,7 +5396,7 @@ export const registerMoonV3Routes = (app, {
       discordUserId: req.user.discordUserId
     });
     if (!context.ok) {
-      res.status(context.status).json(context.payload);
+      sendReaderContextError(res, context);
       return;
     }
 
@@ -5345,7 +5422,7 @@ export const registerMoonV3Routes = (app, {
       discordUserId: req.user.discordUserId
     });
     if (!context.ok) {
-      res.status(context.status).json(context.payload);
+      sendReaderContextError(res, context);
       return;
     }
 
@@ -5377,7 +5454,7 @@ export const registerMoonV3Routes = (app, {
     ]);
 
     if (!context.ok) {
-      res.status(context.status).json(context.payload);
+      sendReaderContextError(res, context);
       return;
     }
 
@@ -5440,7 +5517,7 @@ export const registerMoonV3Routes = (app, {
     );
 
     res.status(response.status);
-    res.setHeader("Cache-Control", "private, max-age=604800");
+    res.setHeader("Cache-Control", response.ok ? "private, max-age=604800" : "no-store");
     res.setHeader("Content-Type", response.headers.get("content-type") || "application/octet-stream");
     const contentLength = response.headers.get("content-length");
     const etag = response.headers.get("etag");
