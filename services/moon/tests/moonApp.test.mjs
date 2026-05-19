@@ -941,6 +941,7 @@ test("moon serves branded split entry documents, typed routes, PWA assets, and M
 
   const readerSessionResponse = await fetch(`${baseUrl}/api/moon/v3/user/reader/title/dan-da-dan/chapter/chapter-1/session`);
   assert.equal(readerSessionResponse.status, 200);
+  assert.match(readerSessionResponse.headers.get("cache-control") || "", /no-store/);
   const readerSession = await readerSessionResponse.json();
   assert.equal(readerSession.pageRevision, "rev-1");
   assert.equal(Object.hasOwn(readerSession, "manifest"), false);
@@ -948,6 +949,7 @@ test("moon serves branded split entry documents, typed routes, PWA assets, and M
 
   const readerPagesResponse = await fetch(`${baseUrl}/api/moon-v3/user/reader/title/dan-da-dan/chapter/chapter-1/pages?cursor=0&pageSize=1&rev=rev-1`);
   assert.equal(readerPagesResponse.status, 200);
+  assert.match(readerPagesResponse.headers.get("cache-control") || "", /max-age=604800/);
   const readerPages = await readerPagesResponse.json();
   assert.equal(readerPages.pages[0].src, "/api/moon/v3/user/reader/title/dan-da-dan/chapter/chapter-1/page/0?rev=rev-1");
 

@@ -132,7 +132,10 @@ export const registerMoonV3ProxyRoutes = (app, {config, getSessionToken}) => {
 
     const contentType = response.headers["content-type"] || "application/json; charset=utf-8";
     res.status(response.status);
-    res.setHeader("Content-Type", contentType);
+    forwardResponseHeaders(res, response.headers);
+    if (!res.hasHeader("Content-Type")) {
+      res.setHeader("Content-Type", contentType);
+    }
     res.send(response.body);
   };
 
