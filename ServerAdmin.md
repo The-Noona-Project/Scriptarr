@@ -79,6 +79,8 @@ the full storage tree directly before it starts the sibling services. Unraid ins
 user template after the first successful boot if you want to reuse the same contract later.
 Warden also mounts Moon's derived browser asset folders from this tree, including `moon/cover-cache` and
 `moon/reader-page-cache`, so successful revisioned reader pages can survive Moon container replacements.
+The reader route also bootstraps the signed-in user's first session and page chunk through Moon on the server before
+hydration, so reloads should show real reader content instead of waiting on an empty shell.
 
 ## Install Shape
 

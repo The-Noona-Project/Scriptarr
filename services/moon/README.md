@@ -73,6 +73,9 @@ Reader page images now auto-retry transient load failures before showing a manua
 successful revisioned page-image responses under its bounded Warden-mounted derived reader page cache. Failed image responses
 stay `no-store`, and the same-origin page probe classifies failures without exposing archive paths, tokens, or raw
 image URLs.
+Signed-in reader routes also bootstrap the first session and page chunk server-side through Moon before client
+hydration. That keeps reload/cache flows from sitting on an empty reader shell while the client refreshes session,
+preference, and cache state.
 Moon title pages now paint from chunked same-origin reads: the cover-led hero and action strip call the lightweight
 `/api/moon-v3/user/title/<titleId>/summary` route first, chapter rows stream through the paged
 `/chapters?cursor=&pageSize=&sort=&filter=&q=` route, and request history waits until the Requests tab opens. The

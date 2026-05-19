@@ -86,6 +86,31 @@ const mergeChapterRows = (current = [], incoming = []) => {
   return Array.from(byId.values());
 };
 
+const normalizeBootSession = (session) => session?.chapter?.id ? session : null;
+
+const bootLayoutModeFor = (session) => {
+  const preferences = session?.preferences || {};
+  return normalizeLayoutMode(preferences.layoutMode || (preferences.readingMode === "paged" ? "single" : "webtoon"));
+};
+
+const bootBookmarkPageFor = (session) => clampPage(
+  Number.isInteger(session?.progress?.bookmark?.pageIndex) ? session.progress.bookmark.pageIndex : 0,
+  session?.pageCount || 1
+);
+
+const createBootPageState = (session, pagesPayload) => {
+  if (!session?.chapter?.id || !Array.isArray(pagesPayload?.pages) || !pagesPayload.pages.length) {
+    return new Map();
+  }
+  return new Map([[session.chapter.id, {
+    pages: pagesPayload.pages,
+    pageInfo: pagesPayload.pageInfo || null,
+    loading: false,
+    error: "",
+    pageRevision: pagesPayload.pageRevision || session.pageRevision || ""
+  }]]);
+};
+
 const runWarmImageJobs = async (jobs = []) => {
   const results = [];
   let cursor = 0;
@@ -103,10 +128,15 @@ const runWarmImageJobs = async (jobs = []) => {
 /**
  * Render the dedicated fullscreen reader app for one title chapter.
  *
- * @param {{titleId: string, chapterId: string, typeSlug?: string}} props
+ * @param {{titleId: string, chapterId: string, typeSlug?: string, initialSessionData?: any, initialPagesData?: any}} props
  * @returns {import("react").ReactNode}
  */
-export const ReaderAppClient = ({titleId, chapterId, typeSlug = ""}) => {
+export const ReaderAppClient = ({titleId, chapterId, typeSlug = "", initialSessionData = null, initialPagesData = null}) => {
+  const bootSession = normalizeBootSession(initialSessionData);
+  const bootChapterId = bootSession?.chapter?.id || chapterId;
+  const bootLayoutMode = bootLayoutModeFor(bootSession);
+  const bootBookmarkPage = bootBookmarkPageFor(bootSession);
+  const bootPageState = createBootPageState(bootSession, initialPagesData);
   const {
     loading,
     refreshing,
@@ -114,34 +144,34 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = ""}) => {
     status,
     data: initialSession
   } = useMoonJson(sessionUrlFor(titleId, chapterId), {
-    fallback: null,
+    fallback: bootSession,
     deps: [titleId, chapterId],
     keepPreviousData: true,
     telemetry: {type: "session-fetch", titleId, chapterId}
   });
   const [chrome, setChrome] = useState({auth: null, loginUrl: "", branding: {siteName: "Scriptarr"}});
-  const [layoutMode, setLayoutMode] = useState("webtoon");
-  const [readingDirection, setReadingDirection] = useState("ltr");
-  const [pageFit, setPageFit] = useState("width");
-  const [showSidebar, setShowSidebar] = useState(false);
-  const [showPageNumbers, setShowPageNumbers] = useState(true);
+  const [layoutMode, setLayoutMode] = useState(bootLayoutMode);
+  const [readingDirection, setReadingDirection] = useState(DIRECTIONS.includes(bootSession?.preferences?.readingDirection) ? bootSession.preferences.readingDirection : "ltr");
+  const [pageFit, setPageFit] = useState(PAGE_FITS.includes(bootSession?.preferences?.pageFit) ? bootSession.preferences.pageFit : "width");
+  const [showSidebar, setShowSidebar] = useState(bootSession?.preferences?.showSidebar === true);
+  const [showPageNumbers, setShowPageNumbers] = useState(bootSession?.preferences?.showPageNumbers !== false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [controlsVisible, setControlsVisible] = useState(true);
-  const [sessionMap, setSessionMap] = useState(() => new Map());
-  const [pageState, setPageState] = useState(() => new Map());
-  const [webtoonChapterIds, setWebtoonChapterIds] = useState([]);
-  const [bookmarks, setBookmarks] = useState([]);
-  const [activeChapterId, setActiveChapterId] = useState(chapterId);
-  const [activePageIndex, setActivePageIndex] = useState(0);
-  const [pagedChapterId, setPagedChapterId] = useState(chapterId);
-  const [pagedPageIndex, setPagedPageIndex] = useState(0);
+  const [sessionMap, setSessionMap] = useState(() => bootSession ? new Map([[bootSession.chapter.id, bootSession]]) : new Map());
+  const [pageState, setPageState] = useState(() => bootPageState);
+  const [webtoonChapterIds, setWebtoonChapterIds] = useState(() => bootSession ? [bootSession.chapter.id] : []);
+  const [bookmarks, setBookmarks] = useState(() => Array.isArray(bootSession?.bookmarks) ? bootSession.bookmarks : []);
+  const [activeChapterId, setActiveChapterId] = useState(bootChapterId);
+  const [activePageIndex, setActivePageIndex] = useState(bootLayoutMode === "webtoon" ? 0 : bootBookmarkPage);
+  const [pagedChapterId, setPagedChapterId] = useState(bootChapterId);
+  const [pagedPageIndex, setPagedPageIndex] = useState(bootBookmarkPage);
   const [chapterRows, setChapterRows] = useState([]);
   const [chapterPageInfo, setChapterPageInfo] = useState(null);
   const [chapterRowsLoading, setChapterRowsLoading] = useState(false);
   const [preloadConfig, setPreloadConfig] = useState(DEFAULT_PRELOAD_CONFIG);
   const [preparingMessage, setPreparingMessage] = useState("");
   const sessionCache = useRef(new Map());
-  const pageStateRef = useRef(new Map());
+  const pageStateRef = useRef(pageState);
   const pageRequestTokensRef = useRef(new Set());
   const pageRequestSeqRef = useRef(0);
   const pageLoadEpochRef = useRef(0);
@@ -152,7 +182,8 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = ""}) => {
   const settingsRef = useRef(/** @type {HTMLElement | null} */ (null));
   const pendingScrollRef = useRef(null);
   const scrollDirectionRef = useRef("forward");
-  const activeWebtoonPageRef = useRef({chapterId, pageIndex: 0});
+  const activeWebtoonPageRef = useRef({chapterId: bootChapterId, pageIndex: 0});
+  const bootPagesPendingRef = useRef(bootPageState.size > 0);
 
   const siteName = chrome.branding?.siteName || "Scriptarr";
   const title = initialSession?.title || null;
@@ -525,12 +556,15 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = ""}) => {
       Number.isInteger(initialSession?.progress?.bookmark?.pageIndex) ? initialSession.progress.bookmark.pageIndex : 0,
       initialSession.pageCount || 1
     );
+    const hydratedBootPageState = bootPagesPendingRef.current ? createBootPageState(initialSession, initialPagesData) : new Map();
+    const hasHydratedBootPages = hydratedBootPageState.size > 0;
+    bootPagesPendingRef.current = false;
     sessionCache.current.clear();
     pageLoadEpochRef.current += 1;
     pageRequestTokensRef.current.clear();
     imageWarmStateRef.current.clear();
     setSessionMap(new Map([[initialSession.chapter.id, initialSession]]));
-    setReaderPageState(() => new Map());
+    setReaderPageState(() => hydratedBootPageState);
     setWebtoonChapterIds([initialSession.chapter.id]);
     setBookmarks(Array.isArray(initialSession.bookmarks) ? initialSession.bookmarks : []);
     setLayoutMode(nextLayoutMode);
@@ -545,8 +579,10 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = ""}) => {
     setPagedChapterId(initialSession.chapter.id);
     setPagedPageIndex(bookmarkPage);
     const firstCursor = nextLayoutMode === "webtoon" ? 0 : Math.max(0, bookmarkPage - (bookmarkPage % pagesPerStep(nextLayoutMode)));
-    void loadPages(initialSession, {cursor: firstCursor, replace: true});
-  }, [initialSession, loadPages, setReaderPageState]);
+    if (!hasHydratedBootPages || firstCursor > 0) {
+      void loadPages(initialSession, {cursor: firstCursor, replace: true});
+    }
+  }, [initialPagesData, initialSession, loadPages, setReaderPageState]);
 
   useEffect(() => {
     if (!title || !activeChapterId) {

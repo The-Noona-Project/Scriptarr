@@ -30,7 +30,9 @@ Current next-chat focus:
   chapter semantics.
 - Reader reliability now includes Moon's successful-only revisioned page-image cache and Raven's redacted page probe.
   Warden mounts Moon's reader page cache as managed storage. Failed page responses must stay `no-store`, and durable
-  diagnostics must not include filesystem paths or raw image URLs.
+  diagnostics must not include filesystem paths or raw image URLs. Reader routes may server-bootstrap the signed-in
+  user's first session/page chunk through Moon, but browser traffic and all subsequent client calls still stay
+  same-origin Moon -> Sage -> internal services.
 - Noona tone: treat Noona voice as a Portal -> Sage -> Oracle workflow. Update prompts/guards in Sage and Oracle,
   verify Discord delivery in Portal, and use Appa diagnostics/review for live checks without storing raw transcripts.
 
