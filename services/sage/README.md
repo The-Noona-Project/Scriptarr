@@ -118,8 +118,12 @@ Vault-backed, overlapping runs are blocked per task, and every manual or schedul
 state. `/admin/system/status` is the lightweight endpoint registry; Warden bootstrap and runtime details hydrate from
 `/api/moon-v3/admin/system/status/runtime`. It leaves GET/read checks pending until
 `/api/moon-v3/admin/system/status/check` is called, then classifies auth-gated reads as protected and leaves mutation
-routes unprobed. `/admin/system/ai` centralizes Oracle settings plus brokered Warden LocalAI
-install, start, and remove controls with requester context for Portal completion DMs.
+routes unprobed. `/admin/system/ai` centralizes Oracle settings plus brokered Oracle-owned embedded LocalAI
+install, start, and remove controls.
+
+Sage also accepts redacted reader-performance telemetry from Moon at
+`/api/moon-v3/user/reader/telemetry`. It records only slow, retry, or caught-buffer summaries as durable `reader`
+events and drops fast local-only metrics so Vault does not become a raw browser telemetry store.
 
 Moon's legacy and v3 library routes should mirror Raven's real-or-empty library state. Sage no longer seeds preview
 titles on behalf of Moon.

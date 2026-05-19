@@ -41,6 +41,8 @@ HTTP broker.
   Portal confirms the channel post was sent.
 - Keep Moon's trusted public API brokered here. Sage should hash stored API keys, issue short-lived selection tokens,
   and enforce NSFW plus duplicate guards before queueing external requests at the lowest priority.
+- Keep Moon reader telemetry brokered here. Persist only redacted slow, retry, or caught-buffer summaries as reader
+  events; never store raw image URLs, query strings, tokens, paths, or page payloads.
 - Keep Warden aggregation split by contract: `/health` for service health, `/api/bootstrap` for the static plan, and
   `/api/runtime` for live runtime details.
 - Keep GitHub update digests Sage-owned. The `update-check` system task may read GitHub's public API and ask Oracle

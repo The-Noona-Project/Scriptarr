@@ -65,6 +65,10 @@ Moon's reader is now a dedicated fullscreen app at `/reader/<type>/<titleId>/<ch
 layout preferences for webtoon, single page, double page, manga double, LTR/RTL direction, and width/height/contain
 fit. It still uses Moon's same-origin typed reader APIs for progress, bookmarks, preferences, manifest payloads, and
 page images.
+The reader also keeps a bounded local debug telemetry buffer at `window.__scriptarrReaderTelemetry`. Session fetch,
+page chunk fetch, image load/decode, preload queue depth, retry counts, decoded pages ahead/behind, and caught-buffer
+waits are measured before preload policy changes; only redacted slow/retry/caught-buffer summaries are brokered through
+Moon -> Sage as durable reader events.
 Moon title pages now paint from chunked same-origin reads: the cover-led hero and action strip call the lightweight
 `/api/moon-v3/user/title/<titleId>/summary` route first, chapter rows stream through the paged
 `/chapters?cursor=&pageSize=&sort=&filter=&q=` route, and request history waits until the Requests tab opens. The

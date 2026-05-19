@@ -255,6 +255,14 @@ test("GitHub update digest rejects raw metadata copy as Noona summary", () => {
     false
   );
   assert.equal(
+    isUsableGithubUpdateSummary("Noona tuned the reader buffer. Let me know if you have any questions."),
+    false
+  );
+  assert.equal(
+    isUsableGithubUpdateSummary("Updates:\n- Add waiting update guard\n- Fix LocalAI startup"),
+    false
+  );
+  assert.equal(
     isUsableGithubUpdateSummary("Noona tuned the reader so pages are ready before you turn them. Ask her what changed when you want the details."),
     true
   );

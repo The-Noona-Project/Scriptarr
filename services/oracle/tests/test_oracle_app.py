@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import replace
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 
@@ -49,6 +50,7 @@ class FakeEmbeddedLocalAi:
         self.prepared = False
         self.stopped = False
         self.ensure_jobs: list[dict] = []
+        self.startup_requests: list[dict] = []
         self.probe_count = 0
         self.status_payload = status or {
             "enabled": True,
@@ -76,6 +78,34 @@ class FakeEmbeddedLocalAi:
 
     async def stop(self) -> None:
         self.stopped = True
+
+    async def cancel_startup_auto_start(self) -> None:
+        return None
+
+    def record_startup_gate(self, *, gate_reason: str, error: str = ""):
+        self.status_payload["startup"] = {
+            "phase": "skipped",
+            "gateReason": gate_reason,
+            "lastError": error,
+            "probePassed": False
+        }
+        return self.status_payload["startup"]
+
+    def start_startup_auto_start(self, runtime_settings):
+        payload = {
+            "enabled": runtime_settings.enabled,
+            "provider": runtime_settings.provider,
+            "model": runtime_settings.model
+        }
+        self.startup_requests.append(payload)
+        self.status_payload["startup"] = {
+            "phase": "checking",
+            "gateReason": "",
+            "lastError": "",
+            "probePassed": False,
+            "model": runtime_settings.model
+        }
+        return self.status_payload["startup"]
 
     async def status(self):
         return self.status_payload
@@ -644,6 +674,140 @@ def test_embedded_localai_verify_generation_retries_first_load_failure():
     assert result["ready"] is True
     assert result["attempt"] == 2
     assert probes == []
+
+
+def test_embedded_localai_startup_autostart_skips_when_oracle_is_disabled():
+    class Logger:
+        def warning(self, *args, **kwargs):
+            return None
+
+    manager = EmbeddedLocalAiManager(config=build_embedded_config(), logger=Logger())
+    runtime = OracleRuntimeSettings(
+        enabled=False,
+        provider="localai",
+        model="Hermes-3-Llama-3.1-8B-Q4_K_S.gguf",
+        temperature=0.2,
+        open_ai_api_key_configured=False,
+        local_ai_profile_key="nvidia",
+        local_ai_image_mode="preset",
+        local_ai_custom_image="",
+        local_ai_base_url="http://127.0.0.1:8080/v1",
+        local_ai_api_key="localai",
+        open_ai_api_key="",
+        api_key="localai",
+        llm_timeout_seconds=180.0
+    )
+
+    result = asyncio.run(manager.run_startup_auto_start(runtime))
+
+    assert result["phase"] == "skipped"
+    assert result["gateReason"] == "oracle_disabled"
+    assert result["probePassed"] is False
+
+
+def test_embedded_localai_startup_autostart_requires_installed_model(tmp_path):
+    class Logger:
+        def warning(self, *args, **kwargs):
+            return None
+
+    config = replace(
+        build_embedded_config(),
+        local_ai_models_dir=str(tmp_path / "models"),
+        local_ai_data_dir=str(tmp_path / "data"),
+        local_ai_backends_path=str(tmp_path / "backends"),
+        local_ai_tmp_dir=str(tmp_path / "tmp"),
+        local_ai_backend_assets_path=str(tmp_path / "assets"),
+        local_ai_generated_content_path=str(tmp_path / "generated"),
+        local_ai_upload_path=str(tmp_path / "uploads")
+    )
+    manager = EmbeddedLocalAiManager(config=config, logger=Logger())
+    started = {"count": 0}
+
+    async def fake_start(*, model_url=None):
+        started["count"] += 1
+
+    manager.start = fake_start
+    runtime = OracleRuntimeSettings(
+        enabled=True,
+        provider="localai",
+        model="Hermes-3-Llama-3.1-8B-Q4_K_S.gguf",
+        temperature=0.2,
+        open_ai_api_key_configured=False,
+        local_ai_profile_key="nvidia",
+        local_ai_image_mode="preset",
+        local_ai_custom_image="",
+        local_ai_base_url="http://127.0.0.1:8080/v1",
+        local_ai_api_key="localai",
+        open_ai_api_key="",
+        api_key="localai",
+        llm_timeout_seconds=180.0
+    )
+
+    result = asyncio.run(manager.run_startup_auto_start(runtime))
+
+    assert result["phase"] == "skipped"
+    assert result["gateReason"] == "model_not_installed"
+    assert started["count"] == 0
+
+
+def test_embedded_localai_startup_autostart_requires_generation_probe(tmp_path):
+    class Logger:
+        def warning(self, *args, **kwargs):
+            return None
+
+    config = replace(
+        build_embedded_config(),
+        local_ai_models_dir=str(tmp_path / "models"),
+        local_ai_data_dir=str(tmp_path / "data"),
+        local_ai_backends_path=str(tmp_path / "backends"),
+        local_ai_tmp_dir=str(tmp_path / "tmp"),
+        local_ai_backend_assets_path=str(tmp_path / "assets"),
+        local_ai_generated_content_path=str(tmp_path / "generated"),
+        local_ai_upload_path=str(tmp_path / "uploads")
+    )
+    manager = EmbeddedLocalAiManager(config=config, logger=Logger())
+    model = manager.model_status(config.local_ai_default_model_url)
+    Path(model["path"]).parent.mkdir(parents=True, exist_ok=True)
+    Path(model["path"]).write_bytes(b"fake-gguf")
+    Path(config.local_ai_backends_path).mkdir(parents=True, exist_ok=True)
+    Path(config.local_ai_backends_path, "llama-cpp").write_text("backend", encoding="utf-8")
+    calls = {"start": 0, "probe": 0}
+
+    async def fake_start(*, model_url=None):
+        calls["start"] += 1
+
+    async def fake_wait_until_ready():
+        return {"ready": True}
+
+    async def fake_verify_generation(*, model_url=None):
+        calls["probe"] += 1
+        return {"ready": True, "status": "ready", "reason": "generated"}
+
+    manager.start = fake_start
+    manager.wait_until_ready = fake_wait_until_ready
+    manager.verify_generation = fake_verify_generation
+    runtime = OracleRuntimeSettings(
+        enabled=True,
+        provider="localai",
+        model="Hermes-3-Llama-3.1-8B-Q4_K_S.gguf",
+        temperature=0.2,
+        open_ai_api_key_configured=False,
+        local_ai_profile_key="nvidia",
+        local_ai_image_mode="preset",
+        local_ai_custom_image="",
+        local_ai_base_url="http://127.0.0.1:8080/v1",
+        local_ai_api_key="localai",
+        open_ai_api_key="",
+        api_key="localai",
+        llm_timeout_seconds=180.0
+    )
+
+    result = asyncio.run(manager.run_startup_auto_start(runtime))
+
+    assert result["phase"] == "ready"
+    assert result["probePassed"] is True
+    assert result["model"] == "Hermes-3-Llama-3.1-8B-Q4_K_S.gguf"
+    assert calls == {"start": 1, "probe": 1}
 
 
 def test_successful_chat_returns_llm_reply():

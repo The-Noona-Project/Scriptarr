@@ -2388,6 +2388,46 @@ test("sage round-trips Moon branding and exposes typed Moon reader payloads", as
   assert.equal(readerPageResponse.headers.get("etag"), "\"raven-reader-page\"");
   assert.match(await readerPageResponse.text(), /reader-page/);
 
+  const fastTelemetry = await fetch(`${baseUrl}/api/moon-v3/user/reader/telemetry`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      type: "page-chunk-fetch",
+      titleId: "dan-da-dan",
+      chapterId: "dandadan-c166",
+      durationMs: 100,
+      rawPath: "/api/moon-v3/user/reader/title/dan-da-dan/chapter/dandadan-c166/pages?token=secret"
+    })
+  }).then((response) => response.json());
+  assert.deepEqual(fastTelemetry, {ok: true, recorded: false});
+
+  const slowTelemetry = await fetch(`${baseUrl}/api/moon-v3/user/reader/telemetry`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      type: "caught-buffer",
+      titleId: "dan-da-dan",
+      chapterId: "dandadan-c166",
+      pageIndex: 2,
+      activeIndex: 1,
+      pageCount: 3,
+      durationMs: 450,
+      reason: "seek_metadata_missing",
+      src: "https://reader.invalid/secret-page.jpg"
+    })
+  }).then((response) => response.json());
+  assert.deepEqual(slowTelemetry, {ok: true, recorded: true, eventType: "reader-performance-slow"});
+
+  const readerEvents = await fetch(`${baseUrl}/api/moon-v3/admin/events?domain=reader&eventType=reader-performance-slow`, {
+    headers
+  }).then((response) => response.json());
+  const telemetryEvent = readerEvents.events.find((event) => event.eventType === "reader-performance-slow");
+  assert.equal(telemetryEvent.targetId, "dan-da-dan:dandadan-c166");
+  assert.equal(telemetryEvent.metadata.type, "caught-buffer");
+  assert.equal(telemetryEvent.metadata.reason, "seek_metadata_missing");
+  assert.equal(Object.hasOwn(telemetryEvent.metadata, "src"), false);
+  assert.equal(Object.hasOwn(telemetryEvent.metadata, "rawPath"), false);
+
   const savedReaderPreferences = await fetch(`${baseUrl}/api/moon-v3/user/reader/preferences`, {
     method: "PUT",
     headers,

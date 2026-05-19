@@ -21,10 +21,10 @@ Start a task like this:
 
 Current next-chat focus:
 
-- AI startup: make Oracle's embedded LocalAI lifecycle restart-safe. Start from Oracle status and model/runtime
-  readiness, then trace Sage and Moon admin AI controls, and only then touch Warden service-plan behavior.
-- Reader smoothness: instrument before editing. Measure session fetch, page metadata chunks, streamed image fetch,
-  browser decode, preload queue depth, and cases where navigation waits for the buffer.
+- AI startup: Oracle now owns restart-safe embedded LocalAI auto-start. Preserve the gates: Oracle enabled,
+  provider `localai`, selected model already installed, no active remove action, and a passing generation probe.
+- Reader smoothness: instrumentation exists before preload policy changes. Keep measuring session fetch, page metadata
+  chunks, streamed image fetch, browser decode, preload queue depth, and cases where navigation waits for the buffer.
 - Reader browser QA: use the real `/reader/:type/:titleId/:chapterId` route in a browser. Smoke webtoon scrolling,
   single/double/manga-double layouts, reload/cache behavior, retries, controller/keyboard paths, and numeric next/prev
   chapter semantics.

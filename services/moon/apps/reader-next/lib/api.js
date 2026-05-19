@@ -5,17 +5,20 @@
  */
 
 import {useCallback, useEffect, useRef, useState} from "react";
+import {readerTelemetryNow, recordReaderTelemetry} from "./readerTelemetry.js";
 
 /**
  * Perform a same-origin JSON request through Moon.
  *
  * @param {string} url
- * @param {RequestInit & {json?: unknown}} [options]
+ * @param {RequestInit & {json?: unknown, telemetry?: Record<string, unknown>}} [options]
  * @returns {Promise<{ok: boolean, status: number, payload: any}>}
  */
 export const requestJson = async (url, options = {}) => {
+  const startedAt = readerTelemetryNow();
+  const telemetry = options.telemetry || null;
   try {
-    const {json, ...fetchOptions} = options;
+    const {json, telemetry: _telemetry, ...fetchOptions} = options;
     const response = await fetch(url, {
       ...fetchOptions,
       headers: {
@@ -36,12 +39,30 @@ export const requestJson = async (url, options = {}) => {
       }
     }
 
-    return {
+    const result = {
       ok: response.ok,
       status: response.status,
       payload
     };
+    if (telemetry) {
+      recordReaderTelemetry({
+        ...telemetry,
+        ok: result.ok,
+        status: result.status,
+        durationMs: readerTelemetryNow() - startedAt
+      });
+    }
+    return result;
   } catch (error) {
+    if (telemetry) {
+      recordReaderTelemetry({
+        ...telemetry,
+        ok: false,
+        status: 0,
+        durationMs: readerTelemetryNow() - startedAt,
+        reason: error instanceof Error ? error.name || error.message : "request_error"
+      });
+    }
     if (error instanceof Error && error.name === "AbortError") {
       return {
         ok: false,
@@ -67,7 +88,7 @@ export const requestJson = async (url, options = {}) => {
  *
  * @template T
  * @param {string | null} url
- * @param {{enabled?: boolean, fallback?: T, deps?: unknown[], keepPreviousData?: boolean}} [options]
+ * @param {{enabled?: boolean, fallback?: T, deps?: unknown[], keepPreviousData?: boolean, telemetry?: Record<string, unknown>}} [options]
  * @returns {{
  *   loading: boolean,
  *   refreshing: boolean,
@@ -78,17 +99,19 @@ export const requestJson = async (url, options = {}) => {
  *   setData: import("react").Dispatch<import("react").SetStateAction<T>>
  * }}
  */
-export const useMoonJson = (url, {enabled = true, fallback = /** @type {T} */ (null), deps = [], keepPreviousData = false} = {}) => {
+export const useMoonJson = (url, {enabled = true, fallback = /** @type {T} */ (null), deps = [], keepPreviousData = false, telemetry = null} = {}) => {
   const [loading, setLoading] = useState(Boolean(enabled && url));
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
   const [status, setStatus] = useState(0);
   const [data, setData] = useState(fallback);
   const fallbackRef = useRef(fallback);
+  const telemetryRef = useRef(telemetry);
   const controllerRef = useRef(null);
   const requestSeqRef = useRef(0);
   const hasLoadedRef = useRef(false);
   fallbackRef.current = fallback;
+  telemetryRef.current = telemetry;
 
   const fetchValue = useCallback(async () => {
     requestSeqRef.current += 1;
@@ -111,7 +134,7 @@ export const useMoonJson = (url, {enabled = true, fallback = /** @type {T} */ (n
     const shouldRefresh = keepPreviousData && hasLoadedRef.current;
     setLoading(!shouldRefresh);
     setRefreshing(shouldRefresh);
-    const result = await requestJson(url, {signal: controller.signal});
+    const result = await requestJson(url, {signal: controller.signal, telemetry: telemetryRef.current});
     if (requestSeq !== requestSeqRef.current) {
       return;
     }

@@ -81,11 +81,12 @@
 - Reader smoothness is readiness-driven. Keep adaptive preload policy and decoded image state in the reader helper
   layer, warm ahead of the visible page, and hold paged navigation on the current spread until the destination spread's
   metadata and images are ready. Do not mark a failed warm-up as permanently complete; failures must remain retryable.
-- The next reader pass should add evidence before changing behavior. Useful counters/timings are session fetch,
-  page-metadata chunk fetch, image stream fetch, browser decode, queued/in-flight warmups, decoded pages ahead/behind,
-  retryable failures, and "caught buffer" waits where navigation or scroll reaches an unready page.
-- Keep reader instrumentation local to the reader app and same-origin APIs. Do not send browser telemetry directly to
-  Sage/Raven/Vault; if durable diagnostics are needed, add a Moon -> Sage route with explicit redaction and bounds.
+- Reader instrumentation now exists before preload policy changes. Keep measuring session fetch, page-metadata chunk
+  fetch, image stream fetch, browser decode, queued/in-flight warmups, decoded pages ahead/behind, retryable failures,
+  and "caught buffer" waits where navigation or scroll reaches an unready page.
+- Keep the full reader telemetry buffer local to the reader app at `window.__scriptarrReaderTelemetry`. Durable
+  diagnostics must stay same-origin through Moon -> Sage and persist only redacted slow/retry/caught-buffer summaries
+  without titles, image URLs, query strings, tokens, raw paths, or page payloads.
 - Reader page images are revisioned immutable assets. Moon and Sage should stream page image responses and preserve
   image cache/content headers, while sessions, progress, bookmarks, and other mutable reader data stay live-only.
 - Reader input belongs in `apps/reader-next/lib/inputController.js`. Keep keyboard, swipe, and gamepad mapping

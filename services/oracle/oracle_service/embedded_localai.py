@@ -133,6 +133,16 @@ class EmbeddedLocalAiManager:
         self._generation_probe_key = ""
         self._download_jobs: dict[str, dict[str, Any]] = {}
         self._download_tasks: dict[str, asyncio.Task] = {}
+        self._startup_task: asyncio.Task | None = None
+        self._manual_remove_requested = False
+        self._startup_state: dict[str, Any] = {
+            "phase": "idle",
+            "gateReason": "",
+            "lastError": "",
+            "lastCheckedAt": "",
+            "probePassed": False,
+            "model": ""
+        }
 
     @property
     def enabled(self) -> bool:
@@ -213,13 +223,133 @@ class EmbeddedLocalAiManager:
             "LOCALAI_DISABLE_WEBUI": "true"
         }
 
-    async def start(self) -> None:
+    def _set_startup_state(
+        self,
+        *,
+        phase: str,
+        gate_reason: str = "",
+        error: str = "",
+        probe_passed: bool = False,
+        model: str = ""
+    ) -> None:
+        self._startup_state = {
+            "phase": phase,
+            "gateReason": gate_reason,
+            "lastError": _safe_text(error, 500),
+            "lastCheckedAt": _now_iso(),
+            "probePassed": bool(probe_passed),
+            "model": _normalize_string(model)
+        }
+
+    def startup_status(self) -> dict[str, Any]:
+        return dict(self._startup_state)
+
+    def health_status(self) -> dict[str, Any]:
+        model = self.model_status(self.config.local_ai_default_model_url)
+        startup = self.startup_status()
+        return {
+            "embedded": True,
+            "installed": bool(model["downloaded"]),
+            "running": self.running(),
+            "ready": bool(startup.get("probePassed")),
+            "message": self.message,
+            "lastError": self.last_error,
+            "updatedAt": self.updated_at,
+            "startup": startup,
+            "job": self.latest_job()
+        }
+
+    def record_startup_gate(self, *, gate_reason: str, error: str = "", model: str = "") -> dict[str, Any]:
+        self._set_startup_state(phase="skipped", gate_reason=gate_reason, error=error, model=model)
+        return self.startup_status()
+
+    def _remove_requested_or_running(self) -> bool:
+        if self._manual_remove_requested:
+            return True
+        for job in self._download_jobs.values():
+            if (job.get("payload") or {}).get("action") == "remove" and job.get("status") in {"queued", "running"}:
+                return True
+        return False
+
+    def _model_url_for_startup(self, model: object) -> str:
+        selected = _normalize_string(model, self.config.local_ai_default_model_url)
+        return selected if selected.startswith("huggingface://") else self._model_url_for_id(selected)
+
+    def start_startup_auto_start(self, runtime_settings: Any) -> dict[str, Any]:
+        if self._startup_task and not self._startup_task.done():
+            return self.startup_status()
+        self._set_startup_state(phase="checking", model=_normalize_string(getattr(runtime_settings, "model", "")))
+        self._startup_task = asyncio.create_task(self.run_startup_auto_start(runtime_settings))
+        return self.startup_status()
+
+    async def cancel_startup_auto_start(self) -> None:
+        if not self._startup_task or self._startup_task.done():
+            return
+        self._startup_task.cancel()
+        try:
+            await self._startup_task
+        except asyncio.CancelledError:
+            self._set_startup_state(phase="cancelled", gate_reason="shutdown")
+        finally:
+            self._startup_task = None
+
+    async def run_startup_auto_start(self, runtime_settings: Any) -> dict[str, Any]:
+        selected_model = _normalize_string(getattr(runtime_settings, "model", ""))
+        try:
+            if not self.enabled:
+                return self.record_startup_gate(gate_reason="embedded_disabled")
+            if getattr(runtime_settings, "enabled", False) is not True:
+                return self.record_startup_gate(gate_reason="oracle_disabled")
+            if _normalize_string(getattr(runtime_settings, "provider", "")) != "localai":
+                return self.record_startup_gate(gate_reason="provider_not_localai")
+            if self._remove_requested_or_running():
+                return self.record_startup_gate(gate_reason="remove_requested", model=selected_model)
+
+            model_url = self._model_url_for_startup(selected_model)
+            model = self.model_status(model_url)
+            if not model.get("downloaded"):
+                return self.record_startup_gate(gate_reason="model_not_installed", model=model.get("id", selected_model))
+            if not self.backend_present():
+                return self.record_startup_gate(gate_reason="backend_not_installed", model=model.get("id", selected_model))
+
+            self._set_startup_state(phase="starting", model=model.get("id", selected_model))
+            self._write_model_config(model_url)
+            if not self.running():
+                await self.start(model_url=model_url)
+            self._set_startup_state(phase="warming", model=model.get("id", selected_model))
+            ready = await self.wait_until_ready()
+            if not ready.get("ready"):
+                error = _safe_text(ready.get("error") or ready.get("reason"), 500) or "LocalAI API did not become ready."
+                self._set_startup_state(phase="failed", gate_reason="runtime_not_ready", error=error, model=model.get("id", selected_model))
+                self._mark(message="Embedded LocalAI startup did not become ready.", error=error)
+                return self.startup_status()
+
+            probe = await self.verify_generation(model_url=model_url)
+            if not probe.get("ready"):
+                error = _safe_text(probe.get("error") or probe.get("reason"), 500) or "LocalAI generation probe failed."
+                self._set_startup_state(phase="failed", gate_reason="generation_probe_failed", error=error, model=model.get("id", selected_model))
+                self._mark(message="Embedded LocalAI startup generation probe failed.", error=error)
+                return self.startup_status()
+
+            self._manual_remove_requested = False
+            self._set_startup_state(phase="ready", probe_passed=True, model=model.get("id", selected_model))
+            self._mark(message="Embedded LocalAI startup probe passed.", error="")
+            return self.startup_status()
+        except Exception as error:  # noqa: BLE001
+            self._set_startup_state(phase="failed", gate_reason="startup_error", error=str(error), model=selected_model)
+            self._mark(message="Embedded LocalAI startup failed.", error=str(error))
+            self.logger.warning("Embedded LocalAI startup failed.", extra={"error": str(error)})
+            return self.startup_status()
+
+    async def start(self, *, model_url: str | None = None) -> None:
         if not self.enabled:
             self._mark(message="Embedded LocalAI is disabled.")
             return
         if self.process and self.process.returncode is None:
             return
         await self.prepare()
+        if model_url:
+            self._write_model_config(model_url)
         args = [self.config.local_ai_bin, *shlex.split(self.config.local_ai_args)]
         try:
             self.process = await asyncio.create_subprocess_exec(
@@ -464,6 +594,11 @@ class EmbeddedLocalAiManager:
         selected_model = model_url or self.config.local_ai_default_model_url
         if not selected_model.startswith("huggingface://"):
             selected_model = self._model_url_for_id(selected_model)
+        if action == "remove":
+            self._manual_remove_requested = True
+            self._set_startup_state(phase="skipped", gate_reason="remove_requested", model=parse_huggingface_model(selected_model).local_name)
+        elif action in {"install", "start"}:
+            self._manual_remove_requested = False
         job = self._new_job(action, selected_model, requested_by)
         self._download_jobs[job["jobId"]] = job
         task = asyncio.create_task(self._run_ensure_job(job["jobId"], action, selected_model, huggingface_token, download_model))
@@ -491,7 +626,7 @@ class EmbeddedLocalAiManager:
             await self._update_job(job_id, message="Ensuring LocalAI llama-cpp backend.", progressPercent=82, percent=82)
             backend = await self.ensure_backend()
             await self._update_job(job_id, message="Starting embedded LocalAI.", progressPercent=85, percent=85)
-            await self.start()
+            await self.start(model_url=model_url)
             await self._update_job(job_id, message="Waiting for embedded LocalAI API readiness.", progressPercent=88, percent=88)
             ready = await self.wait_until_ready()
             if not ready.get("ready"):
@@ -698,6 +833,7 @@ class EmbeddedLocalAiManager:
             "containerName": "scriptarr-oracle",
             "model": model,
             "generationProbe": probe,
+            "startup": self.startup_status(),
             "job": self.latest_job(),
             "models": self.model_options_payload(model["id"])["models"]
         }

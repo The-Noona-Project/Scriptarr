@@ -26,6 +26,9 @@
   the user-facing Moon routes browser-safe, write durable read/progress state through Vault, and rebuild
   home/title/reader payloads from explicit tag preferences plus inferred taste from read history, follows, and the
   active bookshelf.
+- Sage also brokers reader telemetry from Moon. `/api/moon-v3/user/reader/telemetry` should persist only redacted slow,
+  retry, or caught-buffer summaries as `reader` events; do not store raw image URLs, query strings, tokens, paths, page
+  payloads, or full browser traces.
 - User title pages now have a split broker contract. Keep the legacy full
   `/api/moon-v3/user/title/:titleId` route for compatibility, but new Moon UI should call
   `/summary` for hero/action data, `/chapters?cursor=&pageSize=&sort=&filter=&q=` for paged chapter rows with read
@@ -158,7 +161,7 @@
   routes visible as `not_probed`, and avoid adding browser-direct status calls around Moon.
 - Sage owns the dedicated AI admin broker at `/api/moon-v3/admin/system/ai` and the `ai` admin domain. Oracle settings
   saves require `ai.write`; LocalAI lifecycle actions require `ai.root`; install/start/remove requests should pass the
-  Moon admin requester context to Warden. Admin test prompts and structured assist calls should degrade safely when
+  Moon admin requester context to Oracle. Admin test prompts and structured assist calls should degrade safely when
   Oracle or LocalAI is unavailable. Keep the admin test timeout long enough for CPU-only LocalAI prompts instead of
   assuming readiness means fast generation. Keep the base AI payload saved-state focused, put Oracle health and LocalAI
   runtime probes in `/api/moon-v3/admin/system/ai/runtime`, and keep model discovery brokered through Oracle; Moon

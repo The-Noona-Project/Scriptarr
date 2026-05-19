@@ -5,8 +5,8 @@
 Oracle provides Scriptarr's read-only AI replies for Noona and Appa.
 
 Oracle now runs as a small FastAPI service. It starts disabled on install, defaults to OpenAI configuration, and stays
-read-only in v1. Moon admin can later switch Oracle to a Warden-managed LocalAI runtime when the server admin is ready
-for the longer install or startup time.
+read-only in v1. Moon admin can later switch Oracle to the embedded LocalAI runtime when the server admin is ready for
+the longer install or startup time.
 
 Oracle no longer talks directly to Vault or Warden. Its first-party Scriptarr reads now go through Sage's internal
 broker routes, while external LLM traffic still goes directly to OpenAI or LocalAI through OpenAI-compatible requests.
@@ -37,6 +37,12 @@ normalized Appa review decision for Sage; Oracle does not post corrections or wr
 Oracle returns provider-specific degraded replies when OpenAI or LocalAI fails. The LLM call timeout defaults to 60
 seconds and can be tuned with `SCRIPTARR_ORACLE_LLM_TIMEOUT_SECONDS`, which gives CPU-only LocalAI enough room for
 small admin test prompts.
+
+Embedded LocalAI startup is deploy-safe. After Oracle prepares its local cache, it starts a background auto-start check
+only when Oracle is enabled, the selected provider is `localai`, the selected GGUF model already exists in persistent
+storage, no remove action is active, and the runtime can pass a real `scriptarr-ok` generation probe. Missing models or
+slow warmup leave Oracle and the broader Scriptarr stack healthy while `/admin/system/ai` shows the startup phase and
+last gate reason.
 
 The service keeps the existing env names for Sage, OpenAI, and LocalAI so Warden, Moon, Sage, and Portal do not need
 to change how they configure or call Oracle.

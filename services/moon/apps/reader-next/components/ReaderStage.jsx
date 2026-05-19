@@ -38,8 +38,10 @@ export const ReaderStage = ({
             chapterId={pagedChapterId}
             eager={index === 0}
             key={`${pagedChapterId}:${page.index}:${page.src || "pending"}`}
+            layoutMode={layoutMode}
             page={page}
             showPageNumbers={showPageNumbers}
+            titleId={title.id}
           />
         )) : (
           loadingPages ? <ReaderPageSkeletons count={layoutMode === "single" ? 1 : 2} /> : <div className="reader-empty-panel">No pages are available for this chapter.</div>
@@ -60,8 +62,10 @@ export const ReaderStage = ({
                 chapterId={chapterPayload.chapter.id}
                 eager={chapterIndex === 0 && pageIndex === 0}
                 key={`${chapterPayload.chapter.id}:${page.index}:${page.src || "pending"}`}
+                layoutMode={layoutMode}
                 page={page}
                 showPageNumbers={showPageNumbers}
+                titleId={title.id}
               />
             )) : <ReaderPageSkeletons count={2} />}
             {chapterPayload.loading ? <ReaderPageSkeletons count={1} /> : null}

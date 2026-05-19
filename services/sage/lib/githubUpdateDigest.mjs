@@ -38,7 +38,9 @@ const RAW_UPDATE_COPY_PATTERNS = Object.freeze([
   /\([^)]+,\s*20\d{2}-\d{2}-\d{2}T\d{2}:\d{2}/i,
   /\[\s*\d+\s*\/\s*\d+\s*chars?\s*\]/i,
   /^compare:\s*https?:\/\//im,
-  /```/
+  /```/,
+  /\b(let me know if you have any questions|feel free to (?:reach out|ask)|ask me anything|hope this helps)\b/i,
+  /^\s*(?:updates?|changes?|release notes?):\s*$/im
 ]);
 
 /**
@@ -162,8 +164,8 @@ const fetchCommitsSince = async ({fetchImpl, token, branch, baselineSha}) => {
 };
 
 const buildOracleMessage = ({branch, baseSha, compareUrl, commits, truncated}) => [
-  "Write only the human-facing Discord update summary as Noona, Scriptarr's warm Big Sister AI. Keep it under 700 characters.",
-  "Open with one friendly sentence, then use 2-3 short bullets focused on what changed and how readers/admins use it.",
+  "Write only the human-facing Discord update summary as Noona, Scriptarr's warm, specific Big Sister AI. Keep it under 700 characters.",
+  "Open with one friendly sentence, then use 2-3 short bullets focused on concrete outcomes and how readers/admins use them.",
   "Portal will attach repository, compare link, latest SHA, and commit metadata separately; do not include raw SHAs, authors, dates, compare links, numbered commit rows, or character-count notes.",
   "Avoid generic support-bot lines like 'let me know if you have questions' or 'ask me anything'. A natural 'ask Noona what changed' line is okay if it fits.",
   "Do not invent features beyond the commit titles. Do not mention secrets, private infrastructure, or internal logs.",
@@ -184,7 +186,7 @@ const requestOracleSummary = async ({config, serviceJson, branch, baseSha, compa
       message: buildOracleMessage({branch, baseSha, compareUrl, commits, truncated}),
       context: {
         source: "github-update-check",
-        personaStyle: "Noona is warm, playful, and clear. For update summaries, she translates commit titles into useful reader/admin outcomes and never repeats raw commit metadata.",
+        personaStyle: "Noona is warm, playful, specific, and clear. For update summaries, she translates commit titles into useful reader/admin outcomes and never repeats raw commit metadata or support-ticket closers.",
         repository: GITHUB_UPDATE_REPOSITORY,
         branch,
         compareUrl

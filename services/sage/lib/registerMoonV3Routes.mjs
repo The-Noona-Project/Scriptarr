@@ -133,6 +133,21 @@ const EVENT_DOMAIN_ACCESS = Object.freeze({
   follow: "library",
   reader: "library"
 });
+const READER_TELEMETRY_SLOW_THRESHOLDS_MS = Object.freeze({
+  "session-fetch": 1200,
+  "page-chunk-fetch": 900,
+  "image-stream-fetch": 1500,
+  "image-decode": 350,
+  "caught-buffer": 250
+});
+const READER_TELEMETRY_TYPES = new Set([
+  "session-fetch",
+  "page-chunk-fetch",
+  "image-stream-fetch",
+  "image-decode",
+  "image-retry",
+  "caught-buffer"
+]);
 const ORACLE_ADMIN_TEST_TIMEOUT_MS = 75000;
 const LIBRARY_CARD_PAGE_SIZE_DEFAULT = 60;
 const LIBRARY_CARD_PAGE_SIZE_MAX = 100;
@@ -144,6 +159,77 @@ const normalizeTypeSlug = (value, fallback = "manga") => {
     .replace(/^-+/, "")
     .replace(/-+$/, "");
   return normalized || fallback;
+};
+
+const normalizeTelemetryString = (value, fallback = "") => normalizeString(value, fallback)
+  .replace(/[^a-zA-Z0-9._:-]/g, "_")
+  .slice(0, 120);
+const normalizeTelemetryIdentifier = (value) => {
+  const normalized = normalizeString(value);
+  if (!/^[a-zA-Z0-9._:-]{1,120}$/.test(normalized)) {
+    return "";
+  }
+  if (/token|secret|session|authorization|password|key/i.test(normalized)) {
+    return "";
+  }
+  return normalized;
+};
+const normalizeTelemetryLabel = (value, limit = 120) => {
+  const normalized = normalizeString(value);
+  if (/https?:|[/?#\\]|token|secret|session|authorization|password/i.test(normalized)) {
+    return "";
+  }
+  return normalized.replace(/[^a-zA-Z0-9 ._:-]/g, "_").slice(0, limit);
+};
+const normalizeTelemetryInteger = (value, fallback = 0) => {
+  const parsed = Number.parseInt(String(value), 10);
+  return Number.isFinite(parsed) ? parsed : fallback;
+};
+const normalizeTelemetryDuration = (value) => {
+  const parsed = Number.parseFloat(String(value));
+  return Number.isFinite(parsed) ? Math.max(0, Math.round(parsed)) : 0;
+};
+const sanitizeReaderTelemetryPayload = (payload = {}) => {
+  const source = normalizeObject(payload, {}) || {};
+  const type = normalizeTelemetryString(source.type);
+  return {
+    type: READER_TELEMETRY_TYPES.has(type) ? type : "",
+    titleId: normalizeTelemetryIdentifier(source.titleId),
+    chapterId: normalizeTelemetryIdentifier(source.chapterId),
+    pageIndex: normalizeTelemetryInteger(source.pageIndex, -1),
+    activeIndex: normalizeTelemetryInteger(source.activeIndex, -1),
+    pageCount: Math.max(0, normalizeTelemetryInteger(source.pageCount, 0)),
+    cursor: Math.max(0, normalizeTelemetryInteger(source.cursor, 0)),
+    pageSize: Math.max(0, normalizeTelemetryInteger(source.pageSize, 0)),
+    layoutMode: normalizeTelemetryLabel(source.layoutMode, 80),
+    direction: normalizeTelemetryLabel(source.direction, 40),
+    status: normalizeTelemetryInteger(source.status, 0),
+    ok: source.ok === true,
+    durationMs: normalizeTelemetryDuration(source.durationMs),
+    decodeMs: normalizeTelemetryDuration(source.decodeMs),
+    imageLoadMs: normalizeTelemetryDuration(source.imageLoadMs),
+    queueDepth: Math.max(0, normalizeTelemetryInteger(source.queueDepth, 0)),
+    metadataRequestCount: Math.max(0, normalizeTelemetryInteger(source.metadataRequestCount, 0)),
+    warmRequestCount: Math.max(0, normalizeTelemetryInteger(source.warmRequestCount, 0)),
+    inFlightPageRequests: Math.max(0, normalizeTelemetryInteger(source.inFlightPageRequests, 0)),
+    retryCount: Math.max(0, normalizeTelemetryInteger(source.retryCount, 0)),
+    decodedAhead: Math.max(0, normalizeTelemetryInteger(source.decodedAhead, 0)),
+    decodedBehind: Math.max(0, normalizeTelemetryInteger(source.decodedBehind, 0)),
+    decodedTotal: Math.max(0, normalizeTelemetryInteger(source.decodedTotal, 0)),
+    reason: normalizeTelemetryLabel(source.reason, 120),
+    phase: normalizeTelemetryLabel(source.phase, 80),
+    receivedAt: new Date().toISOString()
+  };
+};
+const shouldPersistReaderTelemetry = (event) => {
+  if (!event.type) {
+    return false;
+  }
+  if (event.type === "image-retry" || event.type === "caught-buffer" || event.retryCount > 0) {
+    return true;
+  }
+  const threshold = READER_TELEMETRY_SLOW_THRESHOLDS_MS[event.type];
+  return Number.isFinite(threshold) && event.durationMs >= threshold;
 };
 
 const parseIso = (value) => {
@@ -4995,6 +5081,30 @@ export const registerMoonV3Routes = (app, {
     const nextStore = mergeReaderPreferences(storedPreferences, typeSlug, {...req.body, titleId});
     await writeUserScopedSetting(vaultClient, "moon.reader.preferences", req.user.discordUserId, nextStore);
     res.json(resolveReaderPreferences(nextStore, typeSlug, titleId));
+  }));
+
+  app.post("/api/moon-v3/user/reader/telemetry", withUser(requireUser, async (req, res) => {
+    const event = sanitizeReaderTelemetryPayload(req.body || {});
+    if (!event.type) {
+      res.status(400).json({ok: false, error: "Unsupported reader telemetry event type."});
+      return;
+    }
+    if (!shouldPersistReaderTelemetry(event)) {
+      res.json({ok: true, recorded: false});
+      return;
+    }
+    const targetId = [event.titleId, event.chapterId].filter(Boolean).join(":").slice(0, 180);
+    await appendEventForUser({
+      domain: "reader",
+      eventType: "reader-performance-slow",
+      user: req.user,
+      severity: event.ok === false || event.type === "caught-buffer" ? "warning" : "info",
+      targetType: "reader-session",
+      targetId,
+      message: `${req.user.username} hit a reader ${event.type.replace(/-/g, " ")} event.`,
+      metadata: event
+    });
+    res.json({ok: true, recorded: true, eventType: "reader-performance-slow"});
   }));
 
   app.get("/api/moon-v3/user/reader/bookmarks", withUser(requireUser, async (req, res) => {

@@ -83,6 +83,8 @@ controls, and a simple footer, while the fullscreen reader runs as its own embed
 That reader supports webtoon, single-page, double-page, and manga-double layouts, LTR/RTL direction, page-fit controls,
 keyboard/touch/controller navigation, and still persists Moon-native progress plus bookmarks behind the same typed
 reader routes.
+Reader diagnostics now measure fetch, decode, preload, retry, and caught-buffer timing locally, while durable admin
+events keep only redacted slow/retry summaries.
 Moon admin calendar is now backed by Raven chapter release dates captured from provider scrapes plus metadata
 enrichment, and completed catalog titles get a dated completion marker when chapter dates are missing so finished
 series are not silently dropped from the calendar.
@@ -246,6 +248,9 @@ For end-to-end Docker verification, use:
 - Embedded LocalAI prepares its cache with no model preload. Moon admin can ask Oracle to ensure the selected GGUF
   model; Oracle writes the model YAML, downloads it once into the persistent `localai/models` folder, starts LocalAI
   for that explicit lifecycle action, and reports ready only after a tiny OpenAI-compatible generation probe succeeds.
+- After deploys and restarts, Oracle may auto-start embedded LocalAI in the background only when Oracle is enabled,
+  provider is `localai`, the selected model is already installed, no remove action is active, and the generation probe
+  succeeds. Warmup or missing models do not make Scriptarr unhealthy.
 - CPU LocalAI can still take tens of seconds to answer even after readiness succeeds. Oracle keeps provider-specific
   degraded replies and waits longer for brokered admin test prompts before treating the selected AI provider as down.
 - Moon's AI page now discovers provider models through Moon -> Sage -> Oracle and constrains the Oracle model field to

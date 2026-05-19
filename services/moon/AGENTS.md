@@ -63,9 +63,10 @@ from the same runtime.
 - Reader page images should stay readiness-first: adaptive preload warms a decoded buffer ahead of the visible page,
   paged navigation should wait for destination image readiness, and revisioned page image responses should stream
   through Moon instead of being buffered like JSON payloads.
-- For the next reader speed pass, add measurements before policy changes. Capture session latency, page chunk latency,
-  image fetch latency, decode latency, preload window depth, retry counts, and how often the user reaches an unready
-  target page. Keep these diagnostics lightweight and browser-safe.
+- Reader speed instrumentation exists before policy changes. Keep capturing session latency, page chunk latency, image
+  fetch latency, decode latency, preload window depth, retry counts, decoded pages ahead/behind, and how often the user
+  reaches an unready target page. Keep full diagnostics in the local reader buffer and persist only redacted slow-event
+  summaries through Moon -> Sage.
 - Reader browser QA should use the real app, not only API smoke: webtoon scroll past chunk boundaries, single/double
   page next/previous, manga-double direction, reload/cache refresh, failed image retry, keyboard/touch/controller
   input, and numeric chapter navigation.

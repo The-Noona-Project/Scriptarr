@@ -116,7 +116,7 @@ test("Noona chat sends curated memory and read context to Oracle without mutatin
   assert.equal(oracleCall.baseUrl, "http://oracle.test");
   assert.equal(oracleCall.options.method, "POST");
   assert.equal(oracleCall.options.body.context.source, "discord-mention");
-  assert.match(oracleCall.options.body.context.personaStyle, /not raw automation output|support ticket|raw commit rows/i);
+  assert.match(oracleCall.options.body.context.personaStyle, /specific|support ticket|raw commit rows/i);
   assert.deepEqual(oracleCall.options.body.context.memory.userFacts, ["I read late at night"]);
   assert.equal(oracleCall.options.body.context.readContext.serviceHealth.oracle.ok, true);
   assert.equal(oracleCall.options.body.context.readContext.library.results[0].title, "Yotsuba&!");

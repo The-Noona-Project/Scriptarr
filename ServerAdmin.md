@@ -174,6 +174,11 @@ actions now flow Moon -> Sage -> Oracle. Oracle owns the private embedded model 
 downloads the selected model once into persistent storage, starts LocalAI during the explicit lifecycle action, and
 only reports ready after a tiny OpenAI-compatible generation probe succeeds.
 
+After a deploy or container restart, Oracle also runs a background auto-start check for embedded LocalAI. It starts the
+runtime only when Oracle is enabled, the provider is `localai`, the selected model is already installed, no remove job
+is active, and a real generation probe can pass. If the model is missing or LocalAI is still warming, `/health` remains
+healthy and `/admin/system/ai` shows the startup phase, gate reason, and last error instead of blocking the stack.
+
 Warden plans the `scriptarr-oracle` container instead of a `scriptarr-localai` sidecar. It mounts persistent
 `localai/models` and `localai/data` folders into Oracle and passes hardware flags for the selected profile. NVIDIA
 hosts should run Oracle with `--runtime nvidia --gpus all`, explicit `/dev/nvidia*` device bindings,
@@ -194,6 +199,8 @@ temporarily unavailable.
   proposals.
 - Admins can later switch Oracle to LocalAI from Moon admin and then manually install, start, probe, or remove the
   embedded model/runtime through Oracle-brokered actions.
+- Restarts can auto-start LocalAI only for an already installed selected model; Oracle never downloads a model during
+  background startup.
 - When the provider is `localai` and no model is set explicitly, Scriptarr falls back to
   `Hermes-3-Llama-3.1-8B-Q4_K_S.gguf` instead of the OpenAI default model name.
 - Moon's AI page loads available model ids through Moon -> Sage -> Oracle and renders the model control as a
@@ -300,7 +307,9 @@ That same user app now runs through an embedded Next.js App Router frontend with
 single-row megamenu header with plain site-name branding, a compact avatar dropdown for Profile, conditional Admin,
 and Logout, a dedicated `/profile` page for local StylePanel preferences and install actions, and a simple footer.
 The dedicated reader app is fullscreen, has its own overlays and settings drawer, and supports webtoon, single,
-double, manga double, LTR/RTL, and page-fit controls. `/profile` is now a tabbed account
+double, manga double, LTR/RTL, and page-fit controls. Reader performance diagnostics keep detailed timings in the
+browser-local `window.__scriptarrReaderTelemetry` buffer and persist only redacted slow/retry/caught-buffer summaries
+as `reader` events for admin review. `/profile` is now a tabbed account
 hub with `Overview`, `Stats`, and `Preferences` instead of one long mixed settings panel. Library type links now live
 inside the `Library` mega menu and canonical `/library?type=...` URL state, while `/browse` still opens the same
 catalogue for old links. The catalogue keeps a quick-jump letter rail on the left, tighter search against titles,

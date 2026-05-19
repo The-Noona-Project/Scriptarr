@@ -281,15 +281,33 @@ def create_app(
     @app.on_event("startup")
     async def startup_embedded_local_ai() -> None:
         await embedded_runtime.prepare()
+        if not active_config.local_ai_embedded_enabled:
+            return
+        try:
+            runtime = await resolve_oracle_runtime_settings(config=active_config, sage_client=active_sage_client)
+        except Exception as error:  # noqa: BLE001
+            active_logger.warning("Oracle could not resolve settings for embedded LocalAI startup.", extra={"error": str(error)})
+            embedded_runtime.record_startup_gate(gate_reason="settings_unavailable", error=str(error))
+            return
+        embedded_runtime.start_startup_auto_start(runtime)
 
     @app.on_event("shutdown")
     async def shutdown_embedded_local_ai() -> None:
+        if hasattr(embedded_runtime, "cancel_startup_auto_start"):
+            await embedded_runtime.cancel_startup_auto_start()
         await embedded_runtime.stop()
 
     async def local_ai_available(runtime) -> bool:
         if active_config.local_ai_embedded_enabled:
             return await embedded_runtime.is_ready()
         return await probe_local_ai_fn(runtime)
+
+    async def embedded_health_payload() -> dict[str, object] | None:
+        if not active_config.local_ai_embedded_enabled:
+            return None
+        if hasattr(embedded_runtime, "health_status"):
+            return embedded_runtime.health_status()
+        return await embedded_runtime.status()
 
     @app.get("/health")
     async def health() -> dict[str, object]:
@@ -306,7 +324,7 @@ def create_app(
             "model": runtime.model,
             "localAiBaseUrl": runtime.local_ai_base_url,
             "openAiApiKeyConfigured": runtime.open_ai_api_key_configured,
-            "embeddedLocalAi": await embedded_runtime.status() if active_config.local_ai_embedded_enabled else None,
+            "embeddedLocalAi": await embedded_health_payload(),
             "status": status
         }
 

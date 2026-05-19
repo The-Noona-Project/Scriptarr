@@ -18,6 +18,7 @@ const clampIndex = (value, pageCount) => {
 };
 
 const normalizeConnectionType = (value) => String(value || "").trim().toLowerCase();
+const now = () => typeof performance !== "undefined" && typeof performance.now === "function" ? performance.now() : Date.now();
 
 /**
  * Resolve the reader's page warm-ahead budget for the current device.
@@ -273,10 +274,10 @@ export const resolveReaderPreloadPlan = ({
  *
  * @param {Array<{index?: number, src?: string}>} pages
  * @param {number[]} indexes
- * @param {{imageFactory?: typeof Image}} [options]
+ * @param {{imageFactory?: typeof Image, onMetric?: (event: Record<string, unknown>) => void}} [options]
  * @returns {Promise<Array<{index: number, ok: boolean}>>}
  */
-export const warmReaderPageImages = async (pages = [], indexes = [], {imageFactory = globalThis.Image} = {}) => {
+export const warmReaderPageImages = async (pages = [], indexes = [], {imageFactory = globalThis.Image, onMetric = null} = {}) => {
   if (typeof imageFactory !== "function") {
     return [];
   }
@@ -284,15 +285,52 @@ export const warmReaderPageImages = async (pages = [], indexes = [], {imageFacto
   const pageEntries = pages.filter((page) => Number.isInteger(page?.index) && wanted.has(page.index) && page.src);
   const results = await Promise.all(pageEntries.map((page) => new Promise((resolve) => {
     const image = new imageFactory();
+    const startedAt = now();
     const finish = (ok) => resolve({index: page.index, ok});
     image.onload = () => {
+      const imageLoadMs = now() - startedAt;
+      onMetric?.({
+        type: "image-stream-fetch",
+        pageIndex: page.index,
+        ok: true,
+        durationMs: imageLoadMs
+      });
       if (typeof image.decode === "function") {
-        Promise.resolve(image.decode()).then(() => finish(true), () => finish(false));
+        const decodeStartedAt = now();
+        Promise.resolve(image.decode()).then(() => {
+          onMetric?.({
+            type: "image-decode",
+            pageIndex: page.index,
+            ok: true,
+            durationMs: now() - decodeStartedAt,
+            imageLoadMs
+          });
+          finish(true);
+        }, () => {
+          onMetric?.({
+            type: "image-decode",
+            pageIndex: page.index,
+            ok: false,
+            durationMs: now() - decodeStartedAt,
+            imageLoadMs,
+            reason: "decode_failed"
+          });
+          finish(false);
+        });
         return;
       }
       finish(true);
     };
-    image.onerror = () => finish(false);
+    image.onerror = () => {
+      onMetric?.({
+        type: "image-stream-fetch",
+        pageIndex: page.index,
+        ok: false,
+        durationMs: now() - startedAt,
+        reason: "image_error"
+      });
+      finish(false);
+    };
     image.src = page.src;
   })));
   return results;

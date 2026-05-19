@@ -20,9 +20,9 @@ LocalAI.
 - Embedded LocalAI readiness must mean a real generation probe passed, not merely that `/readyz` returned or any
   non-empty text was generated. If model templates change, verify the generated YAML under `/models` uses the
   OpenAI-compatible chat message template and that the probe returns `scriptarr-ok`.
-- For deploy safety, prefer an Oracle-owned startup path that can auto-start embedded LocalAI when Oracle is enabled,
-  provider is `localai`, the selected model is already installed, and the admin has not requested removal. Do not make
-  the whole Scriptarr stack unhealthy while LocalAI warms.
+- For deploy safety, keep the Oracle-owned startup path gated: auto-start embedded LocalAI only when Oracle is enabled,
+  provider is `localai`, the selected model is already installed, no remove action is active, and the generation probe
+  succeeds. Do not make the whole Scriptarr stack unhealthy while LocalAI warms.
 - Route Oracle's first-party Scriptarr HTTP through Sage; do not add direct Vault or Warden calls here.
 - Preserve Oracle's internal wire contract when changing implementation details:
   - `GET /health`
