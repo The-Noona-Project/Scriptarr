@@ -94,7 +94,16 @@ test("GitHub update digest creates an Oracle-backed pending Discord update", asy
       return {
         ok: true,
         status: 200,
-        payload: {reply: "Noona says a new Scriptarr update is ready."}
+        payload: {
+          reply: [
+            "Noona tightened the update lane so Discord posts are clearer for readers and admins.",
+            "**What changed**",
+            "- Update summaries now stay polished instead of echoing commit rows.",
+            "- Discord AI replies get a steadier delivery path.",
+            "**Try it**",
+            "- Mention Noona if you want the plain-language walkthrough."
+          ].join("\n")
+        }
       };
     },
     logger: {}
@@ -107,7 +116,7 @@ test("GitHub update digest creates an Oracle-backed pending Discord update", asy
   assert.equal(result.commitCount, 2);
   assert.equal(state.pending.status, "ready");
   assert.equal(state.pending.id, "update:def456abc123");
-  assert.equal(state.pending.summary, "Noona says a new Scriptarr update is ready.");
+  assert.match(state.pending.summary, /\*\*What changed\*\*/);
   assert.equal(state.pending.commits[0].title, "Add Noona update summaries");
 });
 
@@ -228,7 +237,19 @@ test("GitHub update digest retries pending AI summaries without advancing the po
       oracleCalls += 1;
       return oracleCalls === 1
         ? {ok: false, status: 503, payload: {error: "Oracle unavailable"}}
-        : {ok: true, status: 200, payload: {reply: "Noona retried the update summary."}};
+        : {
+          ok: true,
+          status: 200,
+          payload: {
+            reply: [
+              "Noona retried the update summary and kept it tidy for Discord.",
+              "**What changed**",
+              "- The pending update can post once the AI summary is ready.",
+              "**Try it**",
+              "- Check the update channel for the polished version."
+            ].join("\n")
+          }
+        };
     },
     logger: {}
   });
@@ -244,7 +265,7 @@ test("GitHub update digest retries pending AI summaries without advancing the po
   assert.equal(second.status, "ready");
   assert.equal(oracleCalls, 2);
   assert.equal(readyState.pending.status, "ready");
-  assert.equal(readyState.pending.summary, "Noona retried the update summary.");
+  assert.match(readyState.pending.summary, /\*\*Try it\*\*/);
 });
 
 test("GitHub update digest rejects raw metadata copy as Noona summary", () => {
@@ -269,7 +290,11 @@ test("GitHub update digest rejects raw metadata copy as Noona summary", () => {
     false
   );
   assert.equal(
-    isUsableGithubUpdateSummary("Noona tuned the reader so pages are ready before you turn them. Ask her what changed when you want the details."),
+    isUsableGithubUpdateSummary("**Exciting Scriptarr Update! 🎉**\n**What changed**\n- Reader pages load better\n**Try it**\n- Open the library."),
+    false
+  );
+  assert.equal(
+    isUsableGithubUpdateSummary("Noona tuned the reader so pages are ready before you turn them.\n**What changed**\n- Reader pages preload more smoothly.\n**Try it**\n- Open a chapter and turn a page."),
     true
   );
 });

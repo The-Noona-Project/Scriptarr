@@ -4931,7 +4931,13 @@ test("sage round-trips brokered Portal Discord settings and exposes them in admi
           compareUrl: "https://github.com/The-Noona-Project/Scriptarr/compare/base...main",
           commitCount: 1,
           commits: [{sha: "abc123def456", title: "Add update summaries", author: "Noona", date: "2026-05-16T00:00:00.000Z"}],
-          summary: "Noona found a useful Scriptarr update.",
+          summary: [
+            "Noona found a useful Scriptarr update for the admin lane.",
+            "**What changed**",
+            "- Update summaries are ready for Discord.",
+            "**Try it**",
+            "- Open the update post for the plain-language version."
+          ].join("\n"),
           createdAt: "2026-05-16T00:00:00.000Z"
         }
       }
@@ -4941,7 +4947,7 @@ test("sage round-trips brokered Portal Discord settings and exposes them in admi
     headers: {"Authorization": "Bearer portal-dev-token"}
   }).then((response) => response.json());
   assert.equal(updateNotifications.notifications[0].channelId, "updates-999");
-  assert.equal(updateNotifications.notifications[0].summary, "Noona found a useful Scriptarr update.");
+  assert.match(updateNotifications.notifications[0].summary, /\*\*What changed\*\*/);
 
   const updateAck = await fetch(`${baseUrl}/api/internal/portal/notifications/updates/update%3Aabc123def456/ack`, {
     method: "POST",

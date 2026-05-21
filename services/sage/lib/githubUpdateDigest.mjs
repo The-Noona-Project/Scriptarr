@@ -35,10 +35,12 @@ const FALLBACK_SUMMARY_PATTERNS = Object.freeze([
 
 const RAW_UPDATE_COPY_PATTERNS = Object.freeze([
   /^\s*(?:\d+[\.)]\s*)?[a-f0-9]{7,40}\s+.+$/im,
+  /^\s*(?:#{1,6}\s*)?\*\*[^*\n]*(?:scriptarr|update|exciting|new)[^*\n]*\*\*/im,
   /\([^)]+,\s*20\d{2}-\d{2}-\d{2}T\d{2}:\d{2}/i,
   /\[\s*\d+\s*\/\s*\d+\s*chars?\s*\]/i,
   /^compare:\s*https?:\/\//im,
   /```/,
+  /\p{Extended_Pictographic}/u,
   /\blong live noona\b/i,
   /^\s*to use the new\b/im,
   /^\s*\d+[\.)]\s+(?:install|set|run|open|click|use)\b/im,
@@ -57,6 +59,9 @@ const RAW_UPDATE_COPY_PATTERNS = Object.freeze([
 export const isUsableGithubUpdateSummary = (summary, payload = {}) => {
   const normalized = normalizeString(summary);
   if (!normalized || payload?.degraded === true || payload?.disabled === true) {
+    return false;
+  }
+  if (!/\*\*What changed\*\*/i.test(normalized) || !/\*\*Try it\*\*/i.test(normalized)) {
     return false;
   }
   return ![...FALLBACK_SUMMARY_PATTERNS, ...RAW_UPDATE_COPY_PATTERNS].some((pattern) => pattern.test(normalized));
@@ -177,6 +182,7 @@ const buildOracleMessage = ({branch, baseSha, compareUrl, commits, truncated}) =
   "Write only the Discord embed description for a public Scriptarr update post from Noona.",
   "Voice: warm, specific, lightly playful, and practical. No support-ticket closer. No LONG LIVE NOONA sign-off.",
   "Hard format: one friendly sentence, then exactly two sections: **What changed** with 2-3 bullets, and **Try it** with 1-2 bullets.",
+  "Do not add a headline, title, emoji, greeting, or celebration line before the friendly sentence.",
   "Use reader/admin outcomes, not implementation chores. If a commit is only docs or plumbing, say the docs/admin area got clearer instead of inventing setup steps.",
   "Do not include raw SHAs, authors, dates, compare links, repository names, numbered commit rows, markdown code fences, character counts, or 'ask me anything' lines.",
   "Do not turn a commit title into a how-to guide unless the title explicitly says a user-facing workflow changed.",
