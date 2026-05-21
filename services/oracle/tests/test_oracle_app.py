@@ -124,6 +124,15 @@ class FakeEmbeddedLocalAi:
     async def status(self):
         return self.status_payload
 
+    def startup_status(self):
+        return self.status_payload.get("startup", {
+            "phase": "idle",
+            "gateReason": "",
+            "lastError": "",
+            "probePassed": False,
+            "model": ""
+        })
+
     async def is_ready(self) -> bool:
         return self.ready
 
@@ -715,6 +724,40 @@ def test_embedded_localai_requires_generation_probe_before_chat():
     assert payload["degraded"] is True
     assert payload["reply"] == "Noona is in read-only fallback mode because LocalAI is unavailable right now."
     assert payload["error"] == "LocalAI probe failed."
+
+
+def test_embedded_localai_retries_startup_after_settings_become_enabled():
+    sage = FakeSageClient(
+        settings={
+            "enabled": True,
+            "provider": "localai",
+            "model": "Hermes-3-Llama-3.1-8B-Q4_K_S.gguf",
+            "temperature": 0.2
+        }
+    )
+    embedded = FakeEmbeddedLocalAi(ready=False)
+    app = create_app(config=build_embedded_config(), sage_client=sage, embedded_local_ai=embedded)
+
+    with TestClient(app) as client:
+        embedded.startup_requests.clear()
+        embedded.status_payload["startup"] = {
+            "phase": "skipped",
+            "gateReason": "oracle_disabled",
+            "lastError": "",
+            "probePassed": False,
+            "model": ""
+        }
+        response = client.post("/api/chat", json={"message": "Say hi"})
+
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["degraded"] is True
+    assert embedded.startup_requests == [{
+        "enabled": True,
+        "provider": "localai",
+        "model": "Hermes-3-Llama-3.1-8B-Q4_K_S.gguf"
+    }]
+    assert embedded.status_payload["startup"]["phase"] == "checking"
 
 
 def test_embedded_localai_verify_generation_retries_first_load_failure():

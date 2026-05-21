@@ -181,7 +181,9 @@ only reports ready after a tiny OpenAI-compatible generation probe succeeds.
 After a deploy or container restart, Oracle also runs a background auto-start check for embedded LocalAI. It starts the
 runtime only when Oracle is enabled, the provider is `localai`, the selected model is already installed, no remove job
 is active, and a real generation probe can pass. If the model is missing or LocalAI is still warming, `/health` remains
-healthy and `/admin/system/ai` shows the startup phase, gate reason, and last error instead of blocking the stack.
+healthy and `/admin/system/ai` shows the startup phase, gate reason, and last error instead of blocking the stack. If
+Oracle starts before its saved settings can be read, later health, status, model-list, or chat requests retry the
+embedded startup after the LocalAI settings become available.
 
 Warden plans the `scriptarr-oracle` container instead of a `scriptarr-localai` sidecar. It mounts persistent
 `localai/models` and `localai/data` folders into Oracle and passes hardware flags for the selected profile. NVIDIA

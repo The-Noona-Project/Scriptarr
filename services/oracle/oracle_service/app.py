@@ -46,6 +46,7 @@ LOCALAI_MODEL_DISCOVERY_NETWORK_ERRORS = (
     "all connection attempts failed",
     "connection aborted"
 )
+LOCALAI_STARTUP_RETRY_GATES = {"settings_unavailable", "oracle_disabled", "provider_not_localai"}
 
 
 def _localai_models_url(base_url: str) -> str:
@@ -309,12 +310,27 @@ def create_app(
             return embedded_runtime.health_status()
         return await embedded_runtime.status()
 
+    def maybe_start_embedded_local_ai(runtime) -> None:
+        if not active_config.local_ai_embedded_enabled:
+            return
+        if runtime.enabled is not True or runtime.provider != "localai":
+            return
+        if not hasattr(embedded_runtime, "start_startup_auto_start"):
+            return
+        startup = embedded_runtime.startup_status() if hasattr(embedded_runtime, "startup_status") else {}
+        phase = _normalize_string(startup.get("phase"))
+        gate_reason = _normalize_string(startup.get("gateReason"))
+        should_retry = phase in {"", "idle", "cancelled"} or (phase == "skipped" and gate_reason in LOCALAI_STARTUP_RETRY_GATES)
+        if should_retry:
+            embedded_runtime.start_startup_auto_start(runtime)
+
     @app.get("/health")
     async def health() -> dict[str, object]:
         status, runtime = await asyncio.gather(
             read_scriptarr_status(active_sage_client),
             resolve_oracle_runtime_settings(config=active_config, sage_client=active_sage_client)
         )
+        maybe_start_embedded_local_ai(runtime)
         return {
             "ok": True,
             "service": "scriptarr-oracle",
@@ -334,6 +350,7 @@ def create_app(
             read_scriptarr_status(active_sage_client),
             resolve_oracle_runtime_settings(config=active_config, sage_client=active_sage_client)
         )
+        maybe_start_embedded_local_ai(runtime)
         return {
             **status_payload,
             "oracle": {
@@ -347,6 +364,7 @@ def create_app(
     @app.get("/api/models")
     async def models(request: Request) -> dict[str, object]:
         runtime = await resolve_oracle_runtime_settings(config=active_config, sage_client=active_sage_client)
+        maybe_start_embedded_local_ai(runtime)
         provider = _normalize_provider(request.query_params.get("provider"), runtime.provider)
         if provider == "localai" and active_config.local_ai_embedded_enabled:
             return embedded_runtime.model_options_payload(_selected_model_for_provider(provider, runtime, active_config))
@@ -377,6 +395,7 @@ def create_app(
             read_scriptarr_status(active_sage_client),
             resolve_oracle_runtime_settings(config=active_config, sage_client=active_sage_client)
         )
+        maybe_start_embedded_local_ai(runtime)
         # Short-circuit obvious health/status prompts so Oracle can answer without an LLM round trip.
         if re.search(r"status|health|boot|callback|alive", message, re.IGNORECASE):
             return {

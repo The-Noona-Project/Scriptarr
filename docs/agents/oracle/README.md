@@ -21,6 +21,9 @@
   background only when Oracle is enabled, provider is `localai`, the selected model is already installed, no remove
   action is active, and the real generation probe succeeds. Keep `/health` healthy while warmup or gate failures are
   reflected in the `startup` status payload.
+- If startup ran before Sage/Vault settings were available and recorded `settings_unavailable`, `oracle_disabled`, or
+  `provider_not_localai`, later health, status, model-list, or chat requests should retry embedded startup once the
+  resolved runtime says Oracle is enabled with provider `localai`.
 - It should gracefully return disabled or degraded responses when OpenAI or LocalAI is unavailable.
 - Keep degraded replies provider-specific so OpenAI failures are not reported as LocalAI outages, and keep the
   provider call timeout long enough for CPU-only LocalAI admin tests.

@@ -42,7 +42,8 @@ Embedded LocalAI startup is deploy-safe. After Oracle prepares its local cache, 
 only when Oracle is enabled, the selected provider is `localai`, the selected GGUF model already exists in persistent
 storage, no remove action is active, and the runtime can pass a real `scriptarr-ok` generation probe. Missing models or
 slow warmup leave Oracle and the broader Scriptarr stack healthy while `/admin/system/ai` shows the startup phase and
-last gate reason.
+last gate reason. If Oracle starts before Sage/Vault settings are available, later health, status, model-list, or chat
+requests retry the embedded startup once the saved settings show Oracle enabled for LocalAI.
 
 The service keeps the existing env names for Sage, OpenAI, and LocalAI so Warden, Moon, Sage, and Portal do not need
 to change how they configure or call Oracle.
