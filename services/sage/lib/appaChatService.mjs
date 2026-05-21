@@ -4,7 +4,7 @@
 
 import {appendDurableEvent, buildServiceActor} from "./adminEvents.mjs";
 import {proposeAiAction} from "./aiTools.mjs";
-import {buildNoonaVisualIdentityContext} from "./noonaVisualIdentity.mjs";
+import {buildNoonaVisualIdentityContext, isVisualIdentityPrompt} from "./noonaVisualIdentity.mjs";
 
 export const APPA_CHAT_PROPOSAL_TOOL_IDS = Object.freeze([
   "status_check",
@@ -22,6 +22,9 @@ const DISCORD_AI_CHAT_TIMEOUT_MS = 90000;
 const DISCORD_AI_REVIEW_TIMEOUT_MS = 60000;
 
 const isActionPrompt = (message) => /\b(start|stop|cancel|end|run|check|probe)\b/i.test(normalizeString(message));
+const isStatusPrompt = (message) => /\b(status|health|healthy|alive|up|down|broken|working)\b/i.test(normalizeString(message));
+const isTriviaPrompt = (message) => /\btrivia\b/i.test(normalizeString(message));
+const isDiscordPrompt = (message) => /\b(discord|command|bot|appa|noona)\b/i.test(normalizeString(message));
 
 const redactExcerpt = (value, limit = 220) => normalizeString(value)
   .replace(/\b(token|secret|password|passwd|api[_ -]?key)\b\s*[:=]\s*\S+/gi, "$1=[redacted]")
@@ -80,24 +83,47 @@ const buildServiceHealthContext = async ({config, serviceJson}) => {
   return Object.fromEntries(entries);
 };
 
-const buildAppaReadContext = async ({config, serviceJson, triviaService, readPortalDiscordSettings}) => {
-  const [serviceHealth, discord, trivia] = await Promise.all([
-    buildServiceHealthContext({config, serviceJson}).catch(() => null),
-    readPortalDiscordSettings?.().catch(() => null),
-    triviaService?.getState?.().catch(() => null)
-  ]);
+const summarizeTriviaState = (state) => {
+  const source = normalizeObject(state, null);
+  if (!source) {
+    return null;
+  }
+  const round = normalizeObject(source.round || source.activeRound || source.currentRound, null);
+  const leaderboard = normalizeObject(source.leaderboard, null);
   return {
-    serviceHealth,
-    discord: discord ? {
-      guildId: normalizeString(discord.guildId),
-      noonaChatEnabled: discord.noonaChat?.enabled === true,
-      appaEnabled: discord.appa?.enabled === true,
-      appaReviewEnabled: discord.appa?.reviewEnabled === true,
-      triviaEnabled: discord.trivia?.enabled === true
-    } : null,
-    trivia,
-    visualIdentity: buildNoonaVisualIdentityContext()
+    enabled: source.enabled === true,
+    active: source.active === true || Boolean(round),
+    phase: normalizeString(source.phase || source.status),
+    roundId: normalizeString(source.roundId || round?.roundId || round?.id),
+    channelId: normalizeString(source.channelId || round?.channelId),
+    clueCount: Number.parseInt(String(source.clueCount ?? normalizeArray(round?.clues).length ?? 0), 10) || 0,
+    leaderboardOpen: source.leaderboardOpen === true || leaderboard?.open === true
   };
+};
+
+const compactDiscordSettings = (settings) => settings ? {
+  guildId: normalizeString(settings.guildId),
+  noonaChatEnabled: settings.noonaChat?.enabled === true,
+  appaEnabled: settings.appa?.enabled === true,
+  appaReviewEnabled: settings.appa?.reviewEnabled === true,
+  triviaEnabled: settings.trivia?.enabled === true
+} : null;
+
+const buildAppaReadContext = async ({config, serviceJson, triviaService, readPortalDiscordSettings, message}) => {
+  const context = {};
+  if (isStatusPrompt(message)) {
+    context.serviceHealth = await buildServiceHealthContext({config, serviceJson}).catch(() => null);
+  }
+  if (isDiscordPrompt(message)) {
+    context.discord = compactDiscordSettings(await readPortalDiscordSettings?.().catch(() => null));
+  }
+  if (isTriviaPrompt(message)) {
+    context.trivia = summarizeTriviaState(await triviaService?.getState?.().catch(() => null));
+  }
+  if (isVisualIdentityPrompt(message)) {
+    context.visualIdentity = buildNoonaVisualIdentityContext();
+  }
+  return Object.keys(context).length ? context : null;
 };
 
 const fallbackAppaReply = (message) => {
@@ -189,7 +215,7 @@ export const createAppaChatService = ({
       }
     }
 
-    const readContext = await buildAppaReadContext({config, serviceJson, triviaService, readPortalDiscordSettings});
+    const readContext = await buildAppaReadContext({config, serviceJson, triviaService, readPortalDiscordSettings, message});
     const oracle = await serviceJson(config.oracleBaseUrl, "/api/chat", {
       method: "POST",
       body: {

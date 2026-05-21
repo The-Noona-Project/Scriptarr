@@ -83,8 +83,10 @@
   "are you alive", update/how-to question, admin-ish status question, requester help, lore/catchphrase, and a degraded
   provider case. Keep public copy warm and direct while preserving secret rejection, internal-codename boundaries, and
   conservative proposal limits.
-- Broker Appa admin mentions through `/api/internal/portal/appa-chat` with Appa persona context, admin read context,
-  and conservative proposal drafting only. Appa must never execute mutations directly from Discord.
+- Broker Appa admin mentions through `/api/internal/portal/appa-chat` with Appa persona context, compact admin read
+  context, and conservative proposal drafting only. Include status, Discord, trivia, or visual-identity context only
+  when the admin prompt asks for it so LocalAI's context window is not exhausted by unrelated state. Appa must never
+  execute mutations directly from Discord.
 - Broker public Noona reply review through `/api/internal/portal/noona-review`. Store a redacted review event first,
   then let Portal record correction delivery success/failure through Sage only after Discord accepts or rejects the
   Appa message. Do not store full prompts, replies, transcripts, tokens, or secrets.

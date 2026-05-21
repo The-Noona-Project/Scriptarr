@@ -72,8 +72,9 @@ test("Appa admin chat uses the Appa persona and Sage-curated read context", asyn
   assert.equal(vault.users[0].role, "admin");
   assert.equal(oracleCall.options.body.personaName, "Appa");
   assert.equal(oracleCall.options.body.context.source, "discord-appa-admin-mention");
-  assert.equal(oracleCall.options.body.context.readContext.discord.appaEnabled, true);
-  assert.equal(oracleCall.options.body.context.readContext.visualIdentity.characters.appa.name, "Appa");
+  assert.equal(oracleCall.options.body.context.readContext.serviceHealth.portal.summary, "ok");
+  assert.equal(oracleCall.options.body.context.readContext.discord, undefined);
+  assert.equal(oracleCall.options.body.context.readContext.visualIdentity, undefined);
 });
 
 test("Appa review stores redacted recommendation and records correction delivery separately", async () => {
