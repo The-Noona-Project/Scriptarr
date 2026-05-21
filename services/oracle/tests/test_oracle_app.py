@@ -918,6 +918,61 @@ def test_embedded_localai_startup_autostart_requires_generation_probe(tmp_path):
     assert calls == {"start": 1, "probe": 1}
 
 
+def test_embedded_localai_manual_start_marks_startup_ready(tmp_path):
+    class Logger:
+        def warning(self, *args, **kwargs):
+            return None
+
+    config = replace(
+        build_embedded_config(),
+        local_ai_models_dir=str(tmp_path / "models"),
+        local_ai_data_dir=str(tmp_path / "data"),
+        local_ai_backends_path=str(tmp_path / "backends"),
+        local_ai_tmp_dir=str(tmp_path / "tmp"),
+        local_ai_backend_assets_path=str(tmp_path / "assets"),
+        local_ai_generated_content_path=str(tmp_path / "generated"),
+        local_ai_upload_path=str(tmp_path / "uploads")
+    )
+    manager = EmbeddedLocalAiManager(config=config, logger=Logger())
+    model = manager.model_status(config.local_ai_default_model_url)
+    Path(model["path"]).parent.mkdir(parents=True, exist_ok=True)
+    Path(model["path"]).write_bytes(b"fake-gguf")
+    manager.record_startup_gate(gate_reason="remove_requested", model="")
+
+    async def fake_prepare():
+        return None
+
+    async def fake_start(*, model_url=None):
+        return None
+
+    async def fake_ensure_backend():
+        return {"status": "present", "backend": "llama-cpp"}
+
+    async def fake_wait_until_ready():
+        return {"ready": True}
+
+    async def fake_verify_generation(*, model_url=None):
+        return {"ready": True, "status": "ready", "reason": "generated"}
+
+    manager.prepare = fake_prepare
+    manager.start = fake_start
+    manager.ensure_backend = fake_ensure_backend
+    manager.wait_until_ready = fake_wait_until_ready
+    manager.verify_generation = fake_verify_generation
+
+    async def run_start_job():
+        job = await manager.start_ensure_job(action="start", download_model=False)
+        await manager._download_tasks[job["jobId"]]
+        return manager.latest_job(), manager.startup_status()
+
+    job, startup = asyncio.run(run_start_job())
+
+    assert job["status"] == "completed"
+    assert startup["phase"] == "ready"
+    assert startup["probePassed"] is True
+    assert startup["model"] == "Hermes-3-Llama-3.1-8B-Q4_K_S.gguf"
+
+
 def test_successful_chat_returns_llm_reply():
     sage = FakeSageClient(
         settings={

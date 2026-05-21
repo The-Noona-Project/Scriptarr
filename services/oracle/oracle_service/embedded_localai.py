@@ -646,6 +646,12 @@ class EmbeddedLocalAiManager:
                 "backend": backend,
                 "ready": probe
             }
+            self._manual_remove_requested = False
+            self._set_startup_state(
+                phase="ready",
+                probe_passed=True,
+                model=parse_huggingface_model(model_url).local_name
+            )
             await self._update_job(job_id, message="Embedded LocalAI model is ready.")
         except Exception as error:  # noqa: BLE001
             job = self._download_jobs[job_id]
