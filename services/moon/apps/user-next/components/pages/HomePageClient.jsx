@@ -16,9 +16,10 @@ import {HomeShelfSkeleton} from "../TitleListLoading.jsx";
  * @returns {import("react").ReactNode}
  */
 export const HomePageClient = () => {
-  const {auth, branding, loginUrl} = useMoonChrome();
+  const {auth, branding, loaded: chromeLoaded = false, loginUrl} = useMoonChrome();
   const siteName = branding?.siteName || "Scriptarr";
   const {loading, refreshing, error, status, data} = useMoonJson("/api/moon-v3/user/home", {
+    enabled: Boolean(chromeLoaded && auth),
     fallback: {
       latestTitles: [],
       continueReading: [],
@@ -29,7 +30,7 @@ export const HomePageClient = () => {
     persistentCache: {userKey: auth?.discordUserId, scope: "home"}
   });
 
-  if (status === 401 && !auth) {
+  if (chromeLoaded && (!auth || status === 401)) {
     return (
       <AuthRequiredView
         loginUrl={loginUrl}
@@ -46,7 +47,7 @@ export const HomePageClient = () => {
     return <ErrorView detail={error} />;
   }
 
-  if (loading && !shelves.length) {
+  if ((!chromeLoaded || loading) && !shelves.length) {
     return <HomeShelfSkeleton shelves={3} itemsPerShelf={5} />;
   }
 

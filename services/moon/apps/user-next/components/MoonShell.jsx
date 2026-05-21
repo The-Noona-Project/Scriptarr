@@ -74,6 +74,7 @@ export const MoonShell = ({children}) => {
   const [chrome, setChrome] = useState({
     branding: {siteName: "Scriptarr"},
     auth: null,
+    loaded: false,
     bootstrap: null,
     libraryTypes: [],
     loginUrl: "",
@@ -98,7 +99,7 @@ export const MoonShell = ({children}) => {
     const currentRoute = query ? `${pathname}${query}` : pathname;
     void loadMoonChromeContext(currentRoute).then((nextValue) => {
       if (active) {
-        setChrome(nextValue);
+        setChrome({...nextValue, loaded: true});
       }
       if (active && !nextValue.auth) {
         void loadMoonLoginUrl(currentRoute).then((loginUrl) => {

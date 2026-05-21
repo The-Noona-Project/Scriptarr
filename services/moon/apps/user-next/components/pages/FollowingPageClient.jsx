@@ -16,15 +16,18 @@ import {AuthRequiredView, EmptyView, ErrorView, LoadingView} from "../StateView.
  * @returns {import("react").ReactNode}
  */
 export const FollowingPageClient = () => {
-  const {auth, branding, loginUrl} = useMoonChrome();
+  const {auth, branding, loaded: chromeLoaded = false, loginUrl} = useMoonChrome();
   const siteName = branding?.siteName || "Scriptarr";
-  const {loading, error, status, data} = useMoonJson("/api/moon-v3/user/following", {fallback: {following: []}});
+  const {loading, error, status, data} = useMoonJson("/api/moon-v3/user/following", {
+    enabled: Boolean(chromeLoaded && auth),
+    fallback: {following: []}
+  });
 
-  if (loading) {
+  if (!chromeLoaded || loading) {
     return <LoadingView label={`${siteName} is gathering the titles you asked it to surface first.`} />;
   }
 
-  if (status === 401 && !auth) {
+  if (!auth || status === 401) {
     return (
       <AuthRequiredView
         loginUrl={loginUrl}

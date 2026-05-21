@@ -89,7 +89,7 @@ const resultTitle = ({query, type, letter}) => {
  * @returns {import("react").ReactNode}
  */
 export const CataloguePageClient = ({initialSearchParams = {}, initialTypeSlug = "", entry = "library"} = {}) => {
-  const {auth, branding, loginUrl, libraryTypes: chromeLibraryTypes = []} = useMoonChrome();
+  const {auth, branding, loaded: chromeLoaded = false, loginUrl, libraryTypes: chromeLibraryTypes = []} = useMoonChrome();
   const siteName = branding?.siteName || "Scriptarr";
   const initialFilters = useMemo(() => normalizeCatalogueSearchParams(initialSearchParams, {
     fallbackType: initialTypeSlug,
@@ -116,6 +116,7 @@ export const CataloguePageClient = ({initialSearchParams = {}, initialTypeSlug =
     view: activeView
   }), [activeLetter, activeQuery, activeType, activeView, pageSize]);
   const {loading, refreshing, error, status, data} = useMoonJson(libraryUrl, {
+    enabled: Boolean(chromeLoaded && auth),
     keepPreviousData: true,
     persistentCache: {userKey: auth?.discordUserId, scope: "library"},
     fallback: {titles: [], counts: {total: 0, byLetter: {}, byType: {}}, pageInfo: {total: 0}}
@@ -264,7 +265,7 @@ export const CataloguePageClient = ({initialSearchParams = {}, initialTypeSlug =
     saveCatalogueView(nextView);
   };
 
-  if (status === 401 && !auth) {
+  if (chromeLoaded && (!auth || status === 401)) {
     return (
       <AuthRequiredView
         loginUrl={loginUrl}
@@ -278,7 +279,7 @@ export const CataloguePageClient = ({initialSearchParams = {}, initialTypeSlug =
     return <ErrorView detail={error} />;
   }
 
-  const showInitialSkeleton = loading && !pageTitles.length;
+  const showInitialSkeleton = (!chromeLoaded || loading) && !pageTitles.length;
   const isGrid = activeView === "grid";
   const resultCountLabel = refreshing ? "Updating loaded results" : `${visibleTotal} result${visibleTotal === 1 ? "" : "s"}`;
 

@@ -170,9 +170,10 @@ const RequestRow = ({request, siteName, onEditNotes, onCancel}) => {
  * @returns {import("react").ReactNode}
  */
 export const RequestsPageClient = () => {
-  const {auth, branding, loginUrl} = useMoonChrome();
+  const {auth, branding, loaded: chromeLoaded = false, loginUrl} = useMoonChrome();
   const siteName = branding?.siteName || "Scriptarr";
   const {loading, error, status, data, refresh} = useMoonJson("/api/moon-v3/user/requests", {
+    enabled: Boolean(chromeLoaded && auth),
     fallback: {
       requests: [],
       tabs: {
@@ -341,11 +342,11 @@ export const RequestsPageClient = () => {
     }
   };
 
-  if (loading) {
+  if (!chromeLoaded || loading) {
     return <LoadingView label={`${siteName} is loading your request wizard, request tabs, and Discord-backed moderation history.`} />;
   }
 
-  if (status === 401 && !auth) {
+  if (!auth || status === 401) {
     return (
       <AuthRequiredView
         loginUrl={loginUrl}
