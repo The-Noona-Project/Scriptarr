@@ -26,6 +26,36 @@ const isStatusPrompt = (message) => /\b(status|health|healthy|alive|up|down|brok
 const isTriviaPrompt = (message) => /\btrivia\b/i.test(normalizeString(message));
 const isDiscordPrompt = (message) => /\b(discord|command|bot|appa|noona)\b/i.test(normalizeString(message));
 
+const summarizeHealthPayload = (service, payload = {}) => {
+  const explicit = normalizeString(payload?.status || payload?.service || payload?.message);
+  if (explicit) {
+    return explicit;
+  }
+  const parts = [];
+  if (typeof payload?.ok === "boolean") {
+    parts.push(`ok=${payload.ok}`);
+  }
+  if (typeof payload?.enabled === "boolean") {
+    parts.push(`enabled=${payload.enabled}`);
+  }
+  const provider = normalizeString(payload?.provider);
+  if (provider) {
+    parts.push(`provider=${provider}`);
+  }
+  const model = normalizeString(payload?.model);
+  if (model) {
+    parts.push(`model=${model}`);
+  }
+  return parts.join(", ") || (service ? "responded" : "");
+};
+
+const compactHealthDetails = (payload = {}) => ({
+  ok: typeof payload?.ok === "boolean" ? payload.ok : undefined,
+  enabled: typeof payload?.enabled === "boolean" ? payload.enabled : undefined,
+  provider: normalizeString(payload?.provider) || undefined,
+  model: normalizeString(payload?.model) || undefined
+});
+
 const redactExcerpt = (value, limit = 220) => normalizeString(value)
   .replace(/\b(token|secret|password|passwd|api[_ -]?key)\b\s*[:=]\s*\S+/gi, "$1=[redacted]")
   .replace(/\b[A-Za-z0-9_-]{24,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{20,}\b/g, "[redacted-token]")
@@ -70,7 +100,8 @@ const buildServiceHealthContext = async ({config, serviceJson}) => {
       return [service, {
         ok: result.ok !== false,
         status: result.status || 200,
-        summary: normalizeString(result.payload?.status || result.payload?.service || result.payload?.message)
+        summary: summarizeHealthPayload(service, result.payload || {}),
+        details: compactHealthDetails(result.payload || {})
       }];
     } catch (error) {
       return [service, {

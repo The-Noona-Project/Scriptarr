@@ -60,6 +60,9 @@ test("Appa admin chat uses the Appa persona and Sage-curated read context", asyn
       if (path === "/api/chat") {
         return {ok: true, status: 200, payload: {reply: "Appa is watching the admin side."}};
       }
+      if (baseUrl === "http://oracle.test" && path === "/health") {
+        return {ok: true, status: 200, payload: {ok: true, enabled: true, provider: "localai", model: "Hermes"}};
+      }
       return {ok: true, status: 200, payload: {status: "ok"}};
     }
   });
@@ -73,6 +76,13 @@ test("Appa admin chat uses the Appa persona and Sage-curated read context", asyn
   assert.equal(oracleCall.options.body.personaName, "Appa");
   assert.equal(oracleCall.options.body.context.source, "discord-appa-admin-mention");
   assert.equal(oracleCall.options.body.context.readContext.serviceHealth.portal.summary, "ok");
+  assert.equal(oracleCall.options.body.context.readContext.serviceHealth.oracle.summary, "ok=true, enabled=true, provider=localai, model=Hermes");
+  assert.deepEqual(oracleCall.options.body.context.readContext.serviceHealth.oracle.details, {
+    ok: true,
+    enabled: true,
+    provider: "localai",
+    model: "Hermes"
+  });
   assert.equal(oracleCall.options.body.context.readContext.discord, undefined);
   assert.equal(oracleCall.options.body.context.readContext.visualIdentity, undefined);
 });
