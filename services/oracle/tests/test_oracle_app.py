@@ -15,7 +15,15 @@ from oracle_service.runtime_settings import OracleRuntimeSettings
 
 
 class FakeSageClient:
-    def __init__(self, *, bootstrap=None, settings=None, secret="") -> None:
+    def __init__(
+        self,
+        *,
+        bootstrap=None,
+        settings=None,
+        secret="",
+        setting_error: Exception | None = None,
+        secret_error: Exception | None = None
+    ) -> None:
         self.bootstrap = bootstrap or {
             "callbackUrl": "https://scriptarr.test/api/moon/auth/discord/callback",
             "localAi": {"enabled": False},
@@ -28,14 +36,20 @@ class FakeSageClient:
             "temperature": 0.2
         }
         self.secret = secret
+        self.setting_error = setting_error
+        self.secret_error = secret_error
         self.requests: list[tuple[str, str]] = []
 
     async def get_setting(self, key: str):
         self.requests.append(("setting", key))
+        if self.setting_error:
+            raise self.setting_error
         return {"key": key, "value": self.settings}
 
     async def get_secret(self, key: str):
         self.requests.append(("secret", key))
+        if self.secret_error:
+            raise self.secret_error
         return {"key": key, "value": self.secret}
 
     async def get_bootstrap_status(self):
@@ -347,6 +361,22 @@ def test_health_reports_runtime_and_bootstrap_details():
     }
 
 
+def test_health_degrades_when_runtime_settings_are_unavailable():
+    sage = FakeSageClient(setting_error=TimeoutError("settings read timed out"))
+    app = create_app(config=build_config(), sage_client=sage)
+
+    with TestClient(app) as client:
+        response = client.get("/health")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["enabled"] is False
+    assert payload["provider"] == "openai"
+    assert payload["openAiApiKeyConfigured"] is False
+    assert payload["status"]["ok"] is True
+
+
 def test_openai_model_discovery_filters_to_oracle_compatible_models():
     sage = FakeSageClient(
         settings={
@@ -628,6 +658,41 @@ def test_localai_unavailable_returns_degraded_fallback():
     assert payload["degraded"] is True
     assert payload["reply"] == "Noona is in read-only fallback mode because LocalAI is unavailable right now."
     assert payload["error"] == "LocalAI probe failed."
+
+
+def test_localai_chat_ignores_openai_secret_lookup_failure():
+    sage = FakeSageClient(
+        settings={
+            "enabled": True,
+            "provider": "localai",
+            "model": "gpt-4.1-mini",
+            "temperature": 0.2
+        },
+        secret_error=TimeoutError("secret read timed out")
+    )
+
+    async def available_probe(_runtime):
+        return True
+
+    async def fake_invoke(runtime, persona_name, message):
+        assert runtime.provider == "localai"
+        assert runtime.api_key == "localai"
+        return f"{persona_name} heard through LocalAI: {message}"
+
+    app = create_app(
+        config=build_config(),
+        sage_client=sage,
+        probe_local_ai_fn=available_probe,
+        invoke_oracle_fn=fake_invoke
+    )
+
+    with TestClient(app) as client:
+        response = client.post("/api/chat", json={"message": "Say hi"})
+
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload.get("degraded") is None
+    assert payload["reply"] == "Noona heard through LocalAI: Say hi"
 
 
 def test_embedded_localai_requires_generation_probe_before_chat():

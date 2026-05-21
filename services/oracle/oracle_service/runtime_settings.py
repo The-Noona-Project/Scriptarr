@@ -29,6 +29,10 @@ def _normalize_string(value: object, fallback: str = "") -> str:
     return normalized or fallback
 
 
+def _mapping_payload(value: object) -> dict[str, object]:
+    return value if isinstance(value, dict) else {}
+
+
 @dataclass(frozen=True)
 class OracleRuntimeSettings:
     enabled: bool
@@ -49,13 +53,16 @@ class OracleRuntimeSettings:
 async def resolve_oracle_runtime_settings(*, config: OracleConfig, sage_client) -> OracleRuntimeSettings:
     settings_response, secret_response = await asyncio.gather(
         sage_client.get_setting(ORACLE_SETTINGS_KEY),
-        sage_client.get_secret(ORACLE_OPENAI_API_KEY_SECRET)
+        sage_client.get_secret(ORACLE_OPENAI_API_KEY_SECRET),
+        return_exceptions=True
     )
 
     # Sage owns the persisted admin settings, while env config provides bootstrap defaults.
-    settings = settings_response.get("value") if isinstance(settings_response, dict) else {}
+    settings_response = _mapping_payload(settings_response)
+    secret_response = _mapping_payload(secret_response)
+    settings = settings_response.get("value")
     settings = settings if isinstance(settings, dict) else {}
-    open_ai_api_key = _normalize_string(secret_response.get("value") if isinstance(secret_response, dict) else None, config.open_ai_api_key)
+    open_ai_api_key = _normalize_string(secret_response.get("value"), config.open_ai_api_key)
     temperature = settings.get("temperature", config.temperature)
     try:
         parsed_temperature = float(str(temperature))

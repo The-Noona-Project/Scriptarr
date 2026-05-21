@@ -7,6 +7,8 @@ from urllib.parse import quote
 
 import httpx
 
+SAGE_REQUEST_TIMEOUT_SECONDS = 20.0
+
 
 class SageClient:
     def __init__(self, base_url: str, service_token: str) -> None:
@@ -17,13 +19,19 @@ class SageClient:
         }
 
     async def _request_json(self, path: str, method: str = "GET", body: object | None = None) -> tuple[bool, int, object | None]:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            response = await client.request(
-                method,
-                f"{self._base_url}{path}",
-                headers=self._headers,
-                json=body
-            )
+        try:
+            async with httpx.AsyncClient(timeout=SAGE_REQUEST_TIMEOUT_SECONDS) as client:
+                response = await client.request(
+                    method,
+                    f"{self._base_url}{path}",
+                    headers=self._headers,
+                    json=body
+                )
+        except httpx.HTTPError as error:
+            return False, 0, {
+                "error": str(error),
+                "type": error.__class__.__name__
+            }
 
         payload: object | None
         text = response.text
