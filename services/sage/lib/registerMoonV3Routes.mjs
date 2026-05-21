@@ -55,6 +55,7 @@ import {
   mergeReaderPreferences,
   resolveReaderPreferences
 } from "./moonReaderPreferences.mjs";
+import {buildReaderTelemetryReport} from "./readerTelemetryReport.mjs";
 import {
   attachRequestWaitlistEntry,
   buildActiveRequestDuplicatePayload,
@@ -266,6 +267,11 @@ const parseIso = (value) => {
   return Number.isFinite(parsed) ? new Date(parsed).toISOString() : null;
 };
 
+const normalizeIngestStatus = (value, fallback = "pending") => {
+  const normalized = normalizeString(value, fallback).toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  return ["ready", "running", "pending", "failed", "missing"].includes(normalized) ? normalized : fallback;
+};
+
 const toTitleSummary = (title = {}) => ({
   id: normalizeString(title.id),
   title: normalizeString(title.title, "Untitled"),
@@ -290,6 +296,9 @@ const toTitleSummary = (title = {}) => ({
   sourceUrl: normalizeString(title.sourceUrl),
   workingRoot: normalizeString(title.workingRoot),
   downloadRoot: normalizeString(title.downloadRoot),
+  ingestStatus: normalizeIngestStatus(title.ingestStatus),
+  ingestedChapterCount: Number.parseInt(String(title.ingestedChapterCount || 0), 10) || 0,
+  ingestError: normalizeString(title.ingestError),
   chapters: normalizeArray(title.chapters).map(toChapterSummary)
 });
 
@@ -302,6 +311,12 @@ const toChapterSummary = (chapter = {}) => ({
   available: chapter.available !== false,
   archivePath: normalizeString(chapter.archivePath),
   sourceUrl: normalizeString(chapter.sourceUrl),
+  ingestStatus: normalizeIngestStatus(chapter.ingestStatus),
+  ingestRevision: normalizeString(chapter.ingestRevision),
+  ingestedPageCount: Number.parseInt(String(chapter.ingestedPageCount || 0), 10) || 0,
+  ingestedAt: parseIso(chapter.ingestedAt),
+  ingestError: normalizeString(chapter.ingestError),
+  ingestManifestPath: normalizeString(chapter.ingestManifestPath),
   updatedAt: parseIso(chapter.updatedAt)
 });
 
@@ -350,7 +365,7 @@ const resolveEquivalentReaderChapterId = (chapters = [], requestedChapterId = ""
   }
   const readableChapters = normalizeArray(chapters)
     .map(toChapterSummary)
-    .filter((entry) => entry.available !== false && normalizeString(entry.id));
+    .filter((entry) => entry.available !== false && normalizeIngestStatus(entry.ingestStatus) === "ready" && normalizeString(entry.id));
   const exact = readableChapters.find((entry) => normalizeString(entry.id) === currentId);
   if (exact?.id) {
     return exact.id;
@@ -378,7 +393,8 @@ const waitForReaderChapterRetry = (delayMs = 250) => new Promise((resolve) => {
 const resolveReaderAdjacentChapterIds = (chapters = [], chapterId = "") => {
   const currentId = normalizeString(chapterId);
   const readableChapters = normalizeArray(chapters)
-    .filter((entry) => entry?.available !== false && normalizeString(entry?.id))
+    .map(toChapterSummary)
+    .filter((entry) => entry.available !== false && normalizeIngestStatus(entry.ingestStatus) === "ready" && normalizeString(entry.id))
     .sort(compareReaderChaptersByNumber);
   const chapterIndex = readableChapters.findIndex((entry) => normalizeString(entry.id) === currentId);
   if (chapterIndex < 0) {
@@ -418,11 +434,15 @@ const buildReaderPageRevision = ({title = {}, chapter = {}, pages = []} = {}) =>
   hash.update("\n");
   hash.update(normalizeString(chapter.id));
   hash.update("\n");
+  hash.update(normalizeString(chapter.ingestRevision));
+  hash.update("\n");
+  hash.update(normalizeString(chapter.ingestedAt));
+  hash.update("\n");
   hash.update(normalizeString(chapter.updatedAt || title.updatedAt));
   hash.update("\n");
-  hash.update(normalizeString(chapter.archivePath || chapter.sourceUrl || title.sourceUrl));
+  hash.update(normalizeString(chapter.ingestManifestPath || chapter.archivePath || chapter.sourceUrl || title.sourceUrl));
   hash.update("\n");
-  hash.update(String(normalizeArray(pages).length || chapter.pageCount || 0));
+  hash.update(String(normalizeArray(pages).length || chapter.ingestedPageCount || chapter.pageCount || 0));
   return hash.digest("hex").slice(0, 12);
 };
 
@@ -465,7 +485,12 @@ const toUserChapterRow = (chapter = {}) => ({
   readAt: parseIso(chapter.readAt),
   qualityStatus: normalizeString(chapter.qualityStatus, "clean"),
   expectedPageCount: Number.parseInt(String(chapter.expectedPageCount || 0), 10) || 0,
-  missingPageCount: Number.parseInt(String(chapter.missingPageCount || 0), 10) || 0
+  missingPageCount: Number.parseInt(String(chapter.missingPageCount || 0), 10) || 0,
+  ingestStatus: normalizeIngestStatus(chapter.ingestStatus),
+  ingestRevision: normalizeString(chapter.ingestRevision),
+  ingestedPageCount: Number.parseInt(String(chapter.ingestedPageCount || 0), 10) || 0,
+  ingestedAt: parseIso(chapter.ingestedAt),
+  ingestError: normalizeString(chapter.ingestError)
 });
 
 const truncateText = (value, maxLength = 280) => {
@@ -532,7 +557,10 @@ const toTitleCardSummary = (title = {}) => {
     cleanChapterCount: Number.parseInt(String(title.cleanChapterCount || 0), 10) || 0,
     partialChapterCount: Number.parseInt(String(title.partialChapterCount || 0), 10) || 0,
     missingContentCount: Number.parseInt(String(title.missingContentCount || 0), 10) || 0,
-    qualitySummary: truncateText(title.qualitySummary, 180)
+    qualitySummary: truncateText(title.qualitySummary, 180),
+    ingestStatus: normalizeIngestStatus(title.ingestStatus),
+    ingestedChapterCount: Number.parseInt(String(title.ingestedChapterCount || 0), 10) || 0,
+    ingestError: truncateText(title.ingestError, 180)
   };
 };
 
@@ -1187,8 +1215,18 @@ export const registerMoonV3Routes = (app, {
   };
 
   const loadLiveRavenTasks = async () => {
-    const ravenPayload = await fetchRavenJson("/v1/downloads/tasks");
-    return normalizeArray(ravenPayload).map((task) => {
+    const [ravenPayload, ingestPayload] = await Promise.all([
+      fetchRavenJson("/v1/downloads/tasks"),
+      fetchRavenJson("/v1/ingest/tasks").catch(() => [])
+    ]);
+    const mergedTasks = new Map();
+    for (const task of [...normalizeArray(ravenPayload), ...normalizeArray(ingestPayload)]) {
+      const taskId = normalizeString(task.taskId);
+      if (taskId) {
+        mergedTasks.set(taskId, task);
+      }
+    }
+    return Array.from(mergedTasks.values()).map((task) => {
       const details = normalizeObject(task.details, {}) || {};
       const selectedDownload = normalizeObject(task.selectedDownload, normalizeObject(details.selectedDownload, {}) || {}) || {};
       return {
@@ -1212,6 +1250,9 @@ export const registerMoonV3Routes = (app, {
       downloadSpeedBytesPerSecond: Number(task.downloadSpeedBytesPerSecond ?? details.downloadSpeedBytesPerSecond ?? 0) || 0,
       startedAt: normalizeString(task.startedAt, normalizeString(details.startedAt)),
       details: {
+        kind: normalizeString(details.kind),
+        failureCode: normalizeString(details.failureCode),
+        recoveryAction: normalizeString(details.recoveryAction),
         downloadSpeedBytesPerSecond: Number(details.downloadSpeedBytesPerSecond || 0) || 0,
         startedAt: normalizeString(details.startedAt),
         sortOrder: Number.parseInt(String(details.sortOrder ?? 0), 10) || 0
@@ -1232,6 +1273,11 @@ export const registerMoonV3Routes = (app, {
       };
     });
   };
+
+  const isIngestQueueTask = (task = {}) =>
+    normalizeString(task.providerId) === "raven-ingest"
+    || normalizeString(task.details?.kind) === "library-ingest"
+    || normalizeString(task.details?.recoveryAction) === "retry-ingest";
 
   const buildLiveRavenQueuePayload = async () => {
     const [tasks, runtimeSettings] = await Promise.all([
@@ -1647,6 +1693,7 @@ export const registerMoonV3Routes = (app, {
   const requireAddRead = (handler) => withAdminAccess("add", "read", handler);
   const requireAddWrite = (handler) => withAdminAccess("add", "write", handler);
     const requireImportRead = (handler) => withAdminAccess("import", "read", handler);
+    const requireImportWrite = (handler) => withAdminAccess("import", "write", handler);
     const requireCalendarRead = (handler) => withAdminAccess("calendar", "read", handler);
     const requireActivityRead = (handler) => withAdminAccess("activity", "read", handler);
     const requireActivityWrite = (handler) => withAdminAccess("activity", "write", handler);
@@ -1978,13 +2025,90 @@ export const registerMoonV3Routes = (app, {
   }));
 
   app.get("/api/moon-v3/admin/import", requireImportRead(async (_req, res) => {
+    const [library, ingest] = await Promise.all([
+      loadLibrary(),
+      fetchRavenJson("/v1/ingest").catch((error) => ({
+        summary: {error: error.message},
+        titles: []
+      }))
+    ]);
     res.json({
       imports: [],
+      titles: library.map((title) => ({
+        id: title.id,
+        title: title.title,
+        libraryTypeLabel: title.libraryTypeLabel,
+        libraryTypeSlug: title.libraryTypeSlug,
+        ingestStatus: title.ingestStatus
+      })),
       summary: {
+        stagingRoot: "/downloads/import-staging",
+        canonicalRoot: "/downloads/downloaded",
+        ingestedRoot: "/downloads/ingested",
         detected: 0,
-        note: "Import scanning is not wired into the Scriptarr scaffold yet."
+        ingest: ingest.summary || {}
       }
     });
+  }));
+
+  app.post("/api/moon-v3/admin/import", requireImportWrite(async (req, res) => {
+    const result = await serviceJson(config.ravenBaseUrl, "/v1/imports", {
+      method: "POST",
+      body: {
+        ...(req.body || {}),
+        requestedBy: normalizeString(req.user?.discordUserId || req.user?.username, "scriptarr-admin")
+      }
+    });
+    if (!result.ok) {
+      res.status(result.status || 502).json({error: result.payload?.error || "Raven import failed."});
+      return;
+    }
+    await appendEvent({
+      ...buildUserActor(req.user, "admin"),
+      domain: "import",
+      eventType: "library-import-created",
+      severity: "info",
+      targetType: "title",
+      targetId: normalizeString(result.payload?.title?.id),
+      message: `${req.user.username} imported ${normalizeString(result.payload?.title?.title, "a title")} into the library.`,
+      metadata: {
+        titleId: normalizeString(result.payload?.title?.id),
+        importedChapters: Number(result.payload?.importedChapters || 0),
+        ingestStatus: normalizeString(result.payload?.ingestStatus)
+      }
+    });
+    res.status(202).json(result.payload);
+  }));
+
+  app.get("/api/moon-v3/admin/ingest", requireImportRead(async (_req, res) => {
+    res.json(await fetchRavenJson("/v1/ingest"));
+  }));
+
+  app.post("/api/moon-v3/admin/ingest/:titleId/retry", requireImportWrite(async (req, res) => {
+    const result = await serviceJson(config.ravenBaseUrl, `/v1/ingest/${encodeURIComponent(req.params.titleId)}/retry`, {
+      method: "POST",
+      body: {
+        requestedBy: normalizeString(req.user?.discordUserId || req.user?.username, "scriptarr-admin")
+      }
+    });
+    if (!result.ok) {
+      res.status(result.status || 502).json({error: result.payload?.error || "Raven ingest retry failed."});
+      return;
+    }
+    await appendEvent({
+      ...buildUserActor(req.user, "admin"),
+      domain: "import",
+      eventType: "library-ingest-retried",
+      severity: "info",
+      targetType: "title",
+      targetId: normalizeString(req.params.titleId),
+      message: `${req.user.username} retried WebP ingest for ${normalizeString(result.payload?.title, "a title")}.`,
+      metadata: {
+        titleId: normalizeString(req.params.titleId),
+        ingestStatus: normalizeString(result.payload?.ingestStatus)
+      }
+    });
+    res.status(202).json(result.payload);
   }));
 
   app.get("/api/moon-v3/admin/calendar", requireCalendarRead(async (_req, res) => {
@@ -2013,6 +2137,15 @@ export const registerMoonV3Routes = (app, {
     }));
 
     app.post("/api/moon-v3/admin/activity/queue/:taskId/retry", requireActivityWrite(async (req, res) => {
+      const tasks = await loadLiveRavenTasks();
+      const task = tasks.find((entry) => normalizeString(entry.taskId) === normalizeString(req.params.taskId));
+      if (task && isIngestQueueTask(task)) {
+        res.json(await fetchRavenJson(`/v1/ingest/${encodeURIComponent(task.titleId)}/retry`, {
+          method: "POST",
+          body: {requestedBy: normalizeString(req.user?.discordUserId || req.user?.username, "scriptarr-admin")}
+        }));
+        return;
+      }
       res.json(await fetchRavenJson(`/v1/downloads/tasks/${encodeURIComponent(req.params.taskId)}/retry`, {
         method: "POST"
       }));
@@ -2044,9 +2177,14 @@ export const registerMoonV3Routes = (app, {
 
       const results = [];
       for (const task of retriableTasks) {
-        const response = await fetchRavenJson(`/v1/downloads/tasks/${encodeURIComponent(task.taskId)}/retry`, {
-          method: "POST"
-        });
+        const response = isIngestQueueTask(task)
+          ? await serviceJson(config.ravenBaseUrl, `/v1/ingest/${encodeURIComponent(task.titleId)}/retry`, {
+            method: "POST",
+            body: {requestedBy: "scriptarr-admin"}
+          })
+          : await serviceJson(config.ravenBaseUrl, `/v1/downloads/tasks/${encodeURIComponent(task.taskId)}/retry`, {
+            method: "POST"
+          });
         results.push({
           taskId: task.taskId,
           titleName: normalizeString(task.titleName, "Untitled"),
@@ -4335,6 +4473,30 @@ export const registerMoonV3Routes = (app, {
     });
   }));
 
+  app.get("/api/moon-v3/admin/system/reader-telemetry", requireSystemRead(async (req, res) => {
+    const now = Date.now();
+    const requestedHours = Number.parseInt(String(req.query.hours || 24), 10);
+    const hours = Math.min(168, Math.max(1, Number.isFinite(requestedHours) ? requestedHours : 24));
+    const since = parseIso(req.query.since) || new Date(now - (hours * 60 * 60 * 1000)).toISOString();
+    const until = parseIso(req.query.until);
+    const requestedLimit = Number.parseInt(String(req.query.limit || 500), 10);
+    const limit = Math.min(500, Math.max(25, Number.isFinite(requestedLimit) ? requestedLimit : 500));
+    const events = normalizeArray(await vaultClient.listEvents({
+      domains: ["reader"],
+      eventTypes: ["reader-performance-slow"],
+      since,
+      ...(until ? {until} : {}),
+      limit,
+      newestFirst: true
+    }));
+    res.json(buildReaderTelemetryReport(events, {
+      since,
+      until,
+      limit,
+      generatedAt: new Date(now).toISOString()
+    }));
+  }));
+
   app.get("/api/moon-v3/admin/system/logs", requireSystemRead(async (req, res) => {
     const params = new URLSearchParams();
     appendOptionalSearchParam(params, "service", req.query.service);
@@ -4634,7 +4796,7 @@ export const registerMoonV3Routes = (app, {
       return;
     }
     const availableChapterIds = normalizeArray(titleState.title.chapters)
-      .filter((chapter) => chapter.available !== false)
+      .filter((chapter) => chapter.available !== false && normalizeIngestStatus(chapter.ingestStatus) === "ready")
       .map((chapter) => normalizeString(chapter.id))
       .filter(Boolean);
     await vaultClient.markTitleRead({
@@ -4699,7 +4861,9 @@ export const registerMoonV3Routes = (app, {
     }
     const readIds = new Set(normalizeArray(title.userState?.readChapterIds).map((entry) => normalizeString(entry)));
     readIds.add(normalizeString(chapter.id));
-    const availableCount = normalizeArray(title.chapters).filter((entry) => entry.available !== false).length;
+    const availableCount = normalizeArray(title.chapters)
+      .filter((entry) => entry.available !== false && normalizeIngestStatus(entry.ingestStatus) === "ready")
+      .length;
     const completedAt = readIds.size >= availableCount && availableCount > 0 ? new Date().toISOString() : null;
     await vaultClient.markChapterRead({
       discordUserId: req.user.discordUserId,
@@ -4779,7 +4943,9 @@ export const registerMoonV3Routes = (app, {
       return;
     }
 
-    const availableCount = chapters.filter((entry) => entry.available !== false).length;
+    const availableCount = chapters
+      .filter((entry) => entry.available !== false && normalizeIngestStatus(entry.ingestStatus) === "ready")
+      .length;
     const selectedReadIds = new Set(normalizeArray(title.userState?.readChapterIds).map((entry) => normalizeString(entry)));
     const now = new Date().toISOString();
     let clearedBookmarkCount = 0;
@@ -5423,6 +5589,15 @@ export const registerMoonV3Routes = (app, {
     res.status(context.status).json(context.payload);
   };
 
+  const sendReaderPageStreamFailure = (res, error) => {
+    if (res.headersSent) {
+      res.destroy(error instanceof Error ? error : undefined);
+      return;
+    }
+    res.setHeader("Cache-Control", "no-store");
+    res.status(502).json({error: "Reader page stream failed."});
+  };
+
   app.get("/api/moon-v3/user/reader/title/:titleId/chapter/:chapterId/session", withUser(requireUser, async (req, res) => {
     const context = await loadReaderChapterContext({
       titleId: req.params.titleId,
@@ -5574,12 +5749,18 @@ export const registerMoonV3Routes = (app, {
   }));
 
   app.get("/api/moon-v3/user/reader/title/:titleId/chapter/:chapterId/page/:pageIndex", withUser(requireUser, async (req, res) => {
-    const response = await fetch(
-      `${config.ravenBaseUrl}/v1/reader/${encodeURIComponent(req.params.titleId)}/${encodeURIComponent(req.params.chapterId)}/page/${encodeURIComponent(req.params.pageIndex)}`,
-      {
-        headers: {"Accept": "image/svg+xml"}
-      }
-    );
+    let response;
+    try {
+      response = await fetch(
+        `${config.ravenBaseUrl}/v1/reader/${encodeURIComponent(req.params.titleId)}/${encodeURIComponent(req.params.chapterId)}/page/${encodeURIComponent(req.params.pageIndex)}`,
+        {
+          headers: {"Accept": "image/svg+xml"}
+        }
+      );
+    } catch (error) {
+      sendReaderPageStreamFailure(res, error);
+      return;
+    }
 
     res.status(response.status);
     res.setHeader("Cache-Control", response.ok ? "private, max-age=604800" : "no-store");
@@ -5600,7 +5781,9 @@ export const registerMoonV3Routes = (app, {
       res.end();
       return;
     }
-    Readable.fromWeb(response.body).pipe(res);
+    const stream = Readable.fromWeb(response.body);
+    stream.on("error", (error) => sendReaderPageStreamFailure(res, error));
+    stream.pipe(res);
   }));
 };
 

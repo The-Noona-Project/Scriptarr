@@ -4,6 +4,7 @@ import {EventEmitter} from "node:events";
 
 const {createPortalRuntime} = await import("../lib/portalRuntime.mjs");
 const {createPortalCommands} = await import("../lib/discord/commands/index.mjs");
+const {createAiResponseQueue} = await import("../lib/discord/aiResponseQueue.mjs");
 const {createRoleManager} = await import("../lib/discord/roleManager.mjs");
 const {createInteractionHandler} = await import("../lib/discord/interactionRouter.mjs");
 const {createTriviaRuntime} = await import("../lib/discord/triviaRuntime.mjs");
@@ -288,6 +289,7 @@ test("portal runtime asks Appa to review Noona public replies and posts serious 
   const reviewPayloads = [];
   const deliveryPayloads = [];
   const replies = [];
+  const replyEdits = [];
   const sage = {
     async getDiscordSettings() {
       return {
@@ -366,17 +368,28 @@ test("portal runtime asks Appa to review Noona public replies and posts serious 
       channel: {id: "chat-channel", sendTyping: async () => {}},
       reply: async (payload) => {
         replies.push(payload);
-        return {id: "noona-reply-1", ...payload};
+        return {
+          id: "noona-reply-1",
+          ...payload,
+          edit: async (nextPayload) => {
+            replyEdits.push(nextPayload);
+            return {id: "noona-reply-1", ...nextPayload};
+          }
+        };
       }
     });
     await new Promise((resolve) => setTimeout(resolve, 40));
 
-    assert.equal(replies[0].content, "Noona handled that.");
+    assert.equal(replies[0].content, "<@user-1> Thinking...");
+    assert.equal(replyEdits[0].content, "<@user-1> Noona handled that.");
     assert.equal(reviewPayloads.length, 1);
     assert.equal(deliveryPayloads.length, 1);
     assert.equal(deliveryPayloads[0].delivered, true);
     assert.equal(appaClient.sentChannelMessages[0].content, "Appa correction: use the admin page for that action.");
-    assert.deepEqual(appaClient.sentChannelMessages[0].messageReference, {messageId: "noona-reply-1"});
+    assert.deepEqual(appaClient.sentChannelMessages[0].reply, {
+      messageReference: "noona-reply-1",
+      failIfNotExists: false
+    });
     const state = runtime.getState();
     assert.equal(state.appa.lastReviewVerdict, "correct");
     assert.equal(state.appa.lastCorrectionError, null);
@@ -426,9 +439,192 @@ test("portal runtime keeps Noona admin fallback when Appa startup fails", async 
     assert.equal(state.connected, true);
     assert.equal(state.splitEnabled, false);
     assert.equal(state.appa.mode, "degraded");
+    assert.equal(state.appa.degradedReason, "login-failure");
     assert.match(state.appa.error, /Appa token rejected/);
+    assert.match(state.appa.detail, /Appa token rejected/);
     assert.equal(state.commands.find((command) => command.name === "chat").registered, true);
     assert.equal(state.commands.find((command) => command.name === "downloadall").registered, true);
+  } finally {
+    await runtime.stop();
+  }
+});
+
+test("portal runtime reports settings-unavailable Appa diagnostics and joins split mode after settings refresh", async () => {
+  const clients = [new FakeDiscordClient(), new FakeDiscordClient(), new FakeDiscordClient()];
+  const settingsResponses = [
+    {ok: false, status: 503, payload: {error: "Sage settings are still booting."}},
+    {
+      ok: true,
+      payload: {
+        guildId: "guild-1",
+        appa: {
+          enabled: true,
+          commands: {
+            status: {enabled: true, roleId: ""}
+          }
+        }
+      }
+    },
+    {
+      ok: true,
+      payload: {
+        guildId: "guild-1",
+        appa: {
+          enabled: true,
+          commands: {
+            status: {enabled: true, roleId: ""}
+          }
+        }
+      }
+    }
+  ];
+  const sage = {
+    async getDiscordSettings() {
+      return settingsResponses.shift() || settingsResponses.at(-1) || {
+        ok: true,
+        payload: {
+          guildId: "guild-1",
+          appa: {enabled: true}
+        }
+      };
+    },
+    async listFollowNotifications() {
+      return {ok: true, payload: {notifications: []}};
+    }
+  };
+
+  const runtime = createPortalRuntime({
+    config: {
+      ...baseConfig,
+      appaDiscordToken: "appa-token",
+      appaDiscordClientId: "appa-client-id"
+    },
+    sage,
+    logger: createLogger(),
+    clientFactory: async (options = {}) => {
+      const client = clients.shift();
+      client.options = options;
+      return client;
+    }
+  });
+
+  try {
+    await runtime.start();
+    const initialState = runtime.getState();
+    assert.equal(initialState.connected, true);
+    assert.equal(initialState.splitEnabled, false);
+    assert.equal(initialState.settingsLoaded, false);
+    assert.equal(initialState.appa.degradedReason, "settings-unavailable");
+    assert.match(initialState.appa.detail, /Sage settings are still booting/);
+    assert.equal(initialState.capabilities.appa.status, "degraded");
+
+    await runtime.refreshSettings();
+    const refreshedState = runtime.getState();
+    assert.equal(refreshedState.settingsLoaded, true);
+    assert.equal(refreshedState.splitEnabled, true);
+    assert.equal(refreshedState.appa.connected, true);
+    assert.equal(refreshedState.appa.degradedReason, null);
+    assert.equal(refreshedState.capabilities.appa.status, "available");
+  } finally {
+    await runtime.stop();
+  }
+});
+
+test("portal runtime classifies Appa command sync failures separately from login failures", async () => {
+  const appaClient = new FakeDiscordClient();
+  appaClient.application.commands.set = async () => {
+    throw new Error("Missing application command permission.");
+  };
+  const clients = [new FakeDiscordClient(), appaClient, new FakeDiscordClient()];
+  const sage = {
+    async getDiscordSettings() {
+      return {
+        ok: true,
+        payload: {
+          guildId: "guild-1",
+          appa: {enabled: true}
+        }
+      };
+    },
+    async listFollowNotifications() {
+      return {ok: true, payload: {notifications: []}};
+    }
+  };
+
+  const runtime = createPortalRuntime({
+    config: {
+      ...baseConfig,
+      appaDiscordToken: "appa-token",
+      appaDiscordClientId: "appa-client-id"
+    },
+    sage,
+    logger: createLogger(),
+    clientFactory: async (options = {}) => {
+      const client = clients.shift();
+      client.options = options;
+      return client;
+    }
+  });
+
+  try {
+    await runtime.start();
+    const state = runtime.getState();
+    assert.equal(state.splitEnabled, false);
+    assert.equal(state.appa.connected, false);
+    assert.equal(state.appa.degradedReason, "command-sync-failed");
+    assert.match(state.appa.detail, /command/i);
+    assert.equal(state.capabilities.appa.status, "degraded");
+  } finally {
+    await runtime.stop();
+  }
+});
+
+test("portal runtime marks connected Appa degraded when refresh command sync fails", async () => {
+  const noonaClient = new FakeDiscordClient();
+  const appaClient = new FakeDiscordClient();
+  const sage = {
+    async getDiscordSettings() {
+      return {
+        ok: true,
+        payload: {
+          guildId: "guild-1",
+          appa: {enabled: true}
+        }
+      };
+    },
+    async listFollowNotifications() {
+      return {ok: true, payload: {notifications: []}};
+    }
+  };
+  const clients = [noonaClient, appaClient];
+  const runtime = createPortalRuntime({
+    config: {
+      ...baseConfig,
+      appaDiscordToken: "appa-token",
+      appaDiscordClientId: "appa-client-id"
+    },
+    sage,
+    logger: createLogger(),
+    clientFactory: async (options = {}) => {
+      const client = clients.shift();
+      client.options = options;
+      return client;
+    }
+  });
+
+  try {
+    await runtime.start();
+    assert.equal(runtime.getState().capabilities.appa.status, "available");
+
+    appaClient.application.commands.set = async () => {
+      throw new Error("Application command update rejected.");
+    };
+    await runtime.refreshSettings();
+    const state = runtime.getState();
+    assert.equal(state.appa.connected, true);
+    assert.equal(state.appa.degradedReason, "command-sync-failed");
+    assert.match(state.appa.detail, /Application command update rejected/);
+    assert.equal(state.capabilities.appa.status, "degraded");
   } finally {
     await runtime.stop();
   }
@@ -772,6 +968,54 @@ test("trivia command reports already active rounds without saying it started ano
   assert.doesNotMatch(interaction.__calls.editReply[0].content, /^Trivia started/i);
 });
 
+test("legacy chat command edits an immediate Thinking reply and queues concurrent requests", async () => {
+  let releaseFirst;
+  const calls = [];
+  const commands = createPortalCommands({
+    sage: {
+      async chat(payload) {
+        calls.push(payload);
+        if (payload.message === "first question") {
+          await new Promise((resolve) => {
+            releaseFirst = resolve;
+          });
+          return {ok: true, payload: {reply: "first answer"}};
+        }
+        return {ok: true, payload: {reply: "second answer"}};
+      }
+    },
+    aiQueue: createAiResponseQueue()
+  });
+  const first = createInteraction({
+    commandName: "chat",
+    strings: {message: "first question"}
+  });
+  const second = createInteraction({
+    commandName: "chat",
+    strings: {message: "second question"}
+  });
+
+  const firstRun = commands.get("chat").execute(first);
+  await new Promise((resolve) => setImmediate(resolve));
+  const secondRun = commands.get("chat").execute(second);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(first.__calls.deferReply[0], {flags: 64});
+  assert.deepEqual(second.__calls.deferReply[0], {flags: 64});
+  assert.equal(first.__calls.editReply[0].content, "<@user-1> Thinking...");
+  assert.equal(second.__calls.editReply[0].content, "<@user-1> Working on 1 request ahead of you. Please wait.");
+  assert.deepEqual(first.__calls.editReply[0].allowedMentions, {users: ["user-1"], repliedUser: false, parse: []});
+
+  releaseFirst();
+  await Promise.all([firstRun, secondRun]);
+
+  assert.deepEqual(calls, [{message: "first question"}, {message: "second question"}]);
+  assert.equal(first.__calls.editReply[1].content, "<@user-1> first answer");
+  assert.equal(second.__calls.editReply[1].content, "<@user-1> Thinking...");
+  assert.equal(second.__calls.editReply[2].content, "<@user-1> second answer");
+  assert.deepEqual(second.__calls.editReply[2].allowedMentions, {users: ["user-1"], repliedUser: false, parse: []});
+});
+
 test("portal runtime forwards configured guild messages into trivia handling", async () => {
   const fakeClient = new FakeDiscordClient();
   const reactions = [];
@@ -846,6 +1090,7 @@ test("portal runtime handles Noona mentions publicly before trivia processing", 
   const fakeClient = new FakeDiscordClient();
   const calls = {guess: 0, noonaChat: 0};
   const replies = [];
+  const replyEdits = [];
   const sage = {
     async getDiscordSettings() {
       return {
@@ -919,7 +1164,14 @@ test("portal runtime handles Noona mentions publicly before trivia processing", 
       channel: {id: "trivia-channel", sendTyping: async () => {}},
       reply: async (payload) => {
         replies.push(payload);
-        return payload;
+        return {
+          id: "noona-runtime-reply-1",
+          ...payload,
+          edit: async (nextPayload) => {
+            replyEdits.push(nextPayload);
+            return {id: "noona-runtime-reply-1", ...nextPayload};
+          }
+        };
       },
       react: async () => {
         throw new Error("Trivia should not see handled Noona mentions.");
@@ -929,7 +1181,8 @@ test("portal runtime handles Noona mentions publicly before trivia processing", 
 
     assert.equal(calls.noonaChat, 1);
     assert.equal(calls.guess, 0);
-    assert.equal(replies[0].content, "LONG LIVE NOONA.");
+    assert.equal(replies[0].content, "<@user-1> Thinking...");
+    assert.equal(replyEdits[0].content, "<@user-1> LONG LIVE NOONA.");
     const state = runtime.getState();
     assert.equal(state.lastNoonaMentionChannelId, "trivia-channel");
     assert.equal(state.lastNoonaMentionError, null);

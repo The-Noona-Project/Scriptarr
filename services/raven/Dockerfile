@@ -20,7 +20,7 @@ FROM eclipse-temurin:24-jre
 WORKDIR /app
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends curl openvpn iproute2 unzip \
+  && apt-get install -y --no-install-recommends curl openvpn iproute2 unzip webp \
   && rm -rf /var/lib/apt/lists/*
 
 ENV SERVER_PORT=8080
@@ -34,4 +34,3 @@ HEALTHCHECK --interval=15s --timeout=5s --start-period=25s --retries=5 \
   CMD curl -fsS http://localhost:8080/health > /dev/null || exit 1
 
 CMD ["java", "-jar", "/app/app.jar"]
-

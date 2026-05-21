@@ -535,7 +535,12 @@ test("vault exposes compact Raven title cards without chapter payloads", async (
         chapterNumber: "1",
         pageCount: 12,
         available: true,
-        archivePath: `/downloads/downloaded/manga/${title.id}/Chapter_1.cbz`
+        archivePath: `/downloads/downloaded/manga/${title.id}/Chapter_1.cbz`,
+        ingestStatus: "ready",
+        ingestRevision: "test-revision",
+        ingestedPageCount: 12,
+        ingestedAt: "2026-04-24T00:00:00.000Z",
+        ingestManifestPath: `/downloads/ingested/manga/${title.id}/${title.id}-c1/manifest.json`
       }],
       ...title
     })
@@ -554,14 +559,24 @@ test("vault exposes compact Raven title cards without chapter payloads", async (
       chapterNumber: "1",
       pageCount: 12,
       available: true,
-      archivePath: "/downloads/downloaded/manga/dan-da-dan/Chapter_1.cbz"
+      archivePath: "/downloads/downloaded/manga/dan-da-dan/Chapter_1.cbz",
+      ingestStatus: "ready",
+      ingestRevision: "test-revision",
+      ingestedPageCount: 12,
+      ingestedAt: "2026-04-24T00:00:00.000Z",
+      ingestManifestPath: "/downloads/ingested/manga/dan-da-dan/dan-da-dan-c1/manifest.json"
     }, {
       id: "dan-da-dan-c2",
       label: "Chapter 2",
       chapterNumber: "2",
       pageCount: 10,
       available: true,
-      archivePath: "/downloads/downloaded/manga/dan-da-dan/Chapter_2.cbz"
+      archivePath: "/downloads/downloaded/manga/dan-da-dan/Chapter_2.cbz",
+      ingestStatus: "ready",
+      ingestRevision: "test-revision",
+      ingestedPageCount: 10,
+      ingestedAt: "2026-04-24T00:00:00.000Z",
+      ingestManifestPath: "/downloads/ingested/manga/dan-da-dan/dan-da-dan-c2/manifest.json"
     }]
   });
   await upsertTitle({id: "blue-box", title: "Blue Box", tags: ["sports"], aliases: []});

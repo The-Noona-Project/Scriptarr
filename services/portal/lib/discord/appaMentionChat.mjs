@@ -1,4 +1,8 @@
+import {editPublicAiReply, queueStatusText, sendPublicAiReply} from "./aiChatMessages.mjs";
+import {createAiResponseQueue} from "./aiResponseQueue.mjs";
 import {normalizeString} from "./utils.mjs";
+
+const defaultAppaAiQueue = createAiResponseQueue();
 
 const normalizeArray = (value) => Array.isArray(value) ? value : [];
 
@@ -22,23 +26,6 @@ const hasMention = (message, botUserId) => {
 const stripMention = (content, botUserId) =>
   normalizeString(content).replace(new RegExp(`<@!?${botUserId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}>`, "g"), "").trim();
 
-const sendPublicReply = async (message, content) => {
-  const payload = {
-    content: normalizeString(content, "Appa is here, but the review cloud is quiet."),
-    allowedMentions: {
-      repliedUser: false,
-      parse: []
-    }
-  };
-  if (typeof message?.reply === "function") {
-    return message.reply(payload);
-  }
-  if (typeof message?.channel?.send === "function") {
-    return message.channel.send(payload);
-  }
-  return null;
-};
-
 const buildUserPayload = (author = {}, member = {}) => ({
   discordUserId: normalizeString(author.id),
   username: normalizeString(author.username || member.displayName || author.globalName, "Discord Admin"),
@@ -56,7 +43,8 @@ const buildUserPayload = (author = {}, member = {}) => ({
  *   sage: {appaChat?: Function},
  *   roleManager: {checkAccess: Function},
  *   logger?: {warn?: Function},
- *   onRuntimeEvent?: Function
+ *   onRuntimeEvent?: Function,
+ *   aiQueue?: ReturnType<typeof createAiResponseQueue>
  * }} options
  * @returns {(message: any) => Promise<boolean>}
  */
@@ -66,7 +54,8 @@ export const createAppaMentionHandler = ({
   sage,
   roleManager,
   logger,
-  onRuntimeEvent
+  onRuntimeEvent,
+  aiQueue = defaultAppaAiQueue
 }) => async (message) => {
   const settings = getSettings?.() || {};
   const appa = settings.appa || {};
@@ -79,12 +68,26 @@ export const createAppaMentionHandler = ({
 
   const configuredGuildId = normalizeString(settings.guildId);
   if (configuredGuildId && guildId !== configuredGuildId) {
+    onRuntimeEvent?.({
+      type: "appa-chat-rejected",
+      at: new Date().toISOString(),
+      reason: "wrong-guild",
+      authorId: normalizeString(message?.author?.id),
+      channelId: normalizeString(message?.channelId || message?.channel?.id)
+    });
     return false;
   }
 
   const allowedChannelIds = normalizeArray(appa.adminMentionChannelIds).map((entry) => normalizeString(entry)).filter(Boolean);
   const channelId = normalizeString(message?.channelId || message?.channel?.id);
   if (allowedChannelIds.length && !allowedChannelIds.includes(channelId)) {
+    onRuntimeEvent?.({
+      type: "appa-chat-rejected",
+      at: new Date().toISOString(),
+      reason: "channel-not-allowed",
+      authorId: normalizeString(message?.author?.id),
+      channelId
+    });
     return false;
   }
 
@@ -92,6 +95,7 @@ export const createAppaMentionHandler = ({
   if (!prompt) {
     return false;
   }
+  const userId = normalizeString(message?.author?.id);
 
   const access = roleManager.checkAccess({
     guildId,
@@ -100,26 +104,63 @@ export const createAppaMentionHandler = ({
     member: message?.member
   }, "status", {});
   if (!access.allowed) {
-    await sendPublicReply(message, access.message || "Appa is for configured admins here.");
+    onRuntimeEvent?.({
+      type: "appa-chat-rejected",
+      at: new Date().toISOString(),
+      reason: "role-denied",
+      authorId: userId,
+      channelId,
+      message: access.message || ""
+    });
+    await sendPublicAiReply(message, access.message || "Appa is for configured admins here.", {
+      userId,
+      fallback: "Appa is for configured admins here."
+    });
     return true;
   }
 
-  const userId = normalizeString(message?.author?.id);
+  let placeholder = null;
   try {
-    await message?.channel?.sendTyping?.();
-    const response = await sage.appaChat?.({
-      message: prompt,
-      rawMessage: normalizeString(message?.content),
-      guildId,
-      channelId,
-      messageId: normalizeString(message?.id),
-      user: buildUserPayload(message?.author, message?.member),
-      proposalMode: "conservative"
+    const response = await aiQueue.run(async () => {
+      await message?.channel?.sendTyping?.();
+      return sage.appaChat?.({
+        message: prompt,
+        rawMessage: normalizeString(message?.content),
+        guildId,
+        channelId,
+        messageId: normalizeString(message?.id),
+        user: buildUserPayload(message?.author, message?.member),
+        proposalMode: "conservative"
+      });
+    }, {
+      onQueued: async ({ahead}) => {
+        [placeholder] = await sendPublicAiReply(message, queueStatusText(ahead), {
+          userId,
+          fallback: "Thinking..."
+        });
+      },
+      onStart: async ({ahead}) => {
+        if (ahead > 0) {
+          [placeholder] = await editPublicAiReply({
+            message,
+            placeholder,
+            content: "Thinking...",
+            userId,
+            fallback: "Thinking..."
+          });
+        }
+      }
     });
     const payload = response?.payload || {};
-    await sendPublicReply(message, payload.reply || (response?.ok
-      ? "Appa is watching the admin side."
-      : payload.error || "Appa is unavailable right now."));
+    await editPublicAiReply({
+      message,
+      placeholder,
+      content: payload.reply || (response?.ok
+        ? "Appa is watching the admin side."
+        : payload.error || "Appa is unavailable right now."),
+      userId,
+      fallback: "Appa is here, but the review cloud is quiet."
+    });
     onRuntimeEvent?.({
       type: response?.ok ? "appa-chat-handled" : "appa-chat-error",
       at: new Date().toISOString(),
@@ -138,7 +179,13 @@ export const createAppaMentionHandler = ({
       channelId,
       message: messageText
     });
-    await sendPublicReply(message, "Appa lost the admin thread for a second. Try again soon.");
+    await editPublicAiReply({
+      message,
+      placeholder,
+      content: "Appa lost the admin thread for a second. Try again soon.",
+      userId,
+      fallback: "Appa lost the admin thread for a second. Try again soon."
+    });
     return true;
   }
 };

@@ -25,6 +25,8 @@ Current next-chat focus:
   provider `localai`, selected model already installed, no active remove action, and a passing generation probe.
 - Reader smoothness: instrumentation exists before preload policy changes. Keep measuring session fetch, page metadata
   chunks, streamed image fetch, browser decode, preload queue depth, and cases where navigation waits for the buffer.
+  Use the `/admin/system/events` reader telemetry report before changing preload behavior; it groups only redacted
+  caught-buffer waits, slow chunk/image/decode events, retry spikes, and target/page hotspots.
 - Reader browser QA: use the real `/reader/:type/:titleId/:chapterId` route in a browser. Smoke webtoon scrolling,
   single/double/manga-double layouts, reload/cache behavior, retries, controller/keyboard paths, and numeric next/prev
   chapter semantics.
@@ -44,8 +46,8 @@ Service ownership:
 - Vault owns durable records and is the only first-party service allowed to talk to MySQL.
 - Portal owns Discord gateway events, slash commands, DMs, reactions, trivia runtime, and notification delivery, but
   persists and decides state through Sage.
-- Raven owns source scraping, downloader queues, `/downloadall`, library file promotion, media quality, naming, and VPN
-  protection.
+- Raven owns source scraping, downloader queues, `/downloadall`, library file promotion, manual CBZ import, WebP ingest,
+  media quality, naming, and VPN protection.
 - Oracle owns AI chat/assist responses only; it may advise, but it must not execute Scriptarr mutations directly.
 - Warden owns container plans, Docker lifecycle, updates, health checks, and production service convergence.
 
@@ -157,6 +159,13 @@ Architecture invariants:
   Appa split/review settings, and DM superuser rules.
 - In split mode Noona is reader-facing and Appa is admin/reviewer-facing. If Appa is disabled or cannot start, Noona
   must retain the legacy single-bot admin command fallback.
+- Portal AI chat surfaces are one-at-a-time per bot: Noona mention chat and legacy `/chat` share Noona's queue, while
+  Appa admin mentions and Appa review work share Appa's queue. Visible AI replies should mention only the requester,
+  send or edit a `Thinking...` placeholder immediately, show the number of request(s) ahead when queued, and edit the
+  placeholder with the first response chunk before sending overflow chunks.
+- Appa runtime diagnostics should distinguish missing env, disabled settings, settings fetch failures, login failures,
+  intent failures, command sync failures, and recent mention-gate rejections. Settings refreshes should retry the split
+  runtime when Appa becomes available instead of leaving Noona fallback stuck until a manual reload.
 - Moon now serves trusted API-key surfaces and plain same-origin Swagger docs. Search is public, protected calls use
   `X-Scriptarr-Api-Key`, system keys inherit assigned permission groups, user keys stay scoped to the owning reader,
   and accepted external requests must stay at the lowest queue priority.
@@ -178,8 +187,12 @@ Architecture invariants:
   replacement downloads. The old metadata-gaps and missing-chapters paths are legacy-only and should redirect.
 - Raven now exposes merged metadata-provider and download-provider tags as one canonical tag set for library and
   moderation surfaces, while keeping source attribution internally for debugging.
-- Raven stores in-flight downloads under `downloading/<type>/...` and promotes completed library content into
-  `downloaded/<type>/...`.
+- Raven stores in-flight downloads under `downloading/<type>/...`, keeps canonical CBZs under `downloaded/<type>/...`,
+  and publishes derived WebP reader pages under `ingested/<type>/<titleId>/<chapterId>/...`.
+- `/admin/import` is manual CBZ intake. `/admin/ingest` is WebP backlog, hardware state, and retry control. Do not
+  collapse those workflows into one route.
+- Reader availability is WebP-first. New downloads and manual imports must pass ingest before a chapter is readable;
+  failed ingest keeps the CBZ and should appear as retryable Needs attention work.
 - Raven title-download concurrency is brokered through `raven.download.runtime`. Default to two active titles, allow
   only `1` through `6`, apply reloads live without cancelling active downloads, and keep per-title page download
   concurrency fixed.

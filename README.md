@@ -88,6 +88,9 @@ events keep only redacted slow/retry summaries.
 Moon admin calendar is now backed by Raven chapter release dates captured from provider scrapes plus metadata
 enrichment, and completed catalog titles get a dated completion marker when chapter dates are missing so finished
 series are not silently dropped from the calendar.
+Raven keeps CBZ chapters canonical under `downloaded/<type>/...` and now requires a WebP ingest pass into
+`ingested/<type>/<titleId>/<chapterId>/` before reader pages become available. Moon admin keeps manual CBZ import at
+`/admin/import` and WebP ingest backlog or retries at `/admin/ingest`.
 Moon admin also exposes `/admin/system/api` for trusted automation settings, system-level API keys with assigned
 permission groups, personal-key audit, and same-origin Swagger or OpenAPI links. Signed-in readers can create their
 own user-level API keys from `/profile` when they want external readers or trackers to sync only their account data.
@@ -205,7 +208,8 @@ For end-to-end Docker verification, use:
 - Portal can also post Noona-written GitHub update summaries to a separate update channel from `/admin/discord`.
   Sage checks `The-Noona-Project/Scriptarr` during the scheduled or manual update-check task, asks Oracle for the
   summary, retries instead of posting a degraded or disabled AI fallback when AI is unavailable, and exposes stable
-  `update:<latestSha>` notifications that Portal acknowledges only after Discord accepts the message.
+  `update:<latestSha>` notifications that Portal acknowledges only after Discord accepts the message. The post keeps
+  Noona's summary once in the embed and keeps raw commit details behind the compare/admin links.
 - Noona trivia is configured from `/admin/discord`. Portal posts sanitized title-summary clues in the configured
   channel, accepts public guesses, awards XP for exact, alias, URL, and tolerant fuzzy matches, and posts leaderboards
   after rounds plus scheduled daily, weekly, and monthly windows. Oracle can advise only borderline guesses when AI
@@ -272,6 +276,9 @@ For end-to-end Docker verification, use:
   VPN remains enabled.
 - Raven should only report download completion after promote plus catalog persistence succeed, and it now rescans the
   `downloaded/<type>/...` tree on boot to recover missing catalog records from finished files.
+- Raven should run WebP ingest after manual CBZ import or normal download promotion. CBZs stay canonical in
+  `downloaded/<type>/...`, derived pages live in `ingested/<type>/<titleId>/<chapterId>/`, and chapters are not readable
+  until ingest status is `ready`.
 - Moon admin's live queue keeps ETA on active downloads only, shows recovery actions for failed or stale Raven title
   tasks, excludes service update/restart jobs from Needs attention, and can remove incomplete working folders without
   deleting promoted library content. Section bulk actions can cancel all queued work, cancel all running work for root

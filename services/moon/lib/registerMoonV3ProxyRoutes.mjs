@@ -195,7 +195,28 @@ const sendReaderPageCacheHit = (res, files, entry) => {
   if (metadata.lastModified) {
     res.setHeader("Last-Modified", metadata.lastModified);
   }
-  nodeFs.createReadStream(files.dataFile).pipe(res);
+  const stream = nodeFs.createReadStream(files.dataFile);
+  stream.on("error", (error) => {
+    res.destroy(error instanceof Error ? error : undefined);
+  });
+  stream.pipe(res);
+};
+
+const sendProxyStreamFailure = (res, error) => {
+  if (res.headersSent) {
+    res.destroy(error instanceof Error ? error : undefined);
+    return;
+  }
+  res.setHeader("Cache-Control", "no-store");
+  res.status(502).json({error: "Upstream stream failed."});
+};
+
+const pipeProxyStream = (stream, res, {onError = null} = {}) => {
+  stream.on("error", (error) => {
+    onError?.(error);
+    sendProxyStreamFailure(res, error);
+  });
+  stream.pipe(res);
 };
 
 const isCacheableReaderPageResponse = (response) => {
@@ -313,7 +334,7 @@ export const registerMoonV3ProxyRoutes = (app, {config, getSessionToken}) => {
         res.end();
         return;
       }
-      response.body.pipe(res);
+      pipeProxyStream(response.body, res);
       return;
     }
     if (req.method === "GET" && isReaderPageImagePath(targetPath)) {
@@ -346,9 +367,10 @@ export const registerMoonV3ProxyRoutes = (app, {config, getSessionToken}) => {
       if (cacheWriter) {
         response.body.on("data", (chunk) => cacheWriter.write(chunk));
         response.body.on("end", () => cacheWriter.finish());
-        response.body.on("error", () => cacheWriter.abort());
       }
-      response.body.pipe(res);
+      pipeProxyStream(response.body, res, {
+        onError: () => cacheWriter?.abort()
+      });
       return;
     }
     if (req.method === "GET" && isReaderPageStatusPath(targetPath)) {

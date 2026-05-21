@@ -16,6 +16,7 @@
   - `/admin/library`
   - `/admin/add`
   - `/admin/import`
+  - `/admin/ingest`
   - `/admin/calendar`
   - `/admin/mediamanagement`
   - `/admin/activity/*`
@@ -48,6 +49,8 @@
 - Duplicate request blockers should not create second visible rows in Moon. Show the duplicate outcome, link directly
   to the title when it already exists, and let Sage or Portal own the hidden waitlist and later ready notifications.
 - Moon should show honest empty states when Raven has no imported titles, and `/admin` should stay dark by default.
+- Keep `/admin/import` and `/admin/ingest` separate. Import is manual CBZ intake into a library; ingest is the WebP
+  backlog, hardware status, completion stats, and retry page for CBZs that are not reader-ready yet.
 - Keep Discord login as the only bootstrap and admin sign-in path. Do not reintroduce claim-dev-session behavior.
 - Preserve same-origin login return flow. Moon should pass a sanitized `returnTo` path into Sage's Discord auth URL,
   and the callback relay should send users back to the page where login started whenever that route is still allowed,

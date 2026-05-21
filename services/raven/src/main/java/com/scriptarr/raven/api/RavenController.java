@@ -83,6 +83,7 @@ public class RavenController {
             "service", "scriptarr-raven",
             "downloads", downloaderService.stats(),
             "vpn", vpnService.status(),
+            "ingest", Map.of("hardware", libraryService.ingestHardwareStatus()),
             "metadataProviders", settingsService.getMetadataProviderSettings(),
             "downloadProviders", settingsService.getDownloadProviderSettings()
         );
@@ -186,6 +187,67 @@ public class RavenController {
             return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("error", "Title not found."));
         }
         return ResponseEntity.ok(title);
+    }
+
+    /**
+     * List WebP ingest backlog, failures, and hardware readiness.
+     *
+     * @return ingest admin payload
+     */
+    @GetMapping("/v1/ingest")
+    public Map<String, Object> ingestBacklog() {
+        return libraryService.listIngestBacklog();
+    }
+
+    /**
+     * List durable ingest task snapshots for Moon's Needs attention queue.
+     *
+     * @return ingest tasks
+     */
+    @GetMapping("/v1/ingest/tasks")
+    public List<Map<String, Object>> ingestTasks() {
+        return libraryService.listIngestTasks();
+    }
+
+    /**
+     * Retry WebP ingest for an existing title.
+     *
+     * @param titleId title id to retry
+     * @param body retry payload
+     * @return updated title or validation error
+     */
+    @PostMapping("/v1/ingest/{titleId}/retry")
+    public ResponseEntity<?> retryIngest(
+        @PathVariable("titleId") String titleId,
+        @RequestBody(required = false) Map<String, Object> body
+    ) {
+        try {
+            return ResponseEntity.accepted().body(libraryService.ingestTitle(
+                titleId,
+                String.valueOf((body == null ? Map.of() : body).getOrDefault("requestedBy", "scriptarr-admin")).trim()
+            ));
+        } catch (IllegalArgumentException error) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("error", error.getMessage()));
+        } catch (IllegalStateException | com.scriptarr.raven.library.LibraryIngestException error) {
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("error", error.getMessage()));
+        }
+    }
+
+    /**
+     * Import Raven-visible CBZ files into a library and queue WebP ingest.
+     *
+     * @param body import payload
+     * @return imported title or validation error
+     */
+    @PostMapping("/v1/imports")
+    public ResponseEntity<?> importLibrary(@RequestBody Map<String, Object> body) {
+        try {
+            return ResponseEntity.accepted().body(libraryService.importLibrary(body));
+        } catch (IllegalArgumentException error) {
+            return ResponseEntity.badRequest().body(Map.of("error", error.getMessage()));
+        } catch (IllegalStateException | com.scriptarr.raven.library.LibraryIngestException error) {
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("error", error.getMessage()));
+        }
     }
 
     /**

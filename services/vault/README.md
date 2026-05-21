@@ -12,6 +12,9 @@ new or returning Discord sign-ins.
 Vault now also persists title-level and chapter-level read state for Moon's bookshelf and completion logic. Progress
 rows still track the current reading position, while the read-state model determines whether a title is active on the
 bookshelf or fully completed.
+Vault also carries Raven ingest state in the catalog: title aggregate status and counts, plus chapter `ingestStatus`,
+`ingestRevision`, `ingestedPageCount`, `ingestedAt`, redacted `ingestError`, and manifest path. Compact reader targets
+only consider chapters whose ingest status is ready.
 When Sage resets a title unread, Vault deletes that user's `media_title_state`, `media_chapter_reads`, and
 `media_progress` rows for the title instead of leaving a started unread title on the bookshelf.
 Vault now also persists first-class API key records for Moon and Sage. It stores hashed key material plus metadata for

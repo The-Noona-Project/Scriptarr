@@ -69,6 +69,8 @@ The reader also keeps a bounded local debug telemetry buffer at `window.__script
 page chunk fetch, image load/decode, preload queue depth, retry counts, decoded pages ahead/behind, and caught-buffer
 waits are measured before preload policy changes; only redacted slow/retry/caught-buffer summaries are brokered through
 Moon -> Sage as durable reader events.
+Admins can inspect those summaries from `/admin/system/events`, where Moon shows a reader telemetry report for
+caught-buffer waits, slow chunk/image/decode events, retry spikes, and redacted target/page hotspots.
 Reader page images now auto-retry transient load failures before showing a manual retry panel, and Moon caches only
 successful revisioned page-image responses under its bounded Warden-mounted derived reader page cache. Failed image responses
 stay `no-store`, and the same-origin page probe classifies failures without exposing archive paths, tokens, or raw
@@ -101,7 +103,7 @@ human-readable display casing.
 Moon admin settings now also surface Anime-Planet as a scrape-based metadata provider ahead of MangaUpdates so admins
 can keep lifecycle or alias enrichment on without relying only on API-backed sources.
 
-Admin routes follow the Arr-style operations model, including library, add/import, calendar, activity, wanted,
+Admin routes follow the Arr-style operations model, including library, add, import, ingest, calendar, activity, wanted,
 requests, users, Discord, settings, and system sections under `/admin`.
 Moon now serves `/admin` through the embedded Next.js App Router admin app with isolated `/admin/_next` assets and
 lightweight local shell providers. The old plain-JS admin fallback and `/admin-assets` bundle are gone; every admin
@@ -132,6 +134,10 @@ it can queue a safe staged replacement download without deleting the current lib
 `/admin/mediamanagement` is now the dedicated Raven file-management page. It exposes a fallback naming profile plus
 per-type naming profiles for manga, manhwa, manhua, webtoon, comic, and OEL so admins can preview and save archive or
 page formats without digging through the broader settings surface.
+`/admin/import` is the manual CBZ intake page. It sends title metadata, library type, existing-title selection, and
+Raven-visible source paths to Sage, which asks Raven to copy approved CBZ files into canonical downloaded storage.
+`/admin/ingest` is separate from import and shows the WebP conversion backlog, completion stats, hardware status, and
+retry buttons for titles whose CBZs are not yet reader-ready.
 `/admin/calendar` now renders a month or agenda view backed by Raven chapter release dates captured from source
 scrapes and metadata enrichment instead of only showing a flat task-style table. Completed titles get one dated
 completion marker when chapter dates are incomplete, while fully undated completed titles remain visible in the
@@ -154,8 +160,9 @@ bundles automatically.
 Moon's admin event history now comes from the shared Vault-backed durable event log, and the admin SPA subscribes to
 same-origin `/api/moon-v3/admin/events*` feeds for live updates instead of page-specific ad hoc polling.
 The admin System pages for Logs, Events, and Updates are now purpose-built Next surfaces rather than generic record
-cards. Logs use Warden's server-redacted Docker tail through Sage, Events expose durable Vault filters plus a detail
-drawer, and Updates restore check/install controls with typed confirmation for `system.root` admins.
+cards. Logs use Warden's server-redacted Docker tail through Sage, Events expose durable Vault filters, reader
+telemetry hotspots, and a detail drawer, and Updates restore check/install controls with typed confirmation for
+`system.root` admins.
 Tasks, Status, and AI now follow the same Next pattern. Tasks renders the Sage-owned allowlisted scheduler with cron
 editing, preview, manual run, and recent history; Status initially renders Sage's lightweight grouped endpoint
 registry, then probes GET/read routes only when an admin runs the explicit check action. It shows auth-gated reads as

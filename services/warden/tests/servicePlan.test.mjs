@@ -74,6 +74,33 @@ test("service plan gives embedded Oracle LocalAI NVIDIA runtime args when hinted
   assert.equal(oracle.env.SCRIPTARR_LOCALAI_BASE_URL, "http://127.0.0.1:8080/v1");
 });
 
+test("service plan gives Raven ingest NVIDIA runtime args when hinted", () => {
+  const plan = resolveServicePlan({
+    env: {
+      SCRIPTARR_MYSQL_URL: "SELFHOST",
+      SCRIPTARR_MYSQL_USER: "scriptarr",
+      SCRIPTARR_MYSQL_PASSWORD: "secret",
+      SCRIPTARR_RAVEN_INGEST_GPU_PROFILE: "nvidia"
+    }
+  });
+
+  const raven = plan.services.find((service) => service.name === "scriptarr-raven");
+  assert.deepEqual(raven.extraArgs, [
+    "--cap-add", "NET_ADMIN",
+    "--device", "/dev/net/tun",
+    "--runtime", "nvidia",
+    "--gpus", "all",
+    "--device", "/dev/nvidia0",
+    "--device", "/dev/nvidiactl",
+    "--device", "/dev/nvidia-uvm",
+    "--device", "/dev/nvidia-uvm-tools"
+  ]);
+  assert.equal(raven.env.SCRIPTARR_RAVEN_INGEST_GPU_PROFILE, "nvidia");
+  assert.equal(raven.env.SCRIPTARR_RAVEN_INGEST_REQUIRE_NVIDIA, "true");
+  assert.equal(raven.env.NVIDIA_VISIBLE_DEVICES, "all");
+  assert.equal(raven.env.NVIDIA_DRIVER_CAPABILITIES, "compute,utility");
+});
+
 test("service plan can explicitly disable Raven VPN runtime devices", () => {
   const plan = resolveServicePlan({
     env: {

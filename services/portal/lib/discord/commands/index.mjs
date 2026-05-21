@@ -18,12 +18,13 @@ export const createPortalCommands = ({
   onTriviaStart,
   onTriviaStop,
   onTriviaLeaderboard,
-  triviaSubcommandScope = "all"
+  triviaSubcommandScope = "all",
+  aiQueue
 }) => {
   const commands = new Map();
   commands.set("ding", createDingCommand({getBrandName}));
   commands.set("status", createStatusCommand({sage, getBrandName}));
-  commands.set("chat", createChatCommand({sage}));
+  commands.set("chat", createChatCommand({sage, aiQueue}));
   commands.set("search", createSearchCommand({sage, publicBaseUrl, getBrandName}));
   commands.set("request", createRequestCommand({sage, getBrandName}));
   commands.set("subscribe", createSubscribeCommand({sage, getBrandName}));

@@ -456,7 +456,7 @@ test("portal notifier delivers follow, approval, denial, and completion DMs once
   assert.ok(sent.some((entry) => entry.payload?.content.includes("moved it back into staff review")));
   assert.ok(sent.some((entry) => entry.payload?.content.includes("expired after 90 days")));
   assert.ok(sent.some((entry) => entry.payload?.content.includes("LocalAI startup completed")));
-  assert.ok(sent.some((entry) => entry.channelId === "updates-channel" && entry.payload?.content.includes("New Scriptarr update from Noona")));
+  assert.ok(sent.some((entry) => entry.channelId === "updates-channel" && entry.payload?.content.includes("Scriptarr update posted by Noona")));
   assert.ok(sent.some((entry) => entry.payload?.content.includes("https://pax-kun.com/myrequests")));
   assert.ok(sent.some((entry) => entry.payload?.embeds?.[0]?.image?.url === "https://images.example/solo.jpg"));
   assert.deepEqual(acknowledged.sort(), [
@@ -488,10 +488,12 @@ test("update channel payload keeps Noona summary out of duplicate message conten
     }]
   }, "https://pax-kun.com", "Scriptarr");
 
-  assert.match(payload.content, /New Scriptarr update from Noona/);
+  assert.match(payload.content, /Scriptarr update posted by Noona/);
   assert.doesNotMatch(payload.content, /pages are ready before you turn them/);
-  assert.equal(payload.embeds[0].title, "New in Scriptarr");
+  assert.equal(payload.embeds[0].title, "Scriptarr Update");
   assert.equal(payload.embeds[0].description, "Noona tuned the reader so pages are ready before you turn them.");
   assert.match(payload.embeds[0].fields[0].value, /2 commits/);
+  assert.match(payload.embeds[0].fields[0].value, /Latest `abc123def456`/);
+  assert.equal(payload.embeds[0].fields.some((field) => field.name === "Recent commits"), false);
   assert.equal(payload.embeds[0].fields.some((field) => field.name === "Included commits"), false);
 });

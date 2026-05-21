@@ -155,10 +155,13 @@ Read this before editing Scriptarr.
   OpenAI, or LocalAI.
 - Moon admin's `/admin/system/status` is now registry-first. Keep the lightweight endpoint matrix fast on first load,
   and only probe GET/read endpoints from the explicit check action while leaving mutation routes unprobed.
-- Raven stores active downloads under `downloading/<type>/...` and promotes completed library content into
-  `downloaded/<type>/...`.
-- Raven should only report `100%` after promoted files persist into the brokered catalog, and startup recovery should
-  reconcile finished `downloaded/<type>/...` files back into the library if catalog rows are missing.
+- Raven stores active downloads under `downloading/<type>/...`, keeps canonical CBZ archives under
+  `downloaded/<type>/...`, and publishes derived reader WebP pages under `ingested/<type>/<titleId>/<chapterId>/...`.
+- Moon admin keeps `/admin/import` for manual CBZ intake and `/admin/ingest` for WebP backlog, hardware state, and
+  retry controls. Do not merge those two admin workflows.
+- Raven should only report `100%` after promoted CBZ files persist into the brokered catalog and WebP ingest succeeds.
+  Startup recovery should reconcile finished `downloaded/<type>/...` files back into the library if catalog rows are
+  missing, and failed ingest should remain retryable from the existing CBZ.
 - Raven title-download concurrency is Sage-backed runtime config. Default to `2`, allow only `1` through `6`, apply
   reloads live when possible without cancelling active titles, and treat the Moon Settings value as the owner of that
   limit.

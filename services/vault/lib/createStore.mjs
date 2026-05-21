@@ -466,7 +466,10 @@ const toRavenTitleCard = (title = {}) => ({
   cleanChapterCount: Math.max(0, Number.parseInt(String(title.cleanChapterCount || 0), 10) || 0),
   partialChapterCount: Math.max(0, Number.parseInt(String(title.partialChapterCount || 0), 10) || 0),
   missingContentCount: Math.max(0, Number.parseInt(String(title.missingContentCount || 0), 10) || 0),
-  qualitySummary: truncateText(title.qualitySummary, 180)
+  qualitySummary: truncateText(title.qualitySummary, 180),
+  ingestStatus: normalizeRavenIngestStatus(title.ingestStatus),
+  ingestedChapterCount: Math.max(0, Number.parseInt(String(title.ingestedChapterCount || 0), 10) || 0),
+  ingestError: truncateText(title.ingestError, 180)
 });
 const buildRavenTitleCardPage = (titles = [], query = {}) => {
   const q = normalizeScalarString(query.q || query.query).toLowerCase();
@@ -545,7 +548,7 @@ const buildRavenTitleCardPage = (titles = [], query = {}) => {
   };
 };
 const sortReaderTargetChapters = (chapters = []) => [...(Array.isArray(chapters) ? chapters : [])]
-  .filter((chapter) => chapter?.available !== false)
+  .filter((chapter) => chapter?.available !== false && normalizeRavenIngestStatus(chapter?.ingestStatus) === "ready")
   .sort((left, right) => {
     const leftNumber = Number.parseFloat(String(left?.chapterNumber || ""));
     const rightNumber = Number.parseFloat(String(right?.chapterNumber || ""));
@@ -632,6 +635,10 @@ const normalizeIntegerArray = (value) => Array.isArray(value)
 const normalizeStringArray = (value) => Array.isArray(value)
   ? value.map((entry) => normalizeScalarString(entry)).filter(Boolean)
   : [];
+const normalizeRavenIngestStatus = (value, fallback = "pending") => {
+  const normalized = normalizeScalarString(value, fallback).toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  return ["ready", "running", "pending", "failed", "missing"].includes(normalized) ? normalized : fallback;
+};
 const normalizeRavenChapter = (chapter = {}) => ({
   id: chapter.id,
   label: chapter.label,
@@ -646,8 +653,32 @@ const normalizeRavenChapter = (chapter = {}) => ({
   missingPageCount: Math.max(0, Number.parseInt(String(chapter.missingPageCount || 0), 10) || 0),
   missingPages: normalizeIntegerArray(chapter.missingPages),
   qualityNotes: normalizeStringArray(chapter.qualityNotes),
+  ingestStatus: normalizeRavenIngestStatus(chapter.ingestStatus),
+  ingestRevision: normalizeScalarString(chapter.ingestRevision),
+  ingestedPageCount: Math.max(0, Number.parseInt(String(chapter.ingestedPageCount || 0), 10) || 0),
+  ingestedAt: toIsoTimestamp(chapter.ingestedAt || chapter.ingested_at),
+  ingestError: normalizeScalarString(chapter.ingestError),
+  ingestManifestPath: normalizeScalarString(chapter.ingestManifestPath),
   updatedAt: toIsoTimestamp(chapter.updatedAt || chapter.updated_at)
 });
+const summarizeRavenIngestStatus = (chapters = []) => {
+  const rows = Array.isArray(chapters) ? chapters.map(normalizeRavenChapter) : [];
+  if (!rows.length) {
+    return {status: "pending", readyCount: 0, error: ""};
+  }
+  const readyCount = rows.filter((chapter) => chapter.ingestStatus === "ready").length;
+  const failed = rows.find((chapter) => chapter.ingestStatus === "failed");
+  if (failed) {
+    return {status: "failed", readyCount, error: failed.ingestError || ""};
+  }
+  if (rows.some((chapter) => chapter.ingestStatus === "running")) {
+    return {status: "running", readyCount, error: ""};
+  }
+  if (readyCount === rows.length) {
+    return {status: "ready", readyCount, error: ""};
+  }
+  return {status: "pending", readyCount, error: ""};
+};
 const normalizeRavenTitle = (title, chapters = []) => ({
   id: title.id,
   title: title.title,
@@ -676,6 +707,9 @@ const normalizeRavenTitle = (title, chapters = []) => ({
   partialChapterCount: Math.max(0, Number.parseInt(String(title.partialChapterCount || 0), 10) || 0),
   missingContentCount: Math.max(0, Number.parseInt(String(title.missingContentCount || 0), 10) || 0),
   qualitySummary: title.qualitySummary || "",
+  ingestStatus: normalizeRavenIngestStatus(title.ingestStatus, summarizeRavenIngestStatus(chapters).status),
+  ingestedChapterCount: Math.max(0, Number.parseInt(String(title.ingestedChapterCount ?? summarizeRavenIngestStatus(chapters).readyCount), 10) || 0),
+  ingestError: normalizeScalarString(title.ingestError, summarizeRavenIngestStatus(chapters).error),
   updatedAt: toIsoTimestamp(title.updatedAt || title.updated_at),
   chapters: sortRavenChapters(chapters.map(normalizeRavenChapter))
 });
@@ -720,6 +754,9 @@ const toRavenTitleSummary = (title = {}) => ({
   partialChapterCount: Math.max(0, Number.parseInt(String(title.partialChapterCount || 0), 10) || 0),
   missingContentCount: Math.max(0, Number.parseInt(String(title.missingContentCount || 0), 10) || 0),
   qualitySummary: normalizeScalarString(title.qualitySummary),
+  ingestStatus: normalizeRavenIngestStatus(title.ingestStatus),
+  ingestedChapterCount: Math.max(0, Number.parseInt(String(title.ingestedChapterCount || 0), 10) || 0),
+  ingestError: normalizeScalarString(title.ingestError),
   updatedAt: toIsoTimestamp(title.updatedAt || title.updated_at)
 });
 const normalizeTitleProgress = (entry = {}) => entry ? {
@@ -1980,6 +2017,9 @@ const createMysqlStore = (config) => {
         partial_chapter_count INT NOT NULL DEFAULT 0,
         missing_content_count INT NOT NULL DEFAULT 0,
         quality_summary TEXT NULL,
+        ingest_status VARCHAR(64) NOT NULL DEFAULT 'pending',
+        ingested_chapter_count INT NOT NULL DEFAULT 0,
+        ingest_error TEXT NULL,
         updated_at DATETIME NOT NULL
       )
     `);
@@ -1999,6 +2039,12 @@ const createMysqlStore = (config) => {
         missing_page_count INT NOT NULL DEFAULT 0,
         missing_pages_json JSON NULL,
         quality_notes_json JSON NULL,
+        ingest_status VARCHAR(64) NOT NULL DEFAULT 'pending',
+        ingest_revision VARCHAR(128) NULL,
+        ingested_page_count INT NOT NULL DEFAULT 0,
+        ingested_at DATETIME NULL,
+        ingest_error TEXT NULL,
+        ingest_manifest_path TEXT NULL,
         updated_at DATETIME NOT NULL,
         PRIMARY KEY (title_id, chapter_id)
       )
@@ -2098,6 +2144,9 @@ const createMysqlStore = (config) => {
     await ignoreKnownAlterError("ALTER TABLE raven_titles ADD COLUMN partial_chapter_count INT NOT NULL DEFAULT 0");
     await ignoreKnownAlterError("ALTER TABLE raven_titles ADD COLUMN missing_content_count INT NOT NULL DEFAULT 0");
     await ignoreKnownAlterError("ALTER TABLE raven_titles ADD COLUMN quality_summary TEXT NULL");
+    await ignoreKnownAlterError("ALTER TABLE raven_titles ADD COLUMN ingest_status VARCHAR(64) NOT NULL DEFAULT 'pending'");
+    await ignoreKnownAlterError("ALTER TABLE raven_titles ADD COLUMN ingested_chapter_count INT NOT NULL DEFAULT 0");
+    await ignoreKnownAlterError("ALTER TABLE raven_titles ADD COLUMN ingest_error TEXT NULL");
     await ignoreKnownAlterError("ALTER TABLE raven_titles ADD INDEX idx_raven_titles_type_title (library_type_slug, title)");
     await ignoreKnownAlterError("ALTER TABLE raven_titles ADD INDEX idx_raven_titles_updated (updated_at)");
     await ignoreKnownAlterError("ALTER TABLE raven_chapters ADD COLUMN quality_status VARCHAR(64) NOT NULL DEFAULT 'clean'");
@@ -2105,6 +2154,12 @@ const createMysqlStore = (config) => {
     await ignoreKnownAlterError("ALTER TABLE raven_chapters ADD COLUMN missing_page_count INT NOT NULL DEFAULT 0");
     await ignoreKnownAlterError("ALTER TABLE raven_chapters ADD COLUMN missing_pages_json JSON NULL");
     await ignoreKnownAlterError("ALTER TABLE raven_chapters ADD COLUMN quality_notes_json JSON NULL");
+    await ignoreKnownAlterError("ALTER TABLE raven_chapters ADD COLUMN ingest_status VARCHAR(64) NOT NULL DEFAULT 'pending'");
+    await ignoreKnownAlterError("ALTER TABLE raven_chapters ADD COLUMN ingest_revision VARCHAR(128) NULL");
+    await ignoreKnownAlterError("ALTER TABLE raven_chapters ADD COLUMN ingested_page_count INT NOT NULL DEFAULT 0");
+    await ignoreKnownAlterError("ALTER TABLE raven_chapters ADD COLUMN ingested_at DATETIME NULL");
+    await ignoreKnownAlterError("ALTER TABLE raven_chapters ADD COLUMN ingest_error TEXT NULL");
+    await ignoreKnownAlterError("ALTER TABLE raven_chapters ADD COLUMN ingest_manifest_path TEXT NULL");
     await ignoreKnownAlterError("ALTER TABLE raven_download_tasks ADD COLUMN provider_id VARCHAR(128) NULL AFTER title_url");
     await ignoreKnownAlterError("ALTER TABLE raven_download_tasks ADD COLUMN request_id BIGINT NULL AFTER provider_id");
     await ignoreKnownAlterError("ALTER TABLE raven_download_tasks ADD COLUMN details_json JSON NULL AFTER percent_value");
@@ -2330,6 +2385,12 @@ const createMysqlStore = (config) => {
     missingPageCount: row.missing_page_count,
     missingPages: parseJsonColumn(row.missing_pages_json, []),
     qualityNotes: parseJsonColumn(row.quality_notes_json, []),
+    ingestStatus: row.ingest_status,
+    ingestRevision: row.ingest_revision,
+    ingestedPageCount: row.ingested_page_count,
+    ingestedAt: row.ingested_at ? row.ingested_at.toISOString() : null,
+    ingestError: row.ingest_error,
+    ingestManifestPath: row.ingest_manifest_path,
     updatedAt: row.updated_at.toISOString()
   });
   const toRavenTitle = (row, chapters = []) => normalizeRavenTitle({
@@ -2360,6 +2421,9 @@ const createMysqlStore = (config) => {
     partialChapterCount: row.partial_chapter_count,
     missingContentCount: row.missing_content_count,
     qualitySummary: row.quality_summary,
+    ingestStatus: row.ingest_status,
+    ingestedChapterCount: row.ingested_chapter_count,
+    ingestError: row.ingest_error,
     updatedAt: row.updated_at ? row.updated_at.toISOString() : null
   }, chapters);
   const toRequest = (row) => {
@@ -3374,7 +3438,8 @@ const createMysqlStore = (config) => {
         title_id, title, media_type, library_type_label, library_type_slug, status_name, latest_chapter,
         cover_accent, summary, release_label, chapter_count, chapters_downloaded, author_name,
         tags_json, aliases_json, metadata_provider, metadata_matched_at, cover_url,
-        quality_status, clean_chapter_count, partial_chapter_count, missing_content_count, quality_summary, updated_at
+        quality_status, clean_chapter_count, partial_chapter_count, missing_content_count, quality_summary,
+        ingest_status, ingested_chapter_count, ingest_error, updated_at
       `;
       const toTitleCardRow = (row) => toRavenTitleCard({
         id: row.title_id,
@@ -3400,6 +3465,9 @@ const createMysqlStore = (config) => {
         partialChapterCount: row.partial_chapter_count,
         missingContentCount: row.missing_content_count,
         qualitySummary: row.quality_summary,
+        ingestStatus: row.ingest_status,
+        ingestedChapterCount: row.ingested_chapter_count,
+        ingestError: row.ingest_error,
         updatedAt: row.updated_at ? row.updated_at.toISOString() : null
       });
 
@@ -3630,9 +3698,10 @@ const createMysqlStore = (config) => {
           title_id, title, media_type, library_type_label, library_type_slug, status_name, latest_chapter, cover_accent, summary, release_label,
           chapter_count, chapters_downloaded, author_name, tags_json, aliases_json, relations_json,
           metadata_provider, metadata_matched_at, source_url, cover_url, working_root, download_root,
-          quality_status, clean_chapter_count, partial_chapter_count, missing_content_count, quality_summary, updated_at
+          quality_status, clean_chapter_count, partial_chapter_count, missing_content_count, quality_summary,
+          ingest_status, ingested_chapter_count, ingest_error, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
         ON DUPLICATE KEY UPDATE
           title = VALUES(title),
           media_type = VALUES(media_type),
@@ -3660,6 +3729,9 @@ const createMysqlStore = (config) => {
           partial_chapter_count = VALUES(partial_chapter_count),
           missing_content_count = VALUES(missing_content_count),
           quality_summary = VALUES(quality_summary),
+          ingest_status = VALUES(ingest_status),
+          ingested_chapter_count = VALUES(ingested_chapter_count),
+          ingest_error = VALUES(ingest_error),
           updated_at = NOW()
       `, [
         title.id,
@@ -3688,7 +3760,10 @@ const createMysqlStore = (config) => {
         Number.parseInt(String(title.cleanChapterCount || 0), 10) || 0,
         Number.parseInt(String(title.partialChapterCount || 0), 10) || 0,
         Number.parseInt(String(title.missingContentCount || 0), 10) || 0,
-        title.qualitySummary || null
+        title.qualitySummary || null,
+        normalizeRavenIngestStatus(title.ingestStatus),
+        Number.parseInt(String(title.ingestedChapterCount || 0), 10) || 0,
+        title.ingestError || null
       ]);
       return this.getRavenTitle(title.id);
     },
@@ -3700,9 +3775,10 @@ const createMysqlStore = (config) => {
           await connection.query(`
             INSERT INTO raven_chapters (
               title_id, chapter_id, label_name, chapter_number, page_count, release_date, is_available, archive_path, source_url,
-              quality_status, expected_page_count, missing_page_count, missing_pages_json, quality_notes_json, updated_at
+              quality_status, expected_page_count, missing_page_count, missing_pages_json, quality_notes_json,
+              ingest_status, ingest_revision, ingested_page_count, ingested_at, ingest_error, ingest_manifest_path, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
           `, [
             titleId,
             normalizedChapter.id,
@@ -3717,7 +3793,13 @@ const createMysqlStore = (config) => {
             Number.parseInt(String(normalizedChapter.expectedPageCount || 0), 10) || 0,
             Number.parseInt(String(normalizedChapter.missingPageCount || 0), 10) || 0,
             JSON.stringify(normalizedChapter.missingPages),
-            JSON.stringify(normalizedChapter.qualityNotes)
+            JSON.stringify(normalizedChapter.qualityNotes),
+            normalizeRavenIngestStatus(normalizedChapter.ingestStatus),
+            normalizedChapter.ingestRevision || null,
+            Number.parseInt(String(normalizedChapter.ingestedPageCount || 0), 10) || 0,
+            toMysqlDateTime(normalizedChapter.ingestedAt),
+            normalizedChapter.ingestError || null,
+            normalizedChapter.ingestManifestPath || null
           ]);
         }
         const [rows] = await connection.query("SELECT * FROM raven_chapters WHERE title_id = ?", [titleId]);

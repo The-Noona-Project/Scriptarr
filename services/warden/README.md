@@ -74,6 +74,13 @@ against Docker inspect output and recreates Raven when they disappear. Hosts wit
 disabled or set `SCRIPTARR_RAVEN_VPN_RUNTIME_DISABLED=true`; Raven will still boot, but its VPN status reports the
 runtime as unsupported and enabled VPN downloads fail closed.
 
+## Raven Ingest Runtime
+
+Raven WebP ingest uses the official `cwebp/libwebp` encoder by default. If `SCRIPTARR_RAVEN_INGEST_GPU_PROFILE=nvidia`
+or the shared GPU hint is set to `nvidia`, Warden gives Raven the same NVIDIA runtime args and env style used for
+Oracle GPU planning. A missing NVIDIA runtime should surface through Raven ingest hardware state as `hardware_missing`
+instead of making the whole managed stack unhealthy.
+
 ## LocalAI
 
 Oracle embeds the LocalAI runtime in the `scriptarr-oracle` image. Warden mounts the persistent `localai/models` and

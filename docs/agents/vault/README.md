@@ -43,6 +43,11 @@
 - Raven catalog rows now carry title-level and chapter-level media quality fields. Preserve `qualityStatus`,
   clean/partial/missing counts, quality summaries, expected page counts, missing page numbers, and quality notes
   through both memory and MySQL stores so Moon can surface Missing Content without scraping task logs.
+- Raven catalog rows now also carry WebP ingest state. Preserve title aggregate ingest status/count/error plus chapter
+  `ingestStatus`, `ingestRevision`, `ingestedPageCount`, `ingestedAt`, redacted `ingestError`, and manifest path through
+  memory and MySQL stores.
+- Reader-target projections should only choose chapters whose ingest status is `ready`; available CBZ-only chapters are
+  not reader-ready.
 - Vault owns the compact Raven title-card projection at `/api/service/raven/title-cards`. Keep it title-table-only,
   indexed for type/title/recency filters, paginated by cursor/pageSize, able to return exact `ids` in caller order,
   and free of chapter arrays or filesystem roots.

@@ -41,8 +41,12 @@ HTTP broker.
   Portal confirms the channel post was sent.
 - Keep Moon's trusted public API brokered here. Sage should hash stored API keys, issue short-lived selection tokens,
   and enforce NSFW plus duplicate guards before queueing external requests at the lowest priority.
+- Keep Moon admin import and ingest brokered here. `/admin/import` is manual CBZ intake through Raven `/v1/imports`;
+  `/admin/ingest` is WebP backlog and retry through Raven `/v1/ingest`. Ingest queue tasks retry from the existing CBZ
+  and should not flow through normal download removal.
 - Keep Moon reader telemetry brokered here. Persist only redacted slow, retry, or caught-buffer summaries as reader
-  events; never store raw image URLs, query strings, tokens, paths, or page payloads.
+  events, and expose admin reports only from those redacted target/page summaries; never store raw image URLs, query
+  strings, tokens, paths, or page payloads.
 - Keep Warden aggregation split by contract: `/health` for service health, `/api/bootstrap` for the static plan, and
   `/api/runtime` for live runtime details.
 - Keep GitHub update digests Sage-owned. The `update-check` system task may read GitHub's public API and ask Oracle

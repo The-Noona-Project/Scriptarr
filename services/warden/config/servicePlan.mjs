@@ -234,6 +234,26 @@ export const resolveServicePlan = ({env = process.env, containerNamePrefix = ""}
       NVIDIA_DRIVER_CAPABILITIES: env.NVIDIA_DRIVER_CAPABILITIES || "compute,utility"
     }
     : {};
+  const ravenIngestGpuProfile = resolveLocalAiProfile({
+    env: {
+      ...env,
+      SCRIPTARR_GPU_HINT: normalizeString(env.SCRIPTARR_RAVEN_INGEST_GPU_PROFILE || env.SCRIPTARR_GPU_HINT || "cpu")
+    }
+  });
+  const ravenGpuEnv = ravenIngestGpuProfile.key === "nvidia"
+    ? {
+      SCRIPTARR_RAVEN_INGEST_GPU_PROFILE: "nvidia",
+      SCRIPTARR_RAVEN_INGEST_REQUIRE_NVIDIA: "true",
+      NVIDIA_VISIBLE_DEVICES: env.NVIDIA_VISIBLE_DEVICES || "all",
+      NVIDIA_DRIVER_CAPABILITIES: env.NVIDIA_DRIVER_CAPABILITIES || "compute,utility"
+    }
+    : {
+      SCRIPTARR_RAVEN_INGEST_GPU_PROFILE: ravenIngestGpuProfile.key
+    };
+  const ravenVpnExtraArgs = normalizeString(env.SCRIPTARR_RAVEN_VPN_RUNTIME_DISABLED).toLowerCase() === "true"
+    ? []
+    : ["--cap-add", "NET_ADMIN", "--device", normalizeString(env.SCRIPTARR_RAVEN_TUN_DEVICE) || "/dev/net/tun"];
+  const ravenIngestExtraArgs = ravenIngestGpuProfile.key === "nvidia" ? ravenIngestGpuProfile.runtimeArgs || [] : [];
   const resolvedContainerNamePrefix = resolveContainerNamePrefix({env, containerNamePrefix});
 
   /** @type {ReturnType<typeof resolveServicePlan>["services"]} */
@@ -332,14 +352,13 @@ export const resolveServicePlan = ({env = process.env, containerNamePrefix = ""}
       SCRIPTARR_SAGE_BASE_URL: `http://scriptarr-sage:${sagePort}`,
       SCRIPTARR_SERVICE_TOKEN: serviceTokens["scriptarr-raven"],
       SCRIPTARR_RAVEN_DATA_ROOT: "/downloads",
-      SCRIPTARR_RAVEN_LOG_DIR: "/app/logs"
+      SCRIPTARR_RAVEN_LOG_DIR: "/app/logs",
+      ...ravenGpuEnv
     },
     mounts: resolveFolderMounts(storageLayout, "scriptarr-raven", ["downloads", "logs"]),
     networkAliases: ["scriptarr-raven"],
     publishedPorts: [],
-    extraArgs: normalizeString(env.SCRIPTARR_RAVEN_VPN_RUNTIME_DISABLED).toLowerCase() === "true"
-      ? []
-      : ["--cap-add", "NET_ADMIN", "--device", normalizeString(env.SCRIPTARR_RAVEN_TUN_DEVICE) || "/dev/net/tun"],
+    extraArgs: [...ravenVpnExtraArgs, ...ravenIngestExtraArgs],
     healthCheck: buildCurlHttpHealthCheck(ravenPort, {startPeriod: "25s"}),
     containerPort: ravenPort
   });

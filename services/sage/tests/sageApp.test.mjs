@@ -96,6 +96,21 @@ const createVaultReaderTargetFailureProxy = ({targetBaseUrl}) => {
   return {server, calls};
 };
 
+/**
+ * Add the ingest metadata required for a Raven chapter to be reader-ready.
+ *
+ * @param {Record<string, unknown>} chapter
+ * @returns {Record<string, unknown>}
+ */
+const readyIngestChapter = (chapter) => ({
+  ...chapter,
+  ingestStatus: chapter.ingestStatus || "ready",
+  ingestRevision: chapter.ingestRevision || `${chapter.id || "chapter"}-webp`,
+  ingestedPageCount: chapter.ingestedPageCount ?? chapter.pageCount ?? 0,
+  ingestedAt: chapter.ingestedAt || "2026-04-22T00:00:00.000Z",
+  ingestManifestPath: chapter.ingestManifestPath || `/downloads/ingested/test/${chapter.id || "chapter"}/manifest.json`
+});
+
 const defaultLibraryTitle = Object.freeze({
   id: "dan-da-dan",
   title: "Dandadan",
@@ -116,21 +131,21 @@ const defaultLibraryTitle = Object.freeze({
   metadataProvider: "mangadex",
   metadataMatchedAt: "2026-04-18T00:00:00.000Z",
   relations: [],
-  chapters: [{
+  chapters: [readyIngestChapter({
     id: "dandadan-c166",
     label: "Chapter 166",
     chapterNumber: "166",
     pageCount: 3,
     releaseDate: "2026-04-14",
     available: true
-  }, {
+  }), readyIngestChapter({
     id: "dandadan-c167",
     label: "Chapter 167",
     chapterNumber: "167",
     pageCount: 2,
     releaseDate: "2026-04-21",
     available: true
-  }]
+  })]
 });
 
 const ownerSmokeLibraryTitle = Object.freeze({
@@ -157,28 +172,28 @@ const descendingReaderTitle = Object.freeze({
   latestChapter: "253",
   chapterCount: 3,
   chaptersDownloaded: 3,
-  chapters: [{
+  chapters: [readyIngestChapter({
     id: "tomb-raider-king-c253",
     label: "Chapter 253",
     chapterNumber: "253",
     pageCount: 24,
     releaseDate: "2026-04-21",
     available: true
-  }, {
+  }), readyIngestChapter({
     id: "tomb-raider-king-c252",
     label: "Chapter 252",
     chapterNumber: "252",
     pageCount: 71,
     releaseDate: "2026-04-20",
     available: true
-  }, {
+  }), readyIngestChapter({
     id: "tomb-raider-king-c251",
     label: "Chapter 251",
     chapterNumber: "251",
     pageCount: 48,
     releaseDate: "2026-04-19",
     available: true
-  }]
+  })]
 });
 
 const defaultIntakePayload = Object.freeze({
@@ -204,15 +219,20 @@ const defaultIntakePayload = Object.freeze({
  * Create a small dependency stub for Sage's Raven, Warden, Portal, and Oracle
  * calls so the Moon v3 broker routes can be tested in isolation.
  *
- * @param {{libraryTitles?: Array<Record<string, unknown>>, downloadTasks?: Array<Record<string, unknown>>, downloadRuntimeReloadStatus?: number, syncLinkedRequestOnQueue?: boolean, readerChapterTransientMisses?: Record<string, number>}} [options]
+ * @param {{libraryTitles?: Array<Record<string, unknown>>, downloadTasks?: Array<Record<string, unknown>>, ingestTasks?: Array<Record<string, unknown>>, ingestOverview?: Record<string, unknown>, importResult?: Record<string, unknown>, downloadRuntimeReloadStatus?: number, syncLinkedRequestOnQueue?: boolean, readerChapterTransientMisses?: Record<string, number>, readerMissingChaptersAsHtml?: boolean, readerPageFetchFails?: boolean}} [options]
  * @returns {Promise<{server: http.Server, calls: Record<string, number>}>}
  */
 const createDependencyStub = ({
   libraryTitles = [defaultLibraryTitle],
   downloadTasks = [],
+  ingestTasks = [],
+  ingestOverview = null,
+  importResult = null,
   downloadRuntimeReloadStatus = 200,
   syncLinkedRequestOnQueue = false,
-  readerChapterTransientMisses = {}
+  readerChapterTransientMisses = {},
+  readerMissingChaptersAsHtml = false,
+  readerPageFetchFails = false
 } = {}) => {
   const calls = {
     health: 0,
@@ -242,10 +262,16 @@ const createDependencyStub = ({
     library: 0,
     libraryCard: 0,
     metadataIdentify: 0,
-    metadataSearchUrls: []
+    metadataSearchUrls: [],
+    ingestTasks: 0,
+    ingestOverview: 0,
+    ingestRetry: 0,
+    importLibrary: 0,
+    downloadRetry: 0
   };
   let currentLibraryTitles = [...libraryTitles];
   let currentDownloadTasks = [...downloadTasks];
+  const currentIngestTasks = [...ingestTasks];
   const libraryById = new Map();
   const syncLibraryIndex = () => {
     libraryById.clear();
@@ -672,8 +698,13 @@ const createDependencyStub = ({
 
       const payload = buildReaderChapterPayload(title, chapterId);
       if (!payload) {
-        response.writeHead(404, {"Content-Type": "application/json"});
-        response.end(JSON.stringify({error: "Chapter not found."}));
+        if (readerMissingChaptersAsHtml) {
+          response.writeHead(404, {"Content-Type": "text/html"});
+          response.end("<h1>Chapter not found</h1>");
+        } else {
+          response.writeHead(404, {"Content-Type": "application/json"});
+          response.end(JSON.stringify({error: "Chapter not found."}));
+        }
         return;
       }
 
@@ -701,6 +732,10 @@ const createDependencyStub = ({
     }
 
     if (request.url?.startsWith("/v1/reader/") && request.url.includes("/page/")) {
+      if (readerPageFetchFails) {
+        request.socket.destroy();
+        return;
+      }
       response.writeHead(200, {
         "Content-Type": "image/svg+xml",
         "ETag": "\"raven-reader-page\""
@@ -712,6 +747,85 @@ const createDependencyStub = ({
     if (request.url === "/v1/downloads/tasks") {
       response.writeHead(200, {"Content-Type": "application/json"});
       response.end(JSON.stringify(currentDownloadTasks));
+      return;
+    }
+
+    if (request.url === "/v1/ingest/tasks") {
+      calls.ingestTasks += 1;
+      response.writeHead(200, {"Content-Type": "application/json"});
+      response.end(JSON.stringify(currentIngestTasks));
+      return;
+    }
+
+    if (request.url === "/v1/ingest") {
+      calls.ingestOverview += 1;
+      const readyCount = currentLibraryTitles.filter((title) => title.ingestStatus === "ready").length;
+      response.writeHead(200, {"Content-Type": "application/json"});
+      response.end(JSON.stringify(ingestOverview || {
+        summary: {
+          total: currentLibraryTitles.length,
+          ready: readyCount,
+          failed: currentLibraryTitles.filter((title) => title.ingestStatus === "failed").length,
+          pending: Math.max(0, currentLibraryTitles.length - readyCount)
+        },
+        hardware: {
+          profile: "cpu-webp",
+          state: "ready",
+          encoder: "cwebp/libwebp"
+        },
+        titles: currentLibraryTitles.map((title) => ({
+          id: title.id,
+          title: title.title,
+          libraryTypeSlug: title.libraryTypeSlug,
+          chapterCount: title.chapterCount,
+          ingestStatus: title.ingestStatus || "pending",
+          ingestedChapterCount: title.ingestedChapterCount || 0,
+          ingestError: title.ingestError || ""
+        }))
+      }));
+      return;
+    }
+
+    if (request.url === "/v1/imports" && request.method === "POST") {
+      calls.importLibrary += 1;
+      readRequestBody(request).then(() => {
+        response.writeHead(202, {"Content-Type": "application/json"});
+        response.end(JSON.stringify(importResult || {
+          importedChapters: 1,
+          ingestStatus: "ready",
+          title: {
+            id: "manual-import-title",
+            title: "Manual Import Title",
+            libraryTypeSlug: "manga"
+          }
+        }));
+      }).catch((error) => {
+        response.writeHead(500, {"Content-Type": "application/json"});
+        response.end(JSON.stringify({error: error instanceof Error ? error.message : String(error)}));
+      });
+      return;
+    }
+
+    if (request.url?.startsWith("/v1/ingest/") && request.url.endsWith("/retry") && request.method === "POST") {
+      calls.ingestRetry += 1;
+      const titleId = decodeURIComponent(String(request.url).replace("/v1/ingest/", "").replace("/retry", ""));
+      response.writeHead(202, {"Content-Type": "application/json"});
+      response.end(JSON.stringify({
+        id: titleId,
+        title: "Manual Import Title",
+        ingestStatus: "running"
+      }));
+      return;
+    }
+
+    if (request.url?.startsWith("/v1/downloads/tasks/") && request.url.endsWith("/retry") && request.method === "POST") {
+      calls.downloadRetry += 1;
+      const taskId = decodeURIComponent(String(request.url).replace("/v1/downloads/tasks/", "").replace("/retry", ""));
+      response.writeHead(202, {"Content-Type": "application/json"});
+      response.end(JSON.stringify({
+        taskId,
+        status: "queued"
+      }));
       return;
     }
 
@@ -1280,28 +1394,29 @@ test("sage reader session recovers equivalent numeric chapter ids from the manif
     latestChapter: "2",
     chapterCount: 2,
     chaptersDownloaded: 2,
-    chapters: [{
+    chapters: [readyIngestChapter({
       id: "padded-reader-title-c002",
       label: "Chapter 2",
       chapterNumber: "2",
       pageCount: 9,
       releaseDate: "2026-04-22",
       available: true
-    }, {
+    }), readyIngestChapter({
       id: "padded-reader-title-c001",
       label: "Chapter 1",
       chapterNumber: "1",
       pageCount: 7,
       releaseDate: "2026-04-21",
       available: true
-    }]
+    })]
   };
 
   const dependencyStub = await createDependencyStub({
     libraryTitles: [paddedReaderTitle],
     readerChapterTransientMisses: {
       "padded-reader-title/padded-reader-title-c002": 2
-    }
+    },
+    readerMissingChaptersAsHtml: true
   });
   dependencyStub.server.listen(0);
   const dependencyPort = dependencyStub.server.address().port;
@@ -1353,6 +1468,52 @@ test("sage reader session recovers equivalent numeric chapter ids from the manif
   });
   assert.equal(missingSessionResponse.status, 404);
   assert.match(missingSessionResponse.headers.get("cache-control") || "", /no-store/);
+
+  await closeServer(sageServer);
+  await closeServer(vaultServer);
+  await closeServer(dependencyStub.server);
+});
+
+test("sage keeps reader page responses bounded when Raven drops the image fetch", async () => {
+  const {app: vaultApp} = await createVaultApp();
+  const vaultServer = vaultApp.listen(0);
+  const vaultPort = vaultServer.address().port;
+
+  const dependencyStub = await createDependencyStub({
+    libraryTitles: [ownerSmokeLibraryTitle],
+    readerPageFetchFails: true
+  });
+  dependencyStub.server.listen(0);
+  const dependencyPort = dependencyStub.server.address().port;
+
+  process.env.SCRIPTARR_VAULT_BASE_URL = `http://127.0.0.1:${vaultPort}`;
+  process.env.SCRIPTARR_WARDEN_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_PORTAL_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_ORACLE_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_RAVEN_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_PUBLIC_BASE_URL = "https://pax-kun.com";
+  process.env.SCRIPTARR_DISCORD_CLIENT_ID = "discord-client-id";
+  process.env.SCRIPTARR_DISCORD_CLIENT_SECRET = "discord-client-secret";
+
+  installDiscordFetchStub();
+
+  const {app: sageApp} = await createSageApp();
+  const sageServer = sageApp.listen(0);
+  const sagePort = sageServer.address().port;
+  const baseUrl = `http://127.0.0.1:${sagePort}`;
+  const ownerClaim = await signInViaDiscord(baseUrl);
+
+  const readerPageResponse = await fetch(`${baseUrl}/api/moon-v3/user/reader/title/dan-da-dan/chapter/dandadan-c166/page/1`, {
+    headers: {
+      "Authorization": `Bearer ${ownerClaim.token}`
+    }
+  });
+  assert.equal(readerPageResponse.status, 502);
+  assert.match(readerPageResponse.headers.get("cache-control") || "", /no-store/);
+  assert.deepEqual(await readerPageResponse.json(), {error: "Reader page stream failed."});
+
+  const healthResponse = await fetch(`${baseUrl}/health`);
+  assert.equal(healthResponse.status, 200);
 
   await closeServer(sageServer);
   await closeServer(vaultServer);
@@ -1983,6 +2144,172 @@ test("sage keeps Moon library routes empty when Raven has no imported titles", a
   await closeServer(dependencyStub.server);
 });
 
+test("sage brokers admin import and ingest workflows as separate Raven surfaces", async () => {
+  const {app: vaultApp} = await createVaultApp();
+  const vaultServer = vaultApp.listen(0);
+  const vaultPort = vaultServer.address().port;
+
+  const dependencyStub = await createDependencyStub({
+    libraryTitles: [{
+      ...defaultLibraryTitle,
+      ingestStatus: "ready",
+      ingestedChapterCount: 2
+    }],
+    ingestOverview: {
+      summary: {total: 1, ready: 1, failed: 0, pending: 0},
+      hardware: {profile: "cpu-webp", state: "ready", encoder: "cwebp/libwebp"},
+      titles: [{
+        id: "dan-da-dan",
+        title: "Dandadan",
+        libraryTypeSlug: "webtoon",
+        ingestStatus: "ready",
+        ingestedChapterCount: 2,
+        chapterCount: 166
+      }]
+    }
+  });
+  dependencyStub.server.listen(0);
+  const dependencyPort = dependencyStub.server.address().port;
+
+  process.env.SCRIPTARR_VAULT_BASE_URL = `http://127.0.0.1:${vaultPort}`;
+  process.env.SCRIPTARR_WARDEN_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_PORTAL_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_ORACLE_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_RAVEN_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_PUBLIC_BASE_URL = "https://pax-kun.com";
+  process.env.SCRIPTARR_DISCORD_CLIENT_ID = "discord-client-id";
+  process.env.SCRIPTARR_DISCORD_CLIENT_SECRET = "discord-client-secret";
+
+  installDiscordFetchStub();
+
+  const {app: sageApp} = await createSageApp();
+  const sageServer = sageApp.listen(0);
+  const sagePort = sageServer.address().port;
+  const baseUrl = `http://127.0.0.1:${sagePort}`;
+  const ownerClaim = await signInViaDiscord(baseUrl);
+  const headers = {
+    "Authorization": `Bearer ${ownerClaim.token}`,
+    "Content-Type": "application/json"
+  };
+
+  const importPage = await fetch(`${baseUrl}/api/moon-v3/admin/import`, {headers}).then((response) => response.json());
+  assert.equal(importPage.summary.stagingRoot, "/downloads/import-staging");
+  assert.equal(importPage.summary.canonicalRoot, "/downloads/downloaded");
+  assert.equal(importPage.summary.ingestedRoot, "/downloads/ingested");
+  assert.equal(importPage.titles[0].ingestStatus, "ready");
+
+  const importResponse = await fetch(`${baseUrl}/api/moon-v3/admin/import`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      titleName: "Manual Import Title",
+      libraryType: "Manga",
+      chapters: [{sourcePath: "/downloads/import-staging/manual/title-c1.cbz", chapterNumber: "1"}]
+    })
+  });
+  const importResult = await importResponse.json();
+  assert.equal(importResponse.status, 202);
+  assert.equal(importResult.importedChapters, 1);
+  assert.equal(dependencyStub.calls.importLibrary, 1);
+
+  const ingestPage = await fetch(`${baseUrl}/api/moon-v3/admin/ingest`, {headers}).then((response) => response.json());
+  assert.equal(ingestPage.hardware.state, "ready");
+  assert.equal(ingestPage.summary.ready, 1);
+
+  const retryResponse = await fetch(`${baseUrl}/api/moon-v3/admin/ingest/dan-da-dan/retry`, {
+    method: "POST",
+    headers
+  });
+  const retryResult = await retryResponse.json();
+  assert.equal(retryResponse.status, 202);
+  assert.equal(retryResult.ingestStatus, "running");
+  assert.equal(dependencyStub.calls.ingestRetry, 1);
+  assert.equal(dependencyStub.calls.ingestOverview >= 2, true);
+
+  await closeServer(sageServer);
+  await closeServer(vaultServer);
+  await closeServer(dependencyStub.server);
+});
+
+test("sage routes queue retries for ingest tasks without using download removal", async () => {
+  const {app: vaultApp} = await createVaultApp();
+  const vaultServer = vaultApp.listen(0);
+  const vaultPort = vaultServer.address().port;
+
+  const dependencyStub = await createDependencyStub({
+    downloadTasks: [{
+      taskId: "download-failed",
+      titleId: "download-title",
+      titleName: "Download Title",
+      providerId: "weebcentral",
+      requestType: "manga",
+      status: "failed",
+      updatedAt: "2026-04-25T00:00:00.000Z"
+    }],
+    ingestTasks: [{
+      taskId: "raven-ingest-manual-title",
+      titleId: "manual-title",
+      titleName: "Manual Title",
+      providerId: "raven-ingest",
+      requestType: "manga",
+      status: "failed",
+      details: {
+        kind: "library-ingest",
+        recoveryAction: "retry-ingest"
+      },
+      updatedAt: "2026-04-25T00:00:00.000Z"
+    }]
+  });
+  dependencyStub.server.listen(0);
+  const dependencyPort = dependencyStub.server.address().port;
+
+  process.env.SCRIPTARR_VAULT_BASE_URL = `http://127.0.0.1:${vaultPort}`;
+  process.env.SCRIPTARR_WARDEN_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_PORTAL_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_ORACLE_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_RAVEN_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_PUBLIC_BASE_URL = "https://pax-kun.com";
+  process.env.SCRIPTARR_DISCORD_CLIENT_ID = "discord-client-id";
+  process.env.SCRIPTARR_DISCORD_CLIENT_SECRET = "discord-client-secret";
+
+  installDiscordFetchStub();
+
+  const {app: sageApp} = await createSageApp();
+  const sageServer = sageApp.listen(0);
+  const sagePort = sageServer.address().port;
+  const baseUrl = `http://127.0.0.1:${sagePort}`;
+  const ownerClaim = await signInViaDiscord(baseUrl);
+  const headers = {
+    "Authorization": `Bearer ${ownerClaim.token}`,
+    "Content-Type": "application/json"
+  };
+
+  const ingestRetry = await fetch(`${baseUrl}/api/moon-v3/admin/activity/queue/raven-ingest-manual-title/retry`, {
+    method: "POST",
+    headers
+  }).then((response) => response.json());
+  assert.equal(ingestRetry.id, "manual-title");
+  assert.equal(dependencyStub.calls.ingestRetry, 1);
+  assert.equal(dependencyStub.calls.downloadRetry, 0);
+
+  const downloadRetry = await fetch(`${baseUrl}/api/moon-v3/admin/activity/queue/download-failed/retry`, {
+    method: "POST",
+    headers
+  }).then((response) => response.json());
+  assert.equal(downloadRetry.taskId, "download-failed");
+  assert.equal(dependencyStub.calls.downloadRetry, 1);
+
+  const ingestRemove = await fetch(`${baseUrl}/api/moon-v3/admin/activity/queue/raven-ingest-manual-title/remove`, {
+    method: "POST",
+    headers
+  });
+  assert.equal(ingestRemove.status, 409);
+
+  await closeServer(sageServer);
+  await closeServer(vaultServer);
+  await closeServer(dependencyStub.server);
+});
+
 test("sage exposes wanted metadata and missing chapter workflows", async () => {
   const {app: vaultApp} = await createVaultApp();
   const vaultServer = vaultApp.listen(0);
@@ -2559,15 +2886,54 @@ test("sage round-trips Moon branding and exposes typed Moon reader payloads", as
   }).then((response) => response.json());
   assert.deepEqual(slowTelemetry, {ok: true, recorded: true, eventType: "reader-performance-slow"});
 
+  const slowChunkTelemetry = await fetch(`${baseUrl}/api/moon-v3/user/reader/telemetry`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      type: "page-chunk-fetch",
+      titleId: "dan-da-dan",
+      chapterId: "dandadan-c166",
+      pageIndex: 2,
+      durationMs: 1200,
+      rawPath: "/api/moon-v3/user/reader/title/dan-da-dan/chapter/dandadan-c166/pages?token=secret"
+    })
+  }).then((response) => response.json());
+  assert.deepEqual(slowChunkTelemetry, {ok: true, recorded: true, eventType: "reader-performance-slow"});
+
+  const retryTelemetry = await fetch(`${baseUrl}/api/moon-v3/user/reader/telemetry`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      type: "image-auto-retry",
+      titleId: "dan-da-dan",
+      chapterId: "dandadan-c166",
+      pageIndex: 2,
+      retryCount: 3,
+      reason: "load_error",
+      src: "https://reader.invalid/secret-page.jpg"
+    })
+  }).then((response) => response.json());
+  assert.deepEqual(retryTelemetry, {ok: true, recorded: true, eventType: "reader-performance-slow"});
+
   const readerEvents = await fetch(`${baseUrl}/api/moon-v3/admin/events?domain=reader&eventType=reader-performance-slow`, {
     headers
   }).then((response) => response.json());
-  const telemetryEvent = readerEvents.events.find((event) => event.eventType === "reader-performance-slow");
+  const telemetryEvent = readerEvents.events.find((event) => event.metadata?.type === "caught-buffer");
   assert.equal(telemetryEvent.targetId, "dan-da-dan:dandadan-c166");
   assert.equal(telemetryEvent.metadata.type, "caught-buffer");
   assert.equal(telemetryEvent.metadata.reason, "seek_metadata_missing");
   assert.equal(Object.hasOwn(telemetryEvent.metadata, "src"), false);
   assert.equal(Object.hasOwn(telemetryEvent.metadata, "rawPath"), false);
+
+  const readerTelemetryReport = await fetch(`${baseUrl}/api/moon-v3/admin/system/reader-telemetry?hours=168`, {
+    headers
+  }).then((response) => response.json());
+  assert.equal(readerTelemetryReport.summary.caughtBufferWaits, 1);
+  assert.equal(readerTelemetryReport.summary.slowEvents >= 1, true);
+  assert.equal(readerTelemetryReport.summary.retryAttempts >= 3, true);
+  assert.equal(readerTelemetryReport.retries.spikes.some((entry) => entry.targetId === "dan-da-dan:dandadan-c166"), true);
+  assert.equal(JSON.stringify(readerTelemetryReport).includes("reader.invalid"), false);
+  assert.equal(JSON.stringify(readerTelemetryReport).includes("token=secret"), false);
 
   const savedReaderPreferences = await fetch(`${baseUrl}/api/moon-v3/user/reader/preferences`, {
     method: "PUT",
@@ -5145,7 +5511,7 @@ test("sage brokers oversized Raven title payloads without tripping internal JSON
     coverUrl: "https://cdn.example.com/oversized.jpg",
     workingRoot: "/downloads/downloading/manhwa/Oversized_Title",
     downloadRoot: "/downloads/downloaded/manhwa/Oversized_Title",
-    chapters: Array.from({length: 411}, (_value, index) => ({
+    chapters: Array.from({length: 411}, (_value, index) => readyIngestChapter({
       id: `title-large-c${index + 1}`,
       label: `Chapter ${index + 1}`,
       chapterNumber: String(index + 1),

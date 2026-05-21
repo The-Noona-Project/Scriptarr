@@ -32,7 +32,7 @@ export const AdminActionBanner = ({children, tone = ""}) => (
 
 /**
  * @param {{
- *   columns: Array<{key: string, label: string, className?: string, render?: (row: any) => import("react").ReactNode}>,
+ *   columns: Array<{key: string, label: string, className?: string, render?: (row: any, index: number) => import("react").ReactNode}>,
  *   rows: any[],
  *   empty?: import("react").ReactNode,
  *   getKey?: (row: any, index: number) => string,
@@ -74,7 +74,7 @@ export const AdminDenseTable = ({
               >
                 {columns.map((column) => (
                   <td className={column.className || ""} key={column.key}>
-                    {column.render ? column.render(row) : row[column.key]}
+                    {column.render ? column.render(row, index) : row[column.key]}
                   </td>
                 ))}
               </tr>

@@ -11,7 +11,7 @@ const createMessage = ({
   author = {id: "user-1", username: "CaptainPax", bot: false},
   roleIds = ["role-chat"]
 } = {}) => {
-  const calls = {reply: [], send: [], typing: 0};
+  const calls = {reply: [], send: [], edit: [], typing: 0};
   return {
     id: "message-1",
     guildId,
@@ -40,7 +40,16 @@ const createMessage = ({
     },
     reply: async (payload) => {
       calls.reply.push(payload);
-      return payload;
+      const editable = {
+        id: `reply-${calls.reply.length}`,
+        ...payload,
+        edit: async (nextPayload) => {
+          calls.edit.push(nextPayload);
+          Object.assign(editable, nextPayload);
+          return editable;
+        }
+      };
+      return editable;
     },
     __calls: calls
   };
@@ -66,8 +75,7 @@ const createHandler = ({settings = {}, sage = {}, events = []} = {}) => {
     getBotUserId: () => "bot-1",
     sage,
     roleManager: createRoleManager({getSettings: () => mergedSettings}),
-    onRuntimeEvent: (event) => events.push(event),
-    rateLimitMs: 6000
+    onRuntimeEvent: (event) => events.push(event)
   });
 };
 
@@ -92,7 +100,7 @@ test("Noona mention handler ignores wrong guilds, bots, empty prompts, and unmen
   assert.equal(calls.chat, 0);
 });
 
-test("Noona mention handler replies publicly, sends typing, and preserves trivia by handling only mentioned chat", async () => {
+test("Noona mention handler sends Thinking, edits the public reply, and preserves trivia by handling only mentioned chat", async () => {
   const payloads = [];
   const events = [];
   const handler = createHandler({
@@ -110,8 +118,9 @@ test("Noona mention handler replies publicly, sends typing, and preserves trivia
   assert.equal(message.__calls.typing, 1);
   assert.equal(payloads[0].message, "are you alive?");
   assert.equal(payloads[0].memoryEnabled, true);
-  assert.equal(message.__calls.reply[0].content, "LONG LIVE NOONA.");
-  assert.deepEqual(message.__calls.reply[0].allowedMentions, {repliedUser: false, parse: []});
+  assert.equal(message.__calls.reply[0].content, "<@user-1> Thinking...");
+  assert.equal(message.__calls.edit[0].content, "<@user-1> LONG LIVE NOONA.");
+  assert.deepEqual(message.__calls.edit[0].allowedMentions, {users: ["user-1"], repliedUser: false, parse: []});
   assert.equal(events[0].type, "noona-chat-handled");
 });
 
@@ -126,10 +135,10 @@ test("Noona mention handler applies the chat role gate before calling Sage", asy
   const message = createMessage({roleIds: []});
 
   assert.equal(await handler(message), true);
-  assert.match(message.__calls.reply[0].content, /permission/i);
+  assert.match(message.__calls.reply[0].content, /<@user-1> .*permission/i);
 });
 
-test("Noona mention handler rate-limits per user and splits long public replies", async () => {
+test("Noona mention handler edits the first long chunk and sends overflow chunks", async () => {
   const longReply = "Noona ".repeat(420);
   const handler = createHandler({
     sage: {
@@ -139,14 +148,45 @@ test("Noona mention handler rate-limits per user and splits long public replies"
     }
   });
   const first = createMessage();
-  const second = createMessage({content: "<@bot-1> again"});
 
   assert.equal(await handler(first), true);
   assert.equal(first.__calls.reply.length, 1);
   assert.equal(first.__calls.send.length > 0, true);
-  assert.equal(first.__calls.reply[0].content.length <= 1800, true);
+  assert.equal(first.__calls.reply[0].content, "<@user-1> Thinking...");
+  assert.equal(first.__calls.edit[0].content.length <= 1800, true);
+  assert.match(first.__calls.edit[0].content, /^<@user-1> Noona/);
   assert.equal(first.__calls.send.every((entry) => entry.content.length <= 1800), true);
+});
 
-  assert.equal(await handler(second), true);
-  assert.match(second.__calls.reply[0].content, /catching up/i);
+test("Noona mention handler queues concurrent requests per bot", async () => {
+  let releaseFirst;
+  const handler = createHandler({
+    sage: {
+      async noonaChat(payload) {
+        if (payload.message === "are you alive?") {
+          await new Promise((resolve) => {
+            releaseFirst = resolve;
+          });
+          return {ok: true, payload: {reply: "first done"}};
+        }
+        return {ok: true, payload: {reply: "second done"}};
+      }
+    }
+  });
+  const first = createMessage();
+  const second = createMessage({content: "<@bot-1> again"});
+
+  const firstRun = handler(first);
+  await new Promise((resolve) => setImmediate(resolve));
+  const secondRun = handler(second);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(first.__calls.reply[0].content, "<@user-1> Thinking...");
+  assert.equal(second.__calls.reply[0].content, "<@user-1> Working on 1 request ahead of you. Please wait.");
+
+  releaseFirst();
+  await Promise.all([firstRun, secondRun]);
+  assert.equal(first.__calls.edit[0].content, "<@user-1> first done");
+  assert.equal(second.__calls.edit[0].content, "<@user-1> Thinking...");
+  assert.equal(second.__calls.edit[1].content, "<@user-1> second done");
 });

@@ -97,6 +97,21 @@ const fetchJsonWithTimeout = async (url, timeoutMs = 1200) => {
   return response.json();
 };
 
+const parseServicePayload = (text, response) => {
+  if (!text) {
+    return null;
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    return {
+      error: response.ok
+        ? "Service returned a non-JSON response."
+        : `Service request failed with HTTP ${response.status}.`
+    };
+  }
+};
+
 const loadWardenStatus = async (baseUrl) => {
   const [health, bootstrap, runtime] = await Promise.all([
     safeJson(fetchJsonWithTimeout(`${baseUrl}/health`)),
@@ -126,7 +141,7 @@ const serviceJson = async (baseUrl, servicePath, options = {}) => {
     signal: timeoutMs > 0 ? AbortSignal.timeout(timeoutMs) : undefined
   });
   const text = await response.text();
-  const payload = text ? JSON.parse(text) : null;
+  const payload = parseServicePayload(text, response);
   return {
     ok: response.ok,
     status: response.status,

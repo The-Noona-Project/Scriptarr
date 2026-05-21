@@ -55,6 +55,11 @@
 - `/api/moon-v3/admin/activity/queue` now feeds Moon's live queue board. Keep that payload grouped into `running`,
   `queued`, and `needsAttention` sections, and keep the cancel, retry, remove, priority, and move routes as Moon-safe
   wrappers around Raven task-control operations.
+- Sage owns the Moon-safe split between manual import and WebP ingest: `/api/moon-v3/admin/import` forwards CBZ import
+  payloads to Raven `/v1/imports`, while `/api/moon-v3/admin/ingest` reads the ingest backlog and retries
+  `/v1/ingest/:titleId/retry`.
+- Queue retry code must treat `raven-ingest` tasks as ingest retries from the existing CBZ. Do not send those through
+  normal download retry or delete canonical CBZ files from queue cleanup.
 - Keep section bulk queue actions brokered here too: cancel all queued work for `activity.write`, cancel all running
   work for `activity.root`, and remove all removable recovery items without touching promoted library content.
 - Keep `needsAttention` limited to retriable or stale Raven title-task recovery work, not generic admin events. The
@@ -180,8 +185,8 @@
   or returns degraded/disabled fallback copy, and use stable `update:<latestSha>` ids that are acknowledged only after
   Portal confirms the Discord channel send.
 - Keep the GitHub update digest guard strict while tuning tone. A summary with disabled/degraded/fallback text, raw
-  commit rows, SHAs, timestamps, compare URLs, character-count notes, or support-bot closers should stay pending and
-  retry later instead of reaching Portal.
+  commit rows, SHAs, timestamps, compare URLs, character-count notes, generic how-to steps, sign-off memes, or
+  support-bot closers should stay pending and retry later instead of reaching Portal.
 - Sage should expose acked downloadall notification queues for Portal from Raven durable run jobs. Use stable
   `downloadall:<runId>:<batchId>:<status>` ids and only mark them acknowledged after Portal confirms the requester DM.
 - Sage also owns downloadall reaction decision prompts. Store the paused-notification DM message id, owner id, run id,

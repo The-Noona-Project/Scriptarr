@@ -250,6 +250,8 @@ chat even if an admin enabled them on the AI page.
 - review Raven download providers, with WeebCentral first by default and MangaDex available as a second normal source
 - set Raven's active title-download limit from `/admin/settings`; the value defaults to `2`, accepts `1` through `6`,
   applies live when Raven can reload it, and otherwise persists for the next Raven restart
+- import existing CBZ files into a library from `/admin/import`, then track the required WebP ingest pass from
+  `/admin/ingest`
 - manage Moon branding from `/admin/settings`, including site name and a PNG, JPEG, or WebP logo that Scriptarr stores
   as WebP variants for user/admin chrome and install metadata
 - review database size and table counts from `/admin/settings`, then open the grant-protected DB explorer at
@@ -258,7 +260,8 @@ chat even if an admin enabled them on the AI page.
 - manage Moon API keys from `/admin/system/api`, including enable state, system keys with permission-group assignment,
   user-key audit, and Swagger/OpenAPI links
 - inspect server-redacted managed-service logs from `/admin/system/logs`
-- search durable audit and runtime events from `/admin/system/events`
+- search durable audit and runtime events from `/admin/system/events`, including the redacted reader telemetry report
+  for caught-buffer waits, slow chunk/image/decode events, retry spikes, and target/page hotspots
 - check or install managed Scriptarr service updates from `/admin/system/updates`; installs require `system.root` and
   the typed confirmation `UPDATE SCRIPTARR`
 - manage allowlisted maintenance schedules from `/admin/system/tasks`; cron expressions are free-form, but the jobs
@@ -313,7 +316,9 @@ and Logout, a dedicated `/profile` page for local StylePanel preferences and ins
 The dedicated reader app is fullscreen, has its own overlays and settings drawer, and supports webtoon, single,
 double, manga double, LTR/RTL, and page-fit controls. Reader performance diagnostics keep detailed timings in the
 browser-local `window.__scriptarrReaderTelemetry` buffer and persist only redacted slow/retry/caught-buffer summaries
-as `reader` events for admin review. Revisioned page images are cached only after successful same-origin loads through
+as `reader` events for admin review. `/admin/system/events` aggregates those summaries into caught-buffer, slow
+load/decode, and retry hotspot reports without exposing raw image URLs or filesystem paths. Revisioned page images are
+cached only after successful same-origin loads through
 Moon in a bounded derived cache, failed page-image responses remain `no-store`, and redacted page probes distinguish
 stream failures from missing or corrupt archive entries without exposing filesystem paths or raw image URLs. `/profile` is now a tabbed account
 hub with `Overview`, `Stats`, and `Preferences` instead of one long mixed settings panel. Library type links now live
@@ -341,6 +346,7 @@ Common admin routes:
 - `/admin/library/<type>/<titleId>`
 - `/admin/add`
 - `/admin/import`
+- `/admin/ingest`
 - `/admin/calendar`
 - `/admin/mediamanagement`
 - `/admin/activity/*`
@@ -358,6 +364,12 @@ at a time with its cover, backdrop, lifecycle status, source and metadata identi
 tasks, and per-chapter release or archive details.
 That title page now also exposes repair candidates with concrete provider URLs, chapter-coverage previews, warning
 chips, and a safe replacement queue action that stages the replacement download before it swaps the live files.
+`/admin/import` is reserved for manual library intake. Admins point Raven at CBZ files that are already visible under
+the Raven downloads mount, confirm title and chapter metadata, and Raven copies the accepted archives into the canonical
+`downloaded/<type>/<title-folder>` library tree before queueing ingest.
+`/admin/ingest` is the WebP backlog and recovery surface. It shows Raven's per-title ingest status, hardware state,
+completion counts, and retry controls. Failed ingest keeps the CBZ in place and appears as retryable work instead of
+making the title readable.
 `/admin/users` is now the access-control workspace: a dense user directory, reusable permission-group editor, group
 assignment panel, and recent auth or access events in one page. Staff access is no longer a flat role toggle. Moon now
 evaluates unioned permission groups with route-family `read`, `write`, or `root` grants, while the bootstrap owner
@@ -420,7 +432,8 @@ Moon admin now owns the Discord workflow settings that Portal uses at runtime:
 - DM superuser id for the private `downloadall` command
 - onboarding channel id and message template
 - release and update channel ids. Release posts announce completed Raven downloads; update posts announce AI-written
-  GitHub commit summaries from `The-Noona-Project/Scriptarr`.
+  GitHub update summaries from `The-Noona-Project/Scriptarr` with raw commit details kept behind the compare/admin
+  links.
 - Noona public mention-chat enable state, allowed channels, memory toggle, conservative proposal mode, and memory clear
   actions
 - Appa admin bot enable state, admin mention channels, review toggle, correction mode, review audit, and Appa command
@@ -444,8 +457,10 @@ Noona mention chat is public by design in this version. With it enabled, users c
 allowed guild channel, for example `@Noona Ai are you alive?`, and Portal replies to that message after sending the
 request through Sage. Portal ignores bots, wrong guilds, empty mentions, channels outside the allowlist, and unmentioned
 chatter. It also reuses the `/chat` command gate, so setting a required role on `/chat` applies to natural mentions
-too. Leave the allowed-channel list blank to allow every channel in the configured guild, or restrict it to known safe
-channel ids for a quieter rollout.
+too. Portal now replies immediately with a requester-mentioned `Thinking...` placeholder, edits that same message with
+the final answer, and reports how many request(s) are ahead when Noona or Appa is already answering another AI request.
+Only the requester mention is allowed in AI replies. Leave the allowed-channel list blank to allow every channel in the
+configured guild, or restrict it to known safe channel ids for a quieter rollout.
 
 Discord's Message Content intent must be enabled in the Discord developer portal for mention chat, trivia guesses, and
 legacy DM text fallback handling. Scriptarr requests the intent in code, but Discord will not deliver message content
@@ -460,7 +475,8 @@ The split Discord command set is:
 When Appa is disabled or unavailable, Noona registers the legacy single-bot command set, including `/ding`, `/status`,
 `/chat`, `/search`, `/request`, `/subscribe`, `/trivia`, and owner-only DM `/downloadall`. Split mode does not
 register `/chat`; natural Noona mention chat remains the public chat surface and still reuses the saved `/chat` role
-gate.
+gate. In fallback mode, legacy `/chat` shares Noona's AI queue and edits its ephemeral placeholder once the response is
+ready.
 
 Blank role ids mean any member in the configured guild can use that slash command. `downloadall` ignores guild roles,
 is only supported in bot DMs, and only checks the configured DM superuser id.
@@ -526,7 +542,9 @@ users when the title is ready. Portal also DMs requesters when an unavailable re
 back into admin review, and DMs them again if that unavailable request expires after 90 days.
 Portal now prefers a minimal Discord runtime when privileged intents are unavailable. Slash commands and DM handling
 can stay online while onboarding is marked degraded, and `/admin/discord` will show the last meaningful runtime or
-command-sync error instead of only a generic disconnected state.
+command-sync error instead of only a generic disconnected state. Appa diagnostics distinguish settings fetch failures,
+the admin toggle being disabled, missing Appa env, login failures, intent failures, command-sync failures, and recent
+mention-gate rejections; refreshing settings can retry the split runtime after brokered settings become available.
 That runtime view now also surfaces the requested intents or partials, the most recent DM receive timestamp, the last
 handled `downloadall`, the last `downloadall` error, Noona mention-chat status, Appa mention/review/correction status,
 and recent redacted Appa review audit events so owner-only DM and public chat failures are easier to trace.
@@ -572,10 +590,11 @@ Warden's own container mounts are:
 - `warden/logs -> /var/log/scriptarr`
 - `warden/runtime -> /var/lib/scriptarr`
 
-Raven's download tree now uses a two-stage layout under `raven/downloads/`:
+Raven's download tree now keeps CBZ archives canonical and WebP reader pages derived under `raven/downloads/`:
 
 - `downloading/<type-slug>/<title-folder>/...` for active or incomplete work
-- `downloaded/<type-slug>/<title-folder>/...` for completed promoted library content
+- `downloaded/<type-slug>/<title-folder>/...` for completed promoted CBZ library content
+- `ingested/<type-slug>/<titleId>/<chapterId>/...` for reader-ready WebP page folders and `manifest.json`
 
 Raven also supports internal chapter and page naming templates through the brokered `raven.naming` setting. This pass
 keeps title-folder naming unchanged so rescans remain compatible with the current library model.
@@ -584,6 +603,8 @@ for manga, manhwa, manhua, webtoon, comic, and OEL downloads. The saved formats 
 archive rescans so Moon, Raven, and the on-disk layout stay aligned.
 Request records now persist the original search query, selected metadata snapshot, selected download snapshot, and any
 linked Raven job or task ids so Moon admin can moderate or retry the exact saved target later.
+Reader availability is WebP-first. Normal downloads and manual CBZ imports must finish Raven ingest before the chapter
+is readable; failed ingest keeps the CBZ for retry and only removes staged or derived ingest files during cleanup.
 Vault now also stores a durable request work key derived from the concrete download target when one exists, or from the
 metadata identity when no download match exists yet, and active duplicate work keys are rejected.
 Vault now also stores reusable permission groups, user-group assignments, and immutable durable events. Deleting a user

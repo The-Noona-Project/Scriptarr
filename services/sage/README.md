@@ -108,6 +108,10 @@ can pass that revision back as `expectedRevision`. Vault rejects stale actions w
 Sage forwards as a clean 409 so Moon can refresh before the moderator retries.
 `/api/moon-v3/admin/calendar` now returns chapter release entries plus completed-title markers, preserving undated
 completed counts so Moon can surface finished catalog titles that do not have reliable chapter dates.
+Sage also brokers the separated Raven library import and ingest surfaces. `/api/moon-v3/admin/import` is for manual CBZ
+intake and forwards accepted import payloads to Raven `/v1/imports`; `/api/moon-v3/admin/ingest` reports the WebP
+backlog and retries Raven `/v1/ingest/:titleId/retry`. Queue recovery routes detect `raven-ingest` tasks and retry
+ingest from the existing CBZ instead of rerouting through download retry.
 
 Sage also brokers the Next admin System pages. `/admin/system/logs` reads Warden's allowlisted redacted Docker log
 tail through Sage, `/admin/system/events` forwards richer durable-event filters into Vault, and
@@ -123,7 +127,9 @@ install, start, and remove controls.
 
 Sage also accepts redacted reader-performance telemetry from Moon at
 `/api/moon-v3/user/reader/telemetry`. It records only slow, retry, or caught-buffer summaries as durable `reader`
-events and drops fast local-only metrics so Vault does not become a raw browser telemetry store.
+events and drops fast local-only metrics so Vault does not become a raw browser telemetry store. Admins can inspect the
+aggregated, URL-safe report at `/api/moon-v3/admin/system/reader-telemetry`, which groups caught-buffer waits, slow
+chunk/image/decode events, and retry spikes by redacted target/page.
 
 Moon's legacy and v3 library routes should mirror Raven's real-or-empty library state. Sage no longer seeds preview
 titles on behalf of Moon.
@@ -140,6 +146,6 @@ an object with `ackedIds`, `silenceBefore`, `lastDigestAt`, and `updatedAt`, whi
 normalize correctly. The scheduled or manual update-check task also asks GitHub for new
 `The-Noona-Project/Scriptarr` commits since the last posted update, asks Oracle for an AI-written Noona summary, and
 exposes a stable `update:<latestSha>` channel notification when an update channel is configured. If Oracle cannot
-summarize the commits or returns degraded/disabled fallback copy, Sage stores the pending range for retry instead of
-posting a fallback. Portal acknowledges release and update notifications through Sage only after Discord accepts the
-channel message.
+summarize the commits or returns degraded/disabled fallback copy, raw commit rows, invented how-to steps, or generic
+support-bot closers, Sage stores the pending range for retry instead of posting a fallback. Portal acknowledges release
+and update notifications through Sage only after Discord accepts the channel message.

@@ -286,6 +286,16 @@ public class DownloaderService {
 
             for (Map<String, Object> task : restoredTasks) {
                 String taskId = String.valueOf(task.get("taskId"));
+                if (isIngestTask(task)) {
+                    if ("queued".equals(task.get("status")) || "running".equals(task.get("status"))) {
+                        task.put("status", "failed");
+                        task.put("message", "Raven restarted during ingest. Retry WebP ingest from the admin queue.");
+                        task.put("percent", Math.max(0, Math.min(99, toInt(task.get("percent")))));
+                    }
+                    tasks.put(taskId, task);
+                    persistTask(taskId);
+                    continue;
+                }
                 tasks.put(taskId, task);
                 persistTask(taskId);
 
@@ -323,6 +333,13 @@ public class DownloaderService {
         String message = normalizeString(task.get("message")).toLowerCase(Locale.ROOT);
         return "failed".equals(normalizeString(task.get("status")).toLowerCase(Locale.ROOT))
             && (message.contains("persist raven title") || message.contains("persist raven chapters"));
+    }
+
+    private boolean isIngestTask(Map<String, Object> task) {
+        Map<String, Object> details = normalizeMap(task.get("details"));
+        return "raven-ingest".equals(normalizeString(task.get("providerId")))
+            || "library-ingest".equals(normalizeString(details.get("kind")))
+            || "retry-ingest".equals(normalizeString(details.get("recoveryAction")));
     }
 
     private boolean sleepBeforeRestoreRetry() {
@@ -1081,6 +1098,9 @@ public class DownloaderService {
                 throw new IllegalStateException("Raven could not persist the downloaded title into the library catalog.");
             }
             title = persistSelectedMetadata(title, request);
+            throwIfCancelled(taskId);
+            update(taskId, "running", "Converting downloaded CBZ files into reader-ready WebP pages.", 98);
+            title = libraryService.ingestTitle(title.id(), request.requestedBy());
             if (title != null) {
                 Map<String, Object> task = tasks.get(taskId);
                 if (task != null) {

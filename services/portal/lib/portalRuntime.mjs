@@ -3,6 +3,7 @@ import {resolveDiscordBotIdentity} from "./discord/botIdentity.mjs";
 import {buildCommandInventory, filterCommandMap} from "./discord/commandCatalog.mjs";
 import {createPortalCommands} from "./discord/commands/index.mjs";
 import {createAppaMentionHandler} from "./discord/appaMentionChat.mjs";
+import {createAiResponseQueue} from "./discord/aiResponseQueue.mjs";
 import {createDirectMessageHandler} from "./discord/directMessageRouter.mjs";
 import {normalizeBrandName} from "./discord/branding.mjs";
 import {createNoonaMentionHandler} from "./discord/noonaMentionChat.mjs";
@@ -51,6 +52,31 @@ const collectErrorText = (error) => {
 
 const isGuildMemberIntentFailure = (error) => /4014|disallowed intent|privileged intent|guild[_ ]members|server members/i.test(collectErrorText(error).toLowerCase());
 
+const classifyDiscordStartupFailure = (value) => {
+  const text = normalizeString(value).toLowerCase();
+  if (/command registration|command sync|slash command|application command/i.test(text)) {
+    return "command-sync-failed";
+  }
+  if (/4014|disallowed intent|privileged intent|message content|guild messages|direct messages/i.test(text)) {
+    return "intent-failure";
+  }
+  if (/token|unauthorized|invalid|401|login/i.test(text)) {
+    return "login-failure";
+  }
+  return text ? "startup-failure" : "";
+};
+
+const describeSettledFailure = (settled, label) => {
+  if (settled.status === "rejected") {
+    return `${label}: ${describeError(settled.reason)}`;
+  }
+  if (settled.value?.ok === false) {
+    const payload = settled.value.payload || {};
+    return `${label}: ${normalizeString(payload.error || payload.message, `HTTP ${settled.value.status || "error"}`)}`;
+  }
+  return "";
+};
+
 const resolveConnectionState = (state) => {
   if (state.connected) {
     return "connected";
@@ -71,9 +97,11 @@ const createCapabilities = (state, settings) => {
   const triviaConfigured = Boolean(settings.trivia?.enabled && settings.trivia?.channelId);
   const noonaChatConfigured = Boolean(settings.noonaChat?.enabled);
   const updatePostsConfigured = Boolean(settings.notifications?.updateChannelId);
-  const appaConfigured = Boolean(settings.appa?.enabled);
+  const appaDegradedReason = normalizeString(state.appa?.degradedReason);
+  const appaConfigured = Boolean(settings.appa?.enabled) || Boolean(appaDegradedReason && appaDegradedReason !== "disabled-in-settings");
   const appaConnected = Boolean(state.appa?.connected);
   const appaAuthConfigured = Boolean(state.appa?.authConfigured);
+  const appaSyncError = normalizeString(state.appa?.syncError);
 
   const commandSync = !authConfigured
     ? {
@@ -195,19 +223,29 @@ const createCapabilities = (state, settings) => {
         status: "disabled",
         detail: "Appa admin bot is disabled, so Noona keeps the admin command fallback."
       }
-      : !appaAuthConfigured
+      : appaDegradedReason === "settings-unavailable"
+        ? {
+          status: "degraded",
+          detail: state.appa?.detail || "Portal could not fetch brokered Discord settings."
+        }
+        : !appaAuthConfigured
         ? {
           status: "missing",
           detail: "Configure the Appa Discord token and client id before enabling the split admin bot."
         }
-        : appaConnected
+        : appaSyncError || appaDegradedReason === "command-sync-failed"
+          ? {
+            status: "degraded",
+            detail: appaSyncError || state.appa?.detail || "Appa command sync failed."
+          }
+          : appaConnected
           ? {
             status: "available",
             detail: "Appa is connected for admin slash commands, admin mentions, downloadall DMs, and Noona review corrections."
           }
           : {
             status: state.appa?.mode === "starting" ? "pending" : "degraded",
-            detail: state.appa?.error || "Appa is not connected to Discord."
+            detail: state.appa?.detail || state.appa?.error || "Appa is not connected to Discord."
           },
     updatePosts: !updatePostsConfigured
       ? {
@@ -237,6 +275,8 @@ export const createPortalRuntime = ({
   let appaDiscord = null;
   let followNotifier = null;
   let triviaRuntime = null;
+  const noonaAiQueue = createAiResponseQueue();
+  const appaAiQueue = createAiResponseQueue();
   const legacyBotIdentity = resolveDiscordBotIdentity(config.discordBotPersona);
   const noonaBotIdentity = resolveDiscordBotIdentity("noona");
   const appaBotIdentity = resolveDiscordBotIdentity("appa");
@@ -244,11 +284,18 @@ export const createPortalRuntime = ({
     mode: config.discordToken && config.discordClientId ? "idle" : "disabled",
     connected: false,
     authConfigured: Boolean(config.discordToken && config.discordClientId),
+    settingsLoaded: false,
+    settingsError: null,
     splitEnabled: false,
     appa: {
       mode: config.appaDiscordToken && config.appaDiscordClientId ? "idle" : "disabled",
       connected: false,
       authConfigured: Boolean(config.appaDiscordToken && config.appaDiscordClientId),
+      envConfigured: Boolean(config.appaDiscordToken && config.appaDiscordClientId),
+      tokenConfigured: Boolean(config.appaDiscordToken),
+      clientIdConfigured: Boolean(config.appaDiscordClientId),
+      settingsEnabled: false,
+      degradedReason: null,
       enabled: false,
       registeredGuildId: "",
       registeredCount: 0,
@@ -262,6 +309,10 @@ export const createPortalRuntime = ({
       lastMentionChannelId: null,
       lastMentionUserId: null,
       lastMentionError: null,
+      lastMentionGateRejectedAt: null,
+      lastMentionGateRejectedReason: null,
+      lastMentionGateRejectedChannelId: null,
+      lastMentionGateRejectedUserId: null,
       lastReviewAt: null,
       lastReviewVerdict: null,
       lastReviewSeverity: null,
@@ -308,7 +359,8 @@ export const createPortalRuntime = ({
     onTriviaStart: (payload) => triviaRuntime?.startRoundNow(payload),
     onTriviaStop: (payload) => triviaRuntime?.stopRound(payload),
     onTriviaLeaderboard: (windowName) => triviaRuntime?.postLeaderboard(windowName),
-    triviaSubcommandScope
+    triviaSubcommandScope,
+    aiQueue: noonaAiQueue
   });
   const commands = createCommands("all");
   const noonaCommands = filterCommandMap(createCommands("reader"), NOONA_SPLIT_COMMANDS);
@@ -330,16 +382,59 @@ export const createPortalRuntime = ({
     commands: settings.appa?.commands || {}
   });
 
+  const buildAppaDiagnostics = (sourceState = state) => {
+    const settingsEnabled = settings.appa?.enabled === true;
+    const tokenConfigured = Boolean(config.appaDiscordToken);
+    const clientIdConfigured = Boolean(config.appaDiscordClientId);
+    const envConfigured = tokenConfigured && clientIdConfigured;
+    const splitWanted = settingsEnabled && envConfigured;
+    const startupReason = classifyDiscordStartupFailure(sourceState.appa?.error || "");
+    const syncError = normalizeString(sourceState.appa?.syncError);
+    const degradedReason = syncError
+      ? "command-sync-failed"
+      : sourceState.appa?.connected
+        ? null
+        : !sourceState.settingsLoaded && sourceState.settingsError
+        ? "settings-unavailable"
+        : !settingsEnabled
+          ? "disabled-in-settings"
+          : !envConfigured
+            ? "missing-env"
+            : syncError
+              ? "command-sync-failed"
+              : startupReason || (splitWanted ? "not-started" : null);
+    return {
+      settingsEnabled,
+      envConfigured,
+      tokenConfigured,
+      clientIdConfigured,
+      splitWanted,
+      mentionGateRejectedReason: normalizeString(sourceState.appa?.lastMentionGateRejectedReason),
+      degradedReason,
+      detail: degradedReason === "command-sync-failed"
+        ? syncError || sourceState.appa?.error || "Appa command sync failed."
+        : sourceState.appa?.connected
+          ? "Appa is connected."
+        : degradedReason === "settings-unavailable"
+          ? sourceState.settingsError
+          : degradedReason === "disabled-in-settings"
+            ? "Appa is disabled in the brokered Discord settings."
+            : degradedReason === "missing-env"
+              ? "Appa requires SCRIPTARR_APPA_DISCORD_TOKEN and SCRIPTARR_APPA_DISCORD_CLIENT_ID."
+              : sourceState.appa?.error || ""
+    };
+  };
+
   const handleNoonaReviewCandidate = async (candidate = {}) => {
     if (!isAppaSplitEnabled() || settings.appa?.reviewEnabled === false || settings.appa?.correctionMode === "off" || !appaDiscord) {
       return;
     }
     const {message: _message, ...reviewPayload} = candidate;
-    const result = await sage.reviewNoonaReply?.({
+    const result = await appaAiQueue.run(() => sage.reviewNoonaReply?.({
       ...reviewPayload,
       reviewEnabled: settings.appa.reviewEnabled,
       correctionMode: settings.appa.correctionMode
-    });
+    }));
     const payload = result?.payload || {};
     const decision = payload.decision || {};
     let corrected = false;
@@ -349,7 +444,12 @@ export const createPortalRuntime = ({
         const correctionMessage = await appaDiscord.sendChannelMessage(candidate.channelId, {
           content: normalizeString(payload.correctionText || decision.correctionText),
           allowedMentions: {parse: [], repliedUser: false},
-          ...(candidate.replyMessageId || candidate.messageId ? {messageReference: {messageId: candidate.replyMessageId || candidate.messageId}} : {})
+          ...(candidate.replyMessageId || candidate.messageId ? {
+            reply: {
+              messageReference: candidate.replyMessageId || candidate.messageId,
+              failIfNotExists: false
+            }
+          } : {})
         });
         await sage.recordNoonaReviewDelivery?.({
           guildId: candidate.guildId,
@@ -486,6 +586,20 @@ export const createPortalRuntime = ({
       return;
     }
 
+    if (event.type === "appa-chat-rejected") {
+      state = {
+        ...state,
+        appa: {
+          ...state.appa,
+          lastMentionGateRejectedAt: event.at || new Date().toISOString(),
+          lastMentionGateRejectedReason: normalizeString(event.reason, "mention-gate-rejection"),
+          lastMentionGateRejectedChannelId: normalizeString(event.channelId),
+          lastMentionGateRejectedUserId: normalizeString(event.authorId)
+        }
+      };
+      return;
+    }
+
     if (event.type === "appa-review") {
       state = {
         ...state,
@@ -601,6 +715,7 @@ export const createPortalRuntime = ({
       sage.getDiscordSettings(),
       typeof sage.getBranding === "function" ? sage.getBranding() : Promise.resolve({ok: false, payload: null})
     ]);
+    const settingsError = describeSettledFailure(settingsResponse, "Discord settings");
     if (settingsResponse.status === "fulfilled" && settingsResponse.value.ok) {
       settings = normalizePortalDiscordSettings(settingsResponse.value.payload, config.discordDefaults);
     }
@@ -609,14 +724,40 @@ export const createPortalRuntime = ({
     }
     state = {
       ...state,
-      guildId: settings.guildId
+      guildId: settings.guildId,
+      settingsLoaded: !settingsError,
+      settingsError: settingsError || null,
+      appa: {
+        ...state.appa,
+        enabled: settings.appa?.enabled === true,
+        settingsEnabled: settings.appa?.enabled === true,
+        envConfigured: Boolean(config.appaDiscordToken && config.appaDiscordClientId),
+        tokenConfigured: Boolean(config.appaDiscordToken),
+        clientIdConfigured: Boolean(config.appaDiscordClientId)
+      }
     };
     if (discord && state.connected) {
+      const wantsSplit = isAppaSplitEnabled();
+      const hasSplit = Boolean(state.splitEnabled && appaDiscord && state.appa?.connected);
+      if (wantsSplit !== hasSplit) {
+        logger?.info?.("Portal Discord runtime split state changed; restarting clients.", {
+          wantsSplit,
+          hasSplit
+        });
+        await stop();
+        await start();
+        return settings;
+      }
       try {
         const sync = await discord.registerCommands();
         let appaSync = null;
+        let appaSyncError = "";
         if (appaDiscord && state.appa?.connected) {
-          appaSync = await appaDiscord.registerCommands();
+          try {
+            appaSync = await appaDiscord.registerCommands();
+          } catch (error) {
+            appaSyncError = describeError(error);
+          }
         }
         await triviaRuntime?.refreshSettings?.();
         state = {
@@ -631,6 +772,7 @@ export const createPortalRuntime = ({
           appa: {
             ...state.appa,
             enabled: settings.appa?.enabled === true,
+            settingsEnabled: settings.appa?.enabled === true,
             ...(appaSync ? {
               mode: "ready",
               connected: true,
@@ -639,6 +781,8 @@ export const createPortalRuntime = ({
               registeredGuildCount: appaSync.registeredGuild || 0,
               registeredGuildId: appaSync.guildId || settings.guildId || "",
               syncError: null
+            } : appaSyncError ? {
+              syncError: appaSyncError
             } : {})
           }
         };
@@ -663,7 +807,8 @@ export const createPortalRuntime = ({
       roleManager,
       logger,
       onRuntimeEvent: recordRuntimeEvent,
-      onReviewCandidate: handleNoonaReviewCandidate
+      onReviewCandidate: handleNoonaReviewCandidate,
+      aiQueue: noonaAiQueue
     });
     nextDiscord = await createDiscordClient({
       token: config.discordToken,
@@ -748,7 +893,8 @@ export const createPortalRuntime = ({
       sage,
       roleManager: appaRoleManager,
       logger,
-      onRuntimeEvent: recordRuntimeEvent
+      onRuntimeEvent: recordRuntimeEvent,
+      aiQueue: appaAiQueue
     });
     nextAppa = await createDiscordClient({
       token: config.appaDiscordToken,
@@ -913,6 +1059,7 @@ export const createPortalRuntime = ({
           appa: {
             ...state.appa,
             enabled: settings.appa?.enabled === true,
+            settingsEnabled: settings.appa?.enabled === true,
             mode: appaStartError
               ? "degraded"
               : !splitEnabled
@@ -922,6 +1069,9 @@ export const createPortalRuntime = ({
                 : state.appa.mode,
             connected: Boolean(appaStarted),
             authConfigured: Boolean(config.appaDiscordToken && config.appaDiscordClientId),
+            envConfigured: Boolean(config.appaDiscordToken && config.appaDiscordClientId),
+            tokenConfigured: Boolean(config.appaDiscordToken),
+            clientIdConfigured: Boolean(config.appaDiscordClientId),
             registeredCount: appaStarted?.sync?.registered || 0,
             registeredGlobalCount: appaStarted?.sync?.registeredGlobal || 0,
             registeredGuildCount: appaStarted?.sync?.registeredGuild || 0,
@@ -1126,23 +1276,32 @@ export const createPortalRuntime = ({
     stop,
     refreshSettings,
     getState() {
-      const connectionState = resolveConnectionState(state);
+      const appaDiagnostics = buildAppaDiagnostics(state);
+      const diagnosticState = {
+        ...state,
+        appa: {
+          ...state.appa,
+          ...appaDiagnostics
+        }
+      };
+      const connectionState = resolveConnectionState(diagnosticState);
+      const capabilities = createCapabilities(diagnosticState, settings);
       const commandInventory = buildCommandInventory({
         settings,
-        registeredGuildId: state.registeredGuildId || settings.guildId || "",
-        registeredGlobalCount: state.registeredGlobalCount || 0,
+        registeredGuildId: diagnosticState.registeredGuildId || settings.guildId || "",
+        registeredGlobalCount: diagnosticState.registeredGlobalCount || 0,
         connectionState,
-        commandSyncState: createCapabilities(state, settings).commandSync.status,
-        splitEnabled: state.splitEnabled,
-        registeredAppaGuildId: state.appa?.registeredGuildId || settings.guildId || "",
-        registeredAppaGlobalCount: state.appa?.registeredGlobalCount || 0,
-        appaCommandSyncState: state.appa?.syncError ? "degraded" : state.appa?.connected ? "available" : "pending"
+        commandSyncState: capabilities.commandSync.status,
+        splitEnabled: diagnosticState.splitEnabled,
+        registeredAppaGuildId: diagnosticState.appa?.registeredGuildId || settings.guildId || "",
+        registeredAppaGlobalCount: diagnosticState.appa?.registeredGlobalCount || 0,
+        appaCommandSyncState: diagnosticState.appa?.syncError ? "degraded" : diagnosticState.appa?.connected ? "available" : "pending"
       });
       return {
-        ...state,
+        ...diagnosticState,
         settings,
         connectionState,
-        capabilities: createCapabilities(state, settings),
+        capabilities,
         commands: commandInventory
       };
     },

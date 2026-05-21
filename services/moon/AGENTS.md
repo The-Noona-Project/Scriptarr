@@ -30,6 +30,8 @@ from the same runtime.
   status starts lightweight, admin events share one provider stream, and admin routes should load leaf chunks only after
   auth/grant checks.
 - Preserve Moon's native reader flows. Do not reintroduce Kavita runtime handoff behavior or browser-direct calls.
+- Keep `/admin/import` for manual CBZ library intake and `/admin/ingest` for WebP backlog, hardware state, stats, and
+  retry controls. Those are separate admin workflows even though both end in Raven ingest.
 - Keep user requests and admin add-title on the shared metadata-first intake flow. Moon should submit `query`,
   `selectedMetadata`, and nullable `selectedDownload` instead of regressing to free-text-only request payloads.
 - `/admin/requests` should keep showing the saved metadata or download snapshots, linked Raven job state, and the
@@ -66,7 +68,8 @@ from the same runtime.
 - Reader speed instrumentation exists before policy changes. Keep capturing session latency, page chunk latency, image
   fetch latency, decode latency, preload window depth, retry counts, decoded pages ahead/behind, and how often the user
   reaches an unready target page. Keep full diagnostics in the local reader buffer and persist only redacted slow-event
-  summaries through Moon -> Sage.
+  summaries through Moon -> Sage. Use the System Events reader telemetry report to inspect caught-buffer waits,
+  slow chunk/image/decode events, retry spikes, and redacted target/page hotspots before changing preload behavior.
 - Reader browser QA should use the real app, not only API smoke: webtoon scroll past chunk boundaries, single/double
   page next/previous, manga-double direction, reload/cache refresh, failed image retry, keyboard/touch/controller
   input, and numeric chapter navigation.

@@ -38,6 +38,9 @@
 - Warden should inject Sage broker settings into Portal, Oracle, and Raven instead of direct first-party base URLs.
 - Warden should launch Raven with the VPN runtime device/capability contract (`NET_ADMIN` and `/dev/net/tun`) when not
   explicitly disabled, and drift detection should recreate Raven when those flags disappear.
+- Warden should pass Raven ingest NVIDIA runtime env and args when `SCRIPTARR_RAVEN_INGEST_GPU_PROFILE=nvidia` or the
+  shared GPU hint asks for NVIDIA. Missing GPU should be reported by Raven ingest as `hardware_missing`, not as a full
+  stack health failure.
 - Warden should mount Moon's derived cover-cache folder at `/app/cover-cache` and set
   `SCRIPTARR_MOON_COVER_CACHE_DIR` for the Moon container. The cache is rebuildable and separate from Vault/Raven
   authoritative catalog state.

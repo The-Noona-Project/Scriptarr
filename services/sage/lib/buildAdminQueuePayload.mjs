@@ -112,6 +112,11 @@ const isRetriableAttentionTask = (task) => {
   return normalizeString(task.attentionReason) === "stale" && status === "queued";
 };
 
+const isIngestTask = (task = {}) =>
+  normalizeString(task.providerId).toLowerCase() === "raven-ingest"
+  || normalizeString(task.details?.kind).toLowerCase() === "library-ingest"
+  || normalizeString(task.details?.recoveryAction).toLowerCase() === "retry-ingest";
+
 const estimateActiveEtaMinutes = (task = {}) => {
   const now = Date.now();
   const progress = Math.max(0, Math.min(100, toNumber(task.percent, 0)));
@@ -169,7 +174,7 @@ export const buildAdminQueuePayload = (tasks = [], {concurrency = 2} = {}) => {
   const staleActiveTasks = normalizedTasks.filter((task) => isStaleActiveTask(task));
   const failedTasks = normalizedTasks.filter((task) => normalizeString(task.status) === "failed");
   const needsAttention = sortNewestFirst([
-    ...failedTasks.map((task) => ({...task, attentionReason: "failed", retriable: true, removable: true})),
+    ...failedTasks.map((task) => ({...task, attentionReason: "failed", retriable: true, removable: !isIngestTask(task)})),
     ...staleActiveTasks
       .filter((task) => !failedTasks.some((failedTask) => normalizeString(failedTask.taskId) === normalizeString(task.taskId)))
       .map((task) => ({

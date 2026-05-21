@@ -44,6 +44,9 @@ managed services.
     `/dev/nvidia-uvm-tools` device bindings
   - `intel`: `--device /dev/dri --group-add video`
   - `amd`: `--device /dev/kfd --device /dev/dri --group-add video`
+- When Raven ingest requests NVIDIA through `SCRIPTARR_RAVEN_INGEST_GPU_PROFILE=nvidia` or the shared GPU hint, pass
+  Oracle-style NVIDIA runtime args and env to Raven. Missing GPU should surface as Raven ingest `hardware_missing`, not
+  whole-stack unhealthy.
 - If service boot order, network topology, embedded LocalAI runtime planning, first-boot auth, or Docker test mode changes,
   update the Warden docs.
 

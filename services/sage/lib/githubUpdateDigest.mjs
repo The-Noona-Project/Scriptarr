@@ -39,6 +39,9 @@ const RAW_UPDATE_COPY_PATTERNS = Object.freeze([
   /\[\s*\d+\s*\/\s*\d+\s*chars?\s*\]/i,
   /^compare:\s*https?:\/\//im,
   /```/,
+  /\blong live noona\b/i,
+  /^\s*to use the new\b/im,
+  /^\s*\d+[\.)]\s+(?:install|set|run|open|click|use)\b/im,
   /\b(let me know if you have any questions|feel free to (?:reach out|ask)|ask me anything|hope this helps)\b/i,
   /^\s*(?:updates?|changes?|release notes?):\s*$/im
 ]);
@@ -163,19 +166,28 @@ const fetchCommitsSince = async ({fetchImpl, token, branch, baselineSha}) => {
   };
 };
 
+const simplifyCommitTitleForPrompt = (title) =>
+  normalizeString(title, "Scriptarr changed")
+    .replace(/\s*\([^)]*\)\s*$/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 140);
+
 const buildOracleMessage = ({branch, baseSha, compareUrl, commits, truncated}) => [
-  "Write only the human-facing Discord update summary as Noona, Scriptarr's warm, specific Big Sister AI. Keep it under 700 characters.",
-  "Open with one friendly sentence, then use 2-3 short bullets focused on concrete outcomes and how readers/admins use them.",
-  "Portal will attach repository, compare link, latest SHA, and commit metadata separately; do not include raw SHAs, authors, dates, compare links, numbered commit rows, or character-count notes.",
-  "Avoid generic support-bot lines like 'let me know if you have questions' or 'ask me anything'. A natural 'ask Noona what changed' line is okay if it fits.",
-  "Do not invent features beyond the commit titles. Do not mention secrets, private infrastructure, or internal logs.",
+  "Write only the Discord embed description for a public Scriptarr update post from Noona.",
+  "Voice: warm, specific, lightly playful, and practical. No support-ticket closer. No LONG LIVE NOONA sign-off.",
+  "Hard format: one friendly sentence, then exactly two sections: **What changed** with 2-3 bullets, and **Try it** with 1-2 bullets.",
+  "Use reader/admin outcomes, not implementation chores. If a commit is only docs or plumbing, say the docs/admin area got clearer instead of inventing setup steps.",
+  "Do not include raw SHAs, authors, dates, compare links, repository names, numbered commit rows, markdown code fences, character counts, or 'ask me anything' lines.",
+  "Do not turn a commit title into a how-to guide unless the title explicitly says a user-facing workflow changed.",
+  "Portal renders traceability and links separately, so your output must be only the polished summary body.",
   `Repository: ${GITHUB_UPDATE_REPOSITORY.owner}/${GITHUB_UPDATE_REPOSITORY.repo}`,
   `Branch: ${branch}`,
   `Base SHA: ${shortSha(baseSha)}`,
   `Compare: ${compareUrl}`,
   truncated ? `Note: this digest includes the newest ${MAX_COMMITS_PER_DIGEST} commits from a larger range.` : "",
-  "Commits:",
-  ...commits.map((commit, index) => `${index + 1}. ${commit.sha} ${commit.title} (${commit.author}, ${commit.date})`)
+  "Reader/admin-facing change hints:",
+  ...commits.map((commit) => `- ${simplifyCommitTitleForPrompt(commit.title)}`)
 ].filter(Boolean).join("\n");
 
 const requestOracleSummary = async ({config, serviceJson, branch, baseSha, compareUrl, commits, truncated}) => {

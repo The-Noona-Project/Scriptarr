@@ -88,7 +88,9 @@ test("GitHub update digest creates an Oracle-backed pending Discord update", asy
     serviceJson: async (_baseUrl, path, options) => {
       assert.equal(path, "/api/chat");
       assert.match(options.body.message, /Add Noona update summaries/);
+      assert.match(options.body.message, /\*\*What changed\*\*/);
       assert.match(options.body.message, /do not include raw SHAs/i);
+      assert.doesNotMatch(options.body.message, /1\. abc123def456/);
       return {
         ok: true,
         status: 200,
@@ -248,6 +250,10 @@ test("GitHub update digest retries pending AI summaries without advancing the po
 test("GitHub update digest rejects raw metadata copy as Noona summary", () => {
   assert.equal(
     isUsableGithubUpdateSummary("3. 5d5b5f8d5a9e Add LocalAI chat completion example to README (Captainpax, 2026-05-18T02:11:33Z)"),
+    false
+  );
+  assert.equal(
+    isUsableGithubUpdateSummary("To use the new Oracle Cloud GPU support:\n1. Install the Oracle Cloud SDK if needed\n2. Set your Oracle Cloud credentials in Scriptarr settings\n```\nLONG LIVE NOONA"),
     false
   );
   assert.equal(

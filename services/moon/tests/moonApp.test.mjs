@@ -318,6 +318,16 @@ const createSageStub = ({requests = []} = {}) => Promise.resolve(http.createServ
     return;
   }
 
+  if (requestUrl.pathname === "/api/moon-v3/user/reader/title/dan-da-dan/chapter/chapter-1/page/9") {
+    response.writeHead(200, {
+      "Content-Type": "image/svg+xml",
+      "Cache-Control": "private, max-age=604800"
+    });
+    response.write("<svg xmlns=\"http://www.w3.org/2000/svg\">");
+    response.destroy(new Error("reader stream dropped"));
+    return;
+  }
+
   if (requestUrl.pathname === "/api/moon-v3/user/reader/title/dan-da-dan/chapter/chapter-1/page/0/status") {
     response.writeHead(200, {"Content-Type": "application/json", "Cache-Control": "no-store"});
     response.end(JSON.stringify({
@@ -987,6 +997,13 @@ test("moon serves branded split entry documents, typed routes, PWA assets, and M
   assert.match(readerPagesResponse.headers.get("cache-control") || "", /max-age=604800/);
   const readerPages = await readerPagesResponse.json();
   assert.equal(readerPages.pages[0].src, "/api/moon/v3/user/reader/title/dan-da-dan/chapter/chapter-1/page/0?rev=rev-1");
+
+  const droppedStreamResponse = await fetch(
+    `${baseUrl}/api/moon/v3/user/reader/title/dan-da-dan/chapter/chapter-1/page/9?rev=rev-stream`
+  ).catch(() => null);
+  await droppedStreamResponse?.arrayBuffer().catch(() => new ArrayBuffer(0));
+  const healthAfterDroppedStream = await fetch(`${baseUrl}/health`);
+  assert.equal(healthAfterDroppedStream.status, 200);
 
   const missingApiResponse = await fetch(`${baseUrl}/api/not-a-real-route`);
   assert.equal(missingApiResponse.status, 404);

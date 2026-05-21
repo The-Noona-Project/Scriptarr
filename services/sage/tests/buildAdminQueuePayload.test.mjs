@@ -142,6 +142,29 @@ test("buildAdminQueuePayload marks stale running titles as non-retriable needs-a
   assert.equal(payload.stats.retryableAttentionCount, 0);
 });
 
+test("buildAdminQueuePayload keeps failed ingest tasks retryable but not removable", () => {
+  const payload = buildAdminQueuePayload([{
+    taskId: "raven-ingest-title-1",
+    titleId: "title-1",
+    titleName: "Manual Title",
+    requestType: "manga",
+    providerId: "raven-ingest",
+    status: "failed",
+    source: "raven",
+    details: {
+      kind: "library-ingest",
+      recoveryAction: "retry-ingest"
+    },
+    updatedAt: new Date().toISOString()
+  }]);
+
+  assert.equal(payload.needsAttention.length, 1);
+  assert.equal(payload.needsAttention[0].taskId, "raven-ingest-title-1");
+  assert.equal(payload.needsAttention[0].retriable, true);
+  assert.equal(payload.needsAttention[0].removable, false);
+  assert.equal(payload.stats.retryableAttentionCount, 1);
+});
+
 test("buildAdminQueuePayload excludes stale broker snapshots from live title recovery", () => {
   const payload = buildAdminQueuePayload([{
     taskId: "bulkrun-1-manga-a",

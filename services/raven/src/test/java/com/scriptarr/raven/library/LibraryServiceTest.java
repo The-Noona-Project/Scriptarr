@@ -11,7 +11,6 @@ import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
@@ -25,7 +24,6 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -152,6 +150,110 @@ class LibraryServiceTest {
     }
 
     /**
+     * Verify manual imports copy staged CBZ files into canonical downloaded
+     * storage and publish reader-ready WebP ingest output.
+     *
+     * @param tempDir temporary test directory
+     * @throws Exception when the import fixture cannot be prepared
+     */
+    @Test
+    void importLibraryCopiesStagedCbzAndRunsWebpIngest(@TempDir Path tempDir) throws Exception {
+        FakeRavenBrokerClient brokerClient = new FakeRavenBrokerClient();
+        ScriptarrLogger logger = mock(ScriptarrLogger.class);
+        when(logger.getDownloadsRoot()).thenReturn(tempDir);
+        LibraryService service = new LibraryService(brokerClient, new RavenSettingsService(brokerClient, logger, List.of()), logger);
+
+        Path sourceRoot = tempDir.resolve("import-staging").resolve("manual-title");
+        Files.createDirectories(sourceRoot);
+        Path sourceArchive = writeArchive(sourceRoot.resolve("Manual Title c001.cbz"), Map.of(
+            "page-002.png", pngPage(20),
+            "page-001.png", pngPage(10)
+        ));
+
+        Map<String, Object> result = service.importLibrary(Map.of(
+            "titleName", "Manual Title",
+            "libraryType", "Manga",
+            "requestedBy", "owner-1",
+            "chapters", List.of(Map.of(
+                "sourcePath", sourceArchive.toString(),
+                "chapterNumber", "1",
+                "label", "Chapter 1"
+            ))
+        ));
+
+        LibraryTitle title = (LibraryTitle) result.get("title");
+        assertNotNull(title);
+        assertEquals(1, result.get("importedChapters"));
+        assertEquals("ready", result.get("ingestStatus"));
+        assertEquals("ready", title.ingestStatus());
+        assertEquals(1, title.chapters().size());
+        LibraryChapter chapter = title.chapters().getFirst();
+        assertEquals("ready", chapter.ingestStatus());
+        assertEquals(2, chapter.ingestedPageCount());
+        assertTrue(chapter.archivePath().contains(tempDir.resolve("downloaded").resolve("manga").resolve("Manual_Title").toString()));
+        assertTrue(Files.exists(Path.of(chapter.archivePath())));
+        assertTrue(Files.exists(Path.of(chapter.ingestManifestPath())));
+        assertTrue(Files.exists(Path.of(chapter.ingestManifestPath()).getParent().resolve("p000001.webp")));
+        assertArrayEquals(pngPage(10), service.renderReaderPage(title.id(), chapter.id(), 0).bytes());
+    }
+
+    /**
+     * Verify imports can append a CBZ chapter to an existing title without
+     * replacing the canonical title id.
+     *
+     * @param tempDir temporary test directory
+     * @throws Exception when the import fixture cannot be prepared
+     */
+    @Test
+    void importLibraryAppendsChapterToExistingTitle(@TempDir Path tempDir) throws Exception {
+        FakeRavenBrokerClient brokerClient = new FakeRavenBrokerClient();
+        ScriptarrLogger logger = mock(ScriptarrLogger.class);
+        when(logger.getDownloadsRoot()).thenReturn(tempDir);
+        LibraryService service = new LibraryService(brokerClient, new RavenSettingsService(brokerClient, logger, List.of()), logger);
+
+        Path titleRoot = tempDir.resolve("downloaded").resolve("manga").resolve("Existing_Title");
+        Files.createDirectories(titleRoot);
+        Path firstArchive = writeArchive(titleRoot.resolve("Existing Title c001.cbz"), Map.of("001.png", pngPage(30)));
+        LibraryTitle existing = service.recordDownloadedTitle(
+            "Existing Title",
+            "Manga",
+            "",
+            "",
+            null,
+            List.of(new LibraryChapter("", "Chapter 1", "1", 1, null, true, firstArchive.toString(), "", null)),
+            titleRoot,
+            titleRoot
+        );
+
+        Path sourceRoot = tempDir.resolve("import-staging").resolve("existing-title");
+        Files.createDirectories(sourceRoot);
+        Path secondArchive = writeArchive(sourceRoot.resolve("Existing Title c002.cbz"), Map.of("001.png", pngPage(40)));
+
+        Map<String, Object> result = service.importLibrary(Map.of(
+            "existingTitleId", existing.id(),
+            "requestedBy", "owner-1",
+            "chapters", List.of(Map.of(
+                "sourcePath", secondArchive.toString(),
+                "chapterNumber", "2",
+                "label", "Chapter 2"
+            ))
+        ));
+
+        LibraryTitle title = (LibraryTitle) result.get("title");
+        assertEquals(existing.id(), title.id());
+        assertEquals(2, title.chapters().size());
+        assertEquals("ready", title.ingestStatus());
+        assertTrue(title.chapters().stream().allMatch((chapter) -> "ready".equals(chapter.ingestStatus())));
+        assertTrue(title.chapters().stream().anyMatch((chapter) -> "2".equals(chapter.chapterNumber())));
+        LibraryChapter importedChapter = title.chapters().stream()
+            .filter((chapter) -> "2".equals(chapter.chapterNumber()))
+            .findFirst()
+            .orElseThrow();
+        assertTrue(Path.of(importedChapter.archivePath()).startsWith(titleRoot));
+        assertTrue(Files.exists(Path.of(importedChapter.archivePath())));
+    }
+
+    /**
      * Verify Raven sorts archive pages with the configured page template so
      * custom file names still render in the correct order.
      *
@@ -189,6 +291,7 @@ class LibraryServiceTest {
             titleFolder,
             titleFolder
         );
+        title = service.ingestTitle(title.id(), "test");
 
         assertArrayEquals(pngPage(2), service.renderReaderPage(title.id(), title.chapters().getFirst().id(), 1).bytes());
     }
@@ -231,16 +334,17 @@ class LibraryServiceTest {
             titleFolder,
             titleFolder
         );
+        title = service.ingestTitle(title.id(), "test");
 
         RenderedPage secondPage = service.renderReaderPage(title.id(), title.chapters().getFirst().id(), 1);
         RenderedPage thirdPage = service.renderReaderPage(title.id(), title.chapters().getFirst().id(), 2);
 
-        assertEquals(1, service.readerArchiveIndexCacheSize());
+        assertEquals(0, service.readerArchiveIndexCacheSize());
         assertArrayEquals(pngPage(2), secondPage.bytes());
-        assertEquals("image/png", secondPage.mediaType());
+        assertEquals("image/webp", secondPage.mediaType());
         assertArrayEquals(pngPage(3), thirdPage.bytes());
-        assertEquals("image/png", thirdPage.mediaType());
-        assertEquals(1, service.readerArchiveIndexCacheSize());
+        assertEquals("image/webp", thirdPage.mediaType());
+        assertEquals(0, service.readerArchiveIndexCacheSize());
     }
 
     /**
@@ -275,17 +379,8 @@ class LibraryServiceTest {
 
         ReaderPageProbe probe = service.probeReaderPage(title.id(), title.chapters().getFirst().id(), 0);
         assertEquals(false, probe.ok());
-        assertEquals(422, probe.status());
-        assertEquals("decode_or_corrupt", probe.failureCode());
-
-        RenderedPage rendered = service.renderReaderPage(title.id(), title.chapters().getFirst().id(), 0);
-        assertEquals("image/svg+xml", rendered.mediaType());
-        assertTrue(new String(rendered.bytes(), StandardCharsets.UTF_8).contains("Scriptarr reader fallback"));
-
-        LibraryChapter marked = service.findTitle(title.id()).chapters().getFirst();
-        assertEquals("possible_missing_page", marked.qualityStatus());
-        assertEquals(1, marked.missingPageCount());
-        assertEquals(List.of(1), marked.missingPages());
+        assertEquals(404, probe.status());
+        assertEquals("missing_page", probe.failureCode());
     }
 
     /**
@@ -322,8 +417,8 @@ class LibraryServiceTest {
             "/downloads/downloading/manga/Kenja_no_Mago",
             "/downloads/downloaded/manga/Kenja_no_Mago",
             List.of(
-                new LibraryChapter("kenja-id-c79", "Chapter 79", "79", 55, Instant.parse("2026-04-18T08:00:00Z").toString(), true, "/downloads/downloaded/manga/Kenja_no_Mago/ch79.cbz", null, null),
-                new LibraryChapter("kenja-id-c94", "Chapter 94", "94", 52, Instant.parse("2026-04-20T08:00:00Z").toString(), true, "/downloads/downloaded/manga/Kenja_no_Mago/ch94.cbz", null, null)
+                readyChapter("kenja-id-c79", "Chapter 79", "79", 55, Instant.parse("2026-04-18T08:00:00Z").toString(), "/downloads/downloaded/manga/Kenja_no_Mago/ch79.cbz"),
+                readyChapter("kenja-id-c94", "Chapter 94", "94", 52, Instant.parse("2026-04-20T08:00:00Z").toString(), "/downloads/downloaded/manga/Kenja_no_Mago/ch94.cbz")
             ),
             null
         ));
@@ -369,9 +464,9 @@ class LibraryServiceTest {
             "/downloads/downloading/manhwa/Tomb_Raider_King",
             "/downloads/downloaded/manhwa/Tomb_Raider_King",
             List.of(
-                new LibraryChapter("tomb-raider-king-c253", "Chapter 253", "253", 24, Instant.parse("2026-04-21T08:00:00Z").toString(), true, "/downloads/downloaded/manhwa/Tomb_Raider_King/ch253.cbz", null, null),
-                new LibraryChapter("tomb-raider-king-c252", "Chapter 252", "252", 71, Instant.parse("2026-04-20T08:00:00Z").toString(), true, "/downloads/downloaded/manhwa/Tomb_Raider_King/ch252.cbz", null, null),
-                new LibraryChapter("tomb-raider-king-c251", "Chapter 251", "251", 48, Instant.parse("2026-04-19T08:00:00Z").toString(), true, "/downloads/downloaded/manhwa/Tomb_Raider_King/ch251.cbz", null, null)
+                readyChapter("tomb-raider-king-c253", "Chapter 253", "253", 24, Instant.parse("2026-04-21T08:00:00Z").toString(), "/downloads/downloaded/manhwa/Tomb_Raider_King/ch253.cbz"),
+                readyChapter("tomb-raider-king-c252", "Chapter 252", "252", 71, Instant.parse("2026-04-20T08:00:00Z").toString(), "/downloads/downloaded/manhwa/Tomb_Raider_King/ch252.cbz"),
+                readyChapter("tomb-raider-king-c251", "Chapter 251", "251", 48, Instant.parse("2026-04-19T08:00:00Z").toString(), "/downloads/downloaded/manhwa/Tomb_Raider_King/ch251.cbz")
             ),
             null
         ));
@@ -579,5 +674,30 @@ class LibraryServiceTest {
         ByteArrayOutputStream output = new ByteArrayOutputStream();
         ImageIO.write(image, "png", output);
         return output.toByteArray();
+    }
+
+    private LibraryChapter readyChapter(String id, String label, String chapterNumber, int pageCount, String releaseDate, String archivePath) {
+        return new LibraryChapter(
+            id,
+            label,
+            chapterNumber,
+            pageCount,
+            releaseDate,
+            true,
+            archivePath,
+            "",
+            "clean",
+            pageCount,
+            0,
+            List.of(),
+            List.of(),
+            "ready",
+            "test-revision",
+            pageCount,
+            releaseDate,
+            "",
+            "/downloads/ingested/" + id + "/manifest.json",
+            releaseDate
+        );
     }
 }

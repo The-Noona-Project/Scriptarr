@@ -19,6 +19,7 @@ const endpointForRoute = (route) => {
     overview: "/api/moon/v3/admin/overview",
     library: "/api/moon/v3/admin/library",
     import: "/api/moon/v3/admin/import",
+    ingest: "/api/moon/v3/admin/ingest",
     calendar: "/api/moon/v3/admin/calendar",
     "activity-history": "/api/moon/v3/admin/activity/history",
     "activity-blocklist": "/api/moon/v3/admin/activity/blocklist",

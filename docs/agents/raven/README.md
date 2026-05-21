@@ -25,7 +25,16 @@
 - Fresh installs must not reintroduce demo titles; Raven's default library state is empty until real ingest exists.
 - Raven library storage now uses dynamic source-backed type labels and the managed folder lifecycle:
   - `/downloads/downloading/<type-slug>/<title-folder>`
-  - `/downloads/downloaded/<type-slug>/<title-folder>`
+  - `/downloads/downloaded/<type-slug>/<title-folder>` for canonical CBZ archives
+  - `/downloads/ingested/<type-slug>/<titleId>/<chapterId>` for derived WebP reader pages
+- Manual imports and normal downloads must converge on the same canonical CBZ layout before ingest. `/v1/imports`
+  should only accept Raven-visible CBZ files under import-staging or downloaded storage, then queue WebP ingest.
+- Reader serving is WebP-first. A chapter is readable only after ingest writes stable `p000001.webp`-style page slugs,
+  a `manifest.json`, and ready ingest metadata into the catalog.
+- Ingest failures keep the CBZ, delete only staged or derived ingest output, and surface as retryable Needs attention
+  work with `recoveryAction: retry-ingest`.
+- The v1 ingest encoder is `cwebp/libwebp` at quality `92`. NVIDIA runtime checks are hardware-status diagnostics for
+  Raven ingest, not a reason to fail the whole service when the host lacks GPU access.
 - Raven VPN should fail closed when enabled. Settings reads use only a short fresh-disabled cache grace, runtime checks
   must verify TUN/NET_ADMIN/OpenVPN support, and reconnect logic must re-check the tunnel before chapter/page-heavy
   phases instead of assuming an existing process is still valid. Enabled idle VPN state should be reported as `armed`
@@ -56,8 +65,8 @@
   response; full title and reader routes remain the detail paths.
 - New Raven catalog entries should use opaque durable ids instead of title slugs. Treat title ids as opaque route
   parameters everywhere outside Raven's internals.
-- Download tasks should only reach `100%` after file promotion and brokered catalog persistence both succeed. When a
-  persist step fails, fail the task loudly instead of leaving it running at `90%`.
+- Download tasks should only reach `100%` after file promotion, brokered catalog persistence, and WebP ingest all
+  succeed. When a persist or ingest step fails, fail the task loudly instead of leaving it running at `90%`.
 - Raven-originated task, catalog, and request-lifecycle changes that matter to Moon admin should now be forwarded
   through Sage's internal broker routes so Vault can append them into the shared durable event log.
 - Startup recovery should rescan finished `downloaded/<type>/...` content, backfill missing catalog rows, and collapse

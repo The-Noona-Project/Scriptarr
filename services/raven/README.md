@@ -13,10 +13,20 @@ Raven now reaches shared settings and durable catalog state through Sage's inter
 first-party hop to Vault, while Raven stays responsible for download execution, source scraping, provider calls, and
 reader-ready library projection.
 
-Completed downloads now use Raven's managed two-stage layout under the existing `/downloads` mount:
+Completed downloads now use Raven's managed storage layout under the existing `/downloads` mount:
 
 - `/downloads/downloading/<type-slug>/<title-folder>`
-- `/downloads/downloaded/<type-slug>/<title-folder>`
+- `/downloads/downloaded/<type-slug>/<title-folder>` for canonical CBZ archives
+- `/downloads/ingested/<type-slug>/<titleId>/<chapterId>` for derived WebP reader pages and `manifest.json`
+
+Manual library import and normal downloads converge on the same canonical CBZ layout. `/v1/imports` accepts
+Raven-visible CBZs from `import-staging` or existing downloaded storage, copies approved archives into
+`downloaded/<type-slug>/<title-folder>`, catalogs the title or chapter rows, and immediately queues WebP ingest.
+Reader routes are WebP-first: a chapter must have `ingestStatus: "ready"`, a page count, an ingest revision, and a
+manifest path before Moon can serve it.
+The v1 encoder is the official `cwebp/libwebp` binary at quality `92`. NVIDIA runtime access is probed when
+`SCRIPTARR_RAVEN_INGEST_GPU_PROFILE=nvidia` or `SCRIPTARR_RAVEN_INGEST_REQUIRE_NVIDIA=true`; missing hardware reports
+`hardware_missing` for admin attention without making Raven's whole health fail.
 
 Raven stores dynamic library type labels and slugs from the source when available, uses opaque durable title ids for
 new catalog entries, and keeps route shapes stable for Moon. The current metadata set includes MangaDex, AniList,
@@ -88,9 +98,11 @@ targets, review chapter coverage, and queue a staged replacement download withou
 Replacement downloads stage into a fresh working and downloaded root, then only swap the live files after the
 replacement succeeds.
 
-Download completion now waits for both file promotion and brokered catalog persistence before a task can reach `100%`.
-If catalog persistence fails, Raven marks the task failed instead of leaving it stuck at `90%`. On boot, Raven also
-rescans the existing `downloaded/<type>/...` tree to backfill missing catalog rows from already-finished archives.
+Download completion now waits for file promotion, brokered catalog persistence, and WebP ingest before a task can reach
+`100%`. If catalog persistence or ingest fails, Raven marks the task failed instead of leaving it stuck at `90%`.
+Ingest failures keep the CBZ and publish retryable `Needs attention` work; cleanup removes only staged or derived ingest
+files. On boot, Raven also rescans the existing `downloaded/<type>/...` tree to backfill missing catalog rows from
+already-finished archives.
 
 Raven's global title-download concurrency is now controlled by the Sage-backed `raven.download.runtime` setting. The
 default remains two active title downloads, admins can choose `1` through `6` from Moon Settings, and Raven reloads the
@@ -106,8 +118,9 @@ the incomplete managed `downloading/<type>` working folder.
 When an upstream page image returns `404`, Raven now skips same-URL image retries, refreshes the chapter page list on
 the next chapter attempt, and leaves a clearer source-image failure if the refreshed source still points at missing
 images.
-Reader page serving reuses cached archive indexes for page order and media types. Raven also exposes a redacted page
-probe for Moon, validates archive-backed JPEG, PNG, GIF, and SVG pages on first read, renders a Scriptarr fallback page
-for missing or corrupt page entries, and marks those pages as possible missing content for `/admin/wanted/missing-content`.
+Reader page serving now reads the ingested WebP folder instead of extracting CBZ pages on demand. The ingest pipeline
+extracts ordered archive pages, writes stable page slugs such as `p000001.webp` at quality `92`, stores a per-chapter
+manifest, and serves `image/webp` through the existing Moon/Sage reader routes. Raven also exposes a redacted page probe
+for Moon and keeps Missing Content quality fields available for damaged source detection.
 For long-running WeebCentral series, Raven now follows the source page's HTMX full-chapter-list flow instead of only
 the initial visible subset, which fixes partial-history titles such as Tomb Raider King.

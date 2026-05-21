@@ -28,14 +28,15 @@
   post Noona's AI-written summary to the configured update channel, and acknowledge only after Discord accepts the
   message. Portal must not call GitHub or Oracle directly for this workflow.
 - Noona update posts should feel like a channel announcement, not a raw changelog dump. Keep the AI summary once,
-  keep traceability in embed fields, and avoid duplicate content above and inside the embed.
+  keep build/compare/admin traceability in embed fields, and avoid duplicate content or raw commit rows above and
+  inside the embed.
 - Portal owns Noona trivia runtime delivery. It should start/stop rounds through Sage, treat normal messages in the
   configured trivia channel as guesses, post quiet reactions for wrong guesses, announce the first correct winner, and
   acknowledge leaderboard posts only after Discord accepts the message.
 - Portal owns only the Discord delivery side of natural Noona mention chat. Detect mentions by bot user id, not
   display name; ignore bots, wrong guilds, disallowed channels, empty prompts, and unmentioned chatter; reuse the
-  `/chat` command role gate; send typing; reply publicly to the triggering message; and split replies safely before
-  Discord's message limit.
+  `/chat` command role gate; send or edit a requester-mentioned `Thinking...` placeholder through the per-bot AI
+  queue; reply publicly to the triggering message; and split replies safely before Discord's message limit.
 - Mention chat must call Sage's `/api/internal/portal/noona-chat` route, not Oracle directly. Sage owns durable memory,
   allowed read context, latest posted update digest context, conservative proposal detection, and Oracle fallback
   behavior.

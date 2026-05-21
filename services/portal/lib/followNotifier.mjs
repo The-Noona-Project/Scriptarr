@@ -196,7 +196,7 @@ export const buildDownloadAllDirectMessagePayload = (notification = {}, publicBa
           value: [
             `Batches: **${completedBatches}** done / **${remainingBatches}** remaining`,
             `Title tasks completed: **${completedTitles}**`
-          ].join("\n"),
+          ].filter(Boolean).join("\n"),
           inline: true
         },
         {
@@ -418,27 +418,20 @@ export const buildUpdateChannelPayload = (notification = {}, publicBaseUrl = "",
   const adminUrl = normalizeString(publicBaseUrl) ? `${normalizeString(publicBaseUrl).replace(/\/+$/g, "")}/admin/system/updates` : "";
   const commitCount = toCount(notification.commitCount, normalizeArray(notification.commits).length);
   const latestSha = normalizeString(notification.latestSha);
-  const commitLines = normalizeArray(notification.commits)
-    .slice(0, 3)
-    .map((commit) => {
-      const sha = normalizeString(commit.sha);
-      const title = normalizeString(commit.title, "Untitled commit");
-      const url = normalizeString(commit.url);
-      return url ? `[${sha}](${url}) ${title}` : `${sha} ${title}`.trim();
-    });
   return {
-    content: truncate(`New ${brandName} update from Noona. Mention Noona for the plain-language version of what changed.`, 1900),
+    content: truncate(`${brandName} update posted by Noona. Mention Noona if you want the plain-language walkthrough.`, 1900),
     embeds: [{
-      title: `New in ${brandName}`,
-      description: summary,
+      title: `${brandName} Update`,
+      description: truncate(summary, 1600),
       url: compareUrl || adminUrl || undefined,
       color: 0x8b5cf6,
       fields: [
         {
-          name: "Traceability",
+          name: "Build",
           value: [
-            `${repository} (${branch})`,
-            `${commitCount} commit${commitCount === 1 ? "" : "s"}${latestSha ? ` · latest ${latestSha}` : ""}`
+            `${commitCount} commit${commitCount === 1 ? "" : "s"} on \`${branch}\``,
+            latestSha ? `Latest \`${latestSha}\`` : "",
+            repository
           ].join("\n"),
           inline: false
         },
@@ -447,18 +440,13 @@ export const buildUpdateChannelPayload = (notification = {}, publicBaseUrl = "",
           value: `[Open compare](${compareUrl})`,
           inline: true
         } : null,
-        commitLines.length ? {
-          name: "Recent commits",
-          value: commitLines.join("\n").slice(0, 1000),
-          inline: false
-        } : null,
         adminUrl ? {
           name: `${brandName} admin`,
           value: `[Open updates](${adminUrl})`,
           inline: true
         } : null
       ].filter(Boolean),
-      footer: {text: "Mention Noona to ask what changed or how to use it."}
+      footer: {text: "Noona keeps the explanation here; commit details stay behind the links."}
     }]
   };
 };

@@ -22,6 +22,12 @@ public record LibraryChapter(
     int missingPageCount,
     List<Integer> missingPages,
     List<String> qualityNotes,
+    String ingestStatus,
+    String ingestRevision,
+    int ingestedPageCount,
+    String ingestedAt,
+    String ingestError,
+    String ingestManifestPath,
     String updatedAt
 ) {
     /**
@@ -52,6 +58,50 @@ public record LibraryChapter(
     }
 
     /**
+     * Backward-compatible constructor for chapters with quality metadata but no
+     * ingest metadata.
+     */
+    public LibraryChapter(
+        String id,
+        String label,
+        String chapterNumber,
+        int pageCount,
+        String releaseDate,
+        boolean available,
+        String archivePath,
+        String sourceUrl,
+        String qualityStatus,
+        int expectedPageCount,
+        int missingPageCount,
+        List<Integer> missingPages,
+        List<String> qualityNotes,
+        String updatedAt
+    ) {
+        this(
+            id,
+            label,
+            chapterNumber,
+            pageCount,
+            releaseDate,
+            available,
+            archivePath,
+            sourceUrl,
+            qualityStatus,
+            expectedPageCount,
+            missingPageCount,
+            missingPages,
+            qualityNotes,
+            "pending",
+            "",
+            0,
+            null,
+            "",
+            "",
+            updatedAt
+        );
+    }
+
+    /**
      * Create immutable chapter payloads with safe quality defaults.
      */
     public LibraryChapter {
@@ -60,5 +110,19 @@ public record LibraryChapter(
         missingPageCount = Math.max(0, missingPageCount);
         missingPages = missingPages == null ? List.of() : List.copyOf(missingPages);
         qualityNotes = qualityNotes == null ? List.of() : List.copyOf(qualityNotes);
+        ingestStatus = normalizeIngestStatus(ingestStatus, available ? "pending" : "missing");
+        ingestRevision = ingestRevision == null ? "" : ingestRevision;
+        ingestedPageCount = Math.max(0, ingestedPageCount);
+        ingestedAt = ingestedAt == null || ingestedAt.isBlank() ? null : ingestedAt;
+        ingestError = ingestError == null ? "" : ingestError;
+        ingestManifestPath = ingestManifestPath == null ? "" : ingestManifestPath;
+    }
+
+    private static String normalizeIngestStatus(String value, String fallback) {
+        String normalized = value == null ? "" : value.trim().toLowerCase().replace('-', '_');
+        return switch (normalized) {
+            case "ready", "running", "pending", "failed", "missing" -> normalized;
+            default -> fallback;
+        };
     }
 }
