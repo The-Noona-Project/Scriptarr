@@ -1,4 +1,4 @@
-import {serializeCookie} from "./cookies.mjs";
+import {parseCookies, serializeCookie} from "./cookies.mjs";
 import {proxyJson} from "./proxy.mjs";
 import {canAccessAdmin as canAccessMoonAdmin} from "@scriptarr/access";
 
@@ -38,6 +38,22 @@ const sanitizeReturnToPath = (value, fallback = "/") => {
   return normalized || fallback;
 };
 
+const parseOauthState = (value) => {
+  const normalized = typeof value === "string" ? value.trim() : "";
+  if (!normalized) {
+    return {nonce: "", returnTo: "/"};
+  }
+  try {
+    const parsed = JSON.parse(Buffer.from(normalized, "base64url").toString("utf8"));
+    return {
+      nonce: typeof parsed?.nonce === "string" ? parsed.nonce.trim() : "",
+      returnTo: sanitizeReturnToPath(parsed?.returnTo, "/")
+    };
+  } catch {
+    return {nonce: "", returnTo: "/"};
+  }
+};
+
 const escapeHtml = (value) => String(value ?? "")
   .replaceAll("&", "&amp;")
   .replaceAll("<", "&lt;")
@@ -55,6 +71,18 @@ const resolvePublicOrigin = (config, req) => {
     // Fall back to the request host below.
   }
   return `${req.protocol || "https"}://${req.get("host") || "localhost"}`;
+};
+
+const shouldUseSecureCookie = (config, req) => {
+  const forwardedProto = String(req.get?.("x-forwarded-proto") || "").split(",")[0].trim().toLowerCase();
+  if (req.secure || forwardedProto === "https") {
+    return true;
+  }
+  try {
+    return new URL(config?.publicBaseUrl || "").protocol === "https:";
+  } catch {
+    return false;
+  }
 };
 
 const renderAuthRelayPage = ({targetPath, publicOrigin}) => {
@@ -118,12 +146,31 @@ const renderAuthRelayPage = ({targetPath, publicOrigin}) => {
  * @returns {void}
  */
 export const registerAuthRoutes = (app, {config, getSessionToken, logger}) => {
+  const oauthStateCookieName = `${config.sessionCookieName || "scriptarr_session"}.oauth_state`;
   const proxyToSage = (req, targetPath, options = {}) => proxyJson({
     baseUrl: config.sageBaseUrl,
     path: targetPath,
     sessionToken: getSessionToken(req),
     ...options
   });
+
+  const safeProxyToSage = async (req, targetPath, fallbackError, options = {}) => {
+    try {
+      return await proxyToSage(req, targetPath, options);
+    } catch (error) {
+      logger?.warn?.("Moon auth broker request failed.", {
+        targetPath,
+        error: error instanceof Error ? error.message : String(error)
+      });
+      return {
+        status: 502,
+        payload: {
+          error: fallbackError,
+          detail: error instanceof Error ? error.message : String(error)
+        }
+      };
+    }
+  };
 
   app.get("/api/moon/auth/bootstrap-status", async (req, res) => {
     const result = await proxyToSage(req, "/api/auth/bootstrap-status");
@@ -132,9 +179,9 @@ export const registerAuthRoutes = (app, {config, getSessionToken, logger}) => {
 
   app.get("/api/moon/chrome/bootstrap", async (req, res) => {
     const [branding, auth, bootstrap] = await Promise.all([
-      proxyToSage(req, "/api/moon-v3/public/branding"),
-      proxyToSage(req, "/api/auth/status"),
-      proxyToSage(req, "/api/auth/bootstrap-status")
+      safeProxyToSage(req, "/api/moon-v3/public/branding", "Branding broker unavailable."),
+      safeProxyToSage(req, "/api/auth/status", "Auth broker unavailable."),
+      safeProxyToSage(req, "/api/auth/bootstrap-status", "Bootstrap broker unavailable.")
     ]);
     const authPayload = auth.status >= 200 && auth.status < 400 ? auth.payload : null;
     const user = authPayload?.user || (authPayload?.authenticated ? authPayload : null);
@@ -142,7 +189,12 @@ export const registerAuthRoutes = (app, {config, getSessionToken, logger}) => {
       branding: branding.status >= 200 && branding.status < 400 ? branding.payload : {siteName: "Scriptarr"},
       auth: authPayload,
       user,
-      bootstrap: bootstrap.status >= 200 && bootstrap.status < 400 ? bootstrap.payload : null
+      bootstrap: bootstrap.status >= 200 && bootstrap.status < 400 ? bootstrap.payload : null,
+      errors: {
+        branding: branding.status >= 500 ? branding.payload?.error || "Branding broker unavailable." : "",
+        auth: auth.status >= 500 ? auth.payload?.error || "Auth broker unavailable." : "",
+        bootstrap: bootstrap.status >= 500 ? bootstrap.payload?.error || "Bootstrap broker unavailable." : ""
+      }
     });
   });
 
@@ -150,24 +202,64 @@ export const registerAuthRoutes = (app, {config, getSessionToken, logger}) => {
     const query = toQueryString({
       returnTo: sanitizeReturnToPath(req.query?.returnTo, "/")
     });
-    const result = await proxyToSage(req, `/api/auth/discord/url${query ? `?${query}` : ""}`);
+    const result = await safeProxyToSage(
+      req,
+      `/api/auth/discord/url${query ? `?${query}` : ""}`,
+      "Discord login broker unavailable."
+    );
+    let oauthUrl = null;
+    try {
+      oauthUrl = result.payload?.oauthUrl ? new URL(result.payload.oauthUrl) : null;
+    } catch {
+      oauthUrl = null;
+    }
+    const oauthState = oauthUrl ? parseOauthState(oauthUrl.searchParams.get("state")) : {nonce: ""};
+    if (oauthState.nonce) {
+      res.setHeader("Set-Cookie", serializeCookie(oauthStateCookieName, oauthState.nonce, {
+        maxAge: 300,
+        path: "/api/moon/auth/discord/callback",
+        secure: shouldUseSecureCookie(config, req)
+      }));
+    }
     res.status(result.status).json(result.payload);
   });
 
   app.get("/api/moon/auth/discord/callback", async (req, res) => {
     const query = toQueryString(req.query);
-    const result = await proxyToSage(req, `/api/auth/discord/callback${query ? `?${query}` : ""}`);
+    const cookies = parseCookies(req.headers.cookie || "");
+    const expectedNonce = String(cookies[oauthStateCookieName] || "").trim();
+    const receivedState = parseOauthState(req.query?.state);
+    const secureCookie = shouldUseSecureCookie(config, req);
+    const clearOauthCookie = serializeCookie(oauthStateCookieName, "", {
+      maxAge: 0,
+      path: "/api/moon/auth/discord/callback",
+      secure: secureCookie
+    });
+    if (!expectedNonce || !receivedState.nonce || expectedNonce !== receivedState.nonce) {
+      res.setHeader("Set-Cookie", clearOauthCookie);
+      res.status(403).send("<pre>Discord login failed: OAuth state did not match this browser session.</pre>");
+      return;
+    }
+    const result = await safeProxyToSage(
+      req,
+      `/api/auth/discord/callback${query ? `?${query}` : ""}`,
+      "Discord login broker unavailable."
+    );
 
     if (result.status >= 400 || !result.payload?.token) {
       logger?.warn("Discord login failed in Moon callback route.", {
         status: result.status,
         error: result.payload?.error || "Unknown error"
       });
+      res.setHeader("Set-Cookie", clearOauthCookie);
       res.status(result.status).send(`<pre>Discord login failed: ${result.payload?.error || "Unknown error"}</pre>`);
       return;
     }
 
-    res.setHeader("Set-Cookie", serializeCookie(config.sessionCookieName, result.payload.token));
+    res.setHeader("Set-Cookie", [
+      clearOauthCookie,
+      serializeCookie(config.sessionCookieName, result.payload.token, {secure: secureCookie})
+    ]);
     const fallbackPath = sanitizeReturnToPath(result.payload?.returnTo, "/");
     const targetPath = fallbackPath.startsWith("/admin") && !canAccessAdmin(result.payload?.user)
       ? "/"
@@ -188,7 +280,10 @@ export const registerAuthRoutes = (app, {config, getSessionToken, logger}) => {
 
   app.post("/api/moon/auth/logout", async (req, res) => {
     await proxyToSage(req, "/api/auth/logout", {method: "POST"});
-    res.setHeader("Set-Cookie", serializeCookie(config.sessionCookieName, "", {maxAge: 0}));
+    res.setHeader("Set-Cookie", serializeCookie(config.sessionCookieName, "", {
+      maxAge: 0,
+      secure: shouldUseSecureCookie(config, req)
+    }));
     res.json({ok: true});
   });
 };

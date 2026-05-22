@@ -29,6 +29,9 @@ const normalizeReleaseChapterLabel = (value, fallback = "Latest chapter") => {
     ? normalized
     : fallback;
 };
+const formatTypeLabel = (value) => normalizeString(value, "library")
+  .replace(/[-_]+/g, " ")
+  .replace(/\b\w/g, (letter) => letter.toUpperCase());
 const escapeMarkdownLinkText = (value) => normalizeString(value)
   .replace(/\\/g, "\\\\")
   .replace(/\[/g, "\\[")
@@ -350,40 +353,79 @@ const buildDirectMessagePayload = (notification, kind, publicBaseUrl, requestCom
 
 export const buildReleaseChannelPayload = (notification = {}, publicBaseUrl = "", brandName = "Scriptarr") => {
   const digestItems = normalizeArray(notification.items);
-  if (digestItems.length || notification.digest === true) {
+  const titleGroups = normalizeArray(notification.titleGroups);
+  if (titleGroups.length || digestItems.length || notification.digest === true) {
     const totalCount = Math.max(toCount(notification.totalCount, digestItems.length), digestItems.length);
     const hiddenCount = Math.max(0, toCount(notification.hiddenCount, totalCount - digestItems.length));
-    const visibleItems = digestItems.slice(0, 10);
+    const typeLabel = normalizeString(notification.libraryTypeLabel)
+      || (notification.libraryTypeSlug ? formatTypeLabel(notification.libraryTypeSlug) : "");
+    const visibleGroups = titleGroups.length
+      ? titleGroups.slice(0, 8)
+      : digestItems.slice(0, 10).map((item) => ({
+        titleName: item.titleName,
+        titleUrl: item.titleUrl || item.linkUrl,
+        coverUrl: item.coverUrl,
+        chapterCount: 1,
+        chapters: [{
+          chapterLabel: item.chapterLabel || item.latestChapter,
+          linkUrl: item.linkUrl || item.readerUrl || item.titleUrl,
+          completedAt: item.completedAt
+        }]
+      }));
     const releaseWord = totalCount === 1 ? "release" : "releases";
     const hiddenLine = hiddenCount > 0
       ? ` +${hiddenCount} more grouped into this digest.`
       : "";
-    const itemLines = visibleItems.map((item, index) => {
-      const itemTitle = truncate(normalizeString(item.titleName || item.title, `${brandName} title`), 120);
-      const itemChapter = truncate(
-        normalizeReleaseChapterLabel(item.chapterLabel || item.latestChapter, "Latest chapter"),
-        90
-      );
-      const itemLink = normalizeString(item.linkUrl || item.readerUrl || item.titleUrl);
-      const titleText = itemLink
-        ? `[${escapeMarkdownLinkText(itemTitle)}](${itemLink})`
-        : itemTitle;
-      return `${index + 1}. ${titleText} - ${itemChapter}`;
+    const fields = visibleGroups.map((group) => {
+      const titleName = truncate(normalizeString(group.titleName || group.title, `${brandName} title`), 150);
+      const titleLink = normalizeString(group.titleUrl || group.linkUrl);
+      const fieldName = truncate(`${titleName}${group.chapterCount > 1 ? ` (${group.chapterCount})` : ""}`, 240);
+      const titleLine = titleLink ? `[Open title](${titleLink})` : "";
+      const chapterLines = normalizeArray(group.chapters).slice(0, 6).map((chapter) => {
+        const label = truncate(normalizeReleaseChapterLabel(chapter.chapterLabel || chapter.latestChapter, "Latest chapter"), 90);
+        const link = normalizeString(chapter.linkUrl || chapter.readerUrl || chapter.titleUrl);
+        return link
+          ? `- [${escapeMarkdownLinkText(label)}](${link})`
+          : `- ${label}`;
+      });
+      return {
+        name: fieldName,
+        value: truncate([titleLine, ...chapterLines].filter(Boolean).join("\n") || "Latest chapter", 1024),
+        inline: false
+      };
     });
-    const firstCoverUrl = normalizeString(visibleItems.find((item) => normalizeString(item.coverUrl))?.coverUrl);
+    const firstCoverUrl = normalizeString(
+      visibleGroups.find((group) => normalizeString(group.coverUrl))?.coverUrl
+      || digestItems.find((item) => normalizeString(item.coverUrl))?.coverUrl
+    );
+    const windowValue = [
+      notification.newestCompletedAt ? `Newest: ${notification.newestCompletedAt}` : "",
+      notification.oldestCompletedAt && notification.oldestCompletedAt !== notification.newestCompletedAt ? `Oldest: ${notification.oldestCompletedAt}` : ""
+    ].filter(Boolean).join("\n");
     return {
-      content: truncate(`${totalCount} new ${brandName} ${releaseWord} are ready to read.${hiddenLine}`, 1900),
+      content: truncate(`${totalCount} new ${brandName}${typeLabel ? ` ${typeLabel}` : ""} ${releaseWord} are ready to read.${hiddenLine}`, 1900),
       embeds: [{
-        title: `${totalCount} new ${brandName} ${releaseWord}`,
-        description: truncate(itemLines.join("\n") || `${brandName} releases are ready to read.`, 3900),
+        title: `${typeLabel ? `${typeLabel} ` : ""}${brandName} ${releaseWord} ready`,
+        description: truncate(`${visibleGroups.length} title group${visibleGroups.length === 1 ? "" : "s"} in this digest.`, 600),
         color: 0x5865f2,
         thumbnail: firstCoverUrl ? {url: firstCoverUrl} : undefined,
-        fields: hiddenCount > 0
-          ? [{
+        fields: [
+          ...fields,
+          windowValue ? {
+            name: "Window",
+            value: windowValue,
+            inline: true
+          } : null,
+          typeLabel ? {
+            name: "Library",
+            value: typeLabel,
+            inline: true
+          } : null,
+          hiddenCount > 0 ? {
             name: "More",
             value: `+${hiddenCount} more grouped in this digest.`
-          }]
-          : undefined,
+          } : null
+        ].filter(Boolean),
         footer: {text: "Grouped by Noona to keep the channel readable."}
       }]
     };
@@ -548,30 +590,43 @@ const deliverReleaseChannelNotifications = async ({
   const deliveredIds = new Set();
   for (const notification of normalizeArray(response.payload?.notifications)) {
     const notificationId = normalizeString(notification?.id);
-    const channelId = normalizeString(notification?.channelId);
-    if (!notificationId || !channelId || deliveredIds.has(notificationId)) {
+    const deliveries = normalizeArray(notification?.deliveries).length
+      ? normalizeArray(notification.deliveries)
+      : [notification];
+    if (!notificationId || deliveredIds.has(notificationId)) {
       continue;
     }
     try {
-      if (!shouldContinue()) {
-        return;
-      }
-      const payload = await appendAiMessageContext({
-        sage,
-        kind: "release",
-        notification,
-        payload: buildReleaseChannelPayload(notification, publicBaseUrl, getBrandName()),
-        logger
-      });
-      if (!shouldContinue()) {
-        return;
-      }
-      await discord.sendChannelMessage(
-        channelId,
-        payload
-      );
-      if (!shouldContinue()) {
-        return;
+      for (const delivery of deliveries) {
+        const channelId = normalizeString(delivery?.channelId, normalizeString(notification?.channelId));
+        if (!channelId) {
+          throw new Error("A release notification channel id is required.");
+        }
+        if (!shouldContinue()) {
+          return;
+        }
+        const deliveryNotification = {
+          ...notification,
+          ...delivery,
+          id: notificationId
+        };
+        const payload = await appendAiMessageContext({
+          sage,
+          kind: "release",
+          notification: deliveryNotification,
+          payload: buildReleaseChannelPayload(deliveryNotification, publicBaseUrl, getBrandName()),
+          logger
+        });
+        if (!shouldContinue()) {
+          return;
+        }
+        await discord.sendChannelMessage(
+          channelId,
+          payload
+        );
+        if (!shouldContinue()) {
+          return;
+        }
       }
       deliveredIds.add(notificationId);
       await acknowledge(notificationId, {

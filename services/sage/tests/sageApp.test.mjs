@@ -1336,8 +1336,14 @@ const restoreFetch = () => {
   globalThis.fetch = originalFetch;
 };
 
-const signInViaDiscord = async (baseUrl, query = "") =>
-  fetch(`${baseUrl}/api/auth/discord/callback?code=test-oauth-code${query ? `&${query}` : ""}`).then((response) => response.json());
+const signInViaDiscord = async (baseUrl, query = "") => {
+  if (query) {
+    return fetch(`${baseUrl}/api/auth/discord/callback?code=test-oauth-code&${query}`).then((response) => response.json());
+  }
+  const authUrlPayload = await fetch(`${baseUrl}/api/auth/discord/url`).then((response) => response.json());
+  const state = new URL(authUrlPayload.oauthUrl).searchParams.get("state");
+  return fetch(`${baseUrl}/api/auth/discord/callback?code=test-oauth-code&state=${encodeURIComponent(state)}`).then((response) => response.json());
+};
 
 test.afterEach(() => {
   restoreFetch();
@@ -1375,6 +1381,10 @@ test("sage carries a sanitized returnTo path through Discord OAuth state", async
 
   assert.equal(authUrlPayload.returnTo, "/browse?q=moon");
   assert.ok(state);
+
+  const missingStateResponse = await fetch(`${baseUrl}/api/auth/discord/callback?code=test-oauth-code`);
+  assert.equal(missingStateResponse.status, 403);
+  assert.match((await missingStateResponse.json()).error, /OAuth state/i);
 
   const ownerClaim = await signInViaDiscord(baseUrl, `state=${encodeURIComponent(state)}`);
   assert.equal(ownerClaim.returnTo, "/browse?q=moon");
@@ -5076,7 +5086,11 @@ test("sage round-trips brokered Portal Discord settings and exposes them in admi
       },
       notifications: {
         releaseChannelId: "release-789",
-        updateChannelId: "updates-789"
+        updateChannelId: "updates-789",
+        releaseChannelIdsByLibraryType: {
+          manga: "manga-789",
+          webtoon: "webtoon-789"
+        }
       },
       appa: {
         enabled: true,
@@ -5108,6 +5122,10 @@ test("sage round-trips brokered Portal Discord settings and exposes them in admi
   assert.equal(savedDiscord.commands.subscribe.enabled, false);
   assert.equal(savedDiscord.notifications.releaseChannelId, "release-789");
   assert.equal(savedDiscord.notifications.updateChannelId, "updates-789");
+  assert.deepEqual(savedDiscord.notifications.releaseChannelIdsByLibraryType, {
+    manga: "manga-789",
+    webtoon: "webtoon-789"
+  });
   assert.equal(savedDiscord.appa.enabled, true);
   assert.equal(savedDiscord.appa.reviewEnabled, false);
   assert.deepEqual(savedDiscord.appa.adminMentionChannelIds, ["admins"]);
@@ -5129,6 +5147,7 @@ test("sage round-trips brokered Portal Discord settings and exposes them in admi
   }).then((response) => response.json());
   assert.equal(discordPayload.settings.notifications.releaseChannelId, "release-789");
   assert.equal(discordPayload.settings.notifications.updateChannelId, "updates-789");
+  assert.equal(discordPayload.settings.notifications.releaseChannelIdsByLibraryType.webtoon, "webtoon-789");
   assert.ok(discordPayload.commandCatalog.some((command) => command.id === "request"));
   assert.equal(discordPayload.commandCatalog.find((command) => command.id === "status")?.splitOwner, "appa");
   assert.equal(discordPayload.commandCatalog.find((command) => command.id === "trivia")?.splitOwner, "both");
@@ -5140,12 +5159,16 @@ test("sage round-trips brokered Portal Discord settings and exposes them in admi
       ...discordPayload.settings,
       notifications: {
         releaseChannelId: "release-999",
-        updateChannelId: "updates-999"
+        updateChannelId: "updates-999",
+        releaseChannelIdsByLibraryType: {
+          manga: "manga-999"
+        }
       }
     })
   }).then((response) => response.json());
   assert.equal(savedV3.settings.notifications.releaseChannelId, "release-999");
   assert.equal(savedV3.settings.notifications.updateChannelId, "updates-999");
+  assert.equal(savedV3.settings.notifications.releaseChannelIdsByLibraryType.manga, "manga-999");
   assert.equal(savedV3.runtime.reload.ok, true);
 
   const releaseTest = await fetch(`${baseUrl}/api/moon-v3/admin/discord/release-notifications/test`, {
@@ -5153,7 +5176,8 @@ test("sage round-trips brokered Portal Discord settings and exposes them in admi
     headers,
     body: JSON.stringify(savedV3.settings)
   }).then((response) => response.json());
-  assert.equal(releaseTest.channelId, "release-999");
+  assert.equal(releaseTest.channelId, "manga-999");
+  assert.equal(releaseTest.notification.libraryTypeSlug, "manga");
   assert.equal(dependencyStub.calls.releaseNotificationTest, 1);
 
   const updateTest = await fetch(`${baseUrl}/api/moon-v3/admin/discord/update-notifications/test`, {

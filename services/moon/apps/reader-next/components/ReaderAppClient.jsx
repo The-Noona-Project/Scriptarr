@@ -176,19 +176,20 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = "", initialSessi
   const bootLayoutMode = bootLayoutModeFor(bootSession);
   const bootBookmarkPage = bootBookmarkPageFor(bootSession);
   const bootPageState = createBootPageState(bootSession, initialPagesData);
+  const [chrome, setChrome] = useState({auth: null, authError: "", loaded: false, loginUrl: "", branding: {siteName: "Scriptarr"}});
   const {
     loading,
     refreshing,
     error,
     status,
     data: initialSession
-  } = useMoonJson(sessionUrlFor(titleId, chapterId), {
+  } = useMoonJson(chrome.loaded && chrome.auth ? sessionUrlFor(titleId, chapterId) : null, {
+    enabled: Boolean(chrome.loaded && chrome.auth),
     fallback: bootSession,
-    deps: [titleId, chapterId],
+    deps: [chrome.auth?.discordUserId || "", titleId, chapterId],
     keepPreviousData: true,
     telemetry: {type: "session-fetch", titleId, chapterId}
   });
-  const [chrome, setChrome] = useState({auth: null, loginUrl: "", branding: {siteName: "Scriptarr"}});
   const [layoutMode, setLayoutMode] = useState(bootLayoutMode);
   const [readingDirection, setReadingDirection] = useState(DIRECTIONS.includes(bootSession?.preferences?.readingDirection) ? bootSession.preferences.readingDirection : "ltr");
   const [pageFit, setPageFit] = useState(PAGE_FITS.includes(bootSession?.preferences?.pageFit) ? bootSession.preferences.pageFit : "width");
@@ -558,7 +559,7 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = "", initialSessi
         return;
       }
       setChrome((current) => ({...current, ...nextValue}));
-      if (!nextValue.auth) {
+      if (!nextValue.auth && !nextValue.authError) {
         void loadMoonLoginUrl(returnTo).then((loginUrl) => {
           if (active && loginUrl) {
             setChrome((current) => ({...current, loginUrl}));
@@ -1112,11 +1113,15 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = "", initialSessi
     }
   };
 
-  if (loading && !initialSession) {
+  if (!chrome.loaded || (loading && !initialSession)) {
     return <ReaderInitialSkeleton />;
   }
 
-  if (status === 401 && !chrome.auth) {
+  if (chrome.authError) {
+    return <main className="reader-app"><div className="reader-empty-panel">{chrome.authError}</div></main>;
+  }
+
+  if (!chrome.auth || status === 401) {
     return (
       <main className="reader-app reader-landing">
         <section className="reader-empty-panel">

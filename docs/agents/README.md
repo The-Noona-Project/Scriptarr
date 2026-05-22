@@ -211,9 +211,9 @@ Architecture invariants:
 - Raven VPN fails closed when enabled, and the internal `raven.naming` setting now controls chapter and page naming.
 - `raven.naming` is now profile-based by library type, and Moon admin exposes it through `/admin/mediamanagement`
   instead of burying it in the generic settings page.
-- Moon admin library and calendar now expect richer Raven release metadata: the series index is dense and sortable,
-  while the calendar view consumes chapter release dates captured from source scrapes, metadata enrichment, and
-  completed-title fallback dates so finished catalog titles remain visible.
+- Moon admin library and calendar now expect richer Raven release metadata: the series index is dense, sortable, and
+  linked to import/ingest tooling, while the calendar view consumes chapter release dates captured from source scrapes,
+  metadata enrichment, and completed-title fallback dates so finished catalog titles remain visible.
 - Moon admin System pages now include Logs, Events, Updates, Tasks, Status, API, and AI as purpose-built Next surfaces.
   Keep browser traffic same-origin through Moon -> Sage, keep task jobs allowlisted, make Status load the lightweight
   registry first and probe GET/read endpoints only from its explicit check action, and keep Oracle/LocalAI settings
@@ -225,6 +225,7 @@ Architecture invariants:
   canonical title page. Keep this accessible-link split in browse, library, and home shelf cards.
 - Moon chrome should collapse branding, auth, user identity, and first-owner bootstrap into
   `/api/moon/chrome/bootstrap`, then fetch the Discord login URL lazily only when a signed-out screen needs it.
+  OAuth callbacks must stay bound to the short-lived browser state cookie.
 - Moon Settings and Status should paint saved or registry payloads first, then hydrate runtime-only data from
   `/api/moon-v3/admin/settings/runtime` and `/api/moon-v3/admin/system/status/runtime`.
 

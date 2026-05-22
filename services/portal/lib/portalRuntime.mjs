@@ -18,6 +18,19 @@ const renderTemplate = (template, values) => Object.entries(values).reduce(
   normalizeString(template)
 );
 
+const normalizeTypeSlug = (value, fallback = "manga") => {
+  const normalized = normalizeString(value, fallback)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+/, "")
+    .replace(/-+$/, "");
+  return normalized || fallback;
+};
+
+const formatTypeLabel = (value) => normalizeTypeSlug(value)
+  .replace(/-/g, " ")
+  .replace(/\b\w/g, (letter) => letter.toUpperCase());
+
 const describeError = (error) => error instanceof Error ? error.message : String(error ?? "");
 const DOWNLOADALL_APPROVE_REACTION = "✅";
 const DOWNLOADALL_DENY_REACTION = "❌";
@@ -1273,8 +1286,13 @@ export const createPortalRuntime = ({
 
   const sendReleaseNotificationTest = async (payload = {}) => {
     const notification = payload.notification || {};
+    const typeSlug = normalizeTypeSlug(notification.libraryTypeSlug || payload.libraryTypeSlug || "manga");
+    const typedChannels = payload.settings?.notifications?.releaseChannelIdsByLibraryType
+      || settings.notifications?.releaseChannelIdsByLibraryType
+      || {};
     const channelId = normalizeString(
       notification.channelId
+      || typedChannels?.[typeSlug]
       || payload.settings?.notifications?.releaseChannelId,
       settings.notifications?.releaseChannelId || ""
     );
@@ -1286,7 +1304,9 @@ export const createPortalRuntime = ({
     }
     const messagePayload = buildReleaseChannelPayload({
       ...notification,
-      channelId
+      channelId,
+      libraryTypeSlug: typeSlug,
+      libraryTypeLabel: normalizeString(notification.libraryTypeLabel, formatTypeLabel(typeSlug))
     }, config.publicBaseUrl);
     await discord.sendChannelMessage(channelId, messagePayload);
     return {

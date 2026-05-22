@@ -12,6 +12,7 @@ import {createContext, useContext} from "react";
  * @type {import("react").Context<{
  *   branding: {siteName?: string},
  *   auth: any,
+ *   authError?: string,
  *   loaded?: boolean,
  *   bootstrap: any,
  *   libraryTypes: Array<{slug: string, label: string, count: number}>,
@@ -23,6 +24,7 @@ import {createContext, useContext} from "react";
 const MoonChromeContext = createContext({
   branding: {siteName: "Scriptarr"},
   auth: null,
+  authError: "",
   loaded: false,
   bootstrap: null,
   libraryTypes: [],
@@ -37,6 +39,7 @@ const MoonChromeContext = createContext({
  * @returns {{
  *   branding: {siteName?: string},
  *   auth: any,
+ *   authError?: string,
  *   loaded?: boolean,
  *   bootstrap: any,
  *   libraryTypes: Array<{slug: string, label: string, count: number}>,

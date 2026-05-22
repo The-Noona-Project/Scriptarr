@@ -141,9 +141,10 @@ Sage also owns the admin Wanted repair routes. `/api/moon-v3/admin/wanted/metada
 `metadata-gaps` route remains an alias, metadata search is scoped with the Raven library id, metadata apply calls
 Raven identify, and missing-chapter repair stays on the existing staged replacement download broker.
 Sage also owns Portal's release and update notification queues. Completed Raven tasks become compact
-`release:digest:<newestTaskId>:<count>` channel notifications when a release channel is configured; the durable state is
-an object with `ackedIds`, `silenceBefore`, `lastDigestAt`, and `updatedAt`, while older array ack settings still
-normalize correctly. The scheduled or manual update-check task also asks GitHub for new
+`release:digest:<newestTaskId>:<count>` channel notifications when a fallback release channel or per-library release
+channel is configured; each digest can contain multiple channel deliveries grouped by library type and title. The
+durable state is an object with `ackedIds`, `silenceBefore`, `lastDigestAt`, and `updatedAt`, while older array ack
+settings still normalize correctly. The scheduled or manual update-check task also asks GitHub for new
 `The-Noona-Project/Scriptarr` commits since the last posted update, asks Oracle for an AI-written Noona summary, and
 exposes a stable `update:<latestSha>` channel notification when an update channel is configured. If Oracle cannot
 summarize the commits or returns degraded/disabled fallback copy, raw commit rows, invented how-to steps, or generic

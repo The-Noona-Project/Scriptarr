@@ -24,10 +24,10 @@ export const parseCookies = (header) => {
  *
  * @param {string} name
  * @param {string} value
- * @param {{httpOnly?: boolean, path?: string, maxAge?: number}} [options]
+ * @param {{httpOnly?: boolean, path?: string, maxAge?: number, secure?: boolean}} [options]
  * @returns {string}
  */
-export const serializeCookie = (name, value, {httpOnly = true, path = "/", maxAge = 86400} = {}) => {
+export const serializeCookie = (name, value, {httpOnly = true, path = "/", maxAge = 86400, secure = false} = {}) => {
   const segments = [
     `${name}=${encodeURIComponent(value)}`,
     `Path=${path}`,
@@ -37,6 +37,9 @@ export const serializeCookie = (name, value, {httpOnly = true, path = "/", maxAg
 
   if (httpOnly) {
     segments.push("HttpOnly");
+  }
+  if (secure) {
+    segments.push("Secure");
   }
 
   return segments.join("; ");

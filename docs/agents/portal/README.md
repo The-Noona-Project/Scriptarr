@@ -22,8 +22,8 @@
 - Portal now also owns requester approval, denial, and completion DMs. Keep those notifications deduped by request id
   plus decision state, and reuse the shared `coverUrl` plus Moon public base URL when they are available.
 - Portal also owns release channel posts for completed Raven downloads. Poll Sage's release-notification queue, send
-  one compact digest to the configured channel with up to ten Moon read or title links plus `+N more`, and acknowledge
-  only after Discord accepts the message.
+  compact digests to the fallback or per-library-type channels with title-grouped Moon read links plus `+N more`, and
+  acknowledge only after every Discord send in the digest succeeds.
 - Portal also owns update channel posts for Sage-created GitHub update digests. Poll Sage's update-notification queue,
   post Noona's AI-written summary to the configured update channel, and acknowledge only after Discord accepts the
   message. Portal must not call GitHub or Oracle directly for this workflow.

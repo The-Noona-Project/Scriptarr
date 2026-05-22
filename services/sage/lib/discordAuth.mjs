@@ -25,33 +25,35 @@ export const sanitizeReturnToPath = (value, fallback = "/") => {
 /**
  * Encode Moon's post-auth redirect hints into Discord's OAuth state payload.
  *
- * @param {{returnTo?: string}} [value]
+ * @param {{returnTo?: string, nonce?: string}} [value]
  * @returns {string}
  */
-export const buildDiscordOauthState = ({returnTo = "/"} = {}) =>
+export const buildDiscordOauthState = ({returnTo = "/", nonce = ""} = {}) =>
   Buffer.from(JSON.stringify({
-    returnTo: sanitizeReturnToPath(returnTo, "/")
+    returnTo: sanitizeReturnToPath(returnTo, "/"),
+    nonce: typeof nonce === "string" ? nonce.trim() : ""
   }), "utf8").toString("base64url");
 
 /**
  * Decode a Discord OAuth state payload back into Scriptarr's auth hints.
  *
  * @param {unknown} value
- * @returns {{returnTo: string}}
+ * @returns {{returnTo: string, nonce: string}}
  */
 export const parseDiscordOauthState = (value) => {
   const normalized = typeof value === "string" ? value.trim() : "";
   if (!normalized) {
-    return {returnTo: "/"};
+    return {returnTo: "/", nonce: ""};
   }
 
   try {
     const parsed = JSON.parse(Buffer.from(normalized, "base64url").toString("utf8"));
     return {
-      returnTo: sanitizeReturnToPath(parsed?.returnTo, "/")
+      returnTo: sanitizeReturnToPath(parsed?.returnTo, "/"),
+      nonce: typeof parsed?.nonce === "string" ? parsed.nonce.trim() : ""
     };
   } catch {
-    return {returnTo: "/"};
+    return {returnTo: "/", nonce: ""};
   }
 };
 
@@ -69,13 +71,13 @@ export const buildCallbackUrl = (config) =>
  * Build the Discord OAuth authorize URL with Scriptarr's fixed identify scope.
  *
  * @param {{discordClientId: string, publicBaseUrl: string}} config
- * @param {{returnTo?: string}} [options]
+ * @param {{returnTo?: string, nonce?: string}} [options]
  * @returns {string}
  */
-export const buildDiscordOauthUrl = (config, {returnTo = "/"} = {}) => {
+export const buildDiscordOauthUrl = (config, {returnTo = "/", nonce = ""} = {}) => {
   const callbackUrl = buildCallbackUrl(config);
   const scopes = encode("identify");
-  const state = encode(buildDiscordOauthState({returnTo}));
+  const state = encode(buildDiscordOauthState({returnTo, nonce}));
   return `https://discord.com/oauth2/authorize?client_id=${encode(config.discordClientId)}&response_type=code&redirect_uri=${encode(callbackUrl)}&scope=${scopes}&state=${state}`;
 };
 

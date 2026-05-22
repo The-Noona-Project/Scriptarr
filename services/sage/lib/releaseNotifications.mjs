@@ -37,6 +37,30 @@ const normalizeTypeSlug = (value, fallback = "manga") => {
   return normalized || fallback;
 };
 
+const formatTypeLabel = (value) => {
+  const normalized = normalizeTypeSlug(value);
+  return normalized
+    .replace(/-/g, " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+};
+
+const normalizeChannelMap = (value = {}) => {
+  const source = normalizeObject(value, {}) || {};
+  const entries = [];
+  for (const [key, channelId] of Object.entries(source)) {
+    const typeSlug = normalizeTypeSlug(key, "");
+    const normalizedChannelId = normalizeScalarString(channelId);
+    if (!typeSlug || !normalizedChannelId) {
+      continue;
+    }
+    entries.push([typeSlug, normalizedChannelId]);
+    if (entries.length >= 25) {
+      break;
+    }
+  }
+  return Object.fromEntries(entries);
+};
+
 const normalizeTitleKey = (value) => normalizeString(value)
   .toLowerCase()
   .replace(/[^a-z0-9]+/g, " ")
@@ -189,6 +213,89 @@ const compareReleaseItems = (left, right) => {
   return normalizeString(right?.taskId).localeCompare(normalizeString(left?.taskId));
 };
 
+const titleGroupKey = (item = {}) => {
+  const titleId = normalizeScalarString(item.titleId);
+  return titleId
+    ? `${normalizeTypeSlug(item.libraryTypeSlug)}::id:${titleId}`
+    : `${normalizeTypeSlug(item.libraryTypeSlug)}::name:${normalizeTitleKey(item.titleName)}`;
+};
+
+const groupDeliveryItemsByTitle = (items = []) => {
+  const groups = new Map();
+  for (const item of normalizeArray(items)) {
+    const key = titleGroupKey(item);
+    const existing = groups.get(key);
+    const chapter = {
+      id: normalizeString(item.id),
+      taskId: normalizeString(item.taskId),
+      chapterId: normalizeString(item.chapterId),
+      chapterLabel: normalizeString(item.chapterLabel, "Latest chapter"),
+      readerUrl: normalizeString(item.readerUrl),
+      linkUrl: normalizeString(item.linkUrl),
+      completedAt: normalizeString(item.completedAt)
+    };
+    if (existing) {
+      existing.chapters.push(chapter);
+      existing.chapterCount += 1;
+      existing.newestCompletedAt = normalizeString(existing.newestCompletedAt || item.completedAt);
+      existing.oldestCompletedAt = normalizeString(item.completedAt || existing.oldestCompletedAt);
+      continue;
+    }
+    groups.set(key, {
+      titleId: normalizeString(item.titleId),
+      titleName: normalizeString(item.titleName, "Untitled"),
+      libraryTypeSlug: normalizeTypeSlug(item.libraryTypeSlug),
+      libraryTypeLabel: normalizeString(item.libraryTypeLabel, formatTypeLabel(item.libraryTypeSlug)),
+      coverUrl: normalizeString(item.coverUrl),
+      titleUrl: normalizeString(item.titleUrl),
+      chapterCount: 1,
+      newestCompletedAt: normalizeString(item.completedAt),
+      oldestCompletedAt: normalizeString(item.completedAt),
+      chapters: [chapter]
+    });
+  }
+  return Array.from(groups.values());
+};
+
+const buildReleaseDeliveries = (items = [], visibleLimit = RELEASE_DIGEST_VISIBLE_LIMIT) => {
+  const deliveriesByKey = new Map();
+  for (const item of normalizeArray(items)) {
+    const channelId = normalizeScalarString(item.channelId);
+    if (!channelId) {
+      continue;
+    }
+    const typeSlug = normalizeTypeSlug(item.libraryTypeSlug);
+    const key = `${channelId}::${typeSlug}`;
+    if (!deliveriesByKey.has(key)) {
+      deliveriesByKey.set(key, {
+        channelId,
+        libraryTypeSlug: typeSlug,
+        libraryTypeLabel: normalizeString(item.libraryTypeLabel, formatTypeLabel(typeSlug)),
+        items: []
+      });
+    }
+    deliveriesByKey.get(key).items.push(item);
+  }
+
+  return Array.from(deliveriesByKey.values()).map((delivery) => {
+    const sortedItems = [...delivery.items].sort(compareReleaseItems);
+    const visibleItems = sortedItems.slice(0, visibleLimit);
+    const hiddenCount = Math.max(0, sortedItems.length - visibleItems.length);
+    return {
+      channelId: delivery.channelId,
+      libraryTypeSlug: delivery.libraryTypeSlug,
+      libraryTypeLabel: delivery.libraryTypeLabel,
+      digest: true,
+      items: visibleItems,
+      titleGroups: groupDeliveryItemsByTitle(visibleItems),
+      totalCount: sortedItems.length,
+      hiddenCount,
+      newestCompletedAt: normalizeString(sortedItems[0]?.completedAt),
+      oldestCompletedAt: normalizeString(sortedItems[sortedItems.length - 1]?.completedAt)
+    };
+  });
+};
+
 /**
  * Normalize the durable release notification state stored in Vault.
  *
@@ -220,6 +327,7 @@ export const normalizeReleaseNotificationState = (value = {}) => {
  * @param {object} options
  * @param {object} options.config
  * @param {string} options.channelId
+ * @param {Record<string, string>} [options.channelIdsByLibraryType]
  * @param {unknown[]} options.tasks
  * @param {unknown[]} options.libraryTitles
  * @param {unknown} options.state
@@ -229,13 +337,15 @@ export const normalizeReleaseNotificationState = (value = {}) => {
 export const buildReleaseNotificationDigests = ({
   config = {},
   channelId = "",
+  channelIdsByLibraryType = {},
   tasks = [],
   libraryTitles = [],
   state = {},
   maxItems = RELEASE_DIGEST_VISIBLE_LIMIT
 } = {}) => {
   const normalizedChannelId = normalizeScalarString(channelId);
-  if (!normalizedChannelId) {
+  const perTypeChannels = normalizeChannelMap(channelIdsByLibraryType);
+  if (!normalizedChannelId && !Object.keys(perTypeChannels).length) {
     return [];
   }
 
@@ -259,11 +369,16 @@ export const buildReleaseNotificationDigests = ({
         || task?.requestType
         || matchedTitle?.mediaType
       );
+      const libraryTypeLabel = normalizeString(
+        task?.libraryTypeLabel,
+        normalizeString(matchedTitle?.libraryTypeLabel, formatTypeLabel(typeSlug))
+      );
+      const itemChannelId = perTypeChannels[typeSlug] || normalizedChannelId;
       const titleUrl = titleId
         ? `${normalizeString(config.publicBaseUrl).replace(/\/+$/g, "")}/title/${encodeURIComponent(typeSlug)}/${encodeURIComponent(titleId)}`
         : "";
       const readerUrl = titleId && chapter?.id
-        ? `${normalizeString(config.publicBaseUrl).replace(/\/+$/g, "")}/reader/${encodeURIComponent(typeSlug)}/${encodeURIComponent(chapter.id)}`
+        ? `${normalizeString(config.publicBaseUrl).replace(/\/+$/g, "")}/reader/${encodeURIComponent(typeSlug)}/${encodeURIComponent(titleId)}/${encodeURIComponent(chapter.id)}`
         : "";
       return {
         id,
@@ -271,6 +386,8 @@ export const buildReleaseNotificationDigests = ({
         titleId,
         titleName: normalizeString(task?.titleName, normalizeString(matchedTitle?.title, "Untitled")),
         libraryTypeSlug: typeSlug,
+        libraryTypeLabel,
+        channelId: itemChannelId,
         chapterId: normalizeString(chapter?.id),
         chapterLabel: resolveChapterLabel({task, matchedTitle, chapter}),
         coverUrl: normalizeString(task?.coverUrl, normalizeString(matchedTitle?.coverUrl)),
@@ -281,7 +398,7 @@ export const buildReleaseNotificationDigests = ({
       };
     })
     .filter((item) => {
-      if (!item.taskId || !item.id || ackedSet.has(item.id)) {
+      if (!item.taskId || !item.id || !item.channelId || ackedSet.has(item.id)) {
         return false;
       }
       if (!Number.isFinite(silenceBeforeTime)) {
@@ -300,17 +417,19 @@ export const buildReleaseNotificationDigests = ({
     Math.max(1, Number.parseInt(String(maxItems || RELEASE_DIGEST_VISIBLE_LIMIT), 10) || RELEASE_DIGEST_VISIBLE_LIMIT),
     RELEASE_DIGEST_VISIBLE_LIMIT
   );
-  const visibleItems = items.slice(0, visibleLimit);
+  const deliveries = buildReleaseDeliveries(items, visibleLimit);
+  const visibleItems = deliveries.flatMap((delivery) => normalizeArray(delivery.items));
   const newest = items[0];
   const oldest = items[items.length - 1];
 
   return [{
     id: `release:digest:${newest.taskId}:${items.length}`,
-    channelId: normalizedChannelId,
+    channelId: normalizeString(deliveries[0]?.channelId, normalizedChannelId),
     digest: true,
+    deliveries,
     items: visibleItems,
     totalCount: items.length,
-    hiddenCount: Math.max(0, items.length - visibleItems.length),
+    hiddenCount: deliveries.reduce((sum, delivery) => sum + Math.max(0, Number.parseInt(String(delivery.hiddenCount || 0), 10) || 0), 0),
     newestCompletedAt: normalizeString(newest.completedAt),
     oldestCompletedAt: normalizeString(oldest.completedAt),
     silenceThrough: toIso(newest.completedAt),

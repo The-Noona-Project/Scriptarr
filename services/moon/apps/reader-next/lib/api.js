@@ -192,7 +192,9 @@ export const loadMoonChromeContext = async (returnTo = "/reader") => {
   return {
     branding: payload.branding || {siteName: "Scriptarr"},
     auth: user,
+    loaded: true,
     bootstrap: payload.bootstrap || null,
+    authError: payload.errors?.auth || payload.errors?.bootstrap || "",
     loginUrl: ""
   };
 };

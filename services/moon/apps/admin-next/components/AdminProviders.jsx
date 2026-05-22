@@ -7,13 +7,14 @@
 import {createContext, useContext, useEffect, useMemo, useState} from "react";
 import {usePathname, useSearchParams} from "next/navigation";
 import {canAccessAdmin} from "../lib/access.js";
-import {AdminEventStreamProvider, loadAdminChromeContext, loadAdminLoginUrl} from "../lib/api.js";
+import {AdminEventStreamProvider, loadAdminChromeContext, loadAdminLoginUrl, useAdminEventSubscription} from "../lib/api.js";
 import {AdminToastProvider} from "./AdminToasts.jsx";
 
 const AdminChromeContext = createContext({
   branding: {siteName: "Scriptarr"},
   user: null,
   bootstrap: null,
+  authError: "",
   loginUrl: "",
   loading: true,
   canAccessAdmin: false,
@@ -45,6 +46,17 @@ export const AdminProviders = ({children}) => (
   <AdminChromeProvider>{children}</AdminChromeProvider>
 );
 
+const AdminChromeEventSync = ({enabled, onRefresh}) => {
+  useAdminEventSubscription({
+    domains: ["auth", "users", "access"],
+    enabled,
+    onEvent: () => {
+      void onRefresh?.();
+    }
+  });
+  return null;
+};
+
 const AdminChromeProvider = ({children}) => {
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -52,6 +64,7 @@ const AdminChromeProvider = ({children}) => {
     branding: {siteName: "Scriptarr"},
     user: null,
     bootstrap: null,
+    authError: "",
     loginUrl: "",
     loading: true
   });
@@ -68,7 +81,7 @@ const AdminChromeProvider = ({children}) => {
     });
     if (!nextChrome.user) {
       const loginUrl = await loadAdminLoginUrl(returnTo);
-      setChrome((current) => current.user ? current : {...current, loginUrl});
+      setChrome((current) => current.user || current.authError ? current : {...current, loginUrl});
     }
   }, [pathname, searchParams]);
 
@@ -88,7 +101,7 @@ const AdminChromeProvider = ({children}) => {
       if (active && !nextChrome.user) {
         void loadAdminLoginUrl(returnTo).then((loginUrl) => {
           if (active && loginUrl) {
-            setChrome((current) => current.user ? current : {...current, loginUrl});
+            setChrome((current) => current.user || current.authError ? current : {...current, loginUrl});
           }
         });
       }
@@ -108,6 +121,7 @@ const AdminChromeProvider = ({children}) => {
   return (
     <AdminChromeContext.Provider value={value}>
       <AdminEventStreamProvider user={chrome.user}>
+        <AdminChromeEventSync enabled={Boolean(chrome.user)} onRefresh={refreshChrome} />
         <AdminToastProvider user={chrome.user}>{children}</AdminToastProvider>
       </AdminEventStreamProvider>
     </AdminChromeContext.Provider>

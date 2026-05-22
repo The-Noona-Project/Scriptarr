@@ -54,7 +54,8 @@
 - Keep Discord login as the only bootstrap and admin sign-in path. Do not reintroduce claim-dev-session behavior.
 - Preserve same-origin login return flow. Moon should pass a sanitized `returnTo` path into Sage's Discord auth URL,
   and the callback relay should send users back to the page where login started whenever that route is still allowed,
-  falling back to `/` otherwise.
+  falling back to `/` otherwise. Keep the browser-bound OAuth-state cookie check in place so callbacks cannot be replayed
+  from another browser session.
 - Keep HTML responses uncached and static admin or user assets versioned so publishes invalidate the browser cache
   without relying on manual hard refreshes.
 - User and admin chrome should start from `/api/moon/chrome/bootstrap?returnTo=...`, which returns branding, auth,
@@ -199,10 +200,11 @@
   same-origin, and honest about what will be deleted: content-side requests, progress, read state, follows, bookmarks,
   Raven catalog state, Raven task state, and managed Raven download folders only.
 - `/admin/discord` should surface Portal capability state honestly: command runtime, command sync, onboarding
-  availability, release notification channel id, update notification channel id, Noona mention-chat enable state,
-  allowed channel ids, memory counts and clear actions, Appa enable/review/correction controls, Appa command role
-  gates, redacted Appa review audit, Noona trivia channel/scoring/schedule settings, last mention-chat time/error, and
-  the last meaningful runtime error should all be visible without forcing the admin to read logs.
+  availability, fallback and per-library release notification channel ids, update notification channel id, Noona
+  mention-chat enable state, allowed channel ids, memory counts and clear actions, Appa enable/review/correction
+  controls, Appa command role gates, redacted Appa review audit, Noona trivia channel/scoring/schedule settings, last
+  mention-chat time/error, and the last meaningful runtime error should all be visible without forcing the admin to read
+  logs.
 - Keep Noona mention-chat controls operational rather than decorative: the page should save the `portal.discord.noonaChat`
   settings object, make `publicReplies` visible but fixed, keep memory review counts clear, and call the Sage memory
   clear route through Moon's same-origin API. Do not call Portal, Vault, or Oracle directly from the browser.

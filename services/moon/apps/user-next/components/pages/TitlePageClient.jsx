@@ -122,7 +122,7 @@ const ChapterRowsSkeleton = () => (
  */
 export const TitlePageClient = ({titleId, typeSlug = ""}) => {
   const router = useRouter();
-  const {auth, branding, loginUrl} = useMoonChrome();
+  const {auth, authError, branding, loaded: chromeLoaded = false, loginUrl} = useMoonChrome();
   const siteName = branding?.siteName || "Scriptarr";
   const {
     loading: summaryLoading,
@@ -131,9 +131,10 @@ export const TitlePageClient = ({titleId, typeSlug = ""}) => {
     data: summaryData,
     refresh: refreshSummary,
     setData: setSummaryData
-  } = useMoonJson(`/api/moon-v3/user/title/${encodeURIComponent(titleId)}/summary`, {
+  } = useMoonJson(chromeLoaded && auth ? `/api/moon-v3/user/title/${encodeURIComponent(titleId)}/summary` : null, {
+    enabled: Boolean(chromeLoaded && auth),
     fallback: summaryFallback,
-    deps: [titleId]
+    deps: [auth?.discordUserId || "", titleId]
   });
   const [busy, setBusy] = useState(false);
   const [activeTab, setActiveTab] = useState("chapters");
@@ -293,7 +294,15 @@ export const TitlePageClient = ({titleId, typeSlug = ""}) => {
     }
   }, [activeTab, fetchRequests]);
 
-  if (summaryStatus === 401 && !auth) {
+  if (!chromeLoaded) {
+    return <div className="moon-title-page"><TitleHeroSkeleton /></div>;
+  }
+
+  if (authError) {
+    return <ErrorView detail={authError} />;
+  }
+
+  if (!auth || (summaryStatus === 401 && !auth)) {
     return (
       <AuthRequiredView
         loginUrl={loginUrl}

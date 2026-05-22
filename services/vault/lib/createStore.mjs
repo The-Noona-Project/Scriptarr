@@ -98,6 +98,10 @@ const normalizeReadStateTimestamp = (value, fallback = null) => {
   const parsed = Date.parse(normalized);
   return Number.isFinite(parsed) ? new Date(parsed).toISOString() : fallback;
 };
+const isSessionExpired = (session = {}) => {
+  const createdAt = Date.parse(String(session?.createdAt || session?.created_at || ""));
+  return Number.isFinite(createdAt) && Date.now() - createdAt > SESSION_TTL_MS;
+};
 const toTitleReadState = (value = {}) => ({
   mediaId: normalizeString(value.mediaId || value.media_id),
   discordUserId: normalizeString(value.discordUserId || value.discord_user_id),
@@ -116,6 +120,10 @@ const CONTENT_RESET_SETTING_PREFIXES = Object.freeze([
   "moon.following.",
   "moon.reader.bookmarks."
 ]);
+const SESSION_TTL_MS = Math.max(
+  60 * 1000,
+  Number.parseInt(String(process.env.SCRIPTARR_SESSION_TTL_MS || 24 * 60 * 60 * 1000), 10) || 24 * 60 * 60 * 1000
+);
 const API_KEY_KINDS = new Set(["system", "user"]);
 const normalizeApiKeyKind = (value, fallback = "system") => {
   const normalized = normalizeString(value, fallback).toLowerCase();
@@ -1417,7 +1425,12 @@ const createMemoryStore = () => {
       return {ok: true};
     },
     async getSession(token) {
-      return state.sessions.get(token) || null;
+      const session = state.sessions.get(token) || null;
+      if (session && isSessionExpired(session)) {
+        state.sessions.delete(token);
+        return null;
+      }
+      return session;
     },
     async getUserForSession(token) {
       const session = await this.getSession(token);
@@ -2940,10 +2953,17 @@ const createMysqlStore = (config) => {
       return {ok: true};
     },
     async getSession(token) {
+      await pool.query("DELETE FROM sessions WHERE created_at < DATE_SUB(NOW(), INTERVAL ? SECOND)", [Math.ceil(SESSION_TTL_MS / 1000)]);
       const [rows] = await pool.query("SELECT * FROM sessions WHERE token = ? LIMIT 1", [token]);
-      return rows[0]
-        ? {token: rows[0].token, discordUserId: rows[0].discord_user_id, createdAt: rows[0].created_at.toISOString()}
-        : null;
+      if (!rows[0]) {
+        return null;
+      }
+      const session = {
+        token: rows[0].token,
+        discordUserId: rows[0].discord_user_id,
+        createdAt: toIsoTimestamp(rows[0].created_at)
+      };
+      return isSessionExpired(session) ? null : session;
     },
     async getUserForSession(token) {
       const session = await this.getSession(token);

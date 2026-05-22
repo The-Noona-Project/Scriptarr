@@ -434,10 +434,12 @@ const createSageStub = ({requests = [], streamProbe = null} = {}) => Promise.res
   }
 
   if (requestUrl.pathname === "/api/auth/discord/url") {
+    const returnTo = requestUrl.searchParams.get("returnTo") || "/";
+    const state = Buffer.from(JSON.stringify({returnTo, nonce: "sage-nonce"}), "utf8").toString("base64url");
     response.writeHead(200, {"Content-Type": "application/json"});
     response.end(JSON.stringify({
-      oauthUrl: "https://discord.example/login",
-      returnTo: requestUrl.searchParams.get("returnTo") || "/"
+      oauthUrl: `https://discord.example/login?state=${encodeURIComponent(state)}`,
+      returnTo
     }));
     return;
   }
@@ -1189,4 +1191,57 @@ test("moon clears the local session cookie on logout", async () => {
   await closeServer(server);
   await closeServer(sageStub);
   process.chdir(cwd);
+});
+
+test("moon binds Discord OAuth callbacks to the browser state cookie", async () => {
+  const cwd = process.cwd();
+  process.chdir(path.join(path.dirname(fileURLToPath(import.meta.url)), ".."));
+
+  const requests = [];
+  const sageStub = await createSageStub({requests});
+  sageStub.listen(0);
+  const sagePort = sageStub.address().port;
+  process.env.SCRIPTARR_SAGE_BASE_URL = `http://127.0.0.1:${sagePort}`;
+
+  const {app} = await createMoonApp();
+  const server = app.listen(0);
+  const baseUrl = `http://127.0.0.1:${server.address().port}`;
+
+  try {
+    const urlResponse = await fetch(`${baseUrl}/api/moon/auth/discord/url?returnTo=${encodeURIComponent("/admin/library")}`, {
+      headers: {"x-forwarded-proto": "https"}
+    });
+    const urlPayload = await urlResponse.json();
+    const oauthUrl = new URL(urlPayload.oauthUrl);
+    const state = oauthUrl.searchParams.get("state");
+    const oauthCookie = urlResponse.headers.get("set-cookie") || "";
+
+    assert.equal(urlResponse.status, 200);
+    assert.ok(state);
+    assert.match(oauthCookie, /scriptarr_session\.oauth_state=sage-nonce/);
+    assert.match(oauthCookie, /Path=\/api\/moon\/auth\/discord\/callback/);
+    assert.match(oauthCookie, /HttpOnly/);
+    assert.match(oauthCookie, /SameSite=Lax/);
+    assert.match(oauthCookie, /Secure/);
+
+    const rejected = await fetch(`${baseUrl}/api/moon/auth/discord/callback?code=test-code&state=${encodeURIComponent(state)}`, {
+      headers: {cookie: "scriptarr_session.oauth_state=wrong-nonce", "x-forwarded-proto": "https"}
+    });
+    assert.equal(rejected.status, 403);
+
+    const accepted = await fetch(`${baseUrl}/api/moon/auth/discord/callback?code=test-code&state=${encodeURIComponent(state)}`, {
+      headers: {cookie: "scriptarr_session.oauth_state=sage-nonce", "x-forwarded-proto": "https"}
+    });
+    assert.equal(accepted.status, 200);
+    assert.match(accepted.headers.get("set-cookie") || "", /scriptarr_session=member-token/);
+
+    assert.equal(
+      requests.filter((entry) => entry.url?.startsWith("/api/auth/discord/callback")).length,
+      1
+    );
+  } finally {
+    await closeServer(server);
+    await closeServer(sageStub);
+    process.chdir(cwd);
+  }
 });

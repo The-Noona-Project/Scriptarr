@@ -662,6 +662,8 @@ The test stack uses:
 - If Moon shows Discord auth as incomplete, re-check the public base URL and callback URL in the Discord developer
   portal. Scriptarr now tries to send the user back to the page they started from after Discord login, so a wrong
   callback or public base URL can also break the return-path handoff and drop users back to `/`.
+- If Discord login works locally but fails behind a reverse proxy, confirm the proxy forwards HTTPS scheme headers.
+  Moon binds OAuth callbacks to a short-lived browser cookie, and production HTTPS should mark that state cookie Secure.
 - If Oracle is off, confirm the chosen provider and credentials in `/admin/system/ai` before treating the rest of the
   stack as unhealthy.
 - If LocalAI actions are slow, let the Moon admin job continue instead of retrying immediately; the first GGUF download,

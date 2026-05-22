@@ -44,11 +44,52 @@ test("release builder groups completed tasks into one compact digest", () => {
   assert.match(notifications[0].id, /^release:digest:/);
   assert.equal(notifications[0].totalCount, 12);
   assert.equal(notifications[0].items.length, 10);
+  assert.equal(notifications[0].deliveries.length, 1);
+  assert.equal(notifications[0].deliveries[0].titleGroups[0].titleName, "Title 12");
   assert.equal(notifications[0].hiddenCount, 2);
   assert.equal(notifications[0].ackItemIds.length, 10);
   assert.equal(notifications[0].items[0].titleName, "Title 12");
   assert.equal(notifications[0].items[0].chapterLabel, "Chapter 12");
+  assert.equal(notifications[0].items[0].readerUrl, "https://pax-kun.com/reader/manga/title-12/chapter-12");
   assert.equal(notifications[0].items.some((item) => /Raven/i.test(String(item.chapterLabel))), false);
+});
+
+test("release builder routes typed deliveries and keeps one digest ack", () => {
+  const notifications = buildReleaseNotificationDigests({
+    config: {publicBaseUrl: "https://pax-kun.com"},
+    channelId: "fallback-channel",
+    channelIdsByLibraryType: {
+      manga: "manga-channel",
+      webtoon: "webtoon-channel"
+    },
+    tasks: [
+      completedTask(1, {titleId: "same-title", titleName: "Same Title", libraryTypeSlug: "manga", message: "Chapter 10"}),
+      completedTask(2, {titleId: "same-title", titleName: "Same Title", libraryTypeSlug: "manga", message: "Chapter 11"}),
+      completedTask(3, {titleId: "toon-title", titleName: "Toon Title", libraryTypeSlug: "webtoon"}),
+      completedTask(4, {titleId: "comic-title", titleName: "Comic Title", libraryTypeSlug: "comic"})
+    ],
+    libraryTitles: [{
+      id: "toon-title",
+      title: "Toon Title",
+      libraryTypeSlug: "webtoon",
+      chapters: [{id: "toon-c1", label: "Episode 1", updatedAt: "2026-05-16T00:04:00.000Z"}]
+    }]
+  });
+
+  assert.equal(notifications.length, 1);
+  assert.deepEqual(
+    notifications[0].deliveries.map((delivery) => [delivery.libraryTypeSlug, delivery.channelId]).sort(),
+    [["comic", "fallback-channel"], ["manga", "manga-channel"], ["webtoon", "webtoon-channel"]]
+  );
+  const mangaDelivery = notifications[0].deliveries.find((delivery) => delivery.libraryTypeSlug === "manga");
+  assert.equal(mangaDelivery.titleGroups.length, 1);
+  assert.equal(mangaDelivery.titleGroups[0].chapterCount, 2);
+  assert.deepEqual(notifications[0].ackItemIds.sort(), [
+    "release:task-1",
+    "release:task-2",
+    "release:task-3",
+    "release:task-4"
+  ]);
 });
 
 test("release builder tolerates missing library matches", () => {

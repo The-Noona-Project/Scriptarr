@@ -77,6 +77,7 @@ export const MoonShell = ({children}) => {
     loaded: false,
     bootstrap: null,
     libraryTypes: [],
+    authError: "",
     loginUrl: "",
     installAvailable: false,
     promptInstall: async () => false
@@ -101,7 +102,7 @@ export const MoonShell = ({children}) => {
       if (active) {
         setChrome({...nextValue, loaded: true});
       }
-      if (active && !nextValue.auth) {
+      if (active && !nextValue.auth && !nextValue.authError) {
         void loadMoonLoginUrl(currentRoute).then((loginUrl) => {
           if (active && loginUrl) {
             setChrome((current) => current.auth ? current : {...current, loginUrl});

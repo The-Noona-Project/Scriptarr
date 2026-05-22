@@ -71,6 +71,7 @@ export const loadAdminChromeContext = async (returnTo = "/admin") => {
     branding: payload.branding || {siteName: "Scriptarr"},
     user,
     bootstrap: payload.bootstrap || null,
+    authError: payload.errors?.auth || payload.errors?.bootstrap || "",
     loginUrl: ""
   };
 };

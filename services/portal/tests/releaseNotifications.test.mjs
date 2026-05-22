@@ -48,12 +48,38 @@ test("release digest payload uses compact branded copy", () => {
 
   assert.match(payload.content, /12 new Scriptarr releases/);
   assert.match(payload.content, /\+2 more/);
-  assert.match(payload.embeds[0].description, /Burn the Witch/);
-  assert.match(payload.embeds[0].description, /Dandadan/);
+  assert.equal(payload.embeds[0].fields.some((field) => /Burn the Witch/.test(field.name)), true);
+  assert.equal(payload.embeds[0].fields.some((field) => /Dandadan/.test(field.name)), true);
   assert.doesNotMatch(payload.content, /Raven/);
-  assert.doesNotMatch(payload.embeds[0].description, /Raven/);
+  assert.doesNotMatch(JSON.stringify(payload.embeds[0].fields), /Raven/);
   assert.equal(Boolean(payload.embeds[0].image), false);
   assert.equal(payload.embeds[0].thumbnail.url, "https://pax-kun.com/cover.jpg");
+});
+
+test("release digest payload groups chapters under titles", () => {
+  const payload = buildReleaseChannelPayload({
+    digest: true,
+    libraryTypeSlug: "manga",
+    libraryTypeLabel: "Manga",
+    totalCount: 2,
+    titleGroups: [{
+      titleName: "Dandadan",
+      titleUrl: "https://pax-kun.com/title/manga/dan-da-dan",
+      chapterCount: 2,
+      chapters: [{
+        chapterLabel: "Chapter 42",
+        linkUrl: "https://pax-kun.com/reader/manga/dan-da-dan/c42"
+      }, {
+        chapterLabel: "Chapter 43",
+        linkUrl: "https://pax-kun.com/reader/manga/dan-da-dan/c43"
+      }]
+    }]
+  }, "https://pax-kun.com", "Scriptarr");
+
+  assert.match(payload.content, /2 new Scriptarr Manga releases/);
+  assert.equal(payload.embeds[0].fields.some((field) => /Dandadan \(2\)/.test(field.name)), true);
+  assert.match(payload.embeds[0].fields.find((field) => /Dandadan/.test(field.name)).value, /Chapter 43/);
+  assert.equal(payload.embeds[0].fields.some((field) => field.name === "Library" && field.value === "Manga"), true);
 });
 
 test("downloadall payload uses compact content and grouped embed fields", () => {
@@ -153,6 +179,74 @@ test("portal release notifier sends channel messages and acks after delivery", a
   assert.equal(acked[0].id, "release:digest:task-1:2");
   assert.deepEqual(acked[0].payload.ackItemIds, ["release:task-1", "release:task-2"]);
   assert.equal(acked[0].payload.silenceThrough, "2026-05-16T00:02:00.000Z");
+});
+
+test("portal release notifier sends every typed delivery before one ack", async () => {
+  const sent = [];
+  const acked = [];
+  const notifier = createFollowNotifier({
+    sage: {
+      async listFollowNotifications() {
+        return {ok: true, payload: {notifications: []}};
+      },
+      async acknowledgeFollowNotification() {},
+      async listRequestNotifications() {
+        return {ok: true, payload: {notifications: []}};
+      },
+      async acknowledgeRequestNotification() {},
+      async listSystemNotifications() {
+        return {ok: true, payload: {notifications: []}};
+      },
+      async acknowledgeSystemNotification() {},
+      async listReleaseNotifications() {
+        return {
+          ok: true,
+          payload: {
+            notifications: [{
+              id: "release:digest:task-3:3",
+              digest: true,
+              totalCount: 3,
+              silenceThrough: "2026-05-16T00:03:00.000Z",
+              ackItemIds: ["release:task-1", "release:task-2", "release:task-3"],
+              deliveries: [{
+                channelId: "manga-channel",
+                libraryTypeSlug: "manga",
+                libraryTypeLabel: "Manga",
+                totalCount: 2,
+                titleGroups: [{titleName: "Dandadan", chapterCount: 2, chapters: [{chapterLabel: "Chapter 42"}, {chapterLabel: "Chapter 43"}]}]
+              }, {
+                channelId: "webtoon-channel",
+                libraryTypeSlug: "webtoon",
+                libraryTypeLabel: "Webtoon",
+                totalCount: 1,
+                titleGroups: [{titleName: "Tower", chapterCount: 1, chapters: [{chapterLabel: "Episode 1"}]}]
+              }]
+            }]
+          }
+        };
+      },
+      async acknowledgeReleaseNotification(id, payload) {
+        acked.push({id, payload});
+      }
+    },
+    discord: {
+      async sendDirectMessage() {},
+      async sendChannelMessage(channelId, payload) {
+        sent.push({channelId, payload});
+      }
+    },
+    logger: {error() {}},
+    publicBaseUrl: "https://pax-kun.com",
+    pollMs: 1000
+  });
+
+  notifier.start();
+  await waitFor(() => acked.length > 0);
+  notifier.stop();
+
+  assert.deepEqual(sent.map((entry) => entry.channelId), ["manga-channel", "webtoon-channel"]);
+  assert.equal(acked.length, 1);
+  assert.equal(acked[0].id, "release:digest:task-3:3");
 });
 
 test("portal release notifier does not ack when Discord send fails", async () => {

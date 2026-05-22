@@ -9,7 +9,15 @@ import {
 test("discord settings helper preserves notification channel and command role rules", () => {
   const settings = normalizeDiscordSettings({
     guildId: " guild ",
-    notifications: {releaseChannelId: " release-channel ", updateChannelId: " updates-channel "},
+    notifications: {
+      releaseChannelId: " release-channel ",
+      updateChannelId: " updates-channel ",
+      releaseChannelIdsByLibraryType: {
+        Manga: " manga-channel ",
+        webtoon: "",
+        "Man Hwa": " manhwa-channel "
+      }
+    },
     noonaChat: {
       enabled: true,
       allowedChannelIds: [" general ", "", "trivia"],
@@ -26,6 +34,10 @@ test("discord settings helper preserves notification channel and command role ru
   assert.equal(settings.guildId, "guild");
   assert.equal(settings.notifications.releaseChannelId, "release-channel");
   assert.equal(settings.notifications.updateChannelId, "updates-channel");
+  assert.deepEqual(settings.notifications.releaseChannelIdsByLibraryType, {
+    manga: "manga-channel",
+    "man-hwa": "manhwa-channel"
+  });
   assert.equal(settings.noonaChat.enabled, true);
   assert.deepEqual(settings.noonaChat.allowedChannelIds, ["general", "trivia"]);
   assert.equal(settings.noonaChat.memoryEnabled, false);

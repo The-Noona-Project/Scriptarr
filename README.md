@@ -78,9 +78,9 @@ editor instead of a generic records view.
 Raven now keeps WeebCentral first by default, exposes MangaDex as a second normal download-provider option, and enables
 Anime-Planet ahead of MangaUpdates as a scrape-based metadata source for aliases, summaries, and lifecycle hints.
 The admin app also exposes a dedicated Discord page at `/admin/discord` for guild workflow settings, onboarding
-template or channel management, per-command role gates, release-channel posts, GitHub update-summary posts, Noona
-trivia, public mention-chat settings, Noona memory review or clears, optional Appa admin/reviewer settings, and Portal
-runtime visibility without exposing Discord credentials.
+template or channel management, per-command role gates, a fallback release channel plus optional per-library release
+channels, GitHub update-summary posts, Noona trivia, public mention-chat settings, Noona memory review or clears,
+optional Appa admin/reviewer settings, and Portal runtime visibility without exposing Discord credentials.
 Scriptarr's user app now runs as an embedded Next.js App Router frontend with a megamenu header, avatar profile
 controls, and a simple footer, while the fullscreen reader runs as its own embedded `/reader` Next app.
 That reader supports webtoon, single-page, double-page, and manga-double layouts, LTR/RTL direction, page-fit controls,
@@ -93,7 +93,8 @@ enrichment, and completed catalog titles get a dated completion marker when chap
 series are not silently dropped from the calendar.
 Raven keeps CBZ chapters canonical under `downloaded/<type>/...` and now requires a WebP ingest pass into
 `ingested/<type>/<titleId>/<chapterId>/` before reader pages become available. Moon admin keeps manual CBZ import at
-`/admin/import` and WebP ingest backlog or retries at `/admin/ingest`.
+`/admin/import` and WebP ingest backlog or retries at `/admin/ingest`; `/admin/library` links directly to both tools
+and can retry ingest for titles that are not reader-ready.
 Moon admin also exposes `/admin/system/api` for trusted automation settings, system-level API keys with assigned
 permission groups, personal-key audit, and same-origin Swagger or OpenAPI links. Signed-in readers can create their
 own user-level API keys from `/profile` when they want external readers or trackers to sync only their account data.
@@ -204,10 +205,10 @@ For end-to-end Docker verification, use:
   creating parallel subscription data.
 - Portal now sends requester Discord DMs when a moderated request is approved, denied, or completed, reusing the same
   title art and Moon links the rest of the stack exposes.
-- Portal can also post completed downloads to the configured Discord release channel from `/admin/discord`.
-  Those release posts are grouped into compact Scriptarr-branded digests, show up to ten newest titles with a
-  `+N more` count, and are acknowledged only after Discord accepts the channel message so restarts do not repost
-  successful releases.
+- Portal can also post completed downloads to the configured Discord release channels from `/admin/discord`.
+  The fallback release channel can be overridden per library type, and posts are grouped by library type and title with
+  Moon read links, a `+N more` count, and one acknowledgement only after every Discord channel send in the digest
+  succeeds.
 - Portal can also post Noona-written GitHub update summaries to a separate update channel from `/admin/discord`.
   Sage checks `The-Noona-Project/Scriptarr` during the scheduled or manual update-check task, asks Oracle for the
   summary, retries instead of posting a degraded or disabled AI fallback when AI is unavailable, and exposes stable

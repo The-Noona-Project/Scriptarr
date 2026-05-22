@@ -31,9 +31,9 @@
   permission groups, API keys, and durable events stay read-only from browser-admin flows.
 - Moon branding, uploaded WebP logo variants, and admin toast preferences are normal settings records. Content reset
   must preserve them with other settings.
-- Brokered Portal Discord settings now include release and update notification channel ids, and durable release/update
-  notification acknowledgments or latest posted GitHub update digests are normal settings-backed state that content
-  reset should preserve.
+- Brokered Portal Discord settings now include the fallback release channel id, per-library release channel ids, and
+  update notification channel id. Durable release/update notification acknowledgments or latest posted GitHub update
+  digests are normal settings-backed state that content reset should preserve.
 - Downloadall notification acknowledgments and reaction decision prompts are also operational settings-backed state.
   Content reset should preserve them so an owner cannot accidentally lose a paused-run decision path during unrelated
   catalog cleanup.

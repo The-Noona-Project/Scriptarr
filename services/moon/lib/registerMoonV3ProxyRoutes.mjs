@@ -393,7 +393,7 @@ const forwardResponseHeaders = (res, headers = {}, {stream = false} = {}) => {
  * }} options
  * @returns {void}
  */
-export const registerMoonV3ProxyRoutes = (app, {config, getSessionToken}) => {
+export const registerMoonV3ProxyRoutes = (app, {config, getSessionToken, logger}) => {
   const forwardedHeaders = (req) => ({
     ...(req.headers.accept ? {"Accept": req.headers.accept} : {}),
     ...(req.get("X-Scriptarr-Api-Key") ? {"X-Scriptarr-Api-Key": req.get("X-Scriptarr-Api-Key")} : {})
@@ -402,6 +402,7 @@ export const registerMoonV3ProxyRoutes = (app, {config, getSessionToken}) => {
   const handleMoonV3Proxy = async (req, res) => {
     const targetPath = normalizeSplat(req.params.splat);
     const query = toQueryString(req.query);
+    try {
     const isEventStream = targetPath === "admin/events/stream";
     if (isEventStream) {
       const proxied = await proxyStreamWithResponseAbort(res, {
@@ -521,6 +522,18 @@ export const registerMoonV3ProxyRoutes = (app, {config, getSessionToken}) => {
       res.setHeader("Content-Type", contentType);
     }
     res.send(response.body);
+    } catch (error) {
+      logger?.warn?.("Moon could not reach Sage for a Moon v3 proxy request.", {
+        targetPath,
+        error: error instanceof Error ? error.message : String(error)
+      });
+      if (!res.headersSent) {
+        res.status(502).json({
+          error: "Sage broker unavailable.",
+          detail: error instanceof Error ? error.message : String(error)
+        });
+      }
+    }
   };
 
   const resolveCoverCacheFile = (titleId, revision) => {

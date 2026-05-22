@@ -53,7 +53,7 @@ export const createMoonApp = async ({logger = createLogger("MOON")} = {}) => {
 
   registerAuthRoutes(app, {config, getSessionToken, logger});
   registerLegacyApiRoutes(app, {config, getSessionToken});
-  registerMoonV3ProxyRoutes(app, {config, getSessionToken});
+  registerMoonV3ProxyRoutes(app, {config, getSessionToken, logger});
   registerPublicApiRoutes(app, {config});
   registerPageRoutes(app, {adminNextRuntime, config, getSessionToken, readerNextRuntime, userNextRuntime});
 

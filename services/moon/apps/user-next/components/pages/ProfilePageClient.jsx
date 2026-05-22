@@ -126,7 +126,7 @@ const renderActivityEntry = (entry) => (
  * @returns {import("react").ReactNode}
  */
 export const ProfilePageClient = () => {
-  const {auth, branding, installAvailable, loginUrl, promptInstall} = useMoonChrome();
+  const {auth, authError, branding, installAvailable, loaded: chromeLoaded = false, loginUrl, promptInstall} = useMoonChrome();
   const siteName = branding?.siteName || "Scriptarr";
   const [activeTab, setActiveTab] = useState("overview");
   const [installPending, setInstallPending] = useState(false);
@@ -145,6 +145,14 @@ export const ProfilePageClient = () => {
     fallback: {apiKeys: [], canManageApiKeys: false},
     deps: [auth?.discordUserId || ""]
   });
+
+  if (!chromeLoaded) {
+    return <LoadingView label={`${siteName} is checking your Discord session.`} />;
+  }
+
+  if (authError) {
+    return <ErrorView detail={authError} />;
+  }
 
   if (!auth) {
     return (

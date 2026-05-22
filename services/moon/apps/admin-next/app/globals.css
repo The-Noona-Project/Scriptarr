@@ -522,6 +522,35 @@ select {
   -webkit-line-clamp: 2;
 }
 
+.admin-library-title-cell {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  min-width: 220px;
+}
+
+.admin-library-title-cell .admin-result-cover.compact {
+  width: 48px;
+  min-height: 64px;
+  border-radius: 8px;
+  font-size: 1.2rem;
+}
+
+.admin-library-title-cell strong,
+.admin-library-title-cell span {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.admin-library-title-cell span {
+  margin-top: 3px;
+  color: var(--admin-muted);
+  font-size: 0.78rem;
+}
+
 .admin-log-line {
   display: block;
   overflow-wrap: anywhere;

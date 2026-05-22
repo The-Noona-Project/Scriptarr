@@ -52,6 +52,8 @@ removed, and Library type links now live under the `Library` mega menu and canon
 Discord login now also preserves the same-origin route where the user started whenever possible, so signing in from a
 title, reader, browse, request, or admin page returns to that page instead of always dropping into one fixed surface.
 If the remembered path is missing, unsafe, or not allowed for the signed-in user, Moon falls back to `/`.
+Moon also binds the Discord callback to a short-lived HTTP-only OAuth-state cookie so a callback from another browser
+session cannot swap the signed-in account.
 Chrome startup uses `/api/moon/chrome/bootstrap?returnTo=...` to collapse branding, auth state, user identity, and
 first-owner bootstrap into one same-origin call. Moon only asks Sage for the Discord OAuth URL when a signed-out
 surface actually needs to render a login link.
@@ -124,8 +126,9 @@ there, and staff can search provider matches and apply one to the selected libra
 `/admin/wanted/missing-content` is the dedicated coverage and quality repair page, showing missing counts, damaged
 chapters, possible missing pages, bad-source summaries, and Raven repair candidates that queue safe staged replacement
 downloads through the existing library repair route. `/admin/wanted/missing-chapters` redirects there.
-`/admin/library` now uses a denser Sonarr-inspired series index with live filtering, coverage bars, latest chapter,
-last release date, metadata state, and direct open or source actions.
+`/admin/library` now uses a denser Sonarr-inspired series index with live filtering, compact catalog cards from Sage,
+ingest status, direct links to ingest/import/add-title tools, and per-title ingest retry actions when a title is not
+reader-ready.
 Each library row now opens a Sonarr-style admin title detail page at `/admin/library/<type>/<titleId>` with a
 backdrop hero, dense status and release stats, related requests, active or recent Raven task visibility, and a
 chapter table that keeps release dates and archive paths in one operational view.

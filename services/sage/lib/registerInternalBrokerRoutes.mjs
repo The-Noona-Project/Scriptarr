@@ -648,7 +648,9 @@ const buildFollowNotifications = async ({config, vaultClient, serviceJson}) => {
 const buildReleaseNotifications = async ({config, vaultClient, serviceJson}) => {
   const settings = await readPortalDiscordSettings(vaultClient);
   const channelId = normalizeString(settings?.notifications?.releaseChannelId);
-  if (!channelId) {
+  const channelIdsByLibraryType = normalizeObject(settings?.notifications?.releaseChannelIdsByLibraryType, {}) || {};
+  const hasTypedChannels = Object.values(channelIdsByLibraryType).some((value) => normalizeString(value));
+  if (!channelId && !hasTypedChannels) {
     return [];
   }
 
@@ -660,6 +662,7 @@ const buildReleaseNotifications = async ({config, vaultClient, serviceJson}) => 
   return buildReleaseNotificationDigests({
     config,
     channelId,
+    channelIdsByLibraryType,
     tasks: tasksResponse.payload,
     libraryTitles: libraryResponse.payload?.titles,
     state

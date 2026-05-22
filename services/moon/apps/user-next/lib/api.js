@@ -260,6 +260,7 @@ export const loadMoonChromeContext = async (returnTo = "/") => {
     loaded: true,
     bootstrap: payload.bootstrap || null,
     libraryTypes: [],
+    authError: payload.errors?.auth || payload.errors?.bootstrap || "",
     loginUrl: ""
   };
 };

@@ -9,6 +9,31 @@ const normalizeOptionalString = (value) => {
   const normalized = normalizeString(value);
   return normalized || null;
 };
+const normalizeTypeSlug = (value, fallback = "") => {
+  const normalized = normalizeString(value, fallback)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+/, "")
+    .replace(/-+$/, "");
+  return normalized || fallback;
+};
+const normalizeChannelMap = (value = {}, fallback = {}) => {
+  const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  const fallbackSource = fallback && typeof fallback === "object" && !Array.isArray(fallback) ? fallback : {};
+  const entries = [];
+  for (const [key, channelId] of Object.entries({...fallbackSource, ...source})) {
+    const typeSlug = normalizeTypeSlug(key);
+    const normalizedChannelId = normalizeOptionalString(channelId);
+    if (!typeSlug || !normalizedChannelId) {
+      continue;
+    }
+    entries.push([typeSlug, normalizedChannelId]);
+    if (entries.length >= 25) {
+      break;
+    }
+  }
+  return Object.fromEntries(entries);
+};
 const normalizeBoolean = (value, fallback = false) => {
   if (typeof value === "boolean") {
     return value;
@@ -194,7 +219,11 @@ export const normalizePortalDiscordSettings = (value = {}, defaults = {}) => {
     },
     notifications: {
       releaseChannelId: normalizeOptionalString(source?.notifications?.releaseChannelId ?? normalizedDefaults?.notifications?.releaseChannelId),
-      updateChannelId: normalizeOptionalString(source?.notifications?.updateChannelId ?? normalizedDefaults?.notifications?.updateChannelId)
+      updateChannelId: normalizeOptionalString(source?.notifications?.updateChannelId ?? normalizedDefaults?.notifications?.updateChannelId),
+      releaseChannelIdsByLibraryType: normalizeChannelMap(
+        source?.notifications?.releaseChannelIdsByLibraryType,
+        normalizedDefaults?.notifications?.releaseChannelIdsByLibraryType
+      )
     },
     trivia: normalizeTriviaSettings(source?.trivia, normalizedDefaults?.trivia),
     noonaChat: normalizeNoonaChatSettings(source?.noonaChat, normalizedDefaults?.noonaChat),

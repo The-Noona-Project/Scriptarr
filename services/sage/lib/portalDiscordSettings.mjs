@@ -49,6 +49,32 @@ const normalizeBoolean = (value, fallback = false) => {
   return fallback;
 };
 
+const normalizeTypeSlug = (value, fallback = "") => {
+  const normalized = normalizeString(value, fallback)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+/, "")
+    .replace(/-+$/, "");
+  return normalized || fallback;
+};
+
+const normalizeChannelMap = (value = {}) => {
+  const source = normalizeObject(value, {}) || {};
+  const entries = [];
+  for (const [key, channelId] of Object.entries(source)) {
+    const typeSlug = normalizeTypeSlug(key);
+    const normalizedChannelId = normalizeString(channelId);
+    if (!typeSlug || !normalizedChannelId) {
+      continue;
+    }
+    entries.push([typeSlug, normalizedChannelId]);
+    if (entries.length >= 25) {
+      break;
+    }
+  }
+  return Object.fromEntries(entries);
+};
+
 const normalizeInteger = (value, fallback, {min = 0, max = Number.MAX_SAFE_INTEGER} = {}) => {
   const parsed = Number.parseInt(String(value ?? ""), 10);
   if (!Number.isInteger(parsed)) {
@@ -226,7 +252,8 @@ export const normalizePortalAppaSettings = (value = {}) => {
  *   },
  *   notifications: {
  *     releaseChannelId: string,
- *     updateChannelId: string
+ *     updateChannelId: string,
+ *     releaseChannelIdsByLibraryType: Record<string, string>
  *   },
  *   trivia: ReturnType<typeof defaultPortalTriviaSettings>,
  *   noonaChat: ReturnType<typeof defaultPortalNoonaChatSettings>,
@@ -244,7 +271,8 @@ export const defaultPortalDiscordSettings = () => ({
   },
   notifications: {
     releaseChannelId: "",
-    updateChannelId: ""
+    updateChannelId: "",
+    releaseChannelIdsByLibraryType: {}
   },
   trivia: defaultPortalTriviaSettings(),
   noonaChat: defaultPortalNoonaChatSettings(),
@@ -282,7 +310,8 @@ export const normalizePortalDiscordSettings = (value) => {
     },
     notifications: {
       releaseChannelId: normalizeString(notifications.releaseChannelId),
-      updateChannelId: normalizeString(notifications.updateChannelId)
+      updateChannelId: normalizeString(notifications.updateChannelId),
+      releaseChannelIdsByLibraryType: normalizeChannelMap(notifications.releaseChannelIdsByLibraryType)
     },
     trivia: normalizePortalTriviaSettings(source.trivia),
     noonaChat: normalizePortalNoonaChatSettings(source.noonaChat),

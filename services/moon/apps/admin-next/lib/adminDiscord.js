@@ -6,6 +6,30 @@ import {formatDisplayValue, normalizeString} from "./format.js";
 
 const normalizeArray = (value) => Array.isArray(value) ? value : [];
 const normalizeObject = (value, fallback = {}) => value && typeof value === "object" && !Array.isArray(value) ? value : fallback;
+const normalizeTypeSlug = (value, fallback = "") => {
+  const normalized = normalizeString(value, fallback)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+/, "")
+    .replace(/-+$/, "");
+  return normalized || fallback;
+};
+const normalizeChannelMap = (value = {}) => {
+  const source = normalizeObject(value);
+  const entries = [];
+  for (const [key, channelId] of Object.entries(source)) {
+    const typeSlug = normalizeTypeSlug(key);
+    const normalizedChannelId = normalizeString(channelId);
+    if (!typeSlug || !normalizedChannelId) {
+      continue;
+    }
+    entries.push([typeSlug, normalizedChannelId]);
+    if (entries.length >= 25) {
+      break;
+    }
+  }
+  return Object.fromEntries(entries);
+};
 
 export const DEFAULT_COMMANDS = ["ding", "status", "chat", "search", "request", "subscribe", "trivia", "downloadall"];
 export const DEFAULT_APPA_COMMANDS = ["ding", "status", "trivia", "downloadall"];
@@ -116,7 +140,8 @@ export const normalizeDiscordSettings = (value = {}) => {
     },
     notifications: {
       releaseChannelId: normalizeString(notifications.releaseChannelId),
-      updateChannelId: normalizeString(notifications.updateChannelId)
+      updateChannelId: normalizeString(notifications.updateChannelId),
+      releaseChannelIdsByLibraryType: normalizeChannelMap(notifications.releaseChannelIdsByLibraryType)
     },
     noonaChat: normalizeNoonaChatSettings(source.noonaChat),
     appa: normalizeAppaSettings(source.appa),

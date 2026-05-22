@@ -57,6 +57,8 @@ const ORACLE_OPENAI_DEFAULT_MODEL = process.env.SCRIPTARR_ORACLE_OPENAI_MODEL ||
 const ORACLE_LOCALAI_DEFAULT_MODEL = "Hermes-3-Llama-3.1-8B-Q4_K_S.gguf";
 const PUBLIC_API_SELECTION_TTL_MS = 5 * 60 * 1000;
 const PUBLIC_API_SELECTION_TOKEN_MAX = 500;
+const DISCORD_OAUTH_STATE_TTL_MS = 5 * 60 * 1000;
+const DISCORD_OAUTH_STATE_MAX = 500;
 const INTERNAL_JSON_BODY_LIMIT = "10mb";
 
 const knownMetadataProviders = Object.freeze([
@@ -620,6 +622,7 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
   const requireUser = requireSession(vaultClient);
   const requireService = createServiceAuth(config);
   const publicSelectionTokens = new Map();
+  const pendingDiscordOauthStates = new Map();
   const appendAdminUserEvent = (user, payload) => appendUserEvent(vaultClient, {
     ...payload,
     user
@@ -674,6 +677,49 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
 
   const deletePublicSelectionToken = (token) => {
     publicSelectionTokens.delete(normalizeString(token));
+  };
+
+  const purgeExpiredDiscordOauthStates = () => {
+    const now = Date.now();
+    for (const [nonce, entry] of pendingDiscordOauthStates.entries()) {
+      if (!entry || Number(entry.expiresAt || 0) <= now) {
+        pendingDiscordOauthStates.delete(nonce);
+      }
+    }
+  };
+
+  const issueDiscordOauthState = (returnTo = "/") => {
+    purgeExpiredDiscordOauthStates();
+    while (pendingDiscordOauthStates.size >= DISCORD_OAUTH_STATE_MAX) {
+      const oldestNonce = pendingDiscordOauthStates.keys().next().value;
+      if (!oldestNonce) {
+        break;
+      }
+      pendingDiscordOauthStates.delete(oldestNonce);
+    }
+    const nonce = randomBytes(24).toString("hex");
+    const safeReturnTo = sanitizeReturnToPath(returnTo, "/");
+    pendingDiscordOauthStates.set(nonce, {
+      returnTo: safeReturnTo,
+      expiresAt: Date.now() + DISCORD_OAUTH_STATE_TTL_MS
+    });
+    return {nonce, returnTo: safeReturnTo};
+  };
+
+  const consumeDiscordOauthState = (state) => {
+    purgeExpiredDiscordOauthStates();
+    const nonce = normalizeString(state?.nonce);
+    if (!nonce) {
+      throw new Error("Discord OAuth state is required.");
+    }
+    const pending = pendingDiscordOauthStates.get(nonce);
+    pendingDiscordOauthStates.delete(nonce);
+    if (!pending || Number(pending.expiresAt || 0) <= Date.now()) {
+      throw new Error("Discord OAuth state expired or was already used.");
+    }
+    return {
+      returnTo: sanitizeReturnToPath(pending.returnTo || state?.returnTo, "/")
+    };
   };
 
   const normalizePublicRequestSummary = (request = {}) => {
@@ -1016,11 +1062,11 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
   });
 
   app.get("/api/auth/discord/url", (req, res) => {
-    const returnTo = sanitizeReturnToPath(req.query?.returnTo, "/");
+    const state = issueDiscordOauthState(req.query?.returnTo);
     res.json({
       callbackUrl: buildCallbackUrl(config),
-      oauthUrl: buildDiscordOauthUrl(config, {returnTo}),
-      returnTo
+      oauthUrl: buildDiscordOauthUrl(config, state),
+      returnTo: state.returnTo
     });
   });
 
@@ -1032,7 +1078,7 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
         return;
       }
       const bootstrapBefore = await vaultClient.getBootstrapStatus();
-      const authState = parseDiscordOauthState(req.query?.state);
+      const authState = consumeDiscordOauthState(parseDiscordOauthState(req.query?.state));
       const identity = await exchangeDiscordCode(config, code);
       const user = await upsertUserFromDiscord({vaultClient, config, identity});
       const session = await vaultClient.createSession(user.discordUserId);

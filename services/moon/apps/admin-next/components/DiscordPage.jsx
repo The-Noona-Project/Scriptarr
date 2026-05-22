@@ -12,6 +12,7 @@ import {formatDate, formatDisplayValue, normalizeString} from "../lib/format.js"
 import {AdminActionBanner, AdminDenseTable, AdminStatusBadge} from "./AdminUi.jsx";
 
 const normalizeArray = (value) => Array.isArray(value) ? value : [];
+const RELEASE_LIBRARY_TYPES = ["manga", "manhwa", "manhua", "webtoon", "comic"];
 
 const parseChannelIds = (value) => normalizeString(value)
   .split(/[\s,]+/g)
@@ -19,6 +20,9 @@ const parseChannelIds = (value) => normalizeString(value)
   .filter(Boolean);
 
 const formatChannelIds = (value) => normalizeArray(value).map((entry) => normalizeString(entry)).filter(Boolean).join("\n");
+const formatTypeLabel = (value) => normalizeString(value)
+  .replace(/-/g, " ")
+  .replace(/\b\w/g, (letter) => letter.toUpperCase());
 
 const patchNested = (source, key, patch) => ({
   ...source,
@@ -78,6 +82,16 @@ export const DiscordPage = ({user}) => {
   const setField = (patch) => setDraft((current) => ({...current, ...patch}));
   const setOnboarding = (patch) => setDraft((current) => patchNested(current, "onboarding", patch));
   const setNotifications = (patch) => setDraft((current) => patchNested(current, "notifications", patch));
+  const setReleaseTypeChannel = (typeSlug, channelId) => setDraft((current) => ({
+    ...current,
+    notifications: {
+      ...current.notifications,
+      releaseChannelIdsByLibraryType: {
+        ...(current.notifications?.releaseChannelIdsByLibraryType || {}),
+        [typeSlug]: channelId
+      }
+    }
+  }));
   const setNoonaChat = (patch) => setDraft((current) => patchNested(current, "noonaChat", patch));
   const setAppa = (patch) => setDraft((current) => patchNested(current, "appa", patch));
   const setTrivia = (patch) => setDraft((current) => patchNested(current, "trivia", patch));
@@ -265,6 +279,11 @@ export const DiscordPage = ({user}) => {
   const triviaAnswerUrl = normalizeString(latestTriviaRound?.moonTitleUrl || latestTriviaRound?.sourceUrl);
   const triviaGuesses = normalizeArray(triviaRuntime.recentGuesses);
   const commandCount = normalizeArray(runtime.commandInventory).length;
+  const releaseChannels = draft.notifications.releaseChannelIdsByLibraryType || {};
+  const hasReleaseChannel = Boolean(
+    normalizeString(draft.notifications.releaseChannelId)
+    || Object.values(releaseChannels).some((channelId) => normalizeString(channelId))
+  );
 
   return (
     <>
@@ -320,6 +339,16 @@ export const DiscordPage = ({user}) => {
               <span>Release channel id</span>
               <input disabled={!canWrite} value={draft.notifications.releaseChannelId} onChange={(event) => setNotifications({releaseChannelId: event.target.value})} />
             </label>
+            {RELEASE_LIBRARY_TYPES.map((typeSlug) => (
+              <label key={typeSlug}>
+                <span>{formatTypeLabel(typeSlug)} release channel</span>
+                <input
+                  disabled={!canWrite}
+                  value={releaseChannels[typeSlug] || ""}
+                  onChange={(event) => setReleaseTypeChannel(typeSlug, event.target.value)}
+                />
+              </label>
+            ))}
             <label>
               <span>Update channel id</span>
               <input disabled={!canWrite} value={draft.notifications.updateChannelId} onChange={(event) => setNotifications({updateChannelId: event.target.value})} />
@@ -328,7 +357,7 @@ export const DiscordPage = ({user}) => {
           <div className="admin-action-row">
             <button className="admin-button solid" type="button" disabled={!canWrite || busy !== ""} onClick={save}>Save settings</button>
             <button className="admin-button ghost" type="button" disabled={!canWrite || busy !== ""} onClick={reload}>Reload runtime</button>
-            <button className="admin-button ghost" type="button" disabled={!canWrite || busy !== "" || !draft.notifications.releaseChannelId} onClick={testRelease}>Test release post</button>
+            <button className="admin-button ghost" type="button" disabled={!canWrite || busy !== "" || !hasReleaseChannel} onClick={testRelease}>Test release post</button>
             <button className="admin-button ghost" type="button" disabled={!canWrite || busy !== "" || !draft.notifications.updateChannelId} onClick={testUpdate}>Test update post</button>
           </div>
         </article>

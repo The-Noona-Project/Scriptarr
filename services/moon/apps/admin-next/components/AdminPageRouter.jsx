@@ -30,6 +30,7 @@ const adminPageComponents = Object.freeze({
   discord: dynamicAdminPage(() => import("./DiscordPage.jsx")),
   import: dynamicAdminPage(() => import("./ImportPage.jsx")),
   ingest: dynamicAdminPage(() => import("./IngestPage.jsx")),
+  library: dynamicAdminPage(() => import("./LibraryPage.jsx")),
   mediamanagement: dynamicAdminPage(() => import("./MediaManagementPage.jsx")),
   requests: dynamicAdminPage(() => import("./RequestsPage.jsx")),
   "settings-database": dynamicAdminPage(() => import("./DatabaseExplorerPage.jsx")),
@@ -62,6 +63,16 @@ export const AdminPageRouter = ({pathname}) => {
         <div className="admin-kicker">Loading</div>
         <h2>Loading admin session</h2>
         <p>Moon is checking your Discord-backed admin grants.</p>
+      </section>
+    );
+  }
+
+  if (chrome.authError) {
+    return (
+      <section className="admin-panel admin-state-panel is-danger">
+        <div className="admin-kicker">Session</div>
+        <h2>Admin session unavailable</h2>
+        <p>{chrome.authError}</p>
       </section>
     );
   }

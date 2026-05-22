@@ -1921,8 +1921,53 @@ export const registerMoonV3Routes = (app, {
     });
   }));
 
-  app.get("/api/moon-v3/admin/library", requireLibraryRead(async (_req, res) => {
-    res.json({titles: await loadLibrary()});
+  app.get("/api/moon-v3/admin/library", requireLibraryRead(async (req, res) => {
+    const requestedPageSize = Number.parseInt(String(req.query?.pageSize || 60), 10);
+    const pageSize = Number.isFinite(requestedPageSize) ? Math.max(1, Math.min(100, requestedPageSize)) : 60;
+    const [cardPage, ingest] = await Promise.all([
+      vaultClient.listRavenTitleCards({
+        q: req.query?.q,
+        type: req.query?.type,
+        letter: req.query?.letter,
+        cursor: req.query?.cursor,
+        pageSize,
+        sort: req.query?.sort || "title"
+      }),
+      fetchRavenJson("/v1/ingest").catch((error) => ({
+        degraded: {ingest: error.message},
+        summary: {},
+        titles: []
+      }))
+    ]);
+    const ingestTitles = new Map(normalizeArray(ingest?.titles).map((title) => [normalizeString(title?.id), title]));
+    const titles = normalizeArray(cardPage?.titles).map((title) => {
+      const ingestTitle = ingestTitles.get(normalizeString(title?.id)) || {};
+      return toTitleCardSummary({
+        ...title,
+        ingestStatus: normalizeString(ingestTitle.ingestStatus, title.ingestStatus),
+        ingestedChapterCount: ingestTitle.ingestedChapterCount ?? title.ingestedChapterCount,
+        ingestError: normalizeString(ingestTitle.ingestError, title.ingestError)
+      });
+    });
+    const counts = normalizeObject(cardPage?.counts, {}) || {};
+    const pageInfo = normalizeObject(cardPage?.pageInfo, {}) || {};
+    const ingestSummary = normalizeObject(ingest?.summary, {}) || {};
+    res.json({
+      titles,
+      counts,
+      filters: normalizeObject(cardPage?.filters, {}) || {},
+      pageInfo,
+      summary: {
+        totalTitles: Number.parseInt(String(pageInfo.total ?? counts.total ?? titles.length), 10) || titles.length,
+        visibleTitles: titles.length,
+        readyTitles: Number.parseInt(String(ingestSummary.readyTitles ?? ingestSummary.ready ?? 0), 10) || 0,
+        pendingTitles: Number.parseInt(String(ingestSummary.pendingTitles ?? ingestSummary.pending ?? 0), 10) || 0,
+        failedTitles: Number.parseInt(String(ingestSummary.failedTitles ?? ingestSummary.failed ?? 0), 10) || 0,
+        hardware: normalizeObject(ingestSummary.hardware || ingest?.hardware, {}) || {},
+        ingest: ingestSummary
+      },
+      ...(ingest?.degraded ? {degraded: ingest.degraded} : {})
+    });
   }));
 
   app.get("/api/moon-v3/admin/library/:titleId", requireLibraryRead(async (req, res) => {
@@ -3225,6 +3270,8 @@ export const registerMoonV3Routes = (app, {
         guildId: nextSettings.guildId,
         onboardingChannelId: nextSettings.onboarding.channelId,
         releaseChannelId: nextSettings.notifications.releaseChannelId,
+        releaseTypeChannelCount: Object.values(normalizeObject(nextSettings.notifications.releaseChannelIdsByLibraryType, {}) || {})
+          .filter((channelId) => normalizeString(channelId)).length,
         updateChannelId: nextSettings.notifications.updateChannelId,
         noonaChatEnabled: nextSettings.noonaChat.enabled,
         noonaChatChannelCount: normalizeArray(nextSettings.noonaChat.allowedChannelIds).length,
@@ -3378,7 +3425,12 @@ export const registerMoonV3Routes = (app, {
         ...normalizeObject(body.notifications, {})
       }
     });
-    const releaseChannelId = normalizeString(previewSettings.notifications.releaseChannelId);
+    const typedReleaseChannels = normalizeObject(previewSettings.notifications.releaseChannelIdsByLibraryType, {}) || {};
+    const requestedTypeSlug = normalizeTypeSlug(body.libraryTypeSlug || Object.keys(typedReleaseChannels)[0] || "manga");
+    const releaseChannelId = normalizeString(
+      typedReleaseChannels[requestedTypeSlug],
+      normalizeString(previewSettings.notifications.releaseChannelId)
+    );
     if (!releaseChannelId) {
       res.status(400).json({error: "A release notification channel id is required."});
       return;
@@ -3392,6 +3444,8 @@ export const registerMoonV3Routes = (app, {
         notification: {
           id: `release-test:${Date.now()}`,
           channelId: releaseChannelId,
+          libraryTypeSlug: requestedTypeSlug,
+          libraryTypeLabel: normalizeString(body.libraryTypeLabel, requestedTypeSlug.replace(/-/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase())),
           titleName: normalizeString(body.titleName, `${branding.siteName || "Scriptarr"} test title`),
           chapterLabel: normalizeString(body.chapterLabel, "Chapter 1"),
           titleUrl: `${normalizeString(config.publicBaseUrl).replace(/\/+$/g, "")}/admin/discord`
