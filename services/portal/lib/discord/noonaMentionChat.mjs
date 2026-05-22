@@ -1,5 +1,5 @@
 import {editPublicAiReply, queueStatusText, sendPublicAiReply} from "./aiChatMessages.mjs";
-import {createAiResponseQueue} from "./aiResponseQueue.mjs";
+import {createAiResponseQueue, isAiResponseQueueCancelError} from "./aiResponseQueue.mjs";
 import {normalizeString} from "./utils.mjs";
 
 const defaultNoonaAiQueue = createAiResponseQueue();
@@ -110,7 +110,7 @@ export const createNoonaMentionHandler = ({
 
   let placeholder = null;
   try {
-    const response = await aiQueue.run(async () => {
+    const response = await aiQueue.run(async ({signal}) => {
       await message?.channel?.sendTyping?.();
       return sage.noonaChat?.({
         message: prompt,
@@ -121,7 +121,7 @@ export const createNoonaMentionHandler = ({
         user: buildUserPayload(message?.author, message?.member),
         memoryEnabled: noonaChat.memoryEnabled !== false,
         proposalMode: normalizeString(noonaChat.proposalMode, "conservative")
-      });
+      }, {signal});
     }, {
       onQueued: async ({ahead}) => {
         [placeholder] = await sendPublicAiReply(message, queueStatusText(ahead), {
@@ -176,6 +176,9 @@ export const createNoonaMentionHandler = ({
     }
     return true;
   } catch (error) {
+    if (isAiResponseQueueCancelError(error)) {
+      return true;
+    }
     const messageText = error instanceof Error ? error.message : String(error);
     logger?.warn?.("Portal Noona mention chat failed.", {error});
     onRuntimeEvent?.({

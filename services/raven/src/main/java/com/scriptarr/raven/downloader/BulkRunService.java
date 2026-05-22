@@ -822,6 +822,7 @@ public class BulkRunService {
     private void updateRunStatus(Map<String, Object> job, String status, String message, Map<String, Object> summary) {
         Map<String, Object> updated = new LinkedHashMap<>(job);
         String previousStatus = stringValue(updated.get("status"));
+        String runId = stringValue(updated.get("jobId"));
         String now = Instant.now().toString();
         updated.put("status", status);
         updated.put("message", firstNonBlank(message, status));
@@ -833,7 +834,10 @@ public class BulkRunService {
             updated.put("finishedAt", now);
         }
         updated.put("updatedAt", now);
-        putJob(stringValue(updated.get("jobId")), updated);
+        putJob(runId, updated);
+        if (isRunTerminal(status)) {
+            cancelledRunIds.remove(runId);
+        }
     }
 
     private void safelyUpdateRunAfterFailure(String runId, String status, String message, Exception originalError) {

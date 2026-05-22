@@ -314,10 +314,12 @@ public class VpnService {
             .build();
         try {
             HttpResponse<InputStream> response = httpClient.send(request, HttpResponse.BodyHandlers.ofInputStream());
-            if (response.statusCode() < 200 || response.statusCode() >= 300) {
-                throw new IOException("PIA OpenVPN profile download failed with status " + response.statusCode());
+            try (InputStream body = response.body()) {
+                if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                    throw new IOException("PIA OpenVPN profile download failed with status " + response.statusCode());
+                }
+                Files.copy(body, tempArchive, StandardCopyOption.REPLACE_EXISTING);
             }
-            Files.copy(response.body(), tempArchive, StandardCopyOption.REPLACE_EXISTING);
             validateProfileArchive(tempArchive);
             moveArchiveIntoPlace(tempArchive, archivePath);
         } finally {

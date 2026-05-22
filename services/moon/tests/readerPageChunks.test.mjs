@@ -226,8 +226,31 @@ test("reader image warmer decodes only requested loaded page images", async () =
     {index: 2, src: "/page-2.jpg"}
   ], [2, 3], {imageFactory: FakeImage});
 
-  assert.deepEqual(sources, ["/page-2.jpg"]);
+  assert.deepEqual(sources.filter(Boolean), ["/page-2.jpg"]);
+  assert.equal(sources.at(-1), "");
   assert.deepEqual(result, [{index: 2, ok: true}]);
+});
+
+test("reader image warmer times out and releases stalled images", async () => {
+  const sources = [];
+  const metrics = [];
+  class FakeImage {
+    set src(value) {
+      sources.push(value);
+    }
+  }
+
+  const result = await warmReaderPageImages([
+    {index: 1, src: "/page-1.jpg"}
+  ], [1], {
+    imageFactory: FakeImage,
+    timeoutMs: 1,
+    onMetric: (metric) => metrics.push(metric)
+  });
+
+  assert.deepEqual(sources, ["/page-1.jpg", ""]);
+  assert.deepEqual(result, [{index: 1, ok: false}]);
+  assert.equal(metrics.some((metric) => metric.reason === "image_timeout"), true);
 });
 
 test("webtoon load-more waits while the first chunk is still loading", () => {

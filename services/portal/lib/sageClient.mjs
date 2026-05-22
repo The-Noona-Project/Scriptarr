@@ -23,6 +23,9 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const DISCORD_AI_CHAT_TIMEOUT_MS = 90000;
 const DISCORD_AI_REVIEW_TIMEOUT_MS = 60000;
+const TRIVIA_STATE_TIMEOUT_MS = 2500;
+const TRIVIA_GUESS_TIMEOUT_MS = 9000;
+const TRIVIA_MUTATION_TIMEOUT_MS = 10000;
 
 const isRetryableNetworkError = (error) => {
   if (!(error instanceof Error)) {
@@ -39,9 +42,19 @@ const requestJson = async (baseUrl, headers, path, options = {}) => {
 
   for (let attempt = 1; attempt <= retries; attempt += 1) {
     let timeout = null;
+    let controller = null;
+    let abortFromParent = null;
     try {
-      const controller = timeoutMs > 0 ? new AbortController() : null;
-      timeout = controller
+      controller = timeoutMs > 0 || options.signal ? new AbortController() : null;
+      if (controller && options.signal) {
+        abortFromParent = () => controller.abort(options.signal.reason);
+        if (options.signal.aborted) {
+          abortFromParent();
+        } else {
+          options.signal.addEventListener("abort", abortFromParent, {once: true});
+        }
+      }
+      timeout = controller && timeoutMs > 0
         ? setTimeout(() => controller.abort(), timeoutMs)
         : null;
       const response = await fetch(`${baseUrl}${path}`, {
@@ -50,7 +63,7 @@ const requestJson = async (baseUrl, headers, path, options = {}) => {
           ? {"Authorization": headers.Authorization}
           : headers,
         body: options.body == null ? undefined : JSON.stringify(options.body),
-        signal: controller?.signal
+        signal: controller?.signal || options.signal
       });
       return {
         ok: response.ok,
@@ -59,14 +72,23 @@ const requestJson = async (baseUrl, headers, path, options = {}) => {
       };
     } catch (error) {
       if (error?.name === "AbortError") {
-        error = new Error(`Request timed out after ${timeoutMs}ms`);
+        if (options.signal?.aborted) {
+          error = options.signal.reason instanceof Error
+            ? options.signal.reason
+            : new Error("Request was aborted.");
+        } else {
+          error = new Error(`Request timed out after ${timeoutMs}ms`);
+        }
       }
       lastError = error;
-      if (attempt >= retries || !isRetryableNetworkError(error)) {
+      if (options.signal?.aborted || attempt >= retries || !isRetryableNetworkError(error)) {
         throw error;
       }
       await sleep(retryDelayMs);
     } finally {
+      if (abortFromParent && options.signal) {
+        options.signal.removeEventListener("abort", abortFromParent);
+      }
       if (timeout) {
         clearTimeout(timeout);
       }
@@ -281,24 +303,27 @@ export const createSageClient = (config) => {
         body: payload
       });
     },
-    chat(payload) {
+    chat(payload, options = {}) {
       return requestJson(config.sageBaseUrl, jsonHeaders, "/api/internal/oracle/chat", {
         method: "POST",
-        body: payload
+        body: payload,
+        signal: options.signal
       });
     },
-    noonaChat(payload) {
+    noonaChat(payload, options = {}) {
       return requestJson(config.sageBaseUrl, jsonHeaders, "/api/internal/portal/noona-chat", {
         method: "POST",
         body: payload,
-        timeoutMs: DISCORD_AI_CHAT_TIMEOUT_MS
+        timeoutMs: DISCORD_AI_CHAT_TIMEOUT_MS,
+        signal: options.signal
       });
     },
-    appaChat(payload) {
+    appaChat(payload, options = {}) {
       return requestJson(config.sageBaseUrl, jsonHeaders, "/api/internal/portal/appa-chat", {
         method: "POST",
         body: payload,
-        timeoutMs: DISCORD_AI_CHAT_TIMEOUT_MS
+        timeoutMs: DISCORD_AI_CHAT_TIMEOUT_MS,
+        signal: options.signal
       });
     },
     recordAppaDiscordDiagnostic(payload) {
@@ -308,11 +333,12 @@ export const createSageClient = (config) => {
         timeoutMs: 10000
       });
     },
-    reviewNoonaReply(payload) {
+    reviewNoonaReply(payload, options = {}) {
       return requestJson(config.sageBaseUrl, jsonHeaders, "/api/internal/portal/noona-review", {
         method: "POST",
         body: payload,
-        timeoutMs: DISCORD_AI_REVIEW_TIMEOUT_MS
+        timeoutMs: DISCORD_AI_REVIEW_TIMEOUT_MS,
+        signal: options.signal
       });
     },
     recordNoonaReviewDelivery(payload) {
@@ -322,75 +348,94 @@ export const createSageClient = (config) => {
         timeoutMs: 10000
       });
     },
-    assistOracle(payload) {
+    assistOracle(payload, options = {}) {
       return requestJson(config.sageBaseUrl, jsonHeaders, "/api/internal/oracle/assist", {
         method: "POST",
         body: payload,
-        timeoutMs: DISCORD_AI_REVIEW_TIMEOUT_MS
+        timeoutMs: DISCORD_AI_REVIEW_TIMEOUT_MS,
+        signal: options.signal
       });
     },
-    getTriviaState() {
-      return requestJson(config.sageBaseUrl, authHeader, "/api/internal/portal/trivia/state");
+    getTriviaState(options = {}) {
+      return requestJson(config.sageBaseUrl, authHeader, "/api/internal/portal/trivia/state", {
+        timeoutMs: options.timeoutMs || TRIVIA_STATE_TIMEOUT_MS,
+        signal: options.signal
+      });
     },
-    startTriviaRound(payload = {}) {
+    startTriviaRound(payload = {}, options = {}) {
       return requestJson(config.sageBaseUrl, jsonHeaders, "/api/internal/portal/trivia/rounds/start", {
         method: "POST",
-        body: payload
+        body: payload,
+        timeoutMs: options.timeoutMs || TRIVIA_MUTATION_TIMEOUT_MS,
+        signal: options.signal
       });
     },
-    stopTriviaRound(payload = {}) {
+    stopTriviaRound(payload = {}, options = {}) {
       return requestJson(config.sageBaseUrl, jsonHeaders, "/api/internal/portal/trivia/rounds/stop", {
         method: "POST",
-        body: payload
+        body: payload,
+        timeoutMs: options.timeoutMs || TRIVIA_MUTATION_TIMEOUT_MS,
+        signal: options.signal
       });
     },
-    submitTriviaGuess(roundId, payload = {}) {
+    submitTriviaGuess(roundId, payload = {}, options = {}) {
       return requestJson(
         config.sageBaseUrl,
         jsonHeaders,
         `/api/internal/portal/trivia/rounds/${encodeURIComponent(String(roundId || "").trim())}/guess`,
         {
           method: "POST",
-          body: payload
+          body: payload,
+          timeoutMs: options.timeoutMs || TRIVIA_GUESS_TIMEOUT_MS,
+          signal: options.signal
         }
       );
     },
-    timeoutTriviaRound(roundId) {
+    timeoutTriviaRound(roundId, options = {}) {
       return requestJson(
         config.sageBaseUrl,
         jsonHeaders,
         `/api/internal/portal/trivia/rounds/${encodeURIComponent(String(roundId || "").trim())}/timeout`,
         {
           method: "POST",
-          body: {}
+          body: {},
+          timeoutMs: options.timeoutMs || TRIVIA_MUTATION_TIMEOUT_MS,
+          signal: options.signal
         }
       );
     },
-    postTriviaHint(roundId, hintMinute) {
+    postTriviaHint(roundId, hintMinute, options = {}) {
       return requestJson(
         config.sageBaseUrl,
         jsonHeaders,
         `/api/internal/portal/trivia/rounds/${encodeURIComponent(String(roundId || "").trim())}/hint`,
         {
           method: "POST",
-          body: {hintMinute}
+          body: {hintMinute},
+          timeoutMs: options.timeoutMs || TRIVIA_MUTATION_TIMEOUT_MS,
+          signal: options.signal
         }
       );
     },
-    getTriviaLeaderboard(windowName = "all", limit = 10) {
+    getTriviaLeaderboard(windowName = "all", limit = 10, options = {}) {
       return requestJson(config.sageBaseUrl, authHeader, withQuery("/api/internal/portal/trivia/leaderboard", {
         window: windowName,
         limit
-      }));
+      }), {
+        timeoutMs: options.timeoutMs || TRIVIA_MUTATION_TIMEOUT_MS,
+        signal: options.signal
+      });
     },
-    acknowledgeTriviaLeaderboard(postId) {
+    acknowledgeTriviaLeaderboard(postId, options = {}) {
       return requestJson(
         config.sageBaseUrl,
         jsonHeaders,
         `/api/internal/portal/trivia/leaderboard/${encodeURIComponent(postId)}/ack`,
         {
           method: "POST",
-          body: {}
+          body: {},
+          timeoutMs: options.timeoutMs || TRIVIA_MUTATION_TIMEOUT_MS,
+          signal: options.signal
         }
       );
     },

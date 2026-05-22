@@ -56,6 +56,7 @@ const MOON_PUBLIC_API_HASH_SECRET = "moon.publicApi.keyHash";
 const ORACLE_OPENAI_DEFAULT_MODEL = process.env.SCRIPTARR_ORACLE_OPENAI_MODEL || "gpt-4.1-mini";
 const ORACLE_LOCALAI_DEFAULT_MODEL = "Hermes-3-Llama-3.1-8B-Q4_K_S.gguf";
 const PUBLIC_API_SELECTION_TTL_MS = 5 * 60 * 1000;
+const PUBLIC_API_SELECTION_TOKEN_MAX = 500;
 const INTERNAL_JSON_BODY_LIMIT = "10mb";
 
 const knownMetadataProviders = Object.freeze([
@@ -635,6 +636,16 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
     }
   };
 
+  const evictOldestPublicSelectionTokens = () => {
+    while (publicSelectionTokens.size > PUBLIC_API_SELECTION_TOKEN_MAX) {
+      const oldestToken = publicSelectionTokens.keys().next().value;
+      if (!oldestToken) {
+        break;
+      }
+      publicSelectionTokens.delete(oldestToken);
+    }
+  };
+
   const issuePublicSelectionToken = (payload) => {
     purgeExpiredPublicSelectionTokens();
     const token = randomBytes(24).toString("hex");
@@ -642,6 +653,7 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
       ...payload,
       expiresAt: Date.now() + PUBLIC_API_SELECTION_TTL_MS
     });
+    evictOldestPublicSelectionTokens();
     return token;
   };
 
@@ -655,6 +667,8 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
       publicSelectionTokens.delete(normalizeString(token));
       return null;
     }
+    publicSelectionTokens.delete(normalizeString(token));
+    publicSelectionTokens.set(normalizeString(token), entry);
     return entry;
   };
 
@@ -1597,7 +1611,7 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
       return;
     }
 
-    const results = normalizeArray(intakeResult.payload?.results).map((entry) => buildPublicApiSelection({
+    const results = normalizeArray(intakeResult.payload?.results).slice(0, PUBLIC_API_SELECTION_TOKEN_MAX).map((entry) => buildPublicApiSelection({
       ...entry,
       query
     }, guardState));

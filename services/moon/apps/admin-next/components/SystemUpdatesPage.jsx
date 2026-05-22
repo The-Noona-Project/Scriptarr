@@ -73,10 +73,21 @@ export const SystemUpdatesPage = ({user}) => {
     if (job?.status !== "running") {
       return undefined;
     }
-    const timer = window.setInterval(() => {
-      void refresh();
-    }, 3000);
-    return () => window.clearInterval(timer);
+    let cancelled = false;
+    let timer = 0;
+    const schedule = () => {
+      timer = window.setTimeout(async () => {
+        await refresh();
+        if (!cancelled) {
+          schedule();
+        }
+      }, 3000);
+    };
+    schedule();
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
   }, [job?.status, refresh]);
 
   const runAction = async (path, body = {}) => {

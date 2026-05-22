@@ -3,13 +3,15 @@ from __future__ import annotations
 import asyncio
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
 from oracle_service.app import create_app
 from oracle_service.config import OracleConfig
 import oracle_service.embedded_localai as embedded_localai_module
-from oracle_service.embedded_localai import EmbeddedLocalAiManager
+import oracle_service.llm as llm_module
+from oracle_service.embedded_localai import EmbeddedLocalAiManager, LOCALAI_DOWNLOAD_JOB_HISTORY_LIMIT
 from oracle_service.llm import LOCALAI_MAX_TOKENS, LOCALAI_STOP_SEQUENCES, _provider_completion_options
 from oracle_service.runtime_settings import OracleRuntimeSettings
 
@@ -63,6 +65,7 @@ class FakeEmbeddedLocalAi:
         self.started = False
         self.prepared = False
         self.stopped = False
+        self.downloads_cancelled = False
         self.ensure_jobs: list[dict] = []
         self.startup_requests: list[dict] = []
         self.probe_count = 0
@@ -95,6 +98,9 @@ class FakeEmbeddedLocalAi:
 
     async def cancel_startup_auto_start(self) -> None:
         return None
+
+    async def cancel_download_tasks(self) -> None:
+        self.downloads_cancelled = True
 
     def record_startup_gate(self, *, gate_reason: str, error: str = ""):
         self.status_payload["startup"] = {
@@ -297,6 +303,157 @@ def test_localai_completion_options_are_bounded():
         "stop": LOCALAI_STOP_SEQUENCES,
         "stream": False
     }
+
+
+def test_invoke_oracle_closes_async_openai_client(monkeypatch):
+    events = []
+
+    class FakeCompletions:
+        async def create(self, **kwargs):
+            events.append(("create", kwargs["model"]))
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(message=SimpleNamespace(content="Noona is tidy."))
+                ]
+            )
+
+    class FakeAsyncOpenAI:
+        def __init__(self, **kwargs):
+            events.append(("init", kwargs["api_key"]))
+            self.chat = SimpleNamespace(completions=FakeCompletions())
+
+        async def __aenter__(self):
+            events.append(("enter", None))
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            events.append(("exit", exc_type))
+            return None
+
+    monkeypatch.setattr(llm_module, "AsyncOpenAI", FakeAsyncOpenAI)
+    runtime = OracleRuntimeSettings(
+        enabled=True,
+        provider="openai",
+        model="gpt-4.1-mini",
+        temperature=0.2,
+        open_ai_api_key_configured=True,
+        local_ai_profile_key="nvidia",
+        local_ai_image_mode="preset",
+        local_ai_custom_image="",
+        local_ai_base_url="http://127.0.0.1:8080/v1",
+        local_ai_api_key="localai",
+        open_ai_api_key="sk-test",
+        api_key="sk-test",
+        llm_timeout_seconds=60.0
+    )
+
+    result = asyncio.run(llm_module.invoke_oracle(runtime, "Noona", "Say hi"))
+
+    assert result == "Noona is tidy."
+    assert events == [
+        ("init", "sk-test"),
+        ("enter", None),
+        ("create", "gpt-4.1-mini"),
+        ("exit", None)
+    ]
+
+
+def test_ensure_backend_timeout_terminates_subprocess(monkeypatch, tmp_path):
+    class Logger:
+        def warning(self, *args, **kwargs):
+            return None
+
+    class FakeProcess:
+        def __init__(self):
+            self.returncode = None
+            self.terminated = False
+            self.killed = False
+            self.waited = False
+
+        async def communicate(self):
+            return b"", b""
+
+        def terminate(self):
+            self.terminated = True
+            self.returncode = -15
+
+        def kill(self):
+            self.killed = True
+            self.returncode = -9
+
+        async def wait(self):
+            self.waited = True
+            return self.returncode
+
+    process = FakeProcess()
+
+    async def fake_create_subprocess_exec(*args, **kwargs):
+        return process
+
+    async def fake_wait_for(awaitable, timeout):
+        if timeout == 600:
+            if hasattr(awaitable, "close"):
+                awaitable.close()
+            raise asyncio.TimeoutError()
+        return await awaitable
+
+    config = replace(
+        build_embedded_config(),
+        local_ai_backends_path=str(tmp_path / "backends")
+    )
+    manager = EmbeddedLocalAiManager(config=config, logger=Logger())
+    monkeypatch.setattr(embedded_localai_module.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    monkeypatch.setattr(embedded_localai_module.asyncio, "wait_for", fake_wait_for)
+
+    try:
+        asyncio.run(manager.ensure_backend())
+    except embedded_localai_module.EmbeddedLocalAiError as error:
+        assert "Timed out installing LocalAI backend" in str(error)
+    else:
+        raise AssertionError("ensure_backend should fail on install timeout")
+
+    assert process.terminated is True
+    assert process.waited is True
+    assert process.killed is False
+
+
+def test_download_job_history_prunes_old_finished_jobs_and_keeps_current():
+    class Logger:
+        def warning(self, *args, **kwargs):
+            return None
+
+    manager = EmbeddedLocalAiManager(config=build_embedded_config(), logger=Logger())
+    for index in range(LOCALAI_DOWNLOAD_JOB_HISTORY_LIMIT + 5):
+        job_id = f"job-{index:02d}"
+        manager._download_jobs[job_id] = {
+            "jobId": job_id,
+            "status": "completed",
+            "updatedAt": f"2026-05-17T00:00:{index:02d}Z"
+        }
+    manager._download_jobs["active-job"] = {
+        "jobId": "active-job",
+        "status": "running",
+        "updatedAt": "2026-05-17T00:00:00Z"
+    }
+
+    manager._prune_download_jobs()
+
+    assert len(manager._download_jobs) == LOCALAI_DOWNLOAD_JOB_HISTORY_LIMIT
+    assert "active-job" in manager._download_jobs
+    assert "job-00" not in manager._download_jobs
+    assert "job-29" in manager._download_jobs
+    assert manager.latest_job()["jobId"] == "job-29"
+
+
+def test_shutdown_cancels_download_tasks_before_stopping_runtime():
+    embedded = FakeEmbeddedLocalAi(ready=True)
+    app = create_app(config=build_embedded_config(), sage_client=FakeSageClient(), embedded_local_ai=embedded)
+
+    with TestClient(app):
+        pass
+
+    assert embedded.downloads_cancelled is True
+    assert embedded.stopped is True
 
 
 def test_oracle_starts_disabled_and_reports_off_state_cleanly_through_sage():

@@ -1,5 +1,5 @@
 import {editPublicAiReply, queueStatusText, sendPublicAiReply} from "./aiChatMessages.mjs";
-import {createAiResponseQueue} from "./aiResponseQueue.mjs";
+import {createAiResponseQueue, isAiResponseQueueCancelError} from "./aiResponseQueue.mjs";
 import {normalizeString} from "./utils.mjs";
 
 const defaultAppaAiQueue = createAiResponseQueue();
@@ -121,7 +121,7 @@ export const createAppaMentionHandler = ({
 
   let placeholder = null;
   try {
-    const response = await aiQueue.run(async () => {
+    const response = await aiQueue.run(async ({signal}) => {
       await message?.channel?.sendTyping?.();
       return sage.appaChat?.({
         message: prompt,
@@ -131,7 +131,7 @@ export const createAppaMentionHandler = ({
         messageId: normalizeString(message?.id),
         user: buildUserPayload(message?.author, message?.member),
         proposalMode: "conservative"
-      });
+      }, {signal});
     }, {
       onQueued: async ({ahead}) => {
         [placeholder] = await sendPublicAiReply(message, queueStatusText(ahead), {
@@ -170,6 +170,9 @@ export const createAppaMentionHandler = ({
     });
     return true;
   } catch (error) {
+    if (isAiResponseQueueCancelError(error)) {
+      return true;
+    }
     const messageText = error instanceof Error ? error.message : String(error);
     logger?.warn?.("Portal Appa mention chat failed.", {error});
     onRuntimeEvent?.({

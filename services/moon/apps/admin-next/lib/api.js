@@ -115,10 +115,19 @@ export const useAdminJson = (url, {enabled = true, fallback = /** @type {T} */ (
   const [data, setData] = useState(fallback);
   const fallbackRef = useRef(fallback);
   const hasLoadedRef = useRef(false);
+  const controllerRef = useRef(null);
+  const requestIdRef = useRef(0);
   fallbackRef.current = fallback;
 
   const refresh = useCallback(async () => {
+    const abortCurrent = () => {
+      controllerRef.current?.abort();
+      controllerRef.current = null;
+    };
+
     if (!enabled || !url) {
+      requestIdRef.current += 1;
+      abortCurrent();
       setLoading(false);
       setRefreshing(false);
       setError("");
@@ -135,7 +144,23 @@ export const useAdminJson = (url, {enabled = true, fallback = /** @type {T} */ (
       setRefreshing(true);
     }
 
-    const result = await requestJson(url);
+    const controller = new AbortController();
+    const requestId = requestIdRef.current + 1;
+    requestIdRef.current = requestId;
+    abortCurrent();
+    controllerRef.current = controller;
+
+    const isCurrentRequest = () =>
+      requestIdRef.current === requestId
+      && controllerRef.current === controller
+      && !controller.signal.aborted;
+
+    const result = await requestJson(url, {signal: controller.signal});
+    if (!isCurrentRequest()) {
+      return;
+    }
+
+    controllerRef.current = null;
     setStatus(result.status);
     if (!result.ok) {
       setError(initialLoad ? result.payload?.error || "Moon could not finish loading this admin page." : "");
@@ -154,6 +179,12 @@ export const useAdminJson = (url, {enabled = true, fallback = /** @type {T} */ (
   useEffect(() => {
     void refresh();
   }, [refresh, ...deps]);
+
+  useEffect(() => () => {
+    requestIdRef.current += 1;
+    controllerRef.current?.abort();
+    controllerRef.current = null;
+  }, []);
 
   return {loading, refreshing, error, status, data, refresh, setData};
 };

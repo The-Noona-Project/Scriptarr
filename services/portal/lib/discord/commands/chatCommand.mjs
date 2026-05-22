@@ -1,5 +1,5 @@
 import {interactionAiPayload, queueStatusText} from "../aiChatMessages.mjs";
-import {createAiResponseQueue} from "../aiResponseQueue.mjs";
+import {createAiResponseQueue, isAiResponseQueueCancelError} from "../aiResponseQueue.mjs";
 import {sendInteractionReply} from "../utils.mjs";
 
 const defaultChatAiQueue = createAiResponseQueue();
@@ -23,21 +23,29 @@ export const createChatCommand = ({sage, aiQueue = defaultChatAiQueue}) => ({
     await interaction.deferReply?.({flags: 64});
     const message = interaction.options?.getString?.("message") || "";
     const userId = interaction.user?.id || interaction.member?.user?.id || "";
-    const response = await aiQueue.run(
-      () => sage.chat({message}),
-      {
-        onQueued: ({ahead}) => sendInteractionReply(interaction, interactionAiPayload(queueStatusText(ahead), {
-          userId,
-          ephemeral: true
-        })),
-        onStart: ({ahead}) => ahead > 0
-          ? sendInteractionReply(interaction, interactionAiPayload("Thinking...", {
+    let response;
+    try {
+      response = await aiQueue.run(
+        ({signal}) => sage.chat({message}, {signal}),
+        {
+          onQueued: ({ahead}) => sendInteractionReply(interaction, interactionAiPayload(queueStatusText(ahead), {
             userId,
             ephemeral: true
-          }))
-          : null
+          })),
+          onStart: ({ahead}) => ahead > 0
+            ? sendInteractionReply(interaction, interactionAiPayload("Thinking...", {
+              userId,
+              ephemeral: true
+            }))
+            : null
+        }
+      );
+    } catch (error) {
+      if (isAiResponseQueueCancelError(error)) {
+        return;
       }
-    );
+      throw error;
+    }
     await sendInteractionReply(interaction, {
       ...interactionAiPayload(response.ok
         ? response.payload?.reply || "Noona did not return a response."

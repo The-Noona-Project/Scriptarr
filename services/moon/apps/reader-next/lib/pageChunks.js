@@ -274,10 +274,14 @@ export const resolveReaderPreloadPlan = ({
  *
  * @param {Array<{index?: number, src?: string}>} pages
  * @param {number[]} indexes
- * @param {{imageFactory?: typeof Image, onMetric?: (event: Record<string, unknown>) => void}} [options]
+ * @param {{imageFactory?: typeof Image, onMetric?: (event: Record<string, unknown>) => void, signal?: AbortSignal, timeoutMs?: number}} [options]
  * @returns {Promise<Array<{index: number, ok: boolean}>>}
  */
-export const warmReaderPageImages = async (pages = [], indexes = [], {imageFactory = globalThis.Image, onMetric = null} = {}) => {
+export const warmReaderPageImages = async (
+  pages = [],
+  indexes = [],
+  {imageFactory = globalThis.Image, onMetric = null, signal = null, timeoutMs = 15_000} = {}
+) => {
   if (typeof imageFactory !== "function") {
     return [];
   }
@@ -286,8 +290,57 @@ export const warmReaderPageImages = async (pages = [], indexes = [], {imageFacto
   const results = await Promise.all(pageEntries.map((page) => new Promise((resolve) => {
     const image = new imageFactory();
     const startedAt = now();
-    const finish = (ok) => resolve({index: page.index, ok});
+    let settled = false;
+    let loaded = false;
+    let timeout = 0;
+    const cleanup = () => {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+      signal?.removeEventListener?.("abort", abort);
+      image.onload = null;
+      image.onerror = null;
+      try {
+        image.src = "";
+      } catch {
+        // Some test doubles expose a write-only src setter.
+      }
+    };
+    const finish = (ok) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      resolve({index: page.index, ok});
+    };
+    const abort = () => {
+      onMetric?.({
+        type: "image-stream-fetch",
+        pageIndex: page.index,
+        ok: false,
+        durationMs: now() - startedAt,
+        reason: "image_cancelled"
+      });
+      finish(false);
+    };
+    if (signal?.aborted) {
+      abort();
+      return;
+    }
+    signal?.addEventListener?.("abort", abort, {once: true});
+    timeout = setTimeout(() => {
+      onMetric?.({
+        type: loaded ? "image-decode" : "image-stream-fetch",
+        pageIndex: page.index,
+        ok: false,
+        durationMs: now() - startedAt,
+        reason: loaded ? "decode_timeout" : "image_timeout"
+      });
+      finish(false);
+    }, Math.max(1, Number.parseInt(String(timeoutMs), 10) || 15_000));
     image.onload = () => {
+      loaded = true;
       const imageLoadMs = now() - startedAt;
       onMetric?.({
         type: "image-stream-fetch",
@@ -298,6 +351,9 @@ export const warmReaderPageImages = async (pages = [], indexes = [], {imageFacto
       if (typeof image.decode === "function") {
         const decodeStartedAt = now();
         Promise.resolve(image.decode()).then(() => {
+          if (settled) {
+            return;
+          }
           onMetric?.({
             type: "image-decode",
             pageIndex: page.index,
@@ -307,6 +363,9 @@ export const warmReaderPageImages = async (pages = [], indexes = [], {imageFacto
           });
           finish(true);
         }, () => {
+          if (settled) {
+            return;
+          }
           onMetric?.({
             type: "image-decode",
             pageIndex: page.index,

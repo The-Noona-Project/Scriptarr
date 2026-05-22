@@ -103,6 +103,9 @@ Fresh installs no longer include seeded demo series. Scriptarr's user and admin 
 library importer has real titles to expose.
 Vault now fronts shared MySQL state with its own cache-first broker layer, and first-party service-to-service HTTP is
 expected to flow through Sage instead of bypassing the broker topology.
+Scriptarr also bounds long-running background work across the managed services. Under stalled upstreams or very busy
+admin, reader, Discord, AI, Docker, or downloader flows, services should cancel stale requests, close streams, evict old
+cache or job entries, and surface normal timeout or retry states instead of growing memory indefinitely.
 Moon requests and admin add-title now run through one intake flow: search query, enabled metadata providers, saved
 metadata snapshot, then either admin source approval or immediate queueing depending on who submitted it.
 That intake is now grouped by concrete provider target so duplicate metadata rows that land on the same download URL

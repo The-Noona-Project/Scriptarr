@@ -1,4 +1,5 @@
 const DEFAULT_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+const DEFAULT_CACHE_MAX_ENTRIES = 1000;
 
 const cloneValue = (value) => {
   if (value == null) {
@@ -32,48 +33,81 @@ const makeListKey = (prefix, filters = {}) => `${prefix}:${stableStringify(filte
  * invalidating the affected cache entries.
  *
  * @param {Record<string, any>} baseStore
- * @param {{ttlMs?: number, now?: () => number}} [options]
+ * @param {{ttlMs?: number, maxEntries?: number, now?: () => number}} [options]
  * @returns {Record<string, any>}
  */
 export const createCachedStore = (
   baseStore,
   {
     ttlMs = DEFAULT_CACHE_TTL_MS,
+    maxEntries = DEFAULT_CACHE_MAX_ENTRIES,
     now = () => Date.now()
   } = {}
 ) => {
+  const cacheMaxEntries = maxEntries === Infinity
+    ? Infinity
+    : Math.max(1, Math.floor(Number(maxEntries) || DEFAULT_CACHE_MAX_ENTRIES));
   const cache = new Map();
 
+  const pruneExpiredEntries = (currentTime = now()) => {
+    for (const [key, entry] of cache.entries()) {
+      if (entry.expiresAt <= currentTime) {
+        cache.delete(key);
+      }
+    }
+  };
+
+  const evictOverflow = () => {
+    while (cache.size > cacheMaxEntries) {
+      const oldestKey = cache.keys().next().value;
+      cache.delete(oldestKey);
+    }
+  };
+
   const readEntry = (key) => {
+    const currentTime = now();
+    pruneExpiredEntries(currentTime);
     const entry = cache.get(key);
     if (!entry) {
       return undefined;
     }
 
-    if (entry.expiresAt <= now()) {
+    if (entry.expiresAt <= currentTime) {
       cache.delete(key);
       return undefined;
     }
 
+    cache.delete(key);
+    cache.set(key, entry);
     return cloneValue(entry.value);
   };
 
   const writeEntry = (key, value) => {
+    const currentTime = now();
+    pruneExpiredEntries(currentTime);
+    cache.delete(key);
     cache.set(key, {
       value: cloneValue(value),
-      expiresAt: now() + ttlMs
+      expiresAt: currentTime + ttlMs
     });
+    evictOverflow();
     return value;
   };
 
   const invalidate = (...keys) => {
+    pruneExpiredEntries();
     for (const key of keys) {
       cache.delete(key);
     }
   };
 
   const invalidatePrefix = (...prefixes) => {
-    for (const key of Array.from(cache.keys())) {
+    const currentTime = now();
+    for (const [key, entry] of cache.entries()) {
+      if (entry.expiresAt <= currentTime) {
+        cache.delete(key);
+        continue;
+      }
       if (prefixes.some((prefix) => key.startsWith(prefix))) {
         cache.delete(key);
       }
@@ -92,6 +126,7 @@ export const createCachedStore = (
   const cachedStore = {
     ...baseStore,
     cacheTtlMs: ttlMs,
+    cacheMaxEntries,
     cacheSize: () => cache.size,
     clearCache: () => cache.clear(),
     async getBootstrapStatus(superuserId) {

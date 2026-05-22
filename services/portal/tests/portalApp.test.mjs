@@ -473,6 +473,55 @@ test("portal notifier delivers follow, approval, denial, and completion DMs once
   ]);
 });
 
+test("portal notifier skips overlapping polls and stops before stale Discord sends", async () => {
+  let activeLists = 0;
+  let maxActiveLists = 0;
+  let releaseList;
+  const sent = [];
+  const notifier = createFollowNotifier({
+    pollMs: 5,
+    publicBaseUrl: "https://pax-kun.com",
+    logger: {error() {}},
+    discord: {
+      async sendDirectMessage(discordUserId, payload) {
+        sent.push({discordUserId, payload});
+      }
+    },
+    sage: {
+      async listFollowNotifications() {
+        activeLists += 1;
+        maxActiveLists = Math.max(maxActiveLists, activeLists);
+        await new Promise((resolve) => {
+          releaseList = resolve;
+        });
+        activeLists -= 1;
+        return {
+          ok: true,
+          payload: {
+            notifications: [{
+              id: "follow-stale",
+              discordUserId: "user-1",
+              titleName: "Late Title"
+            }]
+          }
+        };
+      },
+      async acknowledgeFollowNotification() {
+        return {ok: true};
+      }
+    }
+  });
+
+  notifier.start();
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  const stopPromise = notifier.stop();
+  releaseList();
+  await stopPromise;
+
+  assert.equal(maxActiveLists, 1);
+  assert.deepEqual(sent, []);
+});
+
 test("update channel payload keeps Noona summary out of duplicate message content", () => {
   const payload = buildUpdateChannelPayload({
     repository: "The-Noona-Project/Scriptarr",

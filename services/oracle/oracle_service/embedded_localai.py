@@ -27,6 +27,11 @@ GENERATION_PROBE_ATTEMPTS = 3
 GENERATION_PROBE_RETRY_DELAY_SECONDS = 10
 LOCALAI_READY_WAIT_SECONDS = 180
 LOCALAI_READY_WAIT_INTERVAL_SECONDS = 2
+LOCALAI_DOWNLOAD_JOB_HISTORY_LIMIT = 25
+LOCALAI_DOWNLOAD_CONNECT_TIMEOUT_SECONDS = 20
+LOCALAI_DOWNLOAD_READ_TIMEOUT_SECONDS = 120
+LOCALAI_DOWNLOAD_WRITE_TIMEOUT_SECONDS = 60
+LOCALAI_DOWNLOAD_POOL_TIMEOUT_SECONDS = 20
 
 
 class EmbeddedLocalAiError(RuntimeError):
@@ -293,6 +298,18 @@ class EmbeddedLocalAiManager:
         finally:
             self._startup_task = None
 
+    async def cancel_download_tasks(self) -> None:
+        tasks = [(job_id, task) for job_id, task in self._download_tasks.items() if not task.done()]
+        if not tasks:
+            self._download_tasks.clear()
+            return
+        for _job_id, task in tasks:
+            task.cancel()
+        await asyncio.gather(*(task for _job_id, task in tasks), return_exceptions=True)
+        for job_id, _task in tasks:
+            self._download_tasks.pop(job_id, None)
+        self._prune_download_jobs()
+
     async def run_startup_auto_start(self, runtime_settings: Any) -> dict[str, Any]:
         selected_model = _normalize_string(getattr(runtime_settings, "model", ""))
         try:
@@ -405,6 +422,7 @@ class EmbeddedLocalAiManager:
             "--backends-system-path",
             self.config.local_ai_backends_path
         ]
+        process: asyncio.subprocess.Process | None = None
         try:
             process = await asyncio.create_subprocess_exec(
                 *args,
@@ -414,7 +432,13 @@ class EmbeddedLocalAiManager:
             )
             stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=600)
         except asyncio.TimeoutError as error:
+            if process:
+                await self._terminate_subprocess(process)
             raise EmbeddedLocalAiError(f"Timed out installing LocalAI backend {backend}.") from error
+        except asyncio.CancelledError:
+            if process:
+                await self._terminate_subprocess(process)
+            raise
         if process.returncode != 0:
             detail = _safe_text((stderr or stdout).decode("utf-8", "replace"), 800)
             raise EmbeddedLocalAiError(detail or f"LocalAI backend install failed for {backend}.")
@@ -425,14 +449,19 @@ class EmbeddedLocalAiManager:
             "message": _safe_text((stdout or stderr).decode("utf-8", "replace"), 240)
         }
 
+    async def _terminate_subprocess(self, process: asyncio.subprocess.Process, *, timeout: float = 8) -> None:
+        if process.returncode is not None:
+            return
+        process.terminate()
+        try:
+            await asyncio.wait_for(process.wait(), timeout=timeout)
+        except asyncio.TimeoutError:
+            process.kill()
+            await process.wait()
+
     async def stop(self) -> None:
         if self.process and self.process.returncode is None:
-            self.process.terminate()
-            try:
-                await asyncio.wait_for(self.process.wait(), timeout=8)
-            except asyncio.TimeoutError:
-                self.process.kill()
-                await self.process.wait()
+            await self._terminate_subprocess(self.process)
         self.process = None
         self._generation_probe = None
         self._mark(message="Embedded LocalAI process stopped.")
@@ -493,7 +522,13 @@ class EmbeddedLocalAiManager:
         if resume_from:
             headers["Range"] = f"bytes={resume_from}-"
         started = time.monotonic()
-        async with httpx.AsyncClient(timeout=None, follow_redirects=True) as client:
+        timeout = httpx.Timeout(
+            connect=LOCALAI_DOWNLOAD_CONNECT_TIMEOUT_SECONDS,
+            read=LOCALAI_DOWNLOAD_READ_TIMEOUT_SECONDS,
+            write=LOCALAI_DOWNLOAD_WRITE_TIMEOUT_SECONDS,
+            pool=LOCALAI_DOWNLOAD_POOL_TIMEOUT_SECONDS
+        )
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
             async with client.stream("GET", model_ref.download_url, headers=headers) as response:
                 if response.status_code >= 400:
                     raise EmbeddedLocalAiError(f"HuggingFace model download failed with status {response.status_code}.")
@@ -601,9 +636,26 @@ class EmbeddedLocalAiManager:
             self._manual_remove_requested = False
         job = self._new_job(action, selected_model, requested_by)
         self._download_jobs[job["jobId"]] = job
+        self._prune_download_jobs()
         task = asyncio.create_task(self._run_ensure_job(job["jobId"], action, selected_model, huggingface_token, download_model))
         self._download_tasks[job["jobId"]] = task
         return dict(job)
+
+    def _prune_download_jobs(self) -> None:
+        if len(self._download_jobs) <= LOCALAI_DOWNLOAD_JOB_HISTORY_LIMIT:
+            return
+        removable = sorted(
+            (
+                job
+                for job in self._download_jobs.values()
+                if job.get("status") in {"completed", "failed", "cancelled"}
+            ),
+            key=lambda job: job.get("updatedAt") or job.get("finishedAt") or job.get("createdAt") or ""
+        )
+        for job in removable:
+            if len(self._download_jobs) <= LOCALAI_DOWNLOAD_JOB_HISTORY_LIMIT:
+                break
+            self._download_jobs.pop(job.get("jobId"), None)
 
     async def _run_ensure_job(self, job_id: str, action: str, model_url: str, huggingface_token: str, download_model: bool) -> None:
         try:
@@ -653,6 +705,16 @@ class EmbeddedLocalAiManager:
                 model=parse_huggingface_model(model_url).local_name
             )
             await self._update_job(job_id, message="Embedded LocalAI model is ready.")
+        except asyncio.CancelledError:
+            job = self._download_jobs.get(job_id)
+            if job:
+                job["status"] = "cancelled"
+                job["error"] = "LocalAI action cancelled."
+                job["finishedAt"] = _now_iso()
+                job["result"] = {"error": "LocalAI action cancelled."}
+                await self._update_job(job_id, status="cancelled", message="LocalAI action cancelled.")
+            self._mark(message="Embedded LocalAI action cancelled.", error="")
+            raise
         except Exception as error:  # noqa: BLE001
             job = self._download_jobs[job_id]
             job["status"] = "failed"
@@ -663,6 +725,7 @@ class EmbeddedLocalAiManager:
             self._mark(message="Embedded LocalAI action failed.", error=str(error))
         finally:
             self._download_tasks.pop(job_id, None)
+            self._prune_download_jobs()
 
     def latest_job(self) -> dict[str, Any] | None:
         if not self._download_jobs:

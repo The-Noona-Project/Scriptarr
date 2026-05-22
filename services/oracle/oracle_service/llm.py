@@ -68,19 +68,19 @@ def _provider_completion_options(runtime) -> dict[str, object]:
 
 async def invoke_oracle(runtime, persona_name: str, message: str, context: object | None = None) -> str:
     system_prompt = APPA_SYSTEM_PROMPT if str(persona_name).strip().lower() == "appa" else NOONA_SYSTEM_PROMPT.format(persona=persona_name)
-    client = AsyncOpenAI(
+    async with AsyncOpenAI(
         api_key=runtime.api_key,
         base_url=runtime.local_ai_base_url if runtime.provider == "localai" else None,
         timeout=runtime.llm_timeout_seconds
-    )
-    response = await client.chat.completions.create(
-        model=runtime.model,
-        temperature=runtime.temperature,
-        **_provider_completion_options(runtime),
-        messages=[
-            {"role": "system", "content": system_prompt},
-            *_context_message(context),
-            {"role": "user", "content": message}
-        ]
-    )
+    ) as client:
+        response = await client.chat.completions.create(
+            model=runtime.model,
+            temperature=runtime.temperature,
+            **_provider_completion_options(runtime),
+            messages=[
+                {"role": "system", "content": system_prompt},
+                *_context_message(context),
+                {"role": "user", "content": message}
+            ]
+        )
     return _stringify_content(response.choices[0].message.content)

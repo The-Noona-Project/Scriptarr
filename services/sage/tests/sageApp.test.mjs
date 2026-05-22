@@ -30,6 +30,23 @@ const closeServer = (server) => new Promise((resolve, reject) => {
 });
 
 /**
+ * Poll until a condition passes or the timeout expires.
+ *
+ * @param {() => boolean} condition
+ * @param {number} [timeoutMs]
+ * @returns {Promise<void>}
+ */
+const waitForCondition = async (condition, timeoutMs = 1000) => {
+  const startedAt = Date.now();
+  while (!condition()) {
+    if (Date.now() - startedAt > timeoutMs) {
+      throw new Error("Timed out waiting for test condition.");
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+};
+
+/**
  * Read a test proxy request body into a buffer for forwarding.
  *
  * @param {http.IncomingMessage} request
@@ -219,7 +236,7 @@ const defaultIntakePayload = Object.freeze({
  * Create a small dependency stub for Sage's Raven, Warden, Portal, and Oracle
  * calls so the Moon v3 broker routes can be tested in isolation.
  *
- * @param {{libraryTitles?: Array<Record<string, unknown>>, downloadTasks?: Array<Record<string, unknown>>, ingestTasks?: Array<Record<string, unknown>>, ingestOverview?: Record<string, unknown>, importResult?: Record<string, unknown>, downloadRuntimeReloadStatus?: number, syncLinkedRequestOnQueue?: boolean, readerChapterTransientMisses?: Record<string, number>, readerMissingChaptersAsHtml?: boolean, readerPageFetchFails?: boolean}} [options]
+ * @param {{libraryTitles?: Array<Record<string, unknown>>, downloadTasks?: Array<Record<string, unknown>>, ingestTasks?: Array<Record<string, unknown>>, ingestOverview?: Record<string, unknown>, importResult?: Record<string, unknown>, downloadRuntimeReloadStatus?: number, syncLinkedRequestOnQueue?: boolean, readerChapterTransientMisses?: Record<string, number>, readerMissingChaptersAsHtml?: boolean, readerPageFetchFails?: boolean, readerPageHangs?: boolean, publicSearchResultCount?: number}} [options]
  * @returns {Promise<{server: http.Server, calls: Record<string, number>}>}
  */
 const createDependencyStub = ({
@@ -232,7 +249,9 @@ const createDependencyStub = ({
   syncLinkedRequestOnQueue = false,
   readerChapterTransientMisses = {},
   readerMissingChaptersAsHtml = false,
-  readerPageFetchFails = false
+  readerPageFetchFails = false,
+  readerPageHangs = false,
+  publicSearchResultCount = 1
 } = {}) => {
   const calls = {
     health: 0,
@@ -267,7 +286,8 @@ const createDependencyStub = ({
     ingestOverview: 0,
     ingestRetry: 0,
     importLibrary: 0,
-    downloadRetry: 0
+    downloadRetry: 0,
+    readerPageAborted: 0
   };
   let currentLibraryTitles = [...libraryTitles];
   let currentDownloadTasks = [...downloadTasks];
@@ -736,6 +756,12 @@ const createDependencyStub = ({
         request.socket.destroy();
         return;
       }
+      if (readerPageHangs) {
+        request.on("close", () => {
+          calls.readerPageAborted += 1;
+        });
+        return;
+      }
       response.writeHead(200, {
         "Content-Type": "image/svg+xml",
         "ETag": "\"raven-reader-page\""
@@ -896,16 +922,16 @@ const createDependencyStub = ({
       response.writeHead(200, {"Content-Type": "application/json"});
       response.end(JSON.stringify({
         query,
-        results: [{
+        results: Array.from({length: publicSearchResultCount}, (_value, index) => ({
           metadataProviderId: "mangadex",
-          providerSeriesId: "md-1",
-          canonicalTitle: "Dandadan",
+          providerSeriesId: `md-${index + 1}`,
+          canonicalTitle: index === 0 ? "Dandadan" : `Dandadan ${index + 1}`,
           aliases: ["Dan Da Dan"],
           type: "webtoon",
           metadata: {
             provider: "mangadex",
-            providerSeriesId: "md-1",
-            title: "Dandadan",
+            providerSeriesId: `md-${index + 1}`,
+            title: index === 0 ? "Dandadan" : `Dandadan ${index + 1}`,
             summary: "Aliens and yokai.",
             aliases: ["Dan Da Dan"],
             type: "webtoon"
@@ -921,7 +947,7 @@ const createDependencyStub = ({
           },
           availability: "available",
           titleUrl: "https://weebcentral.com/series/dan-da-dan"
-        }]
+        }))
       }));
       return;
     }
@@ -1518,6 +1544,63 @@ test("sage keeps reader page responses bounded when Raven drops the image fetch"
   await closeServer(sageServer);
   await closeServer(vaultServer);
   await closeServer(dependencyStub.server);
+});
+
+test("sage times out Raven reader page streams without wedging the route", async () => {
+  const previousTimeout = process.env.SCRIPTARR_RAVEN_READER_PAGE_TIMEOUT_MS;
+  process.env.SCRIPTARR_RAVEN_READER_PAGE_TIMEOUT_MS = "50";
+  const {app: vaultApp} = await createVaultApp();
+  const vaultServer = vaultApp.listen(0);
+  const vaultPort = vaultServer.address().port;
+
+  const dependencyStub = await createDependencyStub({
+    libraryTitles: [ownerSmokeLibraryTitle],
+    readerPageHangs: true
+  });
+  dependencyStub.server.listen(0);
+  const dependencyPort = dependencyStub.server.address().port;
+
+  process.env.SCRIPTARR_VAULT_BASE_URL = `http://127.0.0.1:${vaultPort}`;
+  process.env.SCRIPTARR_WARDEN_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_PORTAL_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_ORACLE_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_RAVEN_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_PUBLIC_BASE_URL = "https://pax-kun.com";
+  process.env.SCRIPTARR_DISCORD_CLIENT_ID = "discord-client-id";
+  process.env.SCRIPTARR_DISCORD_CLIENT_SECRET = "discord-client-secret";
+
+  installDiscordFetchStub();
+
+  const {app: sageApp} = await createSageApp();
+  const sageServer = sageApp.listen(0);
+  const sagePort = sageServer.address().port;
+  const baseUrl = `http://127.0.0.1:${sagePort}`;
+  const ownerClaim = await signInViaDiscord(baseUrl);
+
+  try {
+    const readerPageResponse = await fetch(`${baseUrl}/api/moon-v3/user/reader/title/dan-da-dan/chapter/dandadan-c166/page/1`, {
+      headers: {
+        "Authorization": `Bearer ${ownerClaim.token}`
+      }
+    });
+    assert.equal(readerPageResponse.status, 502);
+    assert.match(readerPageResponse.headers.get("cache-control") || "", /no-store/);
+    assert.deepEqual(await readerPageResponse.json(), {error: "Reader page stream failed."});
+    await waitForCondition(() => dependencyStub.calls.readerPageAborted === 1);
+    assert.equal(dependencyStub.calls.readerPageAborted, 1);
+
+    const healthResponse = await fetch(`${baseUrl}/health`);
+    assert.equal(healthResponse.status, 200);
+  } finally {
+    if (previousTimeout == null) {
+      delete process.env.SCRIPTARR_RAVEN_READER_PAGE_TIMEOUT_MS;
+    } else {
+      process.env.SCRIPTARR_RAVEN_READER_PAGE_TIMEOUT_MS = previousTimeout;
+    }
+    await closeServer(sageServer);
+    await closeServer(vaultServer);
+    await closeServer(dependencyStub.server);
+  }
 });
 
 test("sage signs in the first owner through the Discord callback and moderates requests", async () => {
@@ -4037,6 +4120,75 @@ test("sage authenticates system and user API keys with scoped access", async () 
     }).then((response) => response.json());
     assert.equal(requests[0].requestedBy, "owner-1");
     assert.equal(requests[0].details.apiKeyKind, "user");
+  } finally {
+    await closeServer(sageServer);
+    await closeServer(vaultServer);
+    await closeServer(dependencyStub.server);
+  }
+});
+
+test("sage caps public search selection tokens while keeping returned tokens usable", async () => {
+  const {app: vaultApp} = await createVaultApp();
+  const vaultServer = vaultApp.listen(0);
+  const vaultPort = vaultServer.address().port;
+
+  const dependencyStub = await createDependencyStub({
+    libraryTitles: [],
+    publicSearchResultCount: 510
+  });
+  dependencyStub.server.listen(0);
+  const dependencyPort = dependencyStub.server.address().port;
+
+  process.env.SCRIPTARR_VAULT_BASE_URL = `http://127.0.0.1:${vaultPort}`;
+  process.env.SCRIPTARR_WARDEN_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_PORTAL_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_ORACLE_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_RAVEN_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_PUBLIC_BASE_URL = "https://pax-kun.com";
+  process.env.SCRIPTARR_DISCORD_CLIENT_ID = "discord-client-id";
+  process.env.SCRIPTARR_DISCORD_CLIENT_SECRET = "discord-client-secret";
+
+  installDiscordFetchStub();
+
+  const {app: sageApp} = await createSageApp();
+  const sageServer = sageApp.listen(0);
+  const sagePort = sageServer.address().port;
+  const baseUrl = `http://127.0.0.1:${sagePort}`;
+
+  try {
+    const ownerClaim = await signInViaDiscord(baseUrl);
+    const ownerHeaders = {
+      "Authorization": `Bearer ${ownerClaim.token}`,
+      "Content-Type": "application/json"
+    };
+    await fetch(`${baseUrl}/api/moon-v3/admin/system/api/settings`, {
+      method: "PUT",
+      headers: ownerHeaders,
+      body: JSON.stringify({enabled: true})
+    });
+    const userKeyResponse = await fetch(`${baseUrl}/api/moon-v3/user/api-keys`, {
+      method: "POST",
+      headers: ownerHeaders,
+      body: JSON.stringify({name: "Reader Sync"})
+    });
+    assert.equal(userKeyResponse.status, 201);
+    const userKey = await userKeyResponse.json();
+
+    const publicSearch = await fetch(`${baseUrl}/api/public/v1/search?q=dandadan`).then((response) => response.json());
+    assert.equal(publicSearch.results.length, 500);
+    assert.ok(publicSearch.results.every((result) => typeof result.selectionToken === "string" && result.selectionToken.length > 0));
+
+    const publicCreate = await fetch(`${baseUrl}/api/public/v1/requests`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Scriptarr-Api-Key": userKey.secret
+      },
+      body: JSON.stringify({
+        selectionToken: publicSearch.results.at(-1).selectionToken
+      })
+    });
+    assert.equal(publicCreate.status, 202);
   } finally {
     await closeServer(sageServer);
     await closeServer(vaultServer);

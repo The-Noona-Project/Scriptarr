@@ -6,6 +6,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.Locale;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
@@ -16,6 +17,7 @@ import java.util.concurrent.TimeUnit;
 @Component
 public final class CwebpTranscoder implements WebpTranscoder {
     private static final int TRANSCODE_TIMEOUT_SECONDS = 90;
+    private static final Duration PROCESS_STOP_TIMEOUT = Duration.ofSeconds(5);
 
     @Override
     public void transcode(byte[] inputBytes, String sourceMediaType, Path outputPath, int quality) throws IOException, InterruptedException {
@@ -36,10 +38,25 @@ public final class CwebpTranscoder implements WebpTranscoder {
                 outputPath.toString()
             )
                 .redirectErrorStream(true)
+                .redirectOutput(ProcessBuilder.Redirect.DISCARD)
                 .start();
-            if (!process.waitFor(TRANSCODE_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
-                process.destroyForcibly();
-                throw new IOException("cwebp timed out while converting a reader page.");
+            try {
+                if (!process.waitFor(TRANSCODE_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+                    destroyAndWait(process);
+                    throw new IOException("cwebp timed out while converting a reader page.");
+                }
+            } catch (InterruptedException interrupted) {
+                InterruptedException cleanupInterruption = null;
+                try {
+                    destroyAndWait(process);
+                } catch (InterruptedException cleanupError) {
+                    cleanupInterruption = cleanupError;
+                }
+                if (cleanupInterruption != null) {
+                    interrupted.addSuppressed(cleanupInterruption);
+                }
+                Thread.currentThread().interrupt();
+                throw interrupted;
             }
             if (process.exitValue() != 0) {
                 throw new IOException("cwebp failed to create a WebP page.");
@@ -48,6 +65,14 @@ public final class CwebpTranscoder implements WebpTranscoder {
         } finally {
             Files.deleteIfExists(sourcePath);
         }
+    }
+
+    private void destroyAndWait(Process process) throws InterruptedException {
+        if (process == null || !process.isAlive()) {
+            return;
+        }
+        process.destroyForcibly();
+        process.waitFor(PROCESS_STOP_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
     }
 
     private void validateWebpOutput(Path outputPath) throws IOException {

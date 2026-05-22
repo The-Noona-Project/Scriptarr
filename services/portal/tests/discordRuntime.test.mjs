@@ -1253,6 +1253,143 @@ test("portal runtime falls back to minimal intents when guild member intent is d
   }
 });
 
+test("portal runtime serializes concurrent starts into one Discord client", async () => {
+  const createdClients = [];
+  const sage = {
+    async getDiscordSettings() {
+      return {
+        ok: true,
+        payload: {
+          guildId: "guild-1"
+        }
+      };
+    },
+    async listFollowNotifications() {
+      return {ok: true, payload: {notifications: []}};
+    }
+  };
+
+  const runtime = createPortalRuntime({
+    config: baseConfig,
+    sage,
+    logger: createLogger(),
+    clientFactory: async (options = {}) => {
+      const client = new FakeDiscordClient();
+      client.options = options;
+      createdClients.push(client);
+      return client;
+    }
+  });
+
+  try {
+    const [first, second] = await Promise.all([runtime.start(), runtime.start()]);
+    assert.equal(first.connected, true);
+    assert.equal(second.connected, true);
+    assert.equal(createdClients.length, 1);
+    assert.equal(createdClients[0].destroyed, false);
+  } finally {
+    await runtime.stop();
+  }
+});
+
+test("portal runtime stop destroys a pre-ready half-open Discord client", async () => {
+  const createdClients = [];
+  const sage = {
+    async getDiscordSettings() {
+      return {
+        ok: true,
+        payload: {
+          guildId: "guild-1"
+        }
+      };
+    },
+    async listFollowNotifications() {
+      return {ok: true, payload: {notifications: []}};
+    }
+  };
+
+  const runtime = createPortalRuntime({
+    config: baseConfig,
+    sage,
+    logger: createLogger(),
+    clientFactory: async () => {
+      const client = new FakeDiscordClient();
+      client.login = async () => {
+        // Return from login but never emit ready, matching a half-open gateway wait.
+      };
+      createdClients.push(client);
+      return client;
+    }
+  });
+
+  const startPromise = runtime.start();
+  while (createdClients.length === 0) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  await runtime.stop();
+  await startPromise;
+
+  const state = runtime.getState();
+  assert.equal(createdClients[0].destroyed, true);
+  assert.equal(state.connected, false);
+  assert.equal(state.mode, "idle");
+});
+
+test("portal runtime treats pre-ready gateway disconnect as a login failure and retries minimal intents", async () => {
+  const createdClients = [];
+  const sage = {
+    async getDiscordSettings() {
+      return {
+        ok: true,
+        payload: {
+          guildId: "guild-1",
+          onboarding: {
+            channelId: "channel-1",
+            template: "Welcome {username}"
+          }
+        }
+      };
+    },
+    async listFollowNotifications() {
+      return {ok: true, payload: {notifications: []}};
+    }
+  };
+
+  const runtime = createPortalRuntime({
+    config: baseConfig,
+    sage,
+    logger: createLogger(),
+    clientFactory: async (options = {}) => {
+      const fakeClient = new FakeDiscordClient();
+      fakeClient.options = options;
+      fakeClient.login = async () => {
+        if (options.intents?.includes("GuildMembers")) {
+          queueMicrotask(() => {
+            fakeClient.emit("shardDisconnect", {code: 4014, reason: "Disallowed intents"}, 0);
+          });
+          return;
+        }
+        queueMicrotask(() => {
+          fakeClient.emit("ready", fakeClient);
+        });
+      };
+      createdClients.push(fakeClient);
+      return fakeClient;
+    }
+  });
+
+  try {
+    await runtime.start();
+    const state = runtime.getState();
+    assert.equal(createdClients.length, 2);
+    assert.equal(createdClients[0].destroyed, true);
+    assert.equal(state.connected, true);
+    assert.equal(state.warning?.includes("Server Members intent"), true);
+  } finally {
+    await runtime.stop();
+  }
+});
+
 test("portal runtime surfaces disconnect reasons after connecting", async () => {
   const fakeClient = new FakeDiscordClient();
   const sage = {

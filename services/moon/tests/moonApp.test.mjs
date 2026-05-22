@@ -27,7 +27,7 @@ const closeServer = (server) => new Promise((resolve, reject) => {
  *
  * @returns {Promise<http.Server>}
  */
-const createSageStub = ({requests = []} = {}) => Promise.resolve(http.createServer(async (request, response) => {
+const createSageStub = ({requests = [], streamProbe = null} = {}) => Promise.resolve(http.createServer(async (request, response) => {
   const requestUrl = new URL(request.url || "/", "http://moon.test");
   const body = await new Promise((resolve) => {
     const chunks = [];
@@ -328,6 +328,24 @@ const createSageStub = ({requests = []} = {}) => Promise.resolve(http.createServ
     return;
   }
 
+  if (requestUrl.pathname === "/api/moon-v3/user/reader/title/dan-da-dan/chapter/chapter-1/page/8") {
+    response.writeHead(200, {
+      "Content-Type": "image/svg+xml",
+      "Cache-Control": "private, max-age=604800"
+    });
+    response.write("<svg xmlns=\"http://www.w3.org/2000/svg\">");
+    const timer = setTimeout(() => {
+      response.end("<text>slow-reader-page</text></svg>");
+    }, 5000);
+    response.on("close", () => {
+      clearTimeout(timer);
+      if (streamProbe) {
+        streamProbe.closed = true;
+      }
+    });
+    return;
+  }
+
   if (requestUrl.pathname === "/api/moon-v3/user/reader/title/dan-da-dan/chapter/chapter-1/page/0/status") {
     response.writeHead(200, {"Content-Type": "application/json", "Cache-Control": "no-store"});
     response.end(JSON.stringify({
@@ -615,7 +633,8 @@ test("moon serves branded split entry documents, typed routes, PWA assets, and M
   process.env.SCRIPTARR_MOON_READER_PAGE_CACHE_DIR = readerPageCacheDir;
 
   const requests = [];
-  const sageStub = await createSageStub({requests});
+  const streamProbe = {closed: false};
+  const sageStub = await createSageStub({requests, streamProbe});
   sageStub.listen(0);
   const sagePort = sageStub.address().port;
   process.env.SCRIPTARR_SAGE_BASE_URL = `http://127.0.0.1:${sagePort}`;
@@ -1004,6 +1023,27 @@ test("moon serves branded split entry documents, typed routes, PWA assets, and M
   await droppedStreamResponse?.arrayBuffer().catch(() => new ArrayBuffer(0));
   const healthAfterDroppedStream = await fetch(`${baseUrl}/health`);
   assert.equal(healthAfterDroppedStream.status, 200);
+
+  await new Promise((resolve, reject) => {
+    const slowStreamRequest = http.get(
+      `${baseUrl}/api/moon/v3/user/reader/title/dan-da-dan/chapter/chapter-1/page/8?rev=rev-slow`,
+      (response) => {
+        response.once("data", () => {
+          slowStreamRequest.destroy();
+          resolve();
+        });
+      }
+    );
+    slowStreamRequest.on("error", (error) => {
+      if (slowStreamRequest.destroyed) {
+        resolve();
+        return;
+      }
+      reject(error);
+    });
+  });
+  await new Promise((resolve) => setTimeout(resolve, 75));
+  assert.equal(streamProbe.closed, true);
 
   const missingApiResponse = await fetch(`${baseUrl}/api/not-a-real-route`);
   assert.equal(missingApiResponse.status, 404);

@@ -203,6 +203,10 @@ public class RavenSageClient implements RavenBrokerClient {
         } catch (TimeoutException error) {
             future.cancel(true);
             throw new IOException("Sage request timed out for " + path + ".", error);
+        } catch (InterruptedException error) {
+            future.cancel(true);
+            Thread.currentThread().interrupt();
+            throw error;
         } catch (ExecutionException error) {
             Throwable cause = error.getCause();
             if (cause instanceof IOException ioException) {

@@ -5,7 +5,8 @@
  *   method?: string,
  *   body?: unknown,
  *   sessionToken?: string,
- *   headers?: Record<string, string>
+ *   headers?: Record<string, string>,
+ *   signal?: AbortSignal
  * }} ProxyRequestOptions
  */
 import {Readable} from "node:stream";
@@ -45,7 +46,8 @@ export const proxyRequest = async ({
   method = "GET",
   body,
   sessionToken,
-  headers = {}
+  headers = {},
+  signal
 }) => {
   const response = await fetch(`${baseUrl}${path}`, {
     method,
@@ -54,7 +56,8 @@ export const proxyRequest = async ({
       ...(sessionToken ? {"Authorization": `Bearer ${sessionToken}`} : {}),
       ...headers
     },
-    body: body == null ? undefined : JSON.stringify(body)
+    body: body == null ? undefined : JSON.stringify(body),
+    signal
   });
 
   return {
@@ -81,7 +84,8 @@ export const proxyStream = async ({
   method = "GET",
   body,
   sessionToken,
-  headers = {}
+  headers = {},
+  signal
 }) => {
   const response = await fetch(`${baseUrl}${path}`, {
     method,
@@ -90,7 +94,8 @@ export const proxyStream = async ({
       ...(sessionToken ? {"Authorization": `Bearer ${sessionToken}`} : {}),
       ...headers
     },
-    body: body == null ? undefined : JSON.stringify(body)
+    body: body == null ? undefined : JSON.stringify(body),
+    signal
   });
 
   return {

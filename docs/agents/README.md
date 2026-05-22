@@ -85,6 +85,9 @@ Coding rules that avoid hidden drift:
 - Do not let first-party services bypass Sage for shared state. Vault is the only database owner.
 - Keep list views on compact projections. Hydrate full Raven title, chapter, manifest, or user-state payloads only for
   title/detail/reader routes or exact-id cards.
+- Keep resource lifetimes explicit. Long-lived caches, token maps, SSE or proxy streams, admin polling, Discord work
+  queues, LocalAI actions, Docker command output, downloader futures, and subprocesses should have clear caps,
+  abort/close paths, and tests for stalled or disconnected callers.
 - For the unified `/library` catalogue, keep the URL as the source of truth for search/filter/view state and refresh
   only the results chunk. `/browse` remains a compatibility entrypoint. Server-side card payloads should include the
   minimal `readerTarget` needed for art-click reader links.

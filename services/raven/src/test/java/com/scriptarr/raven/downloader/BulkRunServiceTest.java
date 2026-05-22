@@ -6,12 +6,14 @@ import com.scriptarr.raven.support.FakeRavenBrokerClient;
 import com.scriptarr.raven.support.ScriptarrLogger;
 import org.junit.jupiter.api.Test;
 
+import java.lang.reflect.Field;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -267,6 +269,35 @@ class BulkRunServiceTest {
         assertEquals(1, map(status.get("summary")).get("completedTitleTaskCount"));
     }
 
+    /**
+     * Verify terminal cancelled runs do not leave a local cancellation marker
+     * behind after the durable state records the cancellation.
+     *
+     * @throws Exception when the async run does not enter active state
+     */
+    @Test
+    void cancelRunEvictsLocalCancellationMarker() throws Exception {
+        BulkRunService service = new BulkRunService(
+            new NeverCompletingDownloaderService(),
+            new FakeRavenBrokerClient(),
+            new TestLogger()
+        );
+
+        Map<String, Object> created = service.createRun(Map.of(
+            "type", "manga",
+            "titlegroup", "A",
+            "requestedBy", "owner-1"
+        ));
+        String runId = String.valueOf(created.get("runId"));
+        awaitActive(service, runId);
+
+        Map<String, Object> status = service.cancelRun(runId);
+
+        assertEquals("cancelled", status.get("status"));
+        assertTrue(cancelledRunIds(service).isEmpty());
+        service.shutdown();
+    }
+
     private static void assertBatch(Map<String, Object> batch, String group, String type, int sortOrder) {
         Map<String, Object> filters = map(batch.get("filters"));
         assertEquals(group, filters.get("titleGroup"));
@@ -367,6 +398,13 @@ class BulkRunServiceTest {
             return raw.stream().map(BulkRunServiceTest::map).toList();
         }
         return List.of();
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Set<String> cancelledRunIds(BulkRunService service) throws Exception {
+        Field field = BulkRunService.class.getDeclaredField("cancelledRunIds");
+        field.setAccessible(true);
+        return (Set<String>) field.get(service);
     }
 
     private static BulkQueueDownloadResult queuedBulkResult() {

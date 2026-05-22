@@ -54,6 +54,17 @@ const createDiagnosticError = (prefix, error) => {
   return diagnostic;
 };
 
+const createDisconnectError = (closeEvent, shardId) => {
+  const error = new Error(formatDisconnectMessage(closeEvent, shardId));
+  if (closeEvent?.code != null) {
+    error.code = closeEvent.code;
+  }
+  if (normalizeString(closeEvent?.reason)) {
+    error.reason = normalizeString(closeEvent.reason);
+  }
+  return error;
+};
+
 const formatDisconnectMessage = (closeEvent, shardId) => {
   const code = closeEvent?.code ?? null;
   const reason = normalizeString(closeEvent?.reason);
@@ -168,9 +179,22 @@ export const createDiscordClient = async ({
 
   let readyResolve;
   let readyReject;
+  let readySettled = false;
   const ready = new Promise((resolve, reject) => {
-    readyResolve = resolve;
-    readyReject = reject;
+    readyResolve = (value) => {
+      if (readySettled) {
+        return;
+      }
+      readySettled = true;
+      resolve(value);
+    };
+    readyReject = (error) => {
+      if (readySettled) {
+        return;
+      }
+      readySettled = true;
+      reject(error);
+    };
   });
   ready.catch(() => {});
 
@@ -183,15 +207,20 @@ export const createDiscordClient = async ({
   });
 
   client.on(events.error, (error) => {
+    const diagnostic = createDiagnosticError("Discord client error before ready", error);
     onRuntimeEvent?.({
       type: "client-error",
       error,
       message: describeError(error)
     });
     logger?.error?.("Portal Discord client error.", {error});
+    if (!readySettled) {
+      readyReject(diagnostic);
+    }
   });
 
   client.on(events.shardError, (error, shardId) => {
+    const diagnostic = createDiagnosticError("Discord shard error before ready", error);
     onRuntimeEvent?.({
       type: "shard-error",
       error,
@@ -199,10 +228,14 @@ export const createDiscordClient = async ({
       message: describeError(error)
     });
     logger?.error?.("Portal Discord shard error.", {error, shardId});
+    if (!readySettled) {
+      readyReject(diagnostic);
+    }
   });
 
   client.on(events.shardDisconnect, (closeEvent, shardId) => {
     const message = formatDisconnectMessage(closeEvent, shardId);
+    const disconnectError = createDisconnectError(closeEvent, shardId);
     onRuntimeEvent?.({
       type: "disconnect",
       shardId,
@@ -215,6 +248,9 @@ export const createDiscordClient = async ({
       code: closeEvent?.code ?? null,
       reason: normalizeString(closeEvent?.reason)
     });
+    if (!readySettled) {
+      readyReject(disconnectError);
+    }
   });
 
   client.on(events.interactionCreate, createInteractionHandler({
@@ -344,7 +380,7 @@ export const createDiscordClient = async ({
       throw new Error("Discord channel id is required.");
     }
     await ready;
-    return client.channels.fetch(channelId);
+    return client.channels.fetch(channelId, {cache: false});
   };
 
   const sendChannelMessage = async (channelId, payload) => {
@@ -357,11 +393,14 @@ export const createDiscordClient = async ({
       throw new Error("Discord user id is required.");
     }
     await ready;
-    const user = await client.users.fetch(userId);
+    const user = await client.users.fetch(userId, {cache: false});
     return user.send(typeof payload === "string" ? {content: payload} : payload);
   };
 
   const destroy = () => {
+    if (!readySettled) {
+      readyReject(new Error("Discord client was destroyed before it became ready."));
+    }
     client.destroy?.();
   };
 

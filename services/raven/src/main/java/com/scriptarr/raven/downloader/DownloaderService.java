@@ -86,6 +86,7 @@ public class DownloaderService {
     private static final double MISSING_CONTENT_RATIO = 0.10d;
     private static final Duration IMAGE_DOWNLOAD_TIMEOUT = Duration.ofSeconds(30);
     private static final Duration PAGE_DOWNLOAD_TIMEOUT = Duration.ofMinutes(2);
+    private static final int MAX_RETAINED_TERMINAL_TASKS = 200;
     private static final int RESTORE_RETRY_ATTEMPTS = 6;
     private static final Duration RESTORE_RETRY_BACKOFF = Duration.ofSeconds(5);
     private static final long RETRY_BACKOFF_MS = 1_500L;
@@ -190,6 +191,7 @@ public class DownloaderService {
                 }
             }
         }
+        pruneTerminalTaskHistory();
     }
 
     private void restorePersistedTasksOnce() throws Exception {
@@ -327,6 +329,7 @@ public class DownloaderService {
                     String.valueOf(task.getOrDefault("priority", PRIORITY_NORMAL))
                 ));
         }
+        pruneTerminalTaskHistory();
     }
 
     private boolean isRecoverablePersistFailure(Map<String, Object> task) {
@@ -746,6 +749,7 @@ public class DownloaderService {
      * @return task snapshots
      */
     public List<Map<String, Object>> snapshot() {
+        pruneTerminalTaskHistory();
         return tasks.values().stream()
             .sorted(Comparator
                 .comparing((Map<String, Object> entry) -> String.valueOf(entry.get("queuedAt")), Comparator.reverseOrder())
@@ -1326,16 +1330,16 @@ public class DownloaderService {
                     Files.createDirectories(stagedPage.getParent());
                     Files.write(stagedPage, downloadImageWithRetries(imageUrl, chapter.get("href"), request.titleName(), chapterNumber));
                     return PageDownloadResult.success(pageNumber, stagedPage, imageUrl);
+                } catch (InterruptedException error) {
+                    Thread.currentThread().interrupt();
+                    throw error;
                 } catch (IOException error) {
                     return PageDownloadResult.failure(pageNumber, stagedPage, imageUrl, normalizeString(error.getMessage(), "Image download failed."));
                 }
             }));
         }
 
-        List<PageDownloadResult> pages = new ArrayList<>();
-        for (Future<PageDownloadResult> pageDownload : pageDownloads) {
-            pages.add(awaitDownloadedPage(pageDownload));
-        }
+        List<PageDownloadResult> pages = awaitDownloadedPages(pageDownloads);
         List<PageDownloadResult> missingPages = pages.stream().filter((page) -> !page.success()).toList();
         List<PageDownloadResult> downloadedPages = pages.stream().filter(PageDownloadResult::success).toList();
         String qualityStatus = chapterQualityStatus(images.size(), missingPages.size(), downloadedPages.size());
@@ -1558,6 +1562,9 @@ public class DownloaderService {
         task.put("details", buildTaskDetails(task));
         persistTask(taskId);
         syncLinkedRequest(task, previousStatus, status, message);
+        if (isTerminalStatus(nextStatus)) {
+            pruneTerminalTaskHistory();
+        }
     }
 
     private void rememberRoots(String taskId, String typeLabel, String typeSlug, Path workingRoot, Path finalRoot) {
@@ -1757,6 +1764,26 @@ public class DownloaderService {
 
     private boolean isTerminalStatus(String status) {
         return "completed".equals(status) || "failed".equals(status) || SUPERSEDED_STATUS.equals(status);
+    }
+
+    private void pruneTerminalTaskHistory() {
+        List<Map.Entry<String, Map<String, Object>>> terminalTasks = tasks.entrySet().stream()
+            .filter((entry) -> isTerminalStatus(normalizeString(entry.getValue().get("status")).toLowerCase(Locale.ROOT)))
+            .sorted((left, right) -> {
+                int timestampComparison = taskTimestamp(right.getValue()).compareTo(taskTimestamp(left.getValue()));
+                if (timestampComparison != 0) {
+                    return timestampComparison;
+                }
+                return left.getKey().compareTo(right.getKey());
+            })
+            .toList();
+        for (int index = MAX_RETAINED_TERMINAL_TASKS; index < terminalTasks.size(); index++) {
+            String taskId = terminalTasks.get(index).getKey();
+            Map<String, Object> task = tasks.get(taskId);
+            if (task != null && isTerminalStatus(normalizeString(task.get("status")).toLowerCase(Locale.ROOT))) {
+                tasks.remove(taskId, task);
+            }
+        }
     }
 
     private Path resolveTitleRoot(String stateFolder, String titleName, String typeSlug) {
@@ -2451,6 +2478,11 @@ public class DownloaderService {
         } catch (TimeoutException error) {
             download.cancel(true);
             throw new IOException("Page download timed out after " + PAGE_DOWNLOAD_TIMEOUT.toSeconds() + " seconds.", error);
+        } catch (InterruptedException error) {
+            download.cancel(true);
+            throw error;
+        } catch (CancellationException error) {
+            throw new IOException("Page download was cancelled.", error);
         } catch (ExecutionException error) {
             Throwable cause = error.getCause();
             if (cause instanceof IOException ioException) {
@@ -2460,6 +2492,30 @@ public class DownloaderService {
                 throw interruptedException;
             }
             throw new IOException(cause == null ? error.getMessage() : cause.getMessage(), cause == null ? error : cause);
+        }
+    }
+
+    private List<PageDownloadResult> awaitDownloadedPages(List<Future<PageDownloadResult>> downloads) throws IOException, InterruptedException {
+        List<PageDownloadResult> pages = new ArrayList<>();
+        try {
+            for (Future<PageDownloadResult> download : downloads) {
+                pages.add(awaitDownloadedPage(download));
+            }
+            return pages;
+        } catch (InterruptedException error) {
+            cancelPageDownloads(downloads);
+            throw error;
+        } catch (IOException | RuntimeException error) {
+            cancelPageDownloads(downloads);
+            throw error;
+        }
+    }
+
+    private void cancelPageDownloads(List<Future<PageDownloadResult>> downloads) {
+        for (Future<PageDownloadResult> download : downloads) {
+            if (download != null && !download.isDone()) {
+                download.cancel(true);
+            }
         }
     }
 

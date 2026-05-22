@@ -8,6 +8,9 @@ architecture notes.
 Warden bootstraps the stack, Moon is the user and admin surface, Sage is the browser-safe and first-party internal
 broker, Vault owns shared MySQL-backed state plus cache or job brokerage, Raven handles downloads plus metadata, Portal
 handles Discord, and Oracle provides optional AI chat plus bounded Sage-governed assistance.
+Long-running service work is intentionally bounded: caches, public-selection tokens, proxy streams, admin polling,
+Discord queues, AI runtime jobs, Docker command output, and downloader subprocesses should time out, evict, or cancel
+cleanly instead of retaining stale memory or file handles.
 
 ## Service Map
 

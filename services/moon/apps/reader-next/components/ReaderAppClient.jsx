@@ -36,6 +36,10 @@ import {ReaderInitialSkeleton} from "./ReaderSkeleton.jsx";
 const PAGE_CHUNK_SIZE = 18;
 const CHAPTER_RAIL_PAGE_SIZE = 60;
 const WARM_IMAGE_CONCURRENCY = 4;
+const WARM_IMAGE_TIMEOUT_MS = 15_000;
+const IMAGE_WARM_STATE_MAX_ENTRIES = 360;
+const IMAGE_WARM_STATE_PRUNE_TARGET = 240;
+const IMAGE_WARM_ERROR_TTL_MS = 60_000;
 const DEFAULT_PRELOAD_CONFIG = resolveReaderPreloadConfig();
 const PAGE_FITS = ["width", "height", "contain"];
 const DIRECTIONS = ["ltr", "rtl"];
@@ -123,6 +127,41 @@ const runWarmImageJobs = async (jobs = []) => {
   });
   await Promise.all(workers);
   return results.filter(Boolean);
+};
+
+const abortImageWarmEntry = (entry) => {
+  entry?.controller?.abort?.();
+};
+
+const clearImageWarmState = (state) => {
+  for (const entry of state.values()) {
+    abortImageWarmEntry(entry);
+  }
+  state.clear();
+};
+
+const pruneImageWarmState = (state, {chapterId = ""} = {}) => {
+  const now = Date.now();
+  for (const [key, entry] of state.entries()) {
+    const isOldError = entry?.status === "error" && now - Number(entry.updatedAt || 0) > IMAGE_WARM_ERROR_TTL_MS;
+    const isOtherChapter = chapterId && entry?.chapterId && entry.chapterId !== chapterId;
+    if (isOldError || isOtherChapter) {
+      abortImageWarmEntry(entry);
+      state.delete(key);
+    }
+  }
+  if (state.size <= IMAGE_WARM_STATE_MAX_ENTRIES) {
+    return;
+  }
+  const removable = Array.from(state.entries())
+    .sort((left, right) => Number(left[1]?.updatedAt || 0) - Number(right[1]?.updatedAt || 0));
+  for (const [key, entry] of removable) {
+    if (state.size <= IMAGE_WARM_STATE_PRUNE_TARGET) {
+      break;
+    }
+    abortImageWarmEntry(entry);
+    state.delete(key);
+  }
 };
 
 /**
@@ -400,7 +439,24 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = "", initialSessi
         if (current?.status === "error" && !retryFailures) {
           return Promise.resolve({index: page.index, ok: false, cached: true});
         }
+        const controller = new AbortController();
+        const finishWarmState = (status, result) => {
+          const latest = imageWarmStateRef.current.get(warmKey);
+          if (latest?.controller !== controller) {
+            return result;
+          }
+          imageWarmStateRef.current.set(warmKey, {
+            status,
+            chapterId: session.chapter.id,
+            pageIndex: page.index,
+            updatedAt: Date.now()
+          });
+          pruneImageWarmState(imageWarmStateRef.current, {chapterId: session.chapter.id});
+          return result;
+        };
         const promise = warmReaderPageImages([page], [page.index], {
+          signal: controller.signal,
+          timeoutMs: WARM_IMAGE_TIMEOUT_MS,
           onMetric: (metric) => recordReaderTelemetry({
             ...metric,
             titleId: title?.id || "",
@@ -409,29 +465,19 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = "", initialSessi
           })
         }).then((results) => {
           const result = results[0] || {index: page.index, ok: false};
-          imageWarmStateRef.current.set(warmKey, {
-            status: result.ok ? "ready" : "error",
-            chapterId: session.chapter.id,
-            pageIndex: page.index,
-            updatedAt: Date.now()
-          });
-          return result;
+          return finishWarmState(result.ok ? "ready" : "error", result);
         }, () => {
-          imageWarmStateRef.current.set(warmKey, {
-            status: "error",
-            chapterId: session.chapter.id,
-            pageIndex: page.index,
-            updatedAt: Date.now()
-          });
-          return {index: page.index, ok: false};
+          return finishWarmState("error", {index: page.index, ok: false});
         });
         imageWarmStateRef.current.set(warmKey, {
           status: "loading",
           chapterId: session.chapter.id,
           pageIndex: page.index,
+          controller,
           promise,
           updatedAt: Date.now()
         });
+        pruneImageWarmState(imageWarmStateRef.current, {chapterId: session.chapter.id});
         return promise;
       };
     }).filter(Boolean);
@@ -546,6 +592,10 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = "", initialSessi
     };
   }, []);
 
+  useEffect(() => () => {
+    clearImageWarmState(imageWarmStateRef.current);
+  }, []);
+
   useEffect(() => {
     if (!initialSession?.chapter?.id) {
       return;
@@ -562,7 +612,7 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = "", initialSessi
     sessionCache.current.clear();
     pageLoadEpochRef.current += 1;
     pageRequestTokensRef.current.clear();
-    imageWarmStateRef.current.clear();
+    clearImageWarmState(imageWarmStateRef.current);
     setSessionMap(new Map([[initialSession.chapter.id, initialSession]]));
     setReaderPageState(() => hydratedBootPageState);
     setWebtoonChapterIds([initialSession.chapter.id]);

@@ -460,14 +460,15 @@ const deliverNotifications = async ({
   logger,
   publicBaseUrl,
   requestCommand,
-  getBrandName = () => "Scriptarr"
+  getBrandName = () => "Scriptarr",
+  shouldContinue = () => true
 }) => {
   if (typeof list !== "function" || typeof acknowledge !== "function") {
     return;
   }
 
   const response = await list();
-  if (!response?.ok) {
+  if (!response?.ok || !shouldContinue()) {
     return;
   }
 
@@ -481,6 +482,9 @@ const deliverNotifications = async ({
       continue;
     }
     try {
+      if (!shouldContinue()) {
+        return;
+      }
       const payload = await appendAiMessageContext({
         sage,
         kind,
@@ -488,10 +492,16 @@ const deliverNotifications = async ({
         payload: buildDirectMessagePayload(notification, kind, publicBaseUrl, requestCommand, getBrandName()),
         logger
       });
+      if (!shouldContinue()) {
+        return;
+      }
       const sentMessage = await discord.sendDirectMessage(
         notification.discordUserId,
         payload
       );
+      if (!shouldContinue()) {
+        return;
+      }
       if (kind === "downloadall" && normalizeString(notification.status) === "paused") {
         await addDownloadAllDecisionReactions(sentMessage, logger);
         if (notificationId && typeof sage?.recordDownloadAllDecisionPrompt === "function") {
@@ -523,14 +533,15 @@ const deliverReleaseChannelNotifications = async ({
   sage,
   logger,
   publicBaseUrl,
-  getBrandName = () => "Scriptarr"
+  getBrandName = () => "Scriptarr",
+  shouldContinue = () => true
 }) => {
   if (typeof list !== "function" || typeof acknowledge !== "function") {
     return;
   }
 
   const response = await list();
-  if (!response?.ok) {
+  if (!response?.ok || !shouldContinue()) {
     return;
   }
 
@@ -542,6 +553,9 @@ const deliverReleaseChannelNotifications = async ({
       continue;
     }
     try {
+      if (!shouldContinue()) {
+        return;
+      }
       const payload = await appendAiMessageContext({
         sage,
         kind: "release",
@@ -549,10 +563,16 @@ const deliverReleaseChannelNotifications = async ({
         payload: buildReleaseChannelPayload(notification, publicBaseUrl, getBrandName()),
         logger
       });
+      if (!shouldContinue()) {
+        return;
+      }
       await discord.sendChannelMessage(
         channelId,
         payload
       );
+      if (!shouldContinue()) {
+        return;
+      }
       deliveredIds.add(notificationId);
       await acknowledge(notificationId, {
         ackItemIds: normalizeArray(notification.ackItemIds),
@@ -570,14 +590,15 @@ const deliverUpdateChannelNotifications = async ({
   discord,
   logger,
   publicBaseUrl,
-  getBrandName = () => "Scriptarr"
+  getBrandName = () => "Scriptarr",
+  shouldContinue = () => true
 }) => {
   if (typeof list !== "function" || typeof acknowledge !== "function") {
     return;
   }
 
   const response = await list();
-  if (!response?.ok) {
+  if (!response?.ok || !shouldContinue()) {
     return;
   }
 
@@ -589,10 +610,16 @@ const deliverUpdateChannelNotifications = async ({
       continue;
     }
     try {
+      if (!shouldContinue()) {
+        return;
+      }
       await discord.sendChannelMessage(
         channelId,
         buildUpdateChannelPayload(notification, publicBaseUrl, getBrandName())
       );
+      if (!shouldContinue()) {
+        return;
+      }
       deliveredIds.add(notificationId);
       await acknowledge(notificationId);
     } catch (error) {
@@ -653,13 +680,21 @@ export const createFollowNotifier = ({
 } = {}) => {
   let timer = null;
   let active = false;
+  let inFlight = false;
+  let inFlightPromise = null;
+  let generation = 0;
+
+  const shouldContinue = (pollGeneration = generation) => active && pollGeneration === generation;
 
   const poll = async () => {
-    if (!active) {
+    const pollGeneration = generation;
+    if (!shouldContinue(pollGeneration)) {
       return;
     }
 
+    inFlight = true;
     try {
+      const canContinue = () => shouldContinue(pollGeneration);
       await deliverNotifications({
         list: () => sage?.listFollowNotifications?.(),
         acknowledge: (id) => sage?.acknowledgeFollowNotification?.(id),
@@ -668,8 +703,12 @@ export const createFollowNotifier = ({
         sage,
         logger,
         publicBaseUrl,
-        getBrandName
+        getBrandName,
+        shouldContinue: canContinue
       });
+      if (!canContinue()) {
+        return;
+      }
       await deliverNotifications({
         list: () => sage?.listRequestNotifications?.(),
         acknowledge: (id) => sage?.acknowledgeRequestNotification?.(id),
@@ -679,8 +718,12 @@ export const createFollowNotifier = ({
         logger,
         publicBaseUrl,
         requestCommand,
-        getBrandName
+        getBrandName,
+        shouldContinue: canContinue
       });
+      if (!canContinue()) {
+        return;
+      }
       await deliverReleaseChannelNotifications({
         list: () => sage?.listReleaseNotifications?.(),
         acknowledge: (id, payload) => sage?.acknowledgeReleaseNotification?.(id, payload),
@@ -688,16 +731,24 @@ export const createFollowNotifier = ({
         sage,
         logger,
         publicBaseUrl,
-        getBrandName
+        getBrandName,
+        shouldContinue: canContinue
       });
+      if (!canContinue()) {
+        return;
+      }
       await deliverUpdateChannelNotifications({
         list: () => sage?.listUpdateNotifications?.(),
         acknowledge: (id) => sage?.acknowledgeUpdateNotification?.(id),
         discord,
         logger,
         publicBaseUrl,
-        getBrandName
+        getBrandName,
+        shouldContinue: canContinue
       });
+      if (!canContinue()) {
+        return;
+      }
       await deliverNotifications({
         list: () => sage?.listSystemNotifications?.(),
         acknowledge: (id) => sage?.acknowledgeSystemNotification?.(id),
@@ -706,8 +757,12 @@ export const createFollowNotifier = ({
         sage,
         logger,
         publicBaseUrl,
-        getBrandName
+        getBrandName,
+        shouldContinue: canContinue
       });
+      if (!canContinue()) {
+        return;
+      }
       await deliverNotifications({
         list: () => sage?.listDownloadAllNotifications?.(),
         acknowledge: (id) => sage?.acknowledgeDownloadAllNotification?.(id),
@@ -716,11 +771,22 @@ export const createFollowNotifier = ({
         sage,
         logger,
         publicBaseUrl,
-        getBrandName
+        getBrandName,
+        shouldContinue: canContinue
       });
     } catch (error) {
       logger?.error?.("Portal notifier poll failed.", {error});
+    } finally {
+      inFlight = false;
     }
+  };
+
+  const triggerPoll = () => {
+    if (inFlight) {
+      return inFlightPromise;
+    }
+    inFlightPromise = poll();
+    return inFlightPromise;
   };
 
   return {
@@ -729,18 +795,21 @@ export const createFollowNotifier = ({
         return;
       }
       active = true;
+      generation += 1;
       timer = setInterval(() => {
-        void poll();
+        void triggerPoll();
       }, pollMs);
       timer.unref?.();
-      void poll();
+      void triggerPoll();
     },
-    stop() {
+    async stop() {
       active = false;
+      generation += 1;
       if (timer) {
         clearInterval(timer);
         timer = null;
       }
+      await inFlightPromise?.catch?.(() => {});
     }
   };
 };

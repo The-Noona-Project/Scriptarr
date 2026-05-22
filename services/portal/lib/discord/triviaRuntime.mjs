@@ -54,6 +54,14 @@ const withTimeout = (promise, timeoutMs, label) => {
   });
 };
 
+const withAbortDeadline = (invoke, timeoutMs, label) => {
+  const controller = new AbortController();
+  return withTimeout(Promise.resolve().then(() => invoke(controller.signal)), timeoutMs, label)
+    .finally(() => {
+      controller.abort();
+    });
+};
+
 const nextScheduledAt = (kind, hour = 20) => {
   const now = new Date();
   const next = new Date(now);
@@ -164,8 +172,8 @@ export const createTriviaRuntime = ({
       return activeRoundCache.round;
     }
     const startedAt = Date.now();
-    const state = await withTimeout(
-      sage.getTriviaState(),
+    const state = await withAbortDeadline(
+      (signal) => sage.getTriviaState({signal, timeoutMs: TRIVIA_STATE_TIMEOUT_MS}),
       TRIVIA_STATE_TIMEOUT_MS,
       "Trivia state"
     );
@@ -277,7 +285,11 @@ export const createTriviaRuntime = ({
     if (!targetChannelId) {
       throw new Error("A trivia leaderboard channel id is required.");
     }
-    const leaderboard = await sage.getTriviaLeaderboard(windowName, 10);
+    const leaderboard = await withAbortDeadline(
+      (signal) => sage.getTriviaLeaderboard(windowName, 10, {signal}),
+      10000,
+      "Trivia leaderboard"
+    );
     if (!leaderboard.ok) {
       throw new Error(leaderboard.payload?.error || "Noona could not load trivia leaderboard data.");
     }
@@ -314,7 +326,11 @@ export const createTriviaRuntime = ({
           if (!isCurrentGeneration(scheduledGeneration)) {
             return;
           }
-          const result = await sage.postTriviaHint(round.id, hintMinute);
+          const result = await withAbortDeadline(
+            (signal) => sage.postTriviaHint(round.id, hintMinute, {signal}),
+            10000,
+            "Trivia hint"
+          );
           if (!isCurrentGeneration(scheduledGeneration)) {
             return;
           }
@@ -330,7 +346,11 @@ export const createTriviaRuntime = ({
       if (!isCurrentGeneration(scheduledGeneration)) {
         return;
       }
-      const result = await sage.timeoutTriviaRound(round.id);
+      const result = await withAbortDeadline(
+        (signal) => sage.timeoutTriviaRound(round.id, {signal}),
+        10000,
+        "Trivia timeout"
+      );
       if (!isCurrentGeneration(scheduledGeneration)) {
         return;
       }
@@ -382,7 +402,11 @@ export const createTriviaRuntime = ({
     if (!settings.enabled || !settings.channelId) {
       throw new Error("Trivia is disabled or missing a trivia channel id.");
     }
-    const result = await sage.startTriviaRound({requestedBy, force});
+    const result = await withAbortDeadline(
+      (signal) => sage.startTriviaRound({requestedBy, force}, {signal}),
+      10000,
+      "Trivia round start"
+    );
     if (!result.ok || result.payload?.ok === false) {
       throw new Error(result.payload?.error || "Noona could not start a trivia round.");
     }
@@ -410,7 +434,11 @@ export const createTriviaRuntime = ({
   };
 
   const stopRound = async ({requestedBy = "scriptarr-portal"} = {}) => {
-    const result = await sage.stopTriviaRound({requestedBy});
+    const result = await withAbortDeadline(
+      (signal) => sage.stopTriviaRound({requestedBy}, {signal}),
+      10000,
+      "Trivia round stop"
+    );
     if (!result.ok || result.payload?.ok === false) {
       throw new Error(result.payload?.error || "Noona could not stop the active trivia round.");
     }
@@ -426,8 +454,8 @@ export const createTriviaRuntime = ({
   };
 
   const loadTriviaState = async () => {
-    const result = await withTimeout(
-      sage.getTriviaState(),
+    const result = await withAbortDeadline(
+      (signal) => sage.getTriviaState({signal, timeoutMs: TRIVIA_STATE_TIMEOUT_MS}),
       TRIVIA_STATE_TIMEOUT_MS,
       "Trivia state"
     );
@@ -512,13 +540,13 @@ export const createTriviaRuntime = ({
       });
       await reactSafely(message, EYES_REACTION, "eyes");
       const startedAt = Date.now();
-      const guess = await withTimeout(
-        sage.submitTriviaGuess(round.id, {
+      const guess = await withAbortDeadline(
+        (signal) => sage.submitTriviaGuess(round.id, {
           discordUserId: message?.author?.id,
           username: resolveUserName(message),
           content: message?.content,
           messageId: message?.id
-        }),
+        }, {signal, timeoutMs: TRIVIA_GUESS_TIMEOUT_MS}),
         TRIVIA_GUESS_TIMEOUT_MS,
         "Trivia guess"
       );

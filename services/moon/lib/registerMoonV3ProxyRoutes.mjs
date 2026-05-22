@@ -196,7 +196,24 @@ const sendReaderPageCacheHit = (res, files, entry) => {
     res.setHeader("Last-Modified", metadata.lastModified);
   }
   const stream = nodeFs.createReadStream(files.dataFile);
+  let completed = false;
+  const cleanup = () => {
+    res.off("close", handleClose);
+  };
+  const handleClose = () => {
+    if (!completed) {
+      stream.destroy();
+    }
+    cleanup();
+  };
+  res.once("close", handleClose);
+  res.once("finish", () => {
+    completed = true;
+    cleanup();
+  });
   stream.on("error", (error) => {
+    completed = true;
+    cleanup();
     res.destroy(error instanceof Error ? error : undefined);
   });
   stream.pipe(res);
@@ -211,8 +228,75 @@ const sendProxyStreamFailure = (res, error) => {
   res.status(502).json({error: "Upstream stream failed."});
 };
 
-const pipeProxyStream = (stream, res, {onError = null} = {}) => {
+/**
+ * Start an upstream stream request and abort it if the downstream client
+ * disconnects before the upstream response arrives.
+ *
+ * @param {import("express").Response} res
+ * @param {Parameters<typeof proxyStream>[0]} options
+ * @returns {Promise<{response: Awaited<ReturnType<typeof proxyStream>>, controller: AbortController} | null>}
+ */
+const proxyStreamWithResponseAbort = async (res, options) => {
+  const controller = new AbortController();
+  let closed = false;
+  const abortPendingRequest = () => {
+    closed = true;
+    controller.abort();
+  };
+  res.once("close", abortPendingRequest);
+  try {
+    const response = await proxyStream({
+      ...options,
+      signal: controller.signal
+    });
+    res.off("close", abortPendingRequest);
+    if (closed || controller.signal.aborted) {
+      response.body?.destroy();
+      return null;
+    }
+    return {response, controller};
+  } catch (error) {
+    res.off("close", abortPendingRequest);
+    if (closed || controller.signal.aborted) {
+      return null;
+    }
+    throw error;
+  }
+};
+
+/**
+ * Pipe an upstream readable to Express while binding upstream/cache lifetimes
+ * to downstream close, finish, and stream error events.
+ *
+ * @param {import("node:stream").Readable} stream
+ * @param {import("express").Response} res
+ * @param {{controller?: AbortController | null, onAbort?: (() => void) | null, onError?: ((error: Error) => void) | null}} [options]
+ * @returns {void}
+ */
+const pipeProxyStream = (stream, res, {controller = null, onAbort = null, onError = null} = {}) => {
+  let completed = false;
+  const cleanup = () => {
+    res.off("close", handleClose);
+    res.off("finish", handleFinish);
+  };
+  const handleFinish = () => {
+    completed = true;
+    cleanup();
+  };
+  const handleClose = () => {
+    if (!completed) {
+      controller?.abort();
+      stream.destroy();
+      onAbort?.();
+    }
+    cleanup();
+  };
+  res.once("close", handleClose);
+  res.once("finish", handleFinish);
   stream.on("error", (error) => {
+    completed = true;
+    cleanup();
+    controller?.abort();
     onError?.(error);
     sendProxyStreamFailure(res, error);
   });
@@ -320,7 +404,7 @@ export const registerMoonV3ProxyRoutes = (app, {config, getSessionToken}) => {
     const query = toQueryString(req.query);
     const isEventStream = targetPath === "admin/events/stream";
     if (isEventStream) {
-      const response = await proxyStream({
+      const proxied = await proxyStreamWithResponseAbort(res, {
         baseUrl: config.sageBaseUrl,
         path: `/api/moon-v3/${targetPath}${query ? `?${query}` : ""}`,
         method: req.method,
@@ -328,13 +412,17 @@ export const registerMoonV3ProxyRoutes = (app, {config, getSessionToken}) => {
         sessionToken: getSessionToken(req),
         headers: forwardedHeaders(req)
       });
+      if (!proxied) {
+        return;
+      }
+      const {response, controller} = proxied;
       res.status(response.status);
       forwardResponseHeaders(res, response.headers, {stream: true});
       if (!response.body) {
         res.end();
         return;
       }
-      pipeProxyStream(response.body, res);
+      pipeProxyStream(response.body, res, {controller});
       return;
     }
     if (req.method === "GET" && isReaderPageImagePath(targetPath)) {
@@ -344,13 +432,17 @@ export const registerMoonV3ProxyRoutes = (app, {config, getSessionToken}) => {
         sendReaderPageCacheHit(res, cacheFiles, cached);
         return;
       }
-      const response = await proxyStream({
+      const proxied = await proxyStreamWithResponseAbort(res, {
         baseUrl: config.sageBaseUrl,
         path: `/api/moon-v3/${targetPath}${query ? `?${query}` : ""}`,
         method: req.method,
         sessionToken: getSessionToken(req),
         headers: forwardedHeaders(req)
       });
+      if (!proxied) {
+        return;
+      }
+      const {response, controller} = proxied;
       res.status(response.status);
       forwardResponseHeaders(res, response.headers, {stream: true});
       res.setHeader("X-Scriptarr-Reader-Cache", cacheFiles ? "miss" : "bypass");
@@ -369,6 +461,8 @@ export const registerMoonV3ProxyRoutes = (app, {config, getSessionToken}) => {
         response.body.on("end", () => cacheWriter.finish());
       }
       pipeProxyStream(response.body, res, {
+        controller,
+        onAbort: () => cacheWriter?.abort(),
         onError: () => cacheWriter?.abort()
       });
       return;

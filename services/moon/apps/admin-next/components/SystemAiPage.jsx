@@ -325,6 +325,7 @@ export const SystemAiPage = ({user}) => {
   const [runtimeLoading, setRuntimeLoading] = useState(false);
   const [runtimeError, setRuntimeError] = useState("");
   const lastJobToastRef = useRef("");
+  const runtimeRequestRef = useRef({id: 0, controller: null, promise: null});
   const {notify} = useAdminToast();
   const {loading, refreshing, error, data, refresh, setData} = useAdminJson(AI_ENDPOINT, {
     fallback: {
@@ -332,27 +333,52 @@ export const SystemAiPage = ({user}) => {
       localAi: {}
     }
   });
-  const refreshRuntime = useCallback(async () => {
-    setRuntimeLoading(true);
-    const result = await requestJson(AI_RUNTIME_ENDPOINT);
-    setRuntimeLoading(false);
-    if (!result.ok) {
-      setRuntimeError(formatDisplayValue(result.payload?.error, "Moon could not hydrate AI runtime state."));
-      return;
+  const refreshRuntime = useCallback(({restart = false} = {}) => {
+    if (runtimeRequestRef.current.promise && !restart) {
+      return runtimeRequestRef.current.promise;
     }
-    const payload = result.payload || {};
-    setRuntimeError("");
-    setData((current) => ({
-      ...(current || {}),
-      oracleHealth: payload.oracleHealth ?? current?.oracleHealth ?? {},
-      oracleStatus: payload.oracleStatus ?? current?.oracleStatus ?? {},
-      localAi: payload.localAi ?? current?.localAi ?? {},
-      localAiProfile: payload.localAiProfile ?? current?.localAiProfile ?? {}
-    }));
+    if (runtimeRequestRef.current.controller && restart) {
+      runtimeRequestRef.current.controller.abort();
+    }
+    const controller = new AbortController();
+    const requestId = runtimeRequestRef.current.id + 1;
+    runtimeRequestRef.current = {id: requestId, controller, promise: null};
+    setRuntimeLoading(true);
+    const isCurrentRequest = () =>
+      runtimeRequestRef.current.id === requestId
+      && runtimeRequestRef.current.controller === controller
+      && !controller.signal.aborted;
+    const promise = requestJson(AI_RUNTIME_ENDPOINT, {signal: controller.signal})
+      .then((result) => {
+        if (!isCurrentRequest()) {
+          return;
+        }
+        if (!result.ok) {
+          setRuntimeError(formatDisplayValue(result.payload?.error, "Moon could not hydrate AI runtime state."));
+          return;
+        }
+        const payload = result.payload || {};
+        setRuntimeError("");
+        setData((current) => ({
+          ...(current || {}),
+          oracleHealth: payload.oracleHealth ?? current?.oracleHealth ?? {},
+          oracleStatus: payload.oracleStatus ?? current?.oracleStatus ?? {},
+          localAi: payload.localAi ?? current?.localAi ?? {},
+          localAiProfile: payload.localAiProfile ?? current?.localAiProfile ?? {}
+        }));
+      })
+      .finally(() => {
+        if (isCurrentRequest()) {
+          runtimeRequestRef.current = {id: requestId, controller: null, promise: null};
+          setRuntimeLoading(false);
+        }
+      });
+    runtimeRequestRef.current.promise = promise;
+    return promise;
   }, [setData]);
   const refreshAiPage = useCallback(async () => {
     await refresh();
-    await refreshRuntime();
+    await refreshRuntime({restart: true});
   }, [refresh, refreshRuntime]);
   const localAiJob = resolveLocalAiJob(data?.localAi);
   const localAiJobStatus = normalizeString(localAiJob?.status).toLowerCase();
@@ -393,8 +419,14 @@ export const SystemAiPage = ({user}) => {
     if (loading) {
       return;
     }
-    void refreshRuntime();
+    void refreshRuntime({restart: true});
   }, [loading, refreshRuntime]);
+
+  useEffect(() => () => {
+    runtimeRequestRef.current.id += 1;
+    runtimeRequestRef.current.controller?.abort();
+    runtimeRequestRef.current = {id: runtimeRequestRef.current.id, controller: null, promise: null};
+  }, []);
 
   useEffect(() => {
     const provider = normalizeString(draft?.provider).toLowerCase();
@@ -402,10 +434,11 @@ export const SystemAiPage = ({user}) => {
       return undefined;
     }
 
+    const controller = new AbortController();
     let cancelled = false;
     setModelLoading(true);
-    void requestJson(`${AI_MODELS_ENDPOINT}?provider=${encodeURIComponent(provider)}`).then((result) => {
-      if (cancelled) {
+    void requestJson(`${AI_MODELS_ENDPOINT}?provider=${encodeURIComponent(provider)}`, {signal: controller.signal}).then((result) => {
+      if (cancelled || controller.signal.aborted) {
         return;
       }
       const payload = result.ok
@@ -427,6 +460,7 @@ export const SystemAiPage = ({user}) => {
 
     return () => {
       cancelled = true;
+      controller.abort();
     };
   }, [draft?.provider]);
 
@@ -434,10 +468,21 @@ export const SystemAiPage = ({user}) => {
     if (!localAiActionActive) {
       return undefined;
     }
-    const timer = window.setInterval(() => {
-      void refreshRuntime();
-    }, 5000);
-    return () => window.clearInterval(timer);
+    let cancelled = false;
+    let timer = 0;
+    const schedule = () => {
+      timer = window.setTimeout(async () => {
+        await refreshRuntime();
+        if (!cancelled) {
+          schedule();
+        }
+      }, 5000);
+    };
+    schedule();
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
   }, [localAiActionActive, refreshRuntime]);
 
   useEffect(() => {
@@ -527,7 +572,7 @@ export const SystemAiPage = ({user}) => {
       ...current,
       localAi: result.payload || current?.localAi
     }));
-    void refreshRuntime();
+    void refreshRuntime({restart: true});
   };
 
   const runTest = async () => {

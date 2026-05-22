@@ -58,3 +58,28 @@ test("AI response queue releases the lane when onStart fails", async () => {
   assert.deepEqual(started, ["next"]);
   assert.deepEqual(queue.getState(), {active: false, pending: 0, queued: 0});
 });
+
+test("AI response queue bounds queued work and cancels stopped work", async () => {
+  const queue = createAiResponseQueue({maxQueued: 2});
+  let releaseActive;
+
+  const first = queue.run(() => new Promise((resolve) => {
+    releaseActive = () => resolve("first");
+  }));
+  const second = queue.run(async () => "second");
+
+  await assert.rejects(
+    () => queue.run(async () => "third"),
+    /queue is full/i
+  );
+
+  queue.cancelAll("Portal runtime stopped.");
+  releaseActive();
+
+  const results = await Promise.allSettled([first, second]);
+  assert.equal(results[0].status, "rejected");
+  assert.equal(results[1].status, "rejected");
+  assert.match(results[0].reason.message, /Portal runtime stopped/i);
+  assert.match(results[1].reason.message, /Portal runtime stopped/i);
+  assert.deepEqual(queue.getState(), {active: false, pending: 0, queued: 0});
+});

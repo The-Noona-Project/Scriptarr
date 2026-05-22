@@ -3,7 +3,7 @@ import {resolveDiscordBotIdentity} from "./discord/botIdentity.mjs";
 import {buildCommandInventory, filterCommandMap} from "./discord/commandCatalog.mjs";
 import {createPortalCommands} from "./discord/commands/index.mjs";
 import {createAppaMentionHandler} from "./discord/appaMentionChat.mjs";
-import {createAiResponseQueue} from "./discord/aiResponseQueue.mjs";
+import {createAiResponseQueue, isAiResponseQueueCancelError} from "./discord/aiResponseQueue.mjs";
 import {createDirectMessageHandler} from "./discord/directMessageRouter.mjs";
 import {normalizeBrandName} from "./discord/branding.mjs";
 import {createNoonaMentionHandler} from "./discord/noonaMentionChat.mjs";
@@ -277,6 +277,10 @@ export const createPortalRuntime = ({
   let triviaRuntime = null;
   const noonaAiQueue = createAiResponseQueue();
   const appaAiQueue = createAiResponseQueue();
+  let startPromise = null;
+  let stopPromise = null;
+  let lifecycleGeneration = 0;
+  const trackedDiscordClients = new Set();
   const legacyBotIdentity = resolveDiscordBotIdentity(config.discordBotPersona);
   const noonaBotIdentity = resolveDiscordBotIdentity("noona");
   const appaBotIdentity = resolveDiscordBotIdentity("appa");
@@ -348,6 +352,36 @@ export const createPortalRuntime = ({
     lastNoonaMentionError: null
   };
   let brandName = "Scriptarr";
+
+  const trackDiscordClient = (client) => {
+    if (client && typeof client.destroy === "function") {
+      trackedDiscordClients.add(client);
+    }
+    return client;
+  };
+
+  const cleanupRuntimePieces = async ({cancelQueues = false} = {}) => {
+    if (cancelQueues) {
+      noonaAiQueue.cancelAll?.("Portal runtime stopped.");
+      appaAiQueue.cancelAll?.("Portal runtime stopped.");
+    }
+    await followNotifier?.stop?.();
+    followNotifier = null;
+    triviaRuntime?.stop?.();
+    triviaRuntime = null;
+    for (const client of trackedDiscordClients) {
+      try {
+        client?.destroy?.();
+      } catch (error) {
+        logger?.warn?.("Portal Discord client cleanup failed.", {error});
+      }
+    }
+    trackedDiscordClients.clear();
+    appaDiscord = null;
+    discord = null;
+  };
+
+  const isCurrentLifecycle = (generation) => generation === lifecycleGeneration;
 
   const createCommands = (triviaSubcommandScope = "all") => createPortalCommands({
     sage,
@@ -430,18 +464,27 @@ export const createPortalRuntime = ({
       return;
     }
     const {message: _message, ...reviewPayload} = candidate;
-    const result = await appaAiQueue.run(() => sage.reviewNoonaReply?.({
-      ...reviewPayload,
-      reviewEnabled: settings.appa.reviewEnabled,
-      correctionMode: settings.appa.correctionMode
-    }));
+    let result = null;
+    try {
+      result = await appaAiQueue.run(({signal}) => sage.reviewNoonaReply?.({
+        ...reviewPayload,
+        reviewEnabled: settings.appa.reviewEnabled,
+        correctionMode: settings.appa.correctionMode
+      }, {signal}));
+    } catch (error) {
+      if (isAiResponseQueueCancelError(error)) {
+        return;
+      }
+      throw error;
+    }
     const payload = result?.payload || {};
     const decision = payload.decision || {};
+    const correctionDiscord = appaDiscord;
     let corrected = false;
     let correctionError = "";
-    if (result?.ok && payload.shouldCorrect && normalizeString(payload.correctionText || decision.correctionText)) {
+    if (correctionDiscord && result?.ok && payload.shouldCorrect && normalizeString(payload.correctionText || decision.correctionText)) {
       try {
-        const correctionMessage = await appaDiscord.sendChannelMessage(candidate.channelId, {
+        const correctionMessage = await correctionDiscord.sendChannelMessage(candidate.channelId, {
           content: normalizeString(payload.correctionText || decision.correctionText),
           allowedMentions: {parse: [], repliedUser: false},
           ...(candidate.replyMessageId || candidate.messageId ? {
@@ -797,7 +840,7 @@ export const createPortalRuntime = ({
     return settings;
   };
 
-  const startDiscordClient = async ({enableGuildMemberEvents, splitOverride = null}) => {
+  const startDiscordClient = async ({enableGuildMemberEvents, splitOverride = null, generation}) => {
     let nextDiscord;
     const splitEnabled = splitOverride == null ? isAppaSplitEnabled() : Boolean(splitOverride);
     const noonaMentionHandler = createNoonaMentionHandler({
@@ -810,7 +853,7 @@ export const createPortalRuntime = ({
       onReviewCandidate: handleNoonaReviewCandidate,
       aiQueue: noonaAiQueue
     });
-    nextDiscord = await createDiscordClient({
+    nextDiscord = trackDiscordClient(await createDiscordClient({
       token: config.discordToken,
       clientId: config.discordClientId,
       commandMap: splitEnabled ? noonaCommands : commands,
@@ -879,13 +922,19 @@ export const createPortalRuntime = ({
       onRuntimeEvent: (event) => recordRuntimeEvent({...event, clientIdentity: "noona"}),
       logger,
       clientFactory
-    });
+    }));
+    discord = nextDiscord;
+    if (!isCurrentLifecycle(generation)) {
+      nextDiscord.destroy?.();
+      trackedDiscordClients.delete(nextDiscord);
+      throw new Error("Portal runtime start was superseded.");
+    }
 
     const sync = await nextDiscord.login();
     return {nextDiscord, sync};
   };
 
-  const startAppaClient = async () => {
+  const startAppaClient = async (generation) => {
     let nextAppa;
     const appaMentionHandler = createAppaMentionHandler({
       getSettings: () => settings,
@@ -896,7 +945,7 @@ export const createPortalRuntime = ({
       onRuntimeEvent: recordRuntimeEvent,
       aiQueue: appaAiQueue
     });
-    nextAppa = await createDiscordClient({
+    nextAppa = trackDiscordClient(await createDiscordClient({
       token: config.appaDiscordToken,
       clientId: config.appaDiscordClientId,
       commandMap: appaCommands,
@@ -944,12 +993,24 @@ export const createPortalRuntime = ({
       onRuntimeEvent: (event) => recordRuntimeEvent({...event, clientIdentity: "appa"}),
       logger,
       clientFactory
-    });
+    }));
+    appaDiscord = nextAppa;
+    if (!isCurrentLifecycle(generation)) {
+      nextAppa.destroy?.();
+      trackedDiscordClients.delete(nextAppa);
+      throw new Error("Portal runtime start was superseded.");
+    }
     const sync = await nextAppa.login();
     return {nextAppa, sync};
   };
 
-  const start = async () => {
+  const startInternal = async (generation) => {
+    if (state.connected && discord) {
+      return state;
+    }
+
+    await cleanupRuntimePieces();
+
     if (!config.discordToken || !config.discordClientId) {
       state = {
         ...state,
@@ -976,6 +1037,9 @@ export const createPortalRuntime = ({
       registeredGuildId: ""
     };
     await refreshSettings().catch(() => settings);
+    if (!isCurrentLifecycle(generation)) {
+      return state;
+    }
 
     const wantsGuildMemberEvents = Boolean(settings.onboarding.channelId);
     const attempts = wantsGuildMemberEvents
@@ -991,15 +1055,24 @@ export const createPortalRuntime = ({
     for (const attempt of attempts) {
       try {
         let splitEnabled = isAppaSplitEnabled();
-        let started = await startDiscordClient({...attempt, splitOverride: splitEnabled});
+        let started = await startDiscordClient({...attempt, splitOverride: splitEnabled, generation});
+        if (!isCurrentLifecycle(generation)) {
+          return state;
+        }
         discord = started.nextDiscord;
         let appaStarted = null;
         let appaStartError = "";
         if (splitEnabled) {
           try {
-            appaStarted = await startAppaClient();
+            appaStarted = await startAppaClient(generation);
+            if (!isCurrentLifecycle(generation)) {
+              return state;
+            }
             appaDiscord = appaStarted.nextAppa;
           } catch (error) {
+            if (!isCurrentLifecycle(generation)) {
+              return state;
+            }
             appaStartError = describeError(error);
             error?.portalClient?.destroy?.();
             appaDiscord = null;
@@ -1018,7 +1091,10 @@ export const createPortalRuntime = ({
             discord?.destroy?.();
             discord = null;
             splitEnabled = false;
-            started = await startDiscordClient({...attempt, splitOverride: false});
+            started = await startDiscordClient({...attempt, splitOverride: false, generation});
+            if (!isCurrentLifecycle(generation)) {
+              return state;
+            }
             discord = started.nextDiscord;
           }
         }
@@ -1040,6 +1116,9 @@ export const createPortalRuntime = ({
           onRuntimeEvent: recordRuntimeEvent
         });
         await triviaRuntime.start();
+        if (!isCurrentLifecycle(generation)) {
+          return state;
+        }
         state = {
           ...state,
           mode: "ready",
@@ -1084,15 +1163,10 @@ export const createPortalRuntime = ({
         };
         return state;
       } catch (error) {
-        await followNotifier?.stop?.();
-        followNotifier = null;
-        triviaRuntime?.stop?.();
-        triviaRuntime = null;
-        error?.portalClient?.destroy?.();
-        appaDiscord?.destroy?.();
-        appaDiscord = null;
-        discord?.destroy?.();
-        discord = null;
+        if (!isCurrentLifecycle(generation)) {
+          return state;
+        }
+        await cleanupRuntimePieces();
 
         if (attempt.enableGuildMemberEvents && isGuildMemberIntentFailure(error)) {
           logger?.warn?.("Portal Discord runtime could not enable guild member events. Retrying in minimal Discord mode.", {
@@ -1123,26 +1197,50 @@ export const createPortalRuntime = ({
   };
 
   const stop = async () => {
-    followNotifier?.stop?.();
-    followNotifier = null;
-    triviaRuntime?.stop?.();
-    triviaRuntime = null;
-    appaDiscord?.destroy?.();
-    appaDiscord = null;
-    discord?.destroy?.();
-    discord = null;
-    state = {
-      ...state,
-      connected: false,
-      guildMemberEventsEnabled: false,
-      mode: state.authConfigured ? "idle" : "disabled",
-      splitEnabled: false,
-      appa: {
-        ...state.appa,
+    if (stopPromise) {
+      return stopPromise;
+    }
+    lifecycleGeneration += 1;
+    stopPromise = (async () => {
+      await cleanupRuntimePieces({cancelQueues: true});
+      state = {
+        ...state,
         connected: false,
-        mode: state.appa.authConfigured ? "idle" : "disabled"
+        guildMemberEventsEnabled: false,
+        mode: state.authConfigured ? "idle" : "disabled",
+        splitEnabled: false,
+        appa: {
+          ...state.appa,
+          connected: false,
+          mode: state.appa.authConfigured ? "idle" : "disabled"
+        }
+      };
+    })();
+    try {
+      return await stopPromise;
+    } finally {
+      stopPromise = null;
+    }
+  };
+
+  const start = async () => {
+    if (startPromise) {
+      return startPromise;
+    }
+    if (stopPromise) {
+      await stopPromise;
+    }
+    const generation = lifecycleGeneration + 1;
+    lifecycleGeneration = generation;
+    const currentStart = startInternal(generation);
+    startPromise = currentStart;
+    try {
+      return await currentStart;
+    } finally {
+      if (startPromise === currentStart) {
+        startPromise = null;
       }
-    };
+    }
   };
 
   const renderOnboarding = (payload = {}) => renderTemplate(

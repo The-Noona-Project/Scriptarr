@@ -296,6 +296,8 @@ def create_app(
     async def shutdown_embedded_local_ai() -> None:
         if hasattr(embedded_runtime, "cancel_startup_auto_start"):
             await embedded_runtime.cancel_startup_auto_start()
+        if hasattr(embedded_runtime, "cancel_download_tasks"):
+            await embedded_runtime.cancel_download_tasks()
         await embedded_runtime.stop()
 
     async def local_ai_available(runtime) -> bool:

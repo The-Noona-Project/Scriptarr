@@ -67,10 +67,21 @@ export const SystemLogsPage = () => {
     if (paused) {
       return undefined;
     }
-    const timer = window.setInterval(() => {
-      void refresh();
-    }, 5000);
-    return () => window.clearInterval(timer);
+    let cancelled = false;
+    let timer = 0;
+    const schedule = () => {
+      timer = window.setTimeout(async () => {
+        await refresh();
+        if (!cancelled) {
+          schedule();
+        }
+      }, 5000);
+    };
+    schedule();
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
   }, [paused, refresh]);
 
   const copyVisibleLines = async () => {

@@ -112,6 +112,10 @@ const normalizeString = (value, fallback = "") => {
 
 const normalizeArray = (value) => Array.isArray(value) ? value : [];
 const normalizeObject = (value, fallback = null) => value && typeof value === "object" && !Array.isArray(value) ? value : fallback;
+const normalizePositiveInteger = (value, fallback) => {
+  const parsed = Number.parseInt(String(value), 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+};
 const EVENT_DOMAIN_ACCESS = Object.freeze({
   auth: "users",
   users: "users",
@@ -157,6 +161,7 @@ const READER_TELEMETRY_TYPES = new Set([
 const ORACLE_ADMIN_TEST_TIMEOUT_MS = 75000;
 const LIBRARY_CARD_PAGE_SIZE_DEFAULT = 60;
 const LIBRARY_CARD_PAGE_SIZE_MAX = 100;
+const RAVEN_READER_PAGE_FETCH_TIMEOUT_MS = 30000;
 
 const normalizeTypeSlug = (value, fallback = "manga") => {
   const normalized = normalizeString(value, fallback)
@@ -774,6 +779,10 @@ export const registerMoonV3Routes = (app, {
   systemTaskRuntime,
   persistOracleSettings
 }) => {
+  const readerPageFetchTimeoutMs = normalizePositiveInteger(
+    process.env.SCRIPTARR_RAVEN_READER_PAGE_TIMEOUT_MS,
+    RAVEN_READER_PAGE_FETCH_TIMEOUT_MS
+  );
   const fetchRavenJson = async (path, options = {}) => {
     const result = await serviceJson(config.ravenBaseUrl, path, options);
     if (!result.ok) {
@@ -3919,36 +3928,98 @@ export const registerMoonV3Routes = (app, {
     res.flushHeaders?.();
 
     let cursor = Number.parseInt(String(req.query.afterSequence || req.query.after || req.get("Last-Event-ID") || 0), 10) || 0;
+    let closed = false;
+    let writing = false;
+    let pendingWrite = false;
+
+    const waitForDrain = () => new Promise((resolve) => {
+      const cleanup = () => {
+        res.off("drain", onDrain);
+        res.off("close", onClose);
+      };
+      const onDrain = () => {
+        cleanup();
+        resolve(!closed);
+      };
+      const onClose = () => {
+        cleanup();
+        resolve(false);
+      };
+      res.once("drain", onDrain);
+      res.once("close", onClose);
+    });
+
+    const writeEventChunk = async (chunk) => {
+      if (closed || res.destroyed || res.writableEnded) {
+        return false;
+      }
+      if (res.write(chunk)) {
+        return true;
+      }
+      return waitForDrain();
+    };
 
     const writeEvents = async () => {
-      const events = normalizeArray(await vaultClient.listEvents({
-        domains,
-        afterSequence: cursor,
-        limit: 100,
-        newestFirst: false
-      }));
-      for (const event of events) {
-        cursor = Math.max(cursor, Number.parseInt(String(event.sequence || 0), 10) || cursor);
-        res.write(`id: ${cursor}\n`);
-        res.write("event: admin-event\n");
-        res.write(`data: ${JSON.stringify(event)}\n\n`);
+      if (closed) {
+        return;
+      }
+      if (writing) {
+        pendingWrite = true;
+        return;
+      }
+      writing = true;
+      try {
+        do {
+          pendingWrite = false;
+          const events = normalizeArray(await vaultClient.listEvents({
+            domains,
+            afterSequence: cursor,
+            limit: 100,
+            newestFirst: false
+          }));
+          for (const event of events) {
+            if (closed) {
+              return;
+            }
+            cursor = Math.max(cursor, Number.parseInt(String(event.sequence || 0), 10) || cursor);
+            const ok = await writeEventChunk(`id: ${cursor}\nevent: admin-event\ndata: ${JSON.stringify(event)}\n\n`);
+            if (!ok) {
+              return;
+            }
+          }
+        } while (pendingWrite && !closed);
+      } finally {
+        writing = false;
       }
     };
 
+    const scheduleWriteEvents = () => {
+      void writeEvents().catch((error) => {
+        if (!closed) {
+          logger?.warn?.("Admin events SSE poll failed.", {error: error instanceof Error ? error.message : String(error)});
+        }
+      });
+    };
+
     const heartbeat = setInterval(() => {
-      res.write(": keepalive\n\n");
+      void writeEventChunk(": keepalive\n\n");
     }, 15000);
     const poller = setInterval(() => {
-      void writeEvents();
+      scheduleWriteEvents();
     }, 3000);
 
-    await writeEvents();
-
-    req.on("close", () => {
+    const cleanupStream = () => {
+      closed = true;
       clearInterval(heartbeat);
       clearInterval(poller);
-      res.end();
-    });
+      if (!res.writableEnded && !res.destroyed) {
+        res.end();
+      }
+    };
+    req.on("aborted", cleanupStream);
+    res.on("close", cleanupStream);
+
+    await writeEvents();
   }));
 
   const buildAdminSystemStatus = async ({includeChecks = false} = {}) => {
@@ -5749,15 +5820,37 @@ export const registerMoonV3Routes = (app, {
   }));
 
   app.get("/api/moon-v3/user/reader/title/:titleId/chapter/:chapterId/page/:pageIndex", withUser(requireUser, async (req, res) => {
+    const controller = new AbortController();
+    let stream = null;
+    let finished = false;
+    const timeout = setTimeout(() => {
+      controller.abort(new Error("Raven reader page fetch timed out."));
+    }, readerPageFetchTimeoutMs);
+    const cleanup = () => {
+      finished = true;
+      clearTimeout(timeout);
+    };
+    const abortUpstream = () => {
+      if (finished) {
+        return;
+      }
+      controller.abort(new Error("Reader page client disconnected."));
+      stream?.destroy();
+      cleanup();
+    };
+    req.on("aborted", abortUpstream);
+    res.on("close", abortUpstream);
     let response;
     try {
       response = await fetch(
         `${config.ravenBaseUrl}/v1/reader/${encodeURIComponent(req.params.titleId)}/${encodeURIComponent(req.params.chapterId)}/page/${encodeURIComponent(req.params.pageIndex)}`,
         {
-          headers: {"Accept": "image/svg+xml"}
+          headers: {"Accept": "image/svg+xml"},
+          signal: controller.signal
         }
       );
     } catch (error) {
+      cleanup();
       sendReaderPageStreamFailure(res, error);
       return;
     }
@@ -5778,11 +5871,18 @@ export const registerMoonV3Routes = (app, {
       res.setHeader("Last-Modified", lastModified);
     }
     if (!response.body) {
+      cleanup();
       res.end();
       return;
     }
-    const stream = Readable.fromWeb(response.body);
-    stream.on("error", (error) => sendReaderPageStreamFailure(res, error));
+    stream = Readable.fromWeb(response.body);
+    stream.on("error", (error) => {
+      cleanup();
+      sendReaderPageStreamFailure(res, error);
+    });
+    stream.on("end", cleanup);
+    stream.on("close", cleanup);
+    res.on("finish", cleanup);
     stream.pipe(res);
   }));
 };

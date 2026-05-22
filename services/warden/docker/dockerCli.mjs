@@ -4,9 +4,27 @@
 import {spawn} from "node:child_process";
 import {toDockerDesktopHostPath} from "../filesystem/storageLayout.mjs";
 
+const DEFAULT_DOCKER_TIMEOUT_MS = 15 * 60 * 1000;
+const LONG_DOCKER_TIMEOUT_MS = 45 * 60 * 1000;
+const DEFAULT_MAX_OUTPUT_CHARS = 4 * 1024 * 1024;
+const MAX_BUFFERED_LINE_CHARS = 64 * 1024;
+
 const normalizeString = (value) => String(value ?? "").trim();
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const normalizePositiveInteger = (value, fallback) => {
+  const parsed = Number.parseInt(String(value), 10);
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : fallback;
+};
+
+const appendBounded = (current, text, maxChars) => {
+  if (maxChars <= 0) {
+    return "";
+  }
+  const combined = `${current}${text}`;
+  return combined.length > maxChars ? combined.slice(0, maxChars) : combined;
+};
 
 const flushBufferedLine = (buffer, onLine) => {
   const remaining = normalizeString(buffer);
@@ -24,7 +42,10 @@ const flushBufferedLine = (buffer, onLine) => {
  *   stdinText?: string | null,
  *   stdio?: "inherit" | "pipe",
  *   onStdoutLine?: (line: string) => void,
- *   onStderrLine?: (line: string) => void
+ *   onStderrLine?: (line: string) => void,
+ *   timeoutMs?: number,
+ *   maxOutputChars?: number,
+ *   command?: string
  * }} [options]
  * @returns {Promise<{stdout: string, stderr: string}>}
  */
@@ -35,10 +56,13 @@ export const runDocker = (
     stdinText = null,
     stdio = "pipe",
     onStdoutLine,
-    onStderrLine
+    onStderrLine,
+    timeoutMs = DEFAULT_DOCKER_TIMEOUT_MS,
+    maxOutputChars = DEFAULT_MAX_OUTPUT_CHARS,
+    command = "docker"
   } = {}
 ) => new Promise((resolve, reject) => {
-  const child = spawn("docker", args, {
+  const child = spawn(command, args, {
     cwd,
     shell: false,
     stdio: stdio === "inherit" ? "inherit" : [stdinText == null ? "ignore" : "pipe", "pipe", "pipe"]
@@ -48,12 +72,44 @@ export const runDocker = (
   let stderr = "";
   let stdoutBuffer = "";
   let stderrBuffer = "";
+  let settled = false;
+  let timedOut = false;
+  let timeout = null;
+  let forceKillTimeout = null;
+  const safeTimeoutMs = normalizePositiveInteger(timeoutMs, DEFAULT_DOCKER_TIMEOUT_MS);
+  const safeMaxOutputChars = normalizePositiveInteger(maxOutputChars, DEFAULT_MAX_OUTPUT_CHARS);
+
+  const settle = (callback, value) => {
+    if (settled) {
+      return;
+    }
+    settled = true;
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+    if (forceKillTimeout) {
+      clearTimeout(forceKillTimeout);
+    }
+    callback(value);
+  };
+
+  if (safeTimeoutMs > 0) {
+    timeout = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGTERM");
+      forceKillTimeout = setTimeout(() => {
+        child.kill("SIGKILL");
+      }, 5000);
+      forceKillTimeout.unref?.();
+    }, safeTimeoutMs);
+    timeout.unref?.();
+  }
 
   if (stdio !== "inherit" && child.stdout) {
     child.stdout.on("data", (chunk) => {
       const text = String(chunk);
-      stdout += text;
-      stdoutBuffer += text;
+      stdout = appendBounded(stdout, text, safeMaxOutputChars);
+      stdoutBuffer = appendBounded(stdoutBuffer, text, MAX_BUFFERED_LINE_CHARS);
 
       const lines = stdoutBuffer.split(/\r?\n/);
       stdoutBuffer = lines.pop() || "";
@@ -68,8 +124,8 @@ export const runDocker = (
   if (stdio !== "inherit" && child.stderr) {
     child.stderr.on("data", (chunk) => {
       const text = String(chunk);
-      stderr += text;
-      stderrBuffer += text;
+      stderr = appendBounded(stderr, text, safeMaxOutputChars);
+      stderrBuffer = appendBounded(stderrBuffer, text, MAX_BUFFERED_LINE_CHARS);
 
       const lines = stderrBuffer.split(/\r?\n/);
       stderrBuffer = lines.pop() || "";
@@ -81,7 +137,7 @@ export const runDocker = (
     });
   }
 
-  child.on("error", reject);
+  child.on("error", (error) => settle(reject, error));
 
   if (stdinText != null && child.stdin) {
     child.stdin.end(stdinText);
@@ -93,12 +149,17 @@ export const runDocker = (
       flushBufferedLine(stderrBuffer, onStderrLine);
     }
 
-    if (code === 0) {
-      resolve({stdout, stderr});
+    if (timedOut) {
+      settle(reject, new Error(`docker ${args.join(" ")} timed out after ${safeTimeoutMs}ms.`));
       return;
     }
 
-    reject(new Error(stderr || stdout || `docker ${args.join(" ")} failed with exit ${code}`));
+    if (code === 0) {
+      settle(resolve, {stdout, stderr});
+      return;
+    }
+
+    settle(reject, new Error(stderr || stdout || `docker ${args.join(" ")} failed with exit ${code}`));
   });
 });
 
@@ -395,6 +456,7 @@ export const runDetachedContainer = async ({
   }
 
   await runDocker(args, {
+    timeoutMs: LONG_DOCKER_TIMEOUT_MS,
     onStdoutLine: missingImage && logger
       ? (line) => {
         logger.info("Docker run output.", {
@@ -433,6 +495,7 @@ export const pullDockerImage = async (image, {logger, onProgress} = {}) => {
   };
 
   await runDocker(["pull", image], {
+    timeoutMs: LONG_DOCKER_TIMEOUT_MS,
     onStdoutLine: logger || onProgress ? handleLine : undefined,
     onStderrLine: logger || onProgress ? handleLine : undefined
   });

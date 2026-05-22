@@ -5,10 +5,15 @@ import com.scriptarr.raven.support.FakeRavenBrokerClient;
 import com.scriptarr.raven.support.ScriptarrLogger;
 import org.junit.jupiter.api.Test;
 
+import java.lang.reflect.Field;
 import java.nio.file.Path;
+import java.time.Instant;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Unit coverage for Raven's live title-download runtime settings.
@@ -64,6 +69,58 @@ class DownloaderServiceRuntimeSettingsTest {
         } finally {
             service.shutdown();
         }
+    }
+
+    /**
+     * Verify local Raven task history keeps active tasks and recent terminal
+     * entries without deleting durable broker records.
+     *
+     * @throws Exception when private task state cannot be seeded
+     */
+    @Test
+    void snapshotPrunesOldTerminalTasksButKeepsActiveTasks() throws Exception {
+        FakeRavenBrokerClient brokerClient = new FakeRavenBrokerClient();
+        DownloaderService service = createService(brokerClient);
+        try {
+            Map<String, Map<String, Object>> tasks = taskMap(service);
+            for (int index = 0; index < 210; index++) {
+                tasks.put("failed-" + index, task("failed-" + index, "failed", index));
+            }
+            tasks.put("queued-active", task("queued-active", "queued", -1000));
+            tasks.put("running-active", task("running-active", "running", -1000));
+
+            List<Map<String, Object>> snapshot = service.snapshot();
+
+            assertEquals(202, snapshot.size());
+            assertTrue(snapshot.stream().anyMatch((task) -> "queued-active".equals(task.get("taskId"))));
+            assertTrue(snapshot.stream().anyMatch((task) -> "running-active".equals(task.get("taskId"))));
+            assertTrue(snapshot.stream().noneMatch((task) -> "failed-0".equals(task.get("taskId"))));
+            assertTrue(brokerClient.listDownloadTasks().isArray());
+        } finally {
+            service.shutdown();
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Map<String, Object>> taskMap(DownloaderService service) throws Exception {
+        Field field = DownloaderService.class.getDeclaredField("tasks");
+        field.setAccessible(true);
+        return (Map<String, Map<String, Object>>) field.get(service);
+    }
+
+    private Map<String, Object> task(String taskId, String status, int minutesOffset) {
+        String timestamp = Instant.parse("2026-01-01T00:00:00Z").plusSeconds(minutesOffset * 60L).toString();
+        Map<String, Object> task = new LinkedHashMap<>();
+        task.put("taskId", taskId);
+        task.put("jobId", taskId);
+        task.put("titleName", taskId);
+        task.put("status", status);
+        task.put("message", status);
+        task.put("percent", "completed".equals(status) ? 100 : 0);
+        task.put("queuedAt", timestamp);
+        task.put("updatedAt", timestamp);
+        task.put("sortOrder", (long) minutesOffset);
+        return task;
     }
 
     private DownloaderService createService(FakeRavenBrokerClient brokerClient) {
