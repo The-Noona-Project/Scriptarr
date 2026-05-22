@@ -236,12 +236,13 @@ const defaultIntakePayload = Object.freeze({
  * Create a small dependency stub for Sage's Raven, Warden, Portal, and Oracle
  * calls so the Moon v3 broker routes can be tested in isolation.
  *
- * @param {{libraryTitles?: Array<Record<string, unknown>>, downloadTasks?: Array<Record<string, unknown>>, ingestTasks?: Array<Record<string, unknown>>, ingestOverview?: Record<string, unknown>, importResult?: Record<string, unknown>, downloadRuntimeReloadStatus?: number, syncLinkedRequestOnQueue?: boolean, readerChapterTransientMisses?: Record<string, number>, readerMissingChaptersAsHtml?: boolean, readerPageFetchFails?: boolean, readerPageHangs?: boolean, publicSearchResultCount?: number}} [options]
+ * @param {{libraryTitles?: Array<Record<string, unknown>>, downloadTasks?: Array<Record<string, unknown>>, downloadTasksStatus?: number, ingestTasks?: Array<Record<string, unknown>>, ingestOverview?: Record<string, unknown>, importResult?: Record<string, unknown>, downloadRuntimeReloadStatus?: number, syncLinkedRequestOnQueue?: boolean, readerChapterTransientMisses?: Record<string, number>, readerMissingChaptersAsHtml?: boolean, readerPageFetchFails?: boolean, readerPageHangs?: boolean, publicSearchResultCount?: number}} [options]
  * @returns {Promise<{server: http.Server, calls: Record<string, number>}>}
  */
 const createDependencyStub = ({
   libraryTitles = [defaultLibraryTitle],
   downloadTasks = [],
+  downloadTasksStatus = 200,
   ingestTasks = [],
   ingestOverview = null,
   importResult = null,
@@ -771,8 +772,10 @@ const createDependencyStub = ({
     }
 
     if (request.url === "/v1/downloads/tasks") {
-      response.writeHead(200, {"Content-Type": "application/json"});
-      response.end(JSON.stringify(currentDownloadTasks));
+      response.writeHead(downloadTasksStatus, {"Content-Type": "application/json"});
+      response.end(JSON.stringify(downloadTasksStatus >= 400
+        ? {error: "Raven tasks unavailable."}
+        : currentDownloadTasks));
       return;
     }
 
@@ -2221,6 +2224,53 @@ test("sage keeps Moon library routes empty when Raven has no imported titles", a
   assert.equal(overview.counts.titles, 0);
   assert.equal(overview.counts.missingChapters, 0);
   assert.equal(overview.counts.metadataGaps, 0);
+
+  await closeServer(sageServer);
+  await closeServer(vaultServer);
+  await closeServer(dependencyStub.server);
+});
+
+test("sage keeps admin overview available when the Raven task feed fails", async () => {
+  const {app: vaultApp} = await createVaultApp();
+  const vaultServer = vaultApp.listen(0);
+  const vaultPort = vaultServer.address().port;
+
+  const dependencyStub = await createDependencyStub({
+    libraryTitles: [defaultLibraryTitle],
+    downloadTasksStatus: 503
+  });
+  dependencyStub.server.listen(0);
+  const dependencyPort = dependencyStub.server.address().port;
+
+  process.env.SCRIPTARR_VAULT_BASE_URL = `http://127.0.0.1:${vaultPort}`;
+  process.env.SCRIPTARR_WARDEN_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_PORTAL_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_ORACLE_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_RAVEN_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_PUBLIC_BASE_URL = "https://pax-kun.com";
+  process.env.SCRIPTARR_DISCORD_CLIENT_ID = "discord-client-id";
+  process.env.SCRIPTARR_DISCORD_CLIENT_SECRET = "discord-client-secret";
+
+  installDiscordFetchStub();
+
+  const {app: sageApp} = await createSageApp();
+  const sageServer = sageApp.listen(0);
+  const sagePort = sageServer.address().port;
+  const baseUrl = `http://127.0.0.1:${sagePort}`;
+
+  const ownerClaim = await signInViaDiscord(baseUrl);
+  const response = await fetch(`${baseUrl}/api/moon-v3/admin/overview`, {
+    headers: {
+      "Authorization": `Bearer ${ownerClaim.token}`
+    }
+  });
+  const overview = await response.json();
+
+  assert.equal(response.status, 200);
+  assert.equal(overview.counts.titles, 1);
+  assert.equal(overview.counts.activeTasks, 0);
+  assert.deepEqual(overview.queue, []);
+  assert.match(overview.degraded.queue.error, /Raven tasks unavailable/);
 
   await closeServer(sageServer);
   await closeServer(vaultServer);

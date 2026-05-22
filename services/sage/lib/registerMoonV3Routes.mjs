@@ -162,6 +162,7 @@ const ORACLE_ADMIN_TEST_TIMEOUT_MS = 75000;
 const LIBRARY_CARD_PAGE_SIZE_DEFAULT = 60;
 const LIBRARY_CARD_PAGE_SIZE_MAX = 100;
 const RAVEN_READER_PAGE_FETCH_TIMEOUT_MS = 30000;
+const OVERVIEW_SERVICE_STATUS_TIMEOUT_MS = 2500;
 
 const normalizeTypeSlug = (value, fallback = "manga") => {
   const normalized = normalizeString(value, fallback)
@@ -752,7 +753,7 @@ const mergeDisplayStrings = (...values) => {
  *   readAdminToastSettings: (user: Record<string, unknown>) => Promise<Record<string, unknown>>,
  *   readMoonPublicApiSettings: () => Promise<Record<string, unknown>>,
  *   readPortalDiscordSettings: () => Promise<Record<string, unknown>>,
- *   serviceJson: (baseUrl: string, path: string, options?: {method?: string, body?: unknown, headers?: Record<string, string>}) => Promise<{ok: boolean, status: number, payload: any}>,
+ *   serviceJson: (baseUrl: string, path: string, options?: {method?: string, body?: unknown, headers?: Record<string, string>, timeoutMs?: number}) => Promise<{ok: boolean, status: number, payload: any}>,
  *   safeJson: (promise: Promise<unknown>) => Promise<any>
  * }} options
  */
@@ -1282,6 +1283,7 @@ export const registerMoonV3Routes = (app, {
       };
     });
   };
+  const taskTimestamp = (task) => Date.parse(task.updatedAt || task.queuedAt || "") || 0;
 
   const isIngestQueueTask = (task = {}) =>
     normalizeString(task.providerId) === "raven-ingest"
@@ -1351,7 +1353,6 @@ export const registerMoonV3Routes = (app, {
       }
       return `title:${normalizeString(task.titleName).toLowerCase()}`;
     };
-    const taskTimestamp = (task) => Date.parse(task.updatedAt || task.queuedAt || "") || 0;
     const deduped = new Map();
     for (const task of [...ravenTasks, ...brokerTasks]) {
       const logicalId = logicalTaskId(task);
@@ -1372,6 +1373,13 @@ export const registerMoonV3Routes = (app, {
     return Array.from(deduped.values()).sort((left, right) =>
       taskTimestamp(right) - taskTimestamp(left)
     );
+  };
+
+  const loadOverviewTasks = async () => {
+    const activeStatuses = new Set(["queued", "running"]);
+    return (await loadLiveRavenTasks())
+      .filter((task) => activeStatuses.has(normalizeString(task.status)))
+      .sort((left, right) => taskTimestamp(right) - taskTimestamp(left));
   };
 
   const requestMatchesTitle = (request, title) => (
@@ -1669,15 +1677,43 @@ export const registerMoonV3Routes = (app, {
     });
   };
 
+  const loadServiceHealth = async (baseUrl) => {
+    const result = await serviceJson(baseUrl, "/health", {timeoutMs: OVERVIEW_SERVICE_STATUS_TIMEOUT_MS});
+    return result.ok
+      ? result.payload
+      : {
+        ok: false,
+        status: result.status,
+        error: result.payload?.error || `Health check failed with status ${result.status}.`
+      };
+  };
+
   const loadServiceStatus = async () => {
     const [warden, portal, oracle, raven] = await Promise.all([
-      safeJson(fetch(`${config.wardenBaseUrl}/health`).then((response) => response.json())),
-      safeJson(fetch(`${config.portalBaseUrl}/health`).then((response) => response.json())),
-      safeJson(fetch(`${config.oracleBaseUrl}/health`).then((response) => response.json())),
-      safeJson(fetch(`${config.ravenBaseUrl}/health`).then((response) => response.json()))
+      safeJson(loadServiceHealth(config.wardenBaseUrl)),
+      safeJson(loadServiceHealth(config.portalBaseUrl)),
+      safeJson(loadServiceHealth(config.oracleBaseUrl)),
+      safeJson(loadServiceHealth(config.ravenBaseUrl))
     ]);
 
     return {warden, portal, oracle, raven};
+  };
+
+  const loadOverviewSection = async (section, promise, fallback) => {
+    try {
+      return {value: await promise, degraded: null};
+    } catch (error) {
+      logger?.warn?.("Moon v3 admin overview section unavailable; returning degraded overview.", {
+        section,
+        error: error instanceof Error ? error.message : String(error)
+      });
+      return {
+        value: fallback,
+        degraded: {
+          error: error instanceof Error ? error.message : String(error)
+        }
+      };
+    }
   };
 
   const triviaService = createPortalTriviaService({
@@ -1788,12 +1824,24 @@ export const registerMoonV3Routes = (app, {
   });
 
   app.get("/api/moon-v3/admin/overview", requireOverviewRead(async (_req, res) => {
-    const [titles, tasks, requests, services] = await Promise.all([
-      loadLibrary(),
-      loadTasks(),
-      loadRequests(),
-      loadServiceStatus()
+    const [titlesResult, tasksResult, requestsResult, servicesResult] = await Promise.all([
+      loadOverviewSection("library", loadLibrary(), []),
+      loadOverviewSection("queue", loadOverviewTasks(), []),
+      loadOverviewSection("requests", loadRequests(), []),
+      loadOverviewSection("services", loadServiceStatus(), {})
     ]);
+    const degraded = Object.fromEntries(
+      [
+        ["library", titlesResult.degraded],
+        ["queue", tasksResult.degraded],
+        ["requests", requestsResult.degraded],
+        ["services", servicesResult.degraded]
+      ].filter((entry) => entry[1])
+    );
+    const titles = normalizeArray(titlesResult.value);
+    const tasks = normalizeArray(tasksResult.value);
+    const requests = normalizeArray(requestsResult.value);
+    const services = normalizeObject(servicesResult.value, {}) || {};
 
     const pendingRequests = requests.filter((entry) => entry.status === "pending");
     const activeTasks = tasks.filter((entry) => entry.status === "queued" || entry.status === "running");
@@ -1811,7 +1859,8 @@ export const registerMoonV3Routes = (app, {
       services,
       queue: activeTasks.slice(0, 8),
       requests: pendingRequests.slice(0, 8),
-      titles: titles.slice(0, 6)
+      titles: titles.slice(0, 6),
+      ...(Object.keys(degraded).length ? {degraded} : {})
     });
   }));
 
