@@ -2267,6 +2267,15 @@ test("sage keeps admin overview available when the Raven task feed fails", async
   process.env.SCRIPTARR_DISCORD_CLIENT_ID = "discord-client-id";
   process.env.SCRIPTARR_DISCORD_CLIENT_SECRET = "discord-client-secret";
 
+  await fetch(`http://127.0.0.1:${vaultPort}/api/service/raven/titles/${defaultLibraryTitle.id}`, {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": "Bearer vault-dev-token"
+    },
+    body: JSON.stringify(defaultLibraryTitle)
+  });
+
   installDiscordFetchStub();
 
   const {app: sageApp} = await createSageApp();
@@ -2294,7 +2303,7 @@ test("sage keeps admin overview available when the Raven task feed fails", async
   await closeServer(dependencyStub.server);
 });
 
-test("sage keeps admin overview bounded when the Raven library feed is slow", async () => {
+test("sage keeps admin overview bounded without the Raven library feed", async () => {
   const {app: vaultApp} = await createVaultApp();
   const vaultServer = vaultApp.listen(0);
   const vaultPort = vaultServer.address().port;
@@ -2314,6 +2323,15 @@ test("sage keeps admin overview bounded when the Raven library feed is slow", as
   process.env.SCRIPTARR_DISCORD_CLIENT_ID = "discord-client-id";
   process.env.SCRIPTARR_DISCORD_CLIENT_SECRET = "discord-client-secret";
 
+  await fetch(`http://127.0.0.1:${vaultPort}/api/service/raven/titles/${defaultLibraryTitle.id}`, {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": "Bearer vault-dev-token"
+    },
+    body: JSON.stringify(defaultLibraryTitle)
+  });
+
   installDiscordFetchStub();
 
   const {app: sageApp} = await createSageApp();
@@ -2332,10 +2350,11 @@ test("sage keeps admin overview bounded when the Raven library feed is slow", as
   const durationMs = Date.now() - startedAt;
 
   assert.equal(response.status, 200);
-  assert.equal(overview.counts.titles, 0);
-  assert.deepEqual(overview.titles, []);
-  assert.match(overview.degraded.library.error, /abort|timeout/i);
-  assert.ok(durationMs < 2900, `overview should stay bounded, got ${durationMs}ms`);
+  assert.equal(overview.counts.titles, 1);
+  assert.equal(overview.titles[0].id, defaultLibraryTitle.id);
+  assert.equal(overview.degraded?.library, undefined);
+  assert.ok(durationMs < 1200, `overview should stay bounded, got ${durationMs}ms`);
+  assert.equal(dependencyStub.calls.library, 0);
   assert.equal(dependencyStub.calls.health, 0);
   assert.ok(dependencyStub.calls.runtime >= 1);
 

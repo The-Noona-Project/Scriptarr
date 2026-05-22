@@ -803,8 +803,13 @@ export const registerMoonV3Routes = (app, {
   };
 
   const loadOverviewLibrary = async () => {
-    const payload = await fetchRavenJson("/v1/library", {timeoutMs: OVERVIEW_SERVICE_STATUS_TIMEOUT_MS});
-    return normalizeArray(payload?.titles).map(toTitleSummary);
+    const payload = await vaultClient.listRavenTitleCards({pageSize: 6});
+    const titles = normalizeArray(payload?.titles).map(toTitleSummary);
+    const totalTitles = Number.parseInt(String(payload?.pageInfo?.total ?? payload?.counts?.total ?? titles.length), 10);
+    return {
+      titles,
+      totalTitles: Number.isFinite(totalTitles) && totalTitles >= 0 ? totalTitles : titles.length
+    };
   };
 
   const toQueryString = (query = {}) => {
@@ -1888,7 +1893,9 @@ export const registerMoonV3Routes = (app, {
         ["services", servicesResult.degraded]
       ].filter((entry) => entry[1])
     );
-    const titles = normalizeArray(titlesResult.value);
+    const library = normalizeObject(titlesResult.value, {}) || {};
+    const titles = normalizeArray(library.titles);
+    const totalTitles = Number.parseInt(String(library.totalTitles ?? titles.length), 10);
     const tasks = normalizeArray(tasksResult.value);
     const requests = normalizeArray(requestsResult.value);
     const services = normalizeObject(servicesResult.value, {}) || {};
@@ -1900,7 +1907,7 @@ export const registerMoonV3Routes = (app, {
 
     res.json({
       counts: {
-        titles: titles.length,
+        titles: Number.isFinite(totalTitles) && totalTitles >= 0 ? totalTitles : titles.length,
         activeTasks: activeTasks.length,
         pendingRequests: pendingRequests.length,
         missingChapters: missingCount,
