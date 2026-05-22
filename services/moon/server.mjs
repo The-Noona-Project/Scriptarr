@@ -1,5 +1,8 @@
+import {setDefaultResultOrder} from "node:dns";
 import {createLogger} from "@scriptarr/logging";
 import {createMoonApp} from "./lib/createMoonApp.mjs";
+
+setDefaultResultOrder("ipv4first");
 
 const logger = createLogger("MOON");
 let app;

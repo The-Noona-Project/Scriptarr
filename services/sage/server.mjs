@@ -1,8 +1,11 @@
 /**
  * @file Scriptarr Sage module: services/sage/server.mjs.
  */
+import {setDefaultResultOrder} from "node:dns";
 import {createLogger} from "@scriptarr/logging";
 import {createSageApp} from "./lib/createSageApp.mjs";
+
+setDefaultResultOrder("ipv4first");
 
 const logger = createLogger("SAGE");
 let app;
