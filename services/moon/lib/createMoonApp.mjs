@@ -13,6 +13,11 @@ import {createUserNextRuntime} from "./createUserNextRuntime.mjs";
 import {proxyRequest} from "./proxy.mjs";
 
 const SAGE_WARMUP_TIMEOUT_MS = 7000;
+const SAGE_WARMUP_PATHS = Object.freeze([
+  "/api/moon-v3/public/branding",
+  "/api/auth/status",
+  "/api/auth/bootstrap-status"
+]);
 
 /**
  * Warm Moon's internal Sage connection before the public listener opens.
@@ -28,13 +33,13 @@ const warmSageBrokerConnection = async (config, logger) => {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), SAGE_WARMUP_TIMEOUT_MS);
   try {
-    const response = await proxyRequest({
+    const responses = await Promise.all(SAGE_WARMUP_PATHS.map((path) => proxyRequest({
       baseUrl: config.sageBaseUrl,
-      path: "/api/auth/status",
+      path,
       signal: controller.signal
-    });
+    })));
     logger.info?.("Moon warmed the Sage broker connection.", {
-      status: response.status
+      statuses: responses.map((response) => response.status)
     });
   } catch (error) {
     logger.warn?.("Moon could not warm the Sage broker connection.", {
