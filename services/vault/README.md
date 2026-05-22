@@ -9,6 +9,8 @@ Vault now also persists reusable permission groups, user-group assignments, and 
 powers `/admin/users`, `/admin/requests`, and `/admin/system/events`. The bootstrap owner stays protected, while every
 other user's admin access is derived from one or more permission groups plus a required default onboarding group for
 new or returning Discord sign-ins.
+Session reads stay on the fast path: Vault looks up the requested token, checks its TTL, and leaves expired-row cleanup
+to startup and periodic pruning. MySQL stores keep session and role indexes for auth/bootstrap lookups.
 Vault now also persists title-level and chapter-level read state for Moon's bookshelf and completion logic. Progress
 rows still track the current reading position, while the read-state model determines whether a title is active on the
 bookshelf or fully completed.

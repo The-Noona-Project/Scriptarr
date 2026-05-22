@@ -7,7 +7,7 @@
 import {useCallback, useEffect, useMemo, useRef, useState} from "react";
 import Link from "next/link";
 import {usePathname} from "next/navigation";
-import {loadMoonChromeContext, loadMoonLoginUrl, requestJson} from "../lib/api.js";
+import {buildMoonLoginHref, loadMoonChromeContext, requestJson} from "../lib/api.js";
 import {normalizeBrowseType} from "../lib/browse.js";
 import {buildLibraryPath, classifyPathname, getLibraryTypes} from "../lib/navigationRoutes.js";
 import {Flex} from "./UiPrimitives.jsx";
@@ -70,6 +70,7 @@ const buildMenuGroups = (pathname, libraryTypes = [], activeType = "") => {
  */
 export const MoonShell = ({children}) => {
   const pathname = usePathname();
+  const publicPathname = pathname || "/";
   const [queryType, setQueryType] = useState("");
   const [chrome, setChrome] = useState({
     branding: {siteName: "Scriptarr"},
@@ -78,7 +79,8 @@ export const MoonShell = ({children}) => {
     bootstrap: null,
     libraryTypes: [],
     authError: "",
-    loginUrl: "",
+    bootstrapError: "",
+    loginUrl: buildMoonLoginHref(publicPathname),
     installAvailable: false,
     promptInstall: async () => false
   });
@@ -97,24 +99,24 @@ export const MoonShell = ({children}) => {
   useEffect(() => {
     let active = true;
     const query = typeof window === "undefined" ? "" : window.location.search || "";
-    const currentRoute = query ? `${pathname}${query}` : pathname;
+    const currentRoute = query ? `${publicPathname}${query}` : publicPathname;
+    const localLoginUrl = buildMoonLoginHref(currentRoute);
+    setChrome((current) => current.auth ? current : {...current, loginUrl: localLoginUrl});
     void loadMoonChromeContext(currentRoute).then((nextValue) => {
       if (active) {
-        setChrome({...nextValue, loaded: true});
-      }
-      if (active && !nextValue.auth && !nextValue.authError) {
-        void loadMoonLoginUrl(currentRoute).then((loginUrl) => {
-          if (active && loginUrl) {
-            setChrome((current) => current.auth ? current : {...current, loginUrl});
-          }
-        });
+        setChrome((current) => ({
+          ...current,
+          ...nextValue,
+          loaded: true,
+          loginUrl: nextValue.auth ? "" : nextValue.loginUrl || localLoginUrl
+        }));
       }
     });
 
     return () => {
       active = false;
     };
-  }, [pathname]);
+  }, [publicPathname]);
 
   useEffect(() => {
     syncQueryTypeFromLocation();

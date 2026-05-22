@@ -53,6 +53,12 @@ tabbed overview, stats, and preferences surfaces from one trusted response inste
 browser calls.
 Sage now also carries a sanitized Moon `returnTo` path through Discord OAuth `state` so Moon can return the browser to
 the page where login started instead of always landing in admin or one fixed callback destination.
+The Discord callback now records bounded phase timing for the Discord token exchange, Discord profile lookup, Vault
+user upsert, Vault session creation, and best-effort auth-event persistence. If the durable auth event cannot be
+stored after the session is created, Sage logs the failure and still returns the valid session token. The Discord,
+Vault user/session, and auth-event phase timeouts default to 8 seconds, 3 seconds, and 1.5 seconds. They can be tuned
+with `SCRIPTARR_DISCORD_AUTH_TIMEOUT_MS`, `SCRIPTARR_VAULT_AUTH_TIMEOUT_MS`, and
+`SCRIPTARR_AUTH_EVENT_TIMEOUT_MS`.
 For Moon admin, Sage now brokers `/api/moon-v3/admin/activity/queue` as a live queue-board payload plus task action
 routes for cancel, retry, reprioritize, move up/down, cancel-all queued, cancel-all running, and remove-all removable.
 Those routes stay Moon-safe, same-origin, and event-backed so the admin queue can re-fetch on SSE updates instead of

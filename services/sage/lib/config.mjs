@@ -9,6 +9,15 @@
  * @returns {string}
  */
 const normalizeBaseUrl = (value, fallback) => String(value || fallback).replace(/\/$/, "");
+const parsePositiveInteger = (value, fallback, ...aliases) => {
+  for (const candidate of [value, ...aliases]) {
+    const parsed = Number.parseInt(String(candidate || ""), 10);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return parsed;
+    }
+  }
+  return fallback;
+};
 const parseServiceTokens = (value) => {
   if (!value) {
     return {};
@@ -40,6 +49,9 @@ const parseServiceTokens = (value) => {
  *   discordToken: string,
  *   appaDiscordClientId: string,
  *   appaDiscordToken: string,
+ *   discordAuthTimeoutMs: number,
+ *   vaultAuthTimeoutMs: number,
+ *   authEventTimeoutMs: number,
  *   autoProvisionDiscordUsers: boolean
  * }}
  */
@@ -65,6 +77,17 @@ export const resolveSageConfig = () => {
     discordToken: process.env.SCRIPTARR_DISCORD_TOKEN || process.env.DISCORD_TOKEN || "",
     appaDiscordClientId: process.env.SCRIPTARR_APPA_DISCORD_CLIENT_ID || "",
     appaDiscordToken: process.env.SCRIPTARR_APPA_DISCORD_TOKEN || "",
+    discordAuthTimeoutMs: parsePositiveInteger(
+      process.env.SCRIPTARR_DISCORD_AUTH_TIMEOUT_MS,
+      8000,
+      process.env.SCRIPTARR_AUTH_DISCORD_TIMEOUT_MS
+    ),
+    vaultAuthTimeoutMs: parsePositiveInteger(
+      process.env.SCRIPTARR_VAULT_AUTH_TIMEOUT_MS,
+      3000,
+      process.env.SCRIPTARR_AUTH_VAULT_TIMEOUT_MS
+    ),
+    authEventTimeoutMs: parsePositiveInteger(process.env.SCRIPTARR_AUTH_EVENT_TIMEOUT_MS, 1500),
     autoProvisionDiscordUsers: process.env.SCRIPTARR_AUTO_PROVISION_DISCORD_USERS !== "false"
   };
 };

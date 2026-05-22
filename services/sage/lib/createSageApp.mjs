@@ -9,7 +9,8 @@ import {createVaultClient} from "./vaultClient.mjs";
 import {
   buildCallbackUrl,
   buildDiscordOauthUrl,
-  exchangeDiscordCode,
+  completeDiscordCallbackLogin,
+  formatDiscordCallbackError,
   parseDiscordOauthState,
   sanitizeReturnToPath
 } from "./discordAuth.mjs";
@@ -569,43 +570,6 @@ const loadLegacyLibrary = async (config) => {
   return normalizeArray(result.payload?.titles).map(toLegacyLibraryEntry);
 };
 
-const upsertUserFromDiscord = async ({vaultClient, config, identity}) => {
-  const bootstrap = await vaultClient.getBootstrapStatus();
-  const existing = await vaultClient.getUserByDiscordId(identity.discordUserId);
-
-  if (!bootstrap.ownerClaimed) {
-    if (!config.superuserId) {
-      throw new Error("The instance does not have SUPERUSER_ID configured.");
-    }
-    if (identity.discordUserId !== config.superuserId) {
-      throw new Error("This Discord account is not allowed to claim the first admin session.");
-    }
-
-    return vaultClient.upsertDiscordUser({
-      ...identity,
-      role: "owner",
-      claimOwner: true
-    });
-  }
-
-  if (existing) {
-    return vaultClient.upsertDiscordUser({
-      ...identity,
-      role: existing.role,
-      permissions: existing.permissions
-    });
-  }
-
-  if (!config.autoProvisionDiscordUsers) {
-    throw new Error("This Discord account is not provisioned for Scriptarr.");
-  }
-
-  return vaultClient.upsertDiscordUser({
-    ...identity,
-    role: "member"
-  });
-};
-
 /**
  * Create the Scriptarr Sage Express application that brokers Moon-facing auth,
  * moderation, settings, and Warden orchestration routes.
@@ -1077,32 +1041,23 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
         res.status(400).json({error: "Discord OAuth code is required."});
         return;
       }
-      const bootstrapBefore = await vaultClient.getBootstrapStatus();
       const authState = consumeDiscordOauthState(parseDiscordOauthState(req.query?.state));
-      const identity = await exchangeDiscordCode(config, code);
-      const user = await upsertUserFromDiscord({vaultClient, config, identity});
-      const session = await vaultClient.createSession(user.discordUserId);
-      await appendUserEvent(vaultClient, {
-        domain: "auth",
-        eventType: bootstrapBefore.ownerClaimed ? "login" : "bootstrap-owner",
-        user,
-        targetType: "session",
-        targetId: session.token,
-        message: bootstrapBefore.ownerClaimed
-          ? `${user.username} signed in through Discord.`
-          : `${user.username} claimed the protected bootstrap owner session.`,
-        metadata: {
-          discordUserId: user.discordUserId,
-          role: user.role
-        }
-      }, logger);
-      res.json({token: session.token, user, returnTo: authState.returnTo});
+      const payload = await completeDiscordCallbackLogin({
+        config,
+        vaultClient,
+        code,
+        authState,
+        logger
+      });
+      res.json(payload);
     } catch (error) {
+      const {status, payload} = formatDiscordCallbackError(error);
       logger.warn("Discord callback login failed.", {
         codePresent: Boolean(req.query.code),
-        error
+        phase: payload.phase || "unknown",
+        error: error instanceof Error ? error.message : String(error)
       });
-      res.status(403).json({error: error instanceof Error ? error.message : String(error)});
+      res.status(status).json(payload);
     }
   });
 

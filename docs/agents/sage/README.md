@@ -49,6 +49,10 @@
   progress, then next unread, then first readable chapter.
 - Broker Moon's sanitized Discord auth `returnTo` path through OAuth `state`, and let Moon's callback relay enforce
   the final fallback to `/` when the remembered route is invalid or the signed-in user cannot access it.
+- Keep the Discord callback phases explicit and bounded: `discord-token`, `discord-user`, `vault-user`,
+  `vault-session`, and `auth-event`. Use the Sage Vault client timeout options for auth reads/writes, keep one
+  bootstrap-status read in the callback path, log per-phase timing, return user-safe phase errors, and never let
+  auth-event persistence failure reject a session that Vault already created.
 - Moon's root-only content reset is Sage-owned orchestration. Keep the preview plus execute flow brokered, require the
   explicit confirmation string, append `content-reset-started` and `content-reset-completed` events, clear Vault's
   content-side state first, then trigger Raven's managed storage reset.

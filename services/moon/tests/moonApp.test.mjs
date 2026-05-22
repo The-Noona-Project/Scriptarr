@@ -21,13 +21,15 @@ const closeServer = (server) => new Promise((resolve, reject) => {
   });
 });
 
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 /**
  * Start a tiny Sage stub that returns both JSON and raw SVG payloads so Moon's
  * v3 proxy behavior can be exercised without booting the full stack.
  *
  * @returns {Promise<http.Server>}
  */
-const createSageStub = ({requests = [], streamProbe = null} = {}) => Promise.resolve(http.createServer(async (request, response) => {
+const createSageStub = ({requests = [], streamProbe = null, delays = {}} = {}) => Promise.resolve(http.createServer(async (request, response) => {
   const requestUrl = new URL(request.url || "/", "http://moon.test");
   const body = await new Promise((resolve) => {
     const chunks = [];
@@ -40,6 +42,11 @@ const createSageStub = ({requests = [], streamProbe = null} = {}) => Promise.res
     apiKey: request.headers["x-scriptarr-api-key"] || "",
     body
   });
+
+  const delayMs = Number(delays[requestUrl.pathname] || 0);
+  if (delayMs > 0) {
+    await delay(delayMs);
+  }
 
   const authorization = request.headers.authorization || "";
 
@@ -1130,6 +1137,50 @@ test("moon serves branded split entry documents, typed routes, PWA assets, and M
   }
 });
 
+test("moon chrome bootstrap times out slow broker subcalls independently", async () => {
+  const cwd = process.cwd();
+  const previousTimeout = process.env.SCRIPTARR_MOON_CHROME_BOOTSTRAP_PROXY_TIMEOUT_MS;
+  process.chdir(path.join(path.dirname(fileURLToPath(import.meta.url)), ".."));
+  process.env.SCRIPTARR_MOON_CHROME_BOOTSTRAP_PROXY_TIMEOUT_MS = "20";
+
+  const requests = [];
+  const sageStub = await createSageStub({
+    requests,
+    delays: {"/api/moon-v3/public/branding": 80}
+  });
+  sageStub.listen(0);
+  const sagePort = sageStub.address().port;
+  process.env.SCRIPTARR_SAGE_BASE_URL = `http://127.0.0.1:${sagePort}`;
+
+  const {app} = await createMoonApp();
+  const server = app.listen(0);
+  const baseUrl = `http://127.0.0.1:${server.address().port}`;
+
+  try {
+    const response = await fetch(`${baseUrl}/api/moon/chrome/bootstrap?returnTo=%2Fbrowse`);
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+    assert.deepEqual(payload.branding, {siteName: "Scriptarr"});
+    assert.equal(payload.bootstrap.ownerClaimed, true);
+    assert.equal(payload.user, null);
+    assert.equal(payload.errors.branding, "Branding broker unavailable.");
+    assert.equal(payload.errors.auth, "");
+    assert.equal(payload.errors.bootstrap, "");
+    assert.ok(requests.some((entry) => entry.url === "/api/moon-v3/public/branding"));
+    assert.ok(requests.some((entry) => entry.url === "/api/auth/status"));
+    assert.ok(requests.some((entry) => entry.url === "/api/auth/bootstrap-status"));
+  } finally {
+    await closeServer(server);
+    await closeServer(sageStub);
+    if (previousTimeout == null) {
+      delete process.env.SCRIPTARR_MOON_CHROME_BOOTSTRAP_PROXY_TIMEOUT_MS;
+    } else {
+      process.env.SCRIPTARR_MOON_CHROME_BOOTSTRAP_PROXY_TIMEOUT_MS = previousTimeout;
+    }
+    process.chdir(cwd);
+  }
+});
+
 test("moon redirects signed-in non-admin sessions away from admin while allowing admin sessions through", async () => {
   const cwd = process.cwd();
   process.chdir(path.join(path.dirname(fileURLToPath(import.meta.url)), ".."));
@@ -1223,6 +1274,23 @@ test("moon binds Discord OAuth callbacks to the browser state cookie", async () 
     assert.match(oauthCookie, /HttpOnly/);
     assert.match(oauthCookie, /SameSite=Lax/);
     assert.match(oauthCookie, /Secure/);
+
+    const startResponse = await fetch(`${baseUrl}/api/moon/auth/discord/start?returnTo=${encodeURIComponent("/admin/library")}`, {
+      headers: {"x-forwarded-proto": "https"},
+      redirect: "manual"
+    });
+    const startLocation = startResponse.headers.get("location") || "";
+    const startState = new URL(startLocation).searchParams.get("state");
+    const startCookie = startResponse.headers.get("set-cookie") || "";
+
+    assert.equal(startResponse.status, 302);
+    assert.equal(new URL(startLocation).origin, "https://discord.example");
+    assert.ok(startState);
+    assert.match(startCookie, /scriptarr_session\.oauth_state=sage-nonce/);
+    assert.match(startCookie, /Path=\/api\/moon\/auth\/discord\/callback/);
+    assert.match(startCookie, /HttpOnly/);
+    assert.match(startCookie, /SameSite=Lax/);
+    assert.match(startCookie, /Secure/);
 
     const rejected = await fetch(`${baseUrl}/api/moon/auth/discord/callback?code=test-code&state=${encodeURIComponent(state)}`, {
       headers: {cookie: "scriptarr_session.oauth_state=wrong-nonce", "x-forwarded-proto": "https"}

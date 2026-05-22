@@ -138,6 +138,9 @@ Warden is now URL-first for database setup:
   `SCRIPTARR_MYSQL_PASSWORD` for the managed services.
 - `SCRIPTARR_MYSQL_USER` is only used for `SELFHOST` or when the external URL does not include a username.
 - `SCRIPTARR_MYSQL_PASSWORD` remains the shared password for the managed root plus app user in `SELFHOST` mode.
+Vault creates the auth/session indexes it needs on both new and existing databases, including session creation-time
+indexes and the user role index used by bootstrap/admin flows. Expired sessions are checked during token lookup but are
+deleted by Vault's startup and periodic pruning pass, keeping warm auth checks on the indexed token path.
 
 ## Discord Callback Setup
 
@@ -154,6 +157,11 @@ Scriptarr no longer exposes a dev-session claim path, so Discord login is the su
 flow. When login starts from a same-origin Scriptarr page, Scriptarr now remembers that route and returns the user there
 after Discord OAuth completes. If the original route is missing, invalid, or no longer allowed for the signed-in user,
 Scriptarr falls back to the user home page at `/`.
+Signed-out user and admin shells should link directly to Moon's same-origin
+`/api/moon/auth/discord/start?returnTo=...` route. That route sets the short-lived OAuth state cookie and redirects to
+Discord without waiting for the slower chrome bootstrap data. Sage keeps the callback bounded and diagnosable with
+phase-level timings for Discord token exchange, Discord profile lookup, Vault user lookup/upsert, Vault session
+creation, and auth-event persistence; if the auth event fails after the session exists, login still completes.
 
 ## Network Topology
 
@@ -334,7 +342,8 @@ Its home route now favors a simpler media-library feel too, with a personalized 
 cover-led scrollers for recently added titles by type and tag-driven shelves based on explicit tag likes or hides plus
 inferred taste from read history, follows, and the active bookshelf.
 Moon chrome now starts from one same-origin bootstrap call for branding, auth state, user identity, and first-owner
-setup status; the Discord OAuth URL is fetched only when a signed-out page actually needs a login link.
+setup status. Signed-out shells render Moon's local Discord start route immediately, and the individual bootstrap
+broker calls use short timeouts so branding, auth, or first-owner status can degrade separately.
 `/myrequests` is now both the request-creation surface and the personal status page. The top of the page runs the
 metadata-first request wizard, while the list below is split into `Active`, `Completed`, and `Closed` tabs. Readers
 can edit notes or cancel only while the request is still active.

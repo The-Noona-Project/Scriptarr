@@ -26,11 +26,24 @@ const buildHttpError = (status, payload, context) => {
   return error;
 };
 
-const requestJson = async (baseUrl, headers, path, {method = "GET", body, allowStatuses = [], context = "Vault request failed"} = {}) => {
+const withTimeoutSignal = (timeoutMs) => {
+  const normalized = Number(timeoutMs);
+  return Number.isFinite(normalized) && normalized > 0
+    ? {signal: AbortSignal.timeout(normalized)}
+    : {};
+};
+
+const requestJson = async (
+  baseUrl,
+  headers,
+  path,
+  {method = "GET", body, allowStatuses = [], context = "Vault request failed", timeoutMs} = {}
+) => {
   const response = await fetch(`${baseUrl}${path}`, {
     method,
     headers,
-    body: body == null ? undefined : JSON.stringify(body)
+    body: body == null ? undefined : JSON.stringify(body),
+    ...withTimeoutSignal(timeoutMs)
   });
   const payload = await json(response);
   if (!response.ok && !allowStatuses.includes(response.status)) {
@@ -48,9 +61,9 @@ const requestJson = async (baseUrl, headers, path, {method = "GET", body, allowS
  *
  * @param {{vaultBaseUrl: string, serviceToken: string}} config
  * @returns {{
- *   getBootstrapStatus: () => Promise<any>,
- *   upsertDiscordUser: (payload: Record<string, unknown>) => Promise<any>,
- *   getUserByDiscordId: (discordUserId: string) => Promise<any>,
+ *   getBootstrapStatus: (options?: {timeoutMs?: number}) => Promise<any>,
+ *   upsertDiscordUser: (payload: Record<string, unknown>, options?: {timeoutMs?: number, throwOnError?: boolean}) => Promise<any>,
+ *   getUserByDiscordId: (discordUserId: string, options?: {timeoutMs?: number}) => Promise<any>,
  *   listUsers: () => Promise<any>,
  *   getAccessOverview: () => Promise<any>,
  *   listPermissionGroups: () => Promise<any>,
@@ -63,14 +76,14 @@ const requestJson = async (baseUrl, headers, path, {method = "GET", body, allowS
  *   getApiKey: (apiKeyId: string) => Promise<any>,
  *   updateApiKey: (apiKeyId: string, payload: Record<string, unknown>) => Promise<any>,
  *   revokeApiKey: (apiKeyId: string) => Promise<any>,
- *   resolveApiKey: (keyHash: string) => Promise<any>,
+ *   resolveApiKey: (keyHash: string, options?: {timeoutMs?: number}) => Promise<any>,
  *   deleteUser: (discordUserId: string) => Promise<any>,
- *   createSession: (discordUserId: string) => Promise<any>,
- *   clearSession: (token: string) => Promise<any>,
- *   clearSessionsForUser: (discordUserId: string) => Promise<any>,
- *   getSessionUser: (token: string) => Promise<any>,
+ *   createSession: (discordUserId: string, options?: {timeoutMs?: number}) => Promise<any>,
+ *   clearSession: (token: string, options?: {timeoutMs?: number}) => Promise<any>,
+ *   clearSessionsForUser: (discordUserId: string, options?: {timeoutMs?: number}) => Promise<any>,
+ *   getSessionUser: (token: string, options?: {timeoutMs?: number}) => Promise<any>,
  *   listEvents: (filters?: Record<string, unknown>) => Promise<any>,
- *   appendEvent: (payload: Record<string, unknown>) => Promise<any>,
+ *   appendEvent: (payload: Record<string, unknown>, options?: {timeoutMs?: number}) => Promise<any>,
  *   pruneEvents: (retentionDays?: number) => Promise<any>,
  *   listRequests: () => Promise<any>,
  *   getRequest: (id: string | number) => Promise<any>,
@@ -93,25 +106,37 @@ const requestJson = async (baseUrl, headers, path, {method = "GET", body, allowS
 export const createVaultClient = (config) => {
   const baseUrl = config.vaultBaseUrl;
   const headers = withBearer(config.serviceToken);
+  const authTimeoutMs = Number.isFinite(Number(config.vaultAuthTimeoutMs)) && Number(config.vaultAuthTimeoutMs) > 0
+    ? Number(config.vaultAuthTimeoutMs)
+    : 5000;
 
   return {
-    async getBootstrapStatus() {
-      const response = await fetch(`${baseUrl}/api/public/bootstrap-status`);
-      return json(response);
+    async getBootstrapStatus({timeoutMs = authTimeoutMs} = {}) {
+      return (await requestJson(baseUrl, {}, "/api/public/bootstrap-status", {
+        timeoutMs,
+        context: "Failed to load bootstrap status from Vault"
+      })).payload;
     },
-    async upsertDiscordUser(payload) {
+    async upsertDiscordUser(payload, {timeoutMs = authTimeoutMs, throwOnError = false} = {}) {
       const response = await fetch(`${baseUrl}/api/service/users/upsert-discord`, {
         method: "POST",
         headers,
-        body: JSON.stringify(payload)
+        body: JSON.stringify(payload),
+        ...withTimeoutSignal(timeoutMs)
       });
-      return json(response);
+      const payloadJson = await json(response);
+      if (throwOnError && !response.ok) {
+        throw buildHttpError(response.status, payloadJson, "Failed to upsert Discord user in Vault");
+      }
+      return payloadJson;
     },
-    async getUserByDiscordId(discordUserId) {
-      const response = await fetch(`${baseUrl}/api/service/users/by-discord/${encodeURIComponent(discordUserId)}`, {
-        headers
+    async getUserByDiscordId(discordUserId, {timeoutMs = authTimeoutMs} = {}) {
+      const {status, payload} = await requestJson(baseUrl, headers, `/api/service/users/by-discord/${encodeURIComponent(discordUserId)}`, {
+        allowStatuses: [404],
+        timeoutMs,
+        context: "Failed to load Discord user from Vault"
       });
-      return response.status === 404 ? null : json(response);
+      return status === 404 ? null : payload;
     },
     async listUsers() {
       const response = await fetch(`${baseUrl}/api/service/users`, {
@@ -209,11 +234,12 @@ export const createVaultClient = (config) => {
       });
       return status === 404 ? null : payload;
     },
-    async resolveApiKey(keyHash) {
+    async resolveApiKey(keyHash, {timeoutMs = authTimeoutMs} = {}) {
       const {status, payload} = await requestJson(baseUrl, headers, "/api/service/api-keys/resolve", {
         method: "POST",
         body: {keyHash},
         allowStatuses: [404],
+        timeoutMs,
         context: "Failed to resolve an API key in Vault"
       });
       return status === 404 ? null : payload;
@@ -226,33 +252,37 @@ export const createVaultClient = (config) => {
       });
       return status === 404 ? null : payload;
     },
-    async createSession(discordUserId) {
-      const response = await fetch(`${baseUrl}/api/service/sessions`, {
+    async createSession(discordUserId, {timeoutMs = authTimeoutMs} = {}) {
+      return (await requestJson(baseUrl, headers, "/api/service/sessions", {
         method: "POST",
-        headers,
-        body: JSON.stringify({discordUserId})
-      });
-      return json(response);
+        body: {discordUserId},
+        timeoutMs,
+        context: "Failed to create a session in Vault"
+      })).payload;
     },
-    async clearSession(token) {
+    async clearSession(token, {timeoutMs = authTimeoutMs} = {}) {
       const {status, payload} = await requestJson(baseUrl, headers, `/api/service/sessions/${encodeURIComponent(token)}`, {
         method: "DELETE",
         allowStatuses: [404],
+        timeoutMs,
         context: "Failed to clear a session in Vault"
       });
       return status === 404 ? null : payload;
     },
-    async clearSessionsForUser(discordUserId) {
+    async clearSessionsForUser(discordUserId, {timeoutMs = authTimeoutMs} = {}) {
       return (await requestJson(baseUrl, headers, `/api/service/sessions/user/${encodeURIComponent(discordUserId)}`, {
         method: "DELETE",
+        timeoutMs,
         context: "Failed to clear user sessions in Vault"
       })).payload;
     },
-    async getSessionUser(token) {
-      const response = await fetch(`${baseUrl}/api/service/sessions/${encodeURIComponent(token)}`, {
-        headers
+    async getSessionUser(token, {timeoutMs = authTimeoutMs} = {}) {
+      const {status, payload} = await requestJson(baseUrl, headers, `/api/service/sessions/${encodeURIComponent(token)}`, {
+        allowStatuses: [404],
+        timeoutMs,
+        context: "Failed to load session user from Vault"
       });
-      return response.status === 404 ? null : json(response);
+      return status === 404 ? null : payload;
     },
     async listEvents(filters = {}) {
       const searchParams = new URLSearchParams();
@@ -273,10 +303,11 @@ export const createVaultClient = (config) => {
         context: "Failed to list durable events from Vault"
       })).payload;
     },
-    async appendEvent(payload) {
+    async appendEvent(payload, {timeoutMs} = {}) {
       return (await requestJson(baseUrl, headers, "/api/service/events", {
         method: "POST",
         body: payload,
+        timeoutMs,
         context: "Failed to append a durable event in Vault"
       })).payload;
     },

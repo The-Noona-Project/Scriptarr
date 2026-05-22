@@ -47,6 +47,7 @@ export const createCachedStore = (
   const cacheMaxEntries = maxEntries === Infinity
     ? Infinity
     : Math.max(1, Math.floor(Number(maxEntries) || DEFAULT_CACHE_MAX_ENTRIES));
+  const sessionTtlMs = Math.max(0, Number.parseInt(String(baseStore.sessionTtlMs || 0), 10) || 0);
   const cache = new Map();
 
   const pruneExpiredEntries = (currentTime = now()) => {
@@ -82,13 +83,17 @@ export const createCachedStore = (
     return cloneValue(entry.value);
   };
 
-  const writeEntry = (key, value) => {
+  const writeEntry = (key, value, {expiresAt} = {}) => {
     const currentTime = now();
     pruneExpiredEntries(currentTime);
+    const entryExpiresAt = Number.isFinite(expiresAt) ? expiresAt : currentTime + ttlMs;
     cache.delete(key);
+    if (entryExpiresAt <= currentTime) {
+      return value;
+    }
     cache.set(key, {
       value: cloneValue(value),
-      expiresAt: currentTime + ttlMs
+      expiresAt: entryExpiresAt
     });
     evictOverflow();
     return value;
@@ -121,6 +126,15 @@ export const createCachedStore = (
     }
 
     return writeEntry(key, await loader());
+  };
+
+  const getSessionExpiresAt = (session, currentTime = now()) => {
+    const fallbackExpiresAt = currentTime + ttlMs;
+    if (!sessionTtlMs || !session) {
+      return fallbackExpiresAt;
+    }
+    const createdAt = Date.parse(String(session.createdAt || session.created_at || ""));
+    return Number.isFinite(createdAt) ? Math.min(fallbackExpiresAt, createdAt + sessionTtlMs) : fallbackExpiresAt;
   };
 
   const cachedStore = {
@@ -231,7 +245,7 @@ export const createCachedStore = (
     },
     async createSession(payload) {
       const session = await baseStore.createSession(payload);
-      writeEntry(`session:${session.token}`, session);
+      writeEntry(`session:${session.token}`, session, {expiresAt: getSessionExpiresAt(session)});
       invalidate(`session-user:${session.token}`);
       return session;
     },
@@ -245,17 +259,32 @@ export const createCachedStore = (
       invalidatePrefix("session:", "session-user:");
       return result;
     },
+    async pruneExpiredSessions() {
+      const result = await baseStore.pruneExpiredSessions();
+      invalidatePrefix("session:", "session-user:");
+      return result;
+    },
     async getSession(token) {
-      return readThrough(`session:${token}`, () => baseStore.getSession(token));
+      const key = `session:${token}`;
+      const cached = readEntry(key);
+      if (cached !== undefined) {
+        return cached;
+      }
+      const session = await baseStore.getSession(token);
+      return writeEntry(key, session, {expiresAt: getSessionExpiresAt(session)});
     },
     async getUserForSession(token) {
-      return readThrough(`session-user:${token}`, async () => {
-        const session = await cachedStore.getSession(token);
-        if (!session) {
-          return null;
-        }
-        return cachedStore.getUserByDiscordId(session.discordUserId);
-      });
+      const key = `session-user:${token}`;
+      const cached = readEntry(key);
+      if (cached !== undefined) {
+        return cached;
+      }
+      const session = await cachedStore.getSession(token);
+      if (!session) {
+        return writeEntry(key, null);
+      }
+      const user = await cachedStore.getUserByDiscordId(session.discordUserId);
+      return writeEntry(key, user, {expiresAt: getSessionExpiresAt(session)});
     },
     async setSetting(key, value) {
       const setting = await baseStore.setSetting(key, value);

@@ -135,7 +135,8 @@ For end-to-end Docker verification, use:
    downloading the managed images.
    Docker health checks now report `healthy` for Warden plus the managed services once each container settles.
 6. Open the Scriptarr web app, confirm the bootstrap surface shows the configured first owner id, and use Discord login
-   to claim the first owner session.
+   to claim the first owner session. The visible sign-in action uses Moon's same-origin
+   `/api/moon/auth/discord/start` route so it can appear before the full chrome bootstrap finishes.
 7. Copy the callback URL surfaced by the stack into the Discord developer portal.
 8. Finish branding, logo, notification, integrations, library, metadata, download-provider, VPN, Oracle, moderation,
    and managed-service update settings in the admin app.
@@ -240,6 +241,9 @@ For end-to-end Docker verification, use:
   `downloading/<type>` plus `downloaded/<type>` content while preserving users, permission groups, sessions, settings,
   secrets, and durable events.
 - Vault is the only supported broker to the shared MySQL database.
+- Vault keeps auth/session reads on indexed MySQL paths. It creates session and role indexes idempotently, checks
+  session TTLs during token lookup, and prunes expired sessions from startup plus a periodic background task instead
+  of deleting on every auth check.
 - Sage is the supported internal HTTP hop between first-party services. Direct internal exceptions are limited to
   Vault -> MySQL, Warden -> Docker or host runtime, Oracle -> OpenAI or LocalAI, and Raven -> external source,
   metadata, or VPN providers.

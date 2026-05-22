@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import {loadMoonChromeContext, loadMoonLoginUrl, logoutMoonSession, requestJson} from "../apps/user-next/lib/api.js";
+import {buildMoonLoginHref, loadMoonChromeContext, loadMoonLoginUrl, logoutMoonSession, requestJson} from "../apps/user-next/lib/api.js";
 import {
   buildLibraryPath,
   buildProfilePath,
@@ -49,24 +49,25 @@ test("loadMoonChromeContext normalizes nested auth payloads from Moon auth statu
       avatarUrl: "https://cdn.discordapp.com/avatars/captain.png"
     });
     assert.equal(context.loginUrl, "");
+    assert.equal(context.authError, "");
   } finally {
     globalThis.fetch = previousFetch;
   }
 });
 
-test("loadMoonLoginUrl fetches the Discord URL separately for signed-out chrome", async () => {
+test("loadMoonLoginUrl resolves Moon's local Discord start route without a broker fetch", async () => {
   const previousFetch = globalThis.fetch;
-
   globalThis.fetch = async (url) => {
-    assert.equal(String(url), "/api/moon/auth/discord/url?returnTo=%2Fbrowse%3Fq%3Dmoon");
-    return new Response(JSON.stringify({oauthUrl: "https://discord.example/login"}), {
-      status: 200,
-      headers: {"Content-Type": "application/json"}
-    });
+    throw new Error(`Unexpected URL ${String(url)}`);
   };
 
   try {
-    assert.equal(await loadMoonLoginUrl("/browse?q=moon"), "https://discord.example/login");
+    assert.equal(
+      await loadMoonLoginUrl("/browse?q=moon"),
+      "/api/moon/auth/discord/start?returnTo=%2Fbrowse%3Fq%3Dmoon"
+    );
+    assert.equal(buildMoonLoginHref("//evil.example/login"), "/api/moon/auth/discord/start?returnTo=%2F");
+    assert.equal(buildMoonLoginHref("/api/moon/auth/status"), "/api/moon/auth/discord/start?returnTo=%2F");
   } finally {
     globalThis.fetch = previousFetch;
   }

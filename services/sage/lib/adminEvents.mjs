@@ -39,11 +39,12 @@ export const buildServiceActor = (serviceName, label = serviceName) => ({
  * @param {ReturnType<import("./vaultClient.mjs").createVaultClient>} vaultClient
  * @param {Record<string, unknown>} payload
  * @param {{warn?: Function}} [logger]
+ * @param {{timeoutMs?: number}} [options]
  * @returns {Promise<any>}
  */
-export const appendDurableEvent = async (vaultClient, payload, logger) => {
+export const appendDurableEvent = async (vaultClient, payload, logger, options = {}) => {
   try {
-    return await vaultClient.appendEvent(payload);
+    return await vaultClient.appendEvent(payload, options);
   } catch (error) {
     logger?.warn?.("Failed to append durable event.", {
       domain: payload?.domain,
@@ -71,9 +72,10 @@ export const appendDurableEvent = async (vaultClient, payload, logger) => {
  *   metadata?: Record<string, unknown>
  * }} payload
  * @param {{warn?: Function}} [logger]
+ * @param {{timeoutMs?: number}} [options]
  * @returns {Promise<any>}
  */
-export const appendUserEvent = async (vaultClient, payload, logger) => appendDurableEvent(vaultClient, {
+export const appendUserEvent = async (vaultClient, payload, logger, options = {}) => appendDurableEvent(vaultClient, {
   ...buildUserActor(payload.user),
   domain: payload.domain,
   eventType: payload.eventType,
@@ -82,7 +84,7 @@ export const appendUserEvent = async (vaultClient, payload, logger) => appendDur
   targetId: payload.targetId || "",
   message: payload.message,
   metadata: payload.metadata || {}
-}, logger);
+}, logger, options);
 
 export default {
   appendDurableEvent,

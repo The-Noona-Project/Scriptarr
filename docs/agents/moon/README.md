@@ -60,7 +60,10 @@
   without relying on manual hard refreshes.
 - User and admin chrome should start from `/api/moon/chrome/bootstrap?returnTo=...`, which returns branding, auth,
   user identity, and first-owner bootstrap status in one Moon-owned response. Do not include a Discord OAuth URL in
-  that payload; fetch the existing login URL endpoint only when a signed-out screen needs to render a sign-in action.
+  that payload. Signed-out shells should render the local `/api/moon/auth/discord/start?returnTo=...` href immediately;
+  that Moon route sets the OAuth state cookie and redirects to Discord. Keep `/api/moon/auth/discord/url?returnTo=...`
+  available as the JSON compatibility endpoint, and keep chrome bootstrap broker calls independently timeout-bounded so
+  a slow branding, auth, or first-owner-status response does not block the whole shell.
 - Keep the user app installable. `manifest.webmanifest` and `/service-worker.js` are Moon-owned routes, and the
   service worker should cache the app shell plus only a small rolling set of recent reader chapters.
 - The user app now runs as an embedded Next.js App Router program. Preserve the existing public Moon routes and

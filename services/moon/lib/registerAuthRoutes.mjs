@@ -2,6 +2,8 @@ import {parseCookies, serializeCookie} from "./cookies.mjs";
 import {proxyJson} from "./proxy.mjs";
 import {canAccessAdmin as canAccessMoonAdmin} from "@scriptarr/access";
 
+const DEFAULT_CHROME_BOOTSTRAP_PROXY_TIMEOUT_MS = 1500;
+
 /**
  * Serialize the current request query object back into a URL query string.
  *
@@ -61,6 +63,18 @@ const escapeHtml = (value) => String(value ?? "")
   .replaceAll("\"", "&quot;");
 
 const canAccessAdmin = (user) => canAccessMoonAdmin(user);
+
+/**
+ * Resolve the per-broker timeout for Moon's collapsed chrome bootstrap route.
+ *
+ * @returns {number}
+ */
+const resolveChromeBootstrapProxyTimeoutMs = () => {
+  const parsed = Number.parseInt(process.env.SCRIPTARR_MOON_CHROME_BOOTSTRAP_PROXY_TIMEOUT_MS || "", 10);
+  return Number.isFinite(parsed) && parsed > 0
+    ? parsed
+    : DEFAULT_CHROME_BOOTSTRAP_PROXY_TIMEOUT_MS;
+};
 
 const resolvePublicOrigin = (config, req) => {
   try {
@@ -147,6 +161,7 @@ const renderAuthRelayPage = ({targetPath, publicOrigin}) => {
  */
 export const registerAuthRoutes = (app, {config, getSessionToken, logger}) => {
   const oauthStateCookieName = `${config.sessionCookieName || "scriptarr_session"}.oauth_state`;
+  const chromeBootstrapProxyTimeoutMs = resolveChromeBootstrapProxyTimeoutMs();
   const proxyToSage = (req, targetPath, options = {}) => proxyJson({
     baseUrl: config.sageBaseUrl,
     path: targetPath,
@@ -155,21 +170,82 @@ export const registerAuthRoutes = (app, {config, getSessionToken, logger}) => {
   });
 
   const safeProxyToSage = async (req, targetPath, fallbackError, options = {}) => {
+    const timeoutMs = Number.isFinite(options.timeoutMs) && options.timeoutMs > 0 ? options.timeoutMs : 0;
+    const proxyOptions = {...options};
+    delete proxyOptions.timeoutMs;
+    let timeout = null;
+    if (timeoutMs && !proxyOptions.signal) {
+      const controller = new AbortController();
+      timeout = setTimeout(() => controller.abort(), timeoutMs);
+      proxyOptions.signal = controller.signal;
+    }
+
     try {
-      return await proxyToSage(req, targetPath, options);
+      return await proxyToSage(req, targetPath, proxyOptions);
     } catch (error) {
+      const timedOut = Boolean(timeoutMs && proxyOptions.signal?.aborted);
       logger?.warn?.("Moon auth broker request failed.", {
         targetPath,
-        error: error instanceof Error ? error.message : String(error)
+        error: timedOut ? `Timed out after ${timeoutMs}ms.` : error instanceof Error ? error.message : String(error)
       });
       return {
         status: 502,
         payload: {
           error: fallbackError,
-          detail: error instanceof Error ? error.message : String(error)
+          detail: timedOut ? `Timed out after ${timeoutMs}ms.` : error instanceof Error ? error.message : String(error)
         }
       };
+    } finally {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
     }
+  };
+
+  /**
+   * Resolve a Sage-owned Discord OAuth URL and parse the browser-bound nonce.
+   *
+   * @param {import("express").Request} req
+   * @param {string} returnTo
+   * @returns {Promise<{result: {status: number, payload: any}, oauthUrl: URL | null, oauthState: {nonce: string, returnTo: string}}>}
+   */
+  const resolveDiscordLogin = async (req, returnTo) => {
+    const query = toQueryString({returnTo});
+    const result = await safeProxyToSage(
+      req,
+      `/api/auth/discord/url${query ? `?${query}` : ""}`,
+      "Discord login broker unavailable."
+    );
+    let oauthUrl = null;
+    try {
+      oauthUrl = result.payload?.oauthUrl ? new URL(result.payload.oauthUrl) : null;
+    } catch {
+      oauthUrl = null;
+    }
+    return {
+      result,
+      oauthUrl,
+      oauthState: oauthUrl ? parseOauthState(oauthUrl.searchParams.get("state")) : {nonce: "", returnTo}
+    };
+  };
+
+  /**
+   * Attach the short-lived OAuth state cookie when Sage returns a valid nonce.
+   *
+   * @param {import("express").Request} req
+   * @param {import("express").Response} res
+   * @param {{nonce: string}} oauthState
+   * @returns {void}
+   */
+  const setOauthStateCookie = (req, res, oauthState) => {
+    if (!oauthState.nonce) {
+      return;
+    }
+    res.setHeader("Set-Cookie", serializeCookie(oauthStateCookieName, oauthState.nonce, {
+      maxAge: 300,
+      path: "/api/moon/auth/discord/callback",
+      secure: shouldUseSecureCookie(config, req)
+    }));
   };
 
   app.get("/api/moon/auth/bootstrap-status", async (req, res) => {
@@ -178,10 +254,11 @@ export const registerAuthRoutes = (app, {config, getSessionToken, logger}) => {
   });
 
   app.get("/api/moon/chrome/bootstrap", async (req, res) => {
+    const chromeProxyOptions = {timeoutMs: chromeBootstrapProxyTimeoutMs};
     const [branding, auth, bootstrap] = await Promise.all([
-      safeProxyToSage(req, "/api/moon-v3/public/branding", "Branding broker unavailable."),
-      safeProxyToSage(req, "/api/auth/status", "Auth broker unavailable."),
-      safeProxyToSage(req, "/api/auth/bootstrap-status", "Bootstrap broker unavailable.")
+      safeProxyToSage(req, "/api/moon-v3/public/branding", "Branding broker unavailable.", chromeProxyOptions),
+      safeProxyToSage(req, "/api/auth/status", "Auth broker unavailable.", chromeProxyOptions),
+      safeProxyToSage(req, "/api/auth/bootstrap-status", "Bootstrap broker unavailable.", chromeProxyOptions)
     ]);
     const authPayload = auth.status >= 200 && auth.status < 400 ? auth.payload : null;
     const user = authPayload?.user || (authPayload?.authenticated ? authPayload : null);
@@ -199,29 +276,23 @@ export const registerAuthRoutes = (app, {config, getSessionToken, logger}) => {
   });
 
   app.get("/api/moon/auth/discord/url", async (req, res) => {
-    const query = toQueryString({
-      returnTo: sanitizeReturnToPath(req.query?.returnTo, "/")
-    });
-    const result = await safeProxyToSage(
-      req,
-      `/api/auth/discord/url${query ? `?${query}` : ""}`,
-      "Discord login broker unavailable."
-    );
-    let oauthUrl = null;
-    try {
-      oauthUrl = result.payload?.oauthUrl ? new URL(result.payload.oauthUrl) : null;
-    } catch {
-      oauthUrl = null;
-    }
-    const oauthState = oauthUrl ? parseOauthState(oauthUrl.searchParams.get("state")) : {nonce: ""};
-    if (oauthState.nonce) {
-      res.setHeader("Set-Cookie", serializeCookie(oauthStateCookieName, oauthState.nonce, {
-        maxAge: 300,
-        path: "/api/moon/auth/discord/callback",
-        secure: shouldUseSecureCookie(config, req)
-      }));
-    }
+    const {result, oauthState} = await resolveDiscordLogin(req, sanitizeReturnToPath(req.query?.returnTo, "/"));
+    setOauthStateCookie(req, res, oauthState);
     res.status(result.status).json(result.payload);
+  });
+
+  app.get("/api/moon/auth/discord/start", async (req, res) => {
+    const {result, oauthUrl, oauthState} = await resolveDiscordLogin(req, sanitizeReturnToPath(req.query?.returnTo, "/"));
+    setOauthStateCookie(req, res, oauthState);
+    if (!oauthUrl || result.status >= 400) {
+      const status = result.status >= 400 ? result.status : 502;
+      res
+        .status(status)
+        .type("html")
+        .send(`<pre>Discord login failed: ${escapeHtml(result.payload?.error || "Discord login broker unavailable.")}</pre>`);
+      return;
+    }
+    res.redirect(302, oauthUrl.toString());
   });
 
   app.get("/api/moon/auth/discord/callback", async (req, res) => {

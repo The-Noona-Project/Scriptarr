@@ -6,6 +6,9 @@
   to the stored user rows. Non-owner access is group-based, while the bootstrap owner remains protected from normal
   reassignment or deletion.
 - Vault's shared read path is cache-first, with a six-hour in-process TTL cache that repopulates from MySQL on miss.
+- Session reads should remain a single token lookup plus TTL check. Do expired-session deletion through
+  `pruneExpiredSessions`, which runs at Vault startup and on the app timer, and keep session cache entries bounded by
+  the session TTL.
 - Services should not bypass Vault to read or write shared state directly.
 - Vault is the only first-party service allowed to touch MySQL.
 - Sage is the supported caller for Vault's HTTP API. Other first-party services should use Sage's internal broker

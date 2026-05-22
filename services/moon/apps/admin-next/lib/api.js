@@ -52,17 +52,35 @@ export const requestJson = async (url, options = {}) => {
 };
 
 /**
+ * Normalize an admin return path for Moon auth routes.
+ *
+ * @param {string} [returnTo]
+ * @returns {string}
+ */
+export const normalizeAdminReturnTo = (returnTo = "/admin") => {
+  const trimmedReturnTo = typeof returnTo === "string" ? returnTo.trim() : "";
+  return trimmedReturnTo.startsWith("/admin") && !trimmedReturnTo.startsWith("//")
+    ? trimmedReturnTo
+    : "/admin";
+};
+
+/**
+ * Build the local Moon route that starts Discord OAuth for admin pages.
+ *
+ * @param {string} [returnTo]
+ * @returns {string}
+ */
+export const buildAdminLoginHref = (returnTo = "/admin") =>
+  `/api/moon/auth/discord/start?returnTo=${encodeURIComponent(normalizeAdminReturnTo(returnTo))}`;
+
+/**
  * Fetch the collapsed admin chrome bootstrap payload.
  *
  * @param {string} [returnTo]
- * @returns {Promise<{branding: any, user: any, bootstrap: any, loginUrl: string}>}
+ * @returns {Promise<{branding: any, user: any, bootstrap: any, authError: string, bootstrapError: string, loginUrl: string}>}
  */
 export const loadAdminChromeContext = async (returnTo = "/admin") => {
-  const normalizedReturnTo = typeof returnTo === "string"
-      && returnTo.startsWith("/admin")
-      && !returnTo.startsWith("//")
-    ? returnTo
-    : "/admin";
+  const normalizedReturnTo = normalizeAdminReturnTo(returnTo);
   const chrome = await requestJson(`/api/moon/chrome/bootstrap?returnTo=${encodeURIComponent(normalizedReturnTo)}`);
   const payload = chrome.ok ? chrome.payload || {} : {};
   const user = payload.user || payload.auth?.user || (payload.auth?.authenticated ? payload.auth : null);
@@ -71,25 +89,20 @@ export const loadAdminChromeContext = async (returnTo = "/admin") => {
     branding: payload.branding || {siteName: "Scriptarr"},
     user,
     bootstrap: payload.bootstrap || null,
-    authError: payload.errors?.auth || payload.errors?.bootstrap || "",
-    loginUrl: ""
+    authError: payload.errors?.auth || "",
+    bootstrapError: payload.errors?.bootstrap || "",
+    loginUrl: user ? "" : buildAdminLoginHref(normalizedReturnTo)
   };
 };
 
 /**
- * Fetch the Discord OAuth URL only after the admin chrome knows it is signed out.
+ * Resolve the same-origin Moon route that starts Discord OAuth.
  *
  * @param {string} [returnTo]
  * @returns {Promise<string>}
  */
 export const loadAdminLoginUrl = async (returnTo = "/admin") => {
-  const normalizedReturnTo = typeof returnTo === "string"
-      && returnTo.startsWith("/admin")
-      && !returnTo.startsWith("//")
-    ? returnTo
-    : "/admin";
-  const discordUrl = await requestJson(`/api/moon/auth/discord/url?returnTo=${encodeURIComponent(normalizedReturnTo)}`);
-  return discordUrl.ok ? String(discordUrl.payload?.oauthUrl || "").trim() : "";
+  return buildAdminLoginHref(returnTo);
 };
 
 /**

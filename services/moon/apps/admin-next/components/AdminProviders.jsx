@@ -7,7 +7,7 @@
 import {createContext, useContext, useEffect, useMemo, useState} from "react";
 import {usePathname, useSearchParams} from "next/navigation";
 import {canAccessAdmin} from "../lib/access.js";
-import {AdminEventStreamProvider, loadAdminChromeContext, loadAdminLoginUrl, useAdminEventSubscription} from "../lib/api.js";
+import {AdminEventStreamProvider, buildAdminLoginHref, loadAdminChromeContext, useAdminEventSubscription} from "../lib/api.js";
 import {AdminToastProvider} from "./AdminToasts.jsx";
 
 const AdminChromeContext = createContext({
@@ -15,6 +15,7 @@ const AdminChromeContext = createContext({
   user: null,
   bootstrap: null,
   authError: "",
+  bootstrapError: "",
   loginUrl: "",
   loading: true,
   canAccessAdmin: false,
@@ -60,49 +61,43 @@ const AdminChromeEventSync = ({enabled, onRefresh}) => {
 const AdminChromeProvider = ({children}) => {
   const pathname = usePathname();
   const searchParams = useSearchParams();
+  const searchQuery = searchParams?.toString() || "";
+  const publicPathname = toPublicAdminPath(pathname);
+  const returnTo = useMemo(
+    () => searchQuery ? `${publicPathname}?${searchQuery}` : publicPathname,
+    [publicPathname, searchQuery]
+  );
   const [chrome, setChrome] = useState({
     branding: {siteName: "Scriptarr"},
     user: null,
     bootstrap: null,
     authError: "",
-    loginUrl: "",
+    bootstrapError: "",
+    loginUrl: buildAdminLoginHref(returnTo),
     loading: true
   });
 
   const refreshChrome = useMemo(() => async () => {
-    const query = searchParams?.toString();
-    const publicPathname = toPublicAdminPath(pathname);
-    const returnTo = query ? `${publicPathname}?${query}` : publicPathname;
-    setChrome((current) => ({...current, loading: true}));
+    const localLoginUrl = buildAdminLoginHref(returnTo);
+    setChrome((current) => ({...current, loading: true, loginUrl: current.user ? "" : localLoginUrl}));
     const nextChrome = await loadAdminChromeContext(returnTo);
     setChrome({
       ...nextChrome,
+      loginUrl: nextChrome.user ? "" : nextChrome.loginUrl || localLoginUrl,
       loading: false
     });
-    if (!nextChrome.user) {
-      const loginUrl = await loadAdminLoginUrl(returnTo);
-      setChrome((current) => current.user || current.authError ? current : {...current, loginUrl});
-    }
-  }, [pathname, searchParams]);
+  }, [returnTo]);
 
   useEffect(() => {
     let active = true;
-    const query = searchParams?.toString();
-    const publicPathname = toPublicAdminPath(pathname);
-    const returnTo = query ? `${publicPathname}?${query}` : publicPathname;
-    setChrome((current) => ({...current, loading: true}));
+    const localLoginUrl = buildAdminLoginHref(returnTo);
+    setChrome((current) => ({...current, loading: true, loginUrl: current.user ? "" : localLoginUrl}));
     void loadAdminChromeContext(returnTo).then((nextChrome) => {
       if (active) {
         setChrome({
           ...nextChrome,
+          loginUrl: nextChrome.user ? "" : nextChrome.loginUrl || localLoginUrl,
           loading: false
-        });
-      }
-      if (active && !nextChrome.user) {
-        void loadAdminLoginUrl(returnTo).then((loginUrl) => {
-          if (active && loginUrl) {
-            setChrome((current) => current.user || current.authError ? current : {...current, loginUrl});
-          }
         });
       }
     });
@@ -110,7 +105,7 @@ const AdminChromeProvider = ({children}) => {
     return () => {
       active = false;
     };
-  }, [pathname, searchParams]);
+  }, [returnTo]);
 
   const value = useMemo(() => ({
     ...chrome,

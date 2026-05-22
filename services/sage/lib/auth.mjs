@@ -30,6 +30,18 @@ const normalizeString = (value, fallback = "") => {
   return normalized || fallback;
 };
 
+const isTimeoutLikeError = (error) => {
+  const name = error instanceof Error ? error.name : "";
+  const message = error instanceof Error ? error.message : String(error || "");
+  return name === "TimeoutError" || name === "AbortError" || /timed out|timeout/i.test(message);
+};
+
+const sendAuthUnavailable = (res, error) => {
+  res.status(isTimeoutLikeError(error) ? 504 : 503).json({
+    error: "Session verification is temporarily unavailable."
+  });
+};
+
 const hashPresentedApiKey = (value) => createHash("sha256").update(normalizeString(value)).digest("hex");
 
 const sanitizeApiKeyRecord = (apiKey = {}) => ({
@@ -191,7 +203,13 @@ export const hasPermission = (user, permission) => {
 export const requireSession = (vaultClient) => async (req, res, next) => {
   const presentedApiKey = req.get("X-Scriptarr-Api-Key");
   if (presentedApiKey) {
-    const resolved = await resolveApiKeySession(vaultClient, presentedApiKey);
+    let resolved = null;
+    try {
+      resolved = await resolveApiKeySession(vaultClient, presentedApiKey);
+    } catch (error) {
+      sendAuthUnavailable(res, error);
+      return;
+    }
     if (!resolved) {
       res.status(401).json({error: "Invalid API key."});
       return;
@@ -208,7 +226,13 @@ export const requireSession = (vaultClient) => async (req, res, next) => {
     res.status(401).json({error: "Missing session token."});
     return;
   }
-  const user = await vaultClient.getSessionUser(token);
+  let user = null;
+  try {
+    user = await vaultClient.getSessionUser(token);
+  } catch (error) {
+    sendAuthUnavailable(res, error);
+    return;
+  }
   if (!user) {
     res.status(401).json({error: "Invalid session token."});
     return;

@@ -7,6 +7,10 @@ import {DEFAULT_EVENT_RETENTION_DAYS} from "./vaultEvents.mjs";
 
 const JSON_BODY_LIMIT = "10mb";
 const EVENT_PRUNE_INTERVAL_MS = 24 * 60 * 60 * 1000;
+const SESSION_PRUNE_INTERVAL_MS = Math.max(
+  60 * 1000,
+  Number.parseInt(String(process.env.SCRIPTARR_SESSION_PRUNE_INTERVAL_MS || 15 * 60 * 1000), 10) || 15 * 60 * 1000
+);
 const requireJson = express.json({limit: JSON_BODY_LIMIT});
 const readQueryList = (query, key) => {
   const value = query[key];
@@ -56,7 +60,27 @@ export const createVaultApp = async ({logger = createLogger("VAULT")} = {}) => {
   const config = resolveVaultConfig();
   const store = createStore(config);
   await store.init();
-  const pruneTimer = setInterval(() => {
+  const pruneExpiredSessions = async (reason) => {
+    if (typeof store.pruneExpiredSessions !== "function") {
+      return;
+    }
+    try {
+      const result = await store.pruneExpiredSessions();
+      if (result?.removed) {
+        logger.info("Vault pruned expired sessions.", {
+          reason,
+          removed: result.removed
+        });
+      }
+    } catch (error) {
+      logger.warn("Vault failed to prune expired sessions.", {
+        reason,
+        error
+      });
+    }
+  };
+  await pruneExpiredSessions("startup");
+  const eventPruneTimer = setInterval(() => {
     void store.pruneEvents(DEFAULT_EVENT_RETENTION_DAYS).catch((error) => {
       logger.warn("Vault failed to prune expired durable events.", {
         retentionDays: DEFAULT_EVENT_RETENTION_DAYS,
@@ -64,7 +88,11 @@ export const createVaultApp = async ({logger = createLogger("VAULT")} = {}) => {
       });
     });
   }, EVENT_PRUNE_INTERVAL_MS);
-  pruneTimer.unref?.();
+  eventPruneTimer.unref?.();
+  const sessionPruneTimer = setInterval(() => {
+    void pruneExpiredSessions("interval");
+  }, SESSION_PRUNE_INTERVAL_MS);
+  sessionPruneTimer.unref?.();
 
   const app = express();
   const auth = serviceAuth(config);
@@ -595,7 +623,8 @@ export const createVaultApp = async ({logger = createLogger("VAULT")} = {}) => {
     config,
     store,
     close() {
-      clearInterval(pruneTimer);
+      clearInterval(eventPruneTimer);
+      clearInterval(sessionPruneTimer);
     }
   };
 };

@@ -70,6 +70,30 @@ export const requestJson = async (url, options = {}) => {
 };
 
 /**
+ * Normalize a user-facing return path before sending it to Moon auth routes.
+ *
+ * @param {string} [returnTo]
+ * @returns {string}
+ */
+export const normalizeMoonReturnTo = (returnTo = "/") => {
+  const trimmedReturnTo = typeof returnTo === "string" ? returnTo.trim() : "";
+  return trimmedReturnTo.startsWith("/")
+      && !trimmedReturnTo.startsWith("//")
+      && !trimmedReturnTo.startsWith("/api/")
+    ? trimmedReturnTo
+    : "/";
+};
+
+/**
+ * Build the local Moon route that starts Discord OAuth in the current browser.
+ *
+ * @param {string} [returnTo]
+ * @returns {string}
+ */
+export const buildMoonLoginHref = (returnTo = "/") =>
+  `/api/moon/auth/discord/start?returnTo=${encodeURIComponent(normalizeMoonReturnTo(returnTo))}`;
+
+/**
  * Clear Moon's local auth session cookie.
  *
  * @returns {Promise<{ok: boolean, status: number, payload: any}>}
@@ -240,16 +264,13 @@ export const useMoonJson = (url, {enabled = true, fallback = /** @type {T} */ (n
  *   loaded: boolean,
  *   bootstrap: any,
  *   libraryTypes: Array<{slug: string, label: string, count: number}>,
+ *   authError: string,
+ *   bootstrapError: string,
  *   loginUrl: string
  * }>}
  */
 export const loadMoonChromeContext = async (returnTo = "/") => {
-  const trimmedReturnTo = typeof returnTo === "string" ? returnTo.trim() : "";
-  const normalizedReturnTo = trimmedReturnTo.startsWith("/")
-      && !trimmedReturnTo.startsWith("//")
-      && !trimmedReturnTo.startsWith("/api/")
-    ? trimmedReturnTo
-    : "/";
+  const normalizedReturnTo = normalizeMoonReturnTo(returnTo);
   const chrome = await requestJson(`/api/moon/chrome/bootstrap?returnTo=${encodeURIComponent(normalizedReturnTo)}`);
   const payload = chrome.ok ? chrome.payload || {} : {};
   const user = payload.user || payload.auth?.user || (payload.auth?.authenticated ? payload.auth : null);
@@ -260,26 +281,20 @@ export const loadMoonChromeContext = async (returnTo = "/") => {
     loaded: true,
     bootstrap: payload.bootstrap || null,
     libraryTypes: [],
-    authError: payload.errors?.auth || payload.errors?.bootstrap || "",
-    loginUrl: ""
+    authError: payload.errors?.auth || "",
+    bootstrapError: payload.errors?.bootstrap || "",
+    loginUrl: user ? "" : buildMoonLoginHref(normalizedReturnTo)
   };
 };
 
 /**
- * Fetch a Discord OAuth URL only when a signed-out view needs it.
+ * Resolve the same-origin Moon route that starts Discord OAuth.
  *
  * @param {string} [returnTo]
  * @returns {Promise<string>}
  */
 export const loadMoonLoginUrl = async (returnTo = "/") => {
-  const trimmedReturnTo = typeof returnTo === "string" ? returnTo.trim() : "";
-  const normalizedReturnTo = trimmedReturnTo.startsWith("/")
-      && !trimmedReturnTo.startsWith("//")
-      && !trimmedReturnTo.startsWith("/api/")
-    ? trimmedReturnTo
-    : "/";
-  const discordUrl = await requestJson(`/api/moon/auth/discord/url?returnTo=${encodeURIComponent(normalizedReturnTo)}`);
-  return discordUrl.ok ? String(discordUrl.payload?.oauthUrl || "").trim() : "";
+  return buildMoonLoginHref(returnTo);
 };
 
 /**
@@ -292,8 +307,10 @@ export const useSearchKey = (value) =>
   useMemo(() => String(value || "").trim().toLowerCase(), [value]);
 
 export default {
+  buildMoonLoginHref,
   loadMoonChromeContext,
   loadMoonLoginUrl,
+  normalizeMoonReturnTo,
   logoutMoonSession,
   requestJson,
   useMoonJson,

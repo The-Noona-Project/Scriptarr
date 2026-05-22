@@ -114,6 +114,78 @@ const createVaultReaderTargetFailureProxy = ({targetBaseUrl}) => {
 };
 
 /**
+ * Create a Vault proxy that forwards normal calls and fails one selected route.
+ *
+ * @param {{targetBaseUrl: string, shouldFail: (request: http.IncomingMessage) => boolean}} options
+ * @returns {{server: http.Server, calls: {failed: number, forwarded: number, bootstrapStatus: number, upsertDiscordUser: number, getUserByDiscordId: number, createSession: number, events: number}}}
+ */
+const createVaultRouteFailureProxy = ({targetBaseUrl, shouldFail}) => {
+  const calls = {
+    failed: 0,
+    forwarded: 0,
+    bootstrapStatus: 0,
+    upsertDiscordUser: 0,
+    getUserByDiscordId: 0,
+    createSession: 0,
+    events: 0
+  };
+  const server = http.createServer((request, response) => {
+    if (request.url === "/api/public/bootstrap-status") {
+      calls.bootstrapStatus += 1;
+    }
+    if (request.method === "POST" && request.url === "/api/service/users/upsert-discord") {
+      calls.upsertDiscordUser += 1;
+    }
+    if (request.url?.startsWith("/api/service/users/by-discord/")) {
+      calls.getUserByDiscordId += 1;
+    }
+    if (request.method === "POST" && request.url === "/api/service/sessions") {
+      calls.createSession += 1;
+    }
+    if (request.method === "POST" && request.url === "/api/service/events") {
+      calls.events += 1;
+    }
+    if (shouldFail(request)) {
+      calls.failed += 1;
+      response.writeHead(500, {"Content-Type": "application/json"});
+      response.end(JSON.stringify({error: "Forced Vault route failure."}));
+      request.resume();
+      return;
+    }
+
+    readRequestBody(request)
+      .then(async (body) => {
+        calls.forwarded += 1;
+        const headers = {};
+        for (const [key, value] of Object.entries(request.headers || {})) {
+          if (key.toLowerCase() !== "host" && value != null) {
+            headers[key] = Array.isArray(value) ? value.join(", ") : String(value);
+          }
+        }
+        const upstream = await originalFetch(`${targetBaseUrl}${request.url || "/"}`, {
+          method: request.method,
+          headers,
+          body: ["GET", "HEAD"].includes(String(request.method || "GET").toUpperCase()) ? undefined : body
+        });
+        const responseHeaders = {};
+        upstream.headers.forEach((value, key) => {
+          responseHeaders[key] = value;
+        });
+        response.writeHead(upstream.status, responseHeaders);
+        response.end(await upstream.text());
+      })
+      .catch((error) => {
+        response.writeHead(500, {"Content-Type": "application/json"});
+        response.end(JSON.stringify({
+          error: error instanceof Error ? error.message : String(error)
+        }));
+      });
+  });
+
+  return {server, calls};
+};
+
+/**
  * Add the ingest metadata required for a Raven chapter to be reader-ready.
  *
  * @param {Record<string, unknown>} chapter
@@ -1274,20 +1346,26 @@ const installDiscordFetchStub = (identity = {
   username: "Owner",
   global_name: "Owner",
   avatar: null
-}) => {
+}, {tokenStatus = 200, userStatus = 200, tokenPayload = {access_token: "discord-access-token"}} = {}) => {
+  const calls = {
+    discordToken: 0,
+    discordUser: 0
+  };
   globalThis.fetch = async (input, init) => {
     const url = String(input);
 
     if (url === "https://discord.com/api/oauth2/token") {
-      return new Response(JSON.stringify({access_token: "discord-access-token"}), {
-        status: 200,
+      calls.discordToken += 1;
+      return new Response(JSON.stringify(tokenStatus >= 400 ? {error: "invalid_grant"} : tokenPayload), {
+        status: tokenStatus,
         headers: {"Content-Type": "application/json"}
       });
     }
 
     if (url === "https://discord.com/api/users/@me") {
+      calls.discordUser += 1;
       return new Response(JSON.stringify(identity), {
-        status: 200,
+        status: userStatus,
         headers: {"Content-Type": "application/json"}
       });
     }
@@ -1330,6 +1408,7 @@ const installDiscordFetchStub = (identity = {
 
     return originalFetch(input, init);
   };
+  return calls;
 };
 
 const restoreFetch = () => {
@@ -1392,6 +1471,107 @@ test("sage carries a sanitized returnTo path through Discord OAuth state", async
   await closeServer(sageServer);
   await closeServer(vaultServer);
   await closeServer(dependencyStub.server);
+});
+
+test("sage reports Discord callback token exchange failures with the failing auth phase", async () => {
+  process.env.SCRIPTARR_PUBLIC_BASE_URL = "https://pax-kun.com";
+  process.env.SCRIPTARR_DISCORD_CLIENT_ID = "discord-client-id";
+  process.env.SCRIPTARR_DISCORD_CLIENT_SECRET = "discord-client-secret";
+
+  const discordCalls = installDiscordFetchStub(undefined, {tokenStatus: 500});
+
+  const {app: sageApp} = await createSageApp();
+  const sageServer = sageApp.listen(0);
+  const baseUrl = `http://127.0.0.1:${sageServer.address().port}`;
+
+  try {
+    const authUrlPayload = await fetch(`${baseUrl}/api/auth/discord/url`).then((response) => response.json());
+    const state = new URL(authUrlPayload.oauthUrl).searchParams.get("state");
+    const response = await fetch(`${baseUrl}/api/auth/discord/callback?code=test-oauth-code&state=${encodeURIComponent(state)}`);
+    const payload = await response.json();
+
+    assert.equal(response.status, 502);
+    assert.equal(payload.phase, "discord-token");
+    assert.equal(payload.error, "Discord token exchange failed. Please try again.");
+    assert.equal(discordCalls.discordToken, 1);
+    assert.equal(discordCalls.discordUser, 0);
+  } finally {
+    await closeServer(sageServer);
+  }
+});
+
+test("sage completes Discord login when auth event persistence fails after session creation", async () => {
+  const {app: vaultApp} = await createVaultApp();
+  const vaultServer = vaultApp.listen(0);
+  const vaultBaseUrl = `http://127.0.0.1:${vaultServer.address().port}`;
+  const vaultProxy = createVaultRouteFailureProxy({
+    targetBaseUrl: vaultBaseUrl,
+    shouldFail: (request) => request.method === "POST" && request.url === "/api/service/events"
+  });
+  vaultProxy.server.listen(0);
+
+  process.env.SCRIPTARR_VAULT_BASE_URL = `http://127.0.0.1:${vaultProxy.server.address().port}`;
+  process.env.SCRIPTARR_PUBLIC_BASE_URL = "https://pax-kun.com";
+  process.env.SCRIPTARR_DISCORD_CLIENT_ID = "discord-client-id";
+  process.env.SCRIPTARR_DISCORD_CLIENT_SECRET = "discord-client-secret";
+
+  const discordCalls = installDiscordFetchStub();
+  const callbackLogs = [];
+  const logger = {
+    info(message, payload) {
+      callbackLogs.push({level: "info", message, payload});
+    },
+    warn(message, payload) {
+      callbackLogs.push({level: "warn", message, payload});
+    },
+    error(message, payload) {
+      callbackLogs.push({level: "error", message, payload});
+    }
+  };
+
+  const {app: sageApp} = await createSageApp({logger});
+  const sageServer = sageApp.listen(0);
+  const baseUrl = `http://127.0.0.1:${sageServer.address().port}`;
+
+  try {
+    const ownerClaim = await signInViaDiscord(baseUrl);
+    assert.ok(ownerClaim.token);
+    assert.equal(ownerClaim.user.role, "owner");
+    assert.equal(discordCalls.discordToken, 1);
+    assert.equal(discordCalls.discordUser, 1);
+    assert.equal(vaultProxy.calls.bootstrapStatus, 1);
+    assert.equal(vaultProxy.calls.getUserByDiscordId, 0);
+    assert.equal(vaultProxy.calls.upsertDiscordUser, 1);
+    assert.equal(vaultProxy.calls.createSession, 1);
+    assert.equal(vaultProxy.calls.events, 1);
+    assert.equal(vaultProxy.calls.failed, 1);
+
+    const statusResponse = await fetch(`${baseUrl}/api/auth/status`, {
+      headers: {"Authorization": `Bearer ${ownerClaim.token}`}
+    });
+    assert.equal(statusResponse.status, 200);
+    const status = await statusResponse.json();
+    assert.equal(status.user.discordUserId, "owner-1");
+
+    const loggedPhaseEntries = callbackLogs
+      .filter((entry) => entry.message === "Discord callback phase completed." || entry.message === "Discord callback phase failed.")
+      .map((entry) => ({
+        phase: entry.payload.phase,
+        status: entry.message.endsWith("completed.") ? "completed" : "failed"
+      }));
+    assert.deepEqual(loggedPhaseEntries.map((entry) => entry.phase), [
+      "discord-token",
+      "discord-user",
+      "vault-user",
+      "vault-session",
+      "auth-event"
+    ]);
+    assert.equal(loggedPhaseEntries.at(-1).status, "failed");
+  } finally {
+    await closeServer(sageServer);
+    await closeServer(vaultProxy.server);
+    await closeServer(vaultServer);
+  }
 });
 
 test("sage reader session normalizes adjacent chapters to reading order", async () => {

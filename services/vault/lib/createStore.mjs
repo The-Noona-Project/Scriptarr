@@ -89,6 +89,16 @@ const normalizeBoolean = (value, fallback = false) => {
   }
   return fallback;
 };
+const DEFAULT_SESSION_TTL_MS = 24 * 60 * 60 * 1000;
+const MIN_SESSION_TTL_MS = 60 * 1000;
+const resolveSessionTtlMs = (
+  value = process.env.SCRIPTARR_SESSION_TTL_MS || DEFAULT_SESSION_TTL_MS,
+  {allowShort = false} = {}
+) => {
+  const parsed = Number.parseInt(String(value || DEFAULT_SESSION_TTL_MS), 10) || DEFAULT_SESSION_TTL_MS;
+  return Math.max(allowShort ? 1 : MIN_SESSION_TTL_MS, parsed);
+};
+const SESSION_TTL_MS = resolveSessionTtlMs();
 const readStateKey = (discordUserId, mediaId) => `${normalizeString(discordUserId)}::${normalizeString(mediaId)}`;
 const normalizeReadStateTimestamp = (value, fallback = null) => {
   const normalized = normalizeString(value);
@@ -98,9 +108,10 @@ const normalizeReadStateTimestamp = (value, fallback = null) => {
   const parsed = Date.parse(normalized);
   return Number.isFinite(parsed) ? new Date(parsed).toISOString() : fallback;
 };
-const isSessionExpired = (session = {}) => {
+const isSessionExpired = (session = {}, sessionTtlMs = SESSION_TTL_MS) => {
   const createdAt = Date.parse(String(session?.createdAt || session?.created_at || ""));
-  return Number.isFinite(createdAt) && Date.now() - createdAt > SESSION_TTL_MS;
+  const ttlMs = resolveSessionTtlMs(sessionTtlMs, {allowShort: true});
+  return Number.isFinite(createdAt) && Date.now() - createdAt > ttlMs;
 };
 const toTitleReadState = (value = {}) => ({
   mediaId: normalizeString(value.mediaId || value.media_id),
@@ -120,10 +131,6 @@ const CONTENT_RESET_SETTING_PREFIXES = Object.freeze([
   "moon.following.",
   "moon.reader.bookmarks."
 ]);
-const SESSION_TTL_MS = Math.max(
-  60 * 1000,
-  Number.parseInt(String(process.env.SCRIPTARR_SESSION_TTL_MS || 24 * 60 * 60 * 1000), 10) || 24 * 60 * 60 * 1000
-);
 const API_KEY_KINDS = new Set(["system", "user"]);
 const normalizeApiKeyKind = (value, fallback = "system") => {
   const normalized = normalizeString(value, fallback).toLowerCase();
@@ -996,7 +1003,10 @@ const createConflictError = (message, code) => {
   return error;
 };
 
-const createMemoryStore = () => {
+const createMemoryStore = (options = {}) => {
+  const sessionTtlMs = resolveSessionTtlMs(options.sessionTtlMs ?? SESSION_TTL_MS, {
+    allowShort: Object.hasOwn(options, "sessionTtlMs")
+  });
   const state = {
     users: new Map(),
     permissionGroups: new Map(),
@@ -1186,6 +1196,7 @@ const createMemoryStore = () => {
 
   return {
     driver: "memory",
+    sessionTtlMs,
     async init() {
       seedMemoryGroups();
       return true;
@@ -1424,13 +1435,19 @@ const createMemoryStore = () => {
       clearMemorySessionsForUser(discordUserId);
       return {ok: true};
     },
+    async pruneExpiredSessions() {
+      let removed = 0;
+      for (const [token, session] of Array.from(state.sessions.entries())) {
+        if (isSessionExpired(session, sessionTtlMs)) {
+          state.sessions.delete(token);
+          removed += 1;
+        }
+      }
+      return {removed};
+    },
     async getSession(token) {
       const session = state.sessions.get(token) || null;
-      if (session && isSessionExpired(session)) {
-        state.sessions.delete(token);
-        return null;
-      }
-      return session;
+      return session && !isSessionExpired(session, sessionTtlMs) ? session : null;
     },
     async getUserForSession(token) {
       const session = await this.getSession(token);
@@ -1840,6 +1857,9 @@ const createMemoryStore = () => {
 };
 
 const createMysqlStore = (config) => {
+  const sessionTtlMs = resolveSessionTtlMs(config.sessionTtlMs ?? SESSION_TTL_MS, {
+    allowShort: Object.hasOwn(config, "sessionTtlMs")
+  });
   const pool = mysql.createPool({
     host: config.mysql.host,
     port: config.mysql.port,
@@ -1874,7 +1894,8 @@ const createMysqlStore = (config) => {
         role_name VARCHAR(32) NOT NULL,
         permissions_json JSON NOT NULL,
         created_at DATETIME NOT NULL,
-        updated_at DATETIME NOT NULL
+        updated_at DATETIME NOT NULL,
+        INDEX idx_users_role_name (role_name)
       )
     `);
     await pool.query(`
@@ -1923,9 +1944,14 @@ const createMysqlStore = (config) => {
       CREATE TABLE IF NOT EXISTS sessions (
         token VARCHAR(128) PRIMARY KEY,
         discord_user_id VARCHAR(64) NOT NULL,
-        created_at DATETIME NOT NULL
+        created_at DATETIME NOT NULL,
+        INDEX idx_sessions_created_at (created_at),
+        INDEX idx_sessions_discord_user_created_at (discord_user_id, created_at)
       )
     `);
+    await ignoreKnownAlterError("ALTER TABLE users ADD INDEX idx_users_role_name (role_name)");
+    await ignoreKnownAlterError("ALTER TABLE sessions ADD INDEX idx_sessions_created_at (created_at)");
+    await ignoreKnownAlterError("ALTER TABLE sessions ADD INDEX idx_sessions_discord_user_created_at (discord_user_id, created_at)");
     await pool.query(`
       CREATE TABLE IF NOT EXISTS settings (
         setting_key VARCHAR(128) PRIMARY KEY,
@@ -2584,6 +2610,7 @@ const createMysqlStore = (config) => {
 
   return {
     driver: "mysql",
+    sessionTtlMs,
     init,
     async health() {
       await pool.query("SELECT 1");
@@ -2952,8 +2979,14 @@ const createMysqlStore = (config) => {
       await pool.query("DELETE FROM sessions WHERE discord_user_id = ?", [discordUserId]);
       return {ok: true};
     },
+    async pruneExpiredSessions() {
+      const [result] = await pool.query(
+        "DELETE FROM sessions WHERE created_at < DATE_SUB(NOW(), INTERVAL ? SECOND)",
+        [Math.ceil(sessionTtlMs / 1000)]
+      );
+      return {removed: Number(result?.affectedRows || 0)};
+    },
     async getSession(token) {
-      await pool.query("DELETE FROM sessions WHERE created_at < DATE_SUB(NOW(), INTERVAL ? SECOND)", [Math.ceil(SESSION_TTL_MS / 1000)]);
       const [rows] = await pool.query("SELECT * FROM sessions WHERE token = ? LIMIT 1", [token]);
       if (!rows[0]) {
         return null;
@@ -2963,7 +2996,7 @@ const createMysqlStore = (config) => {
         discordUserId: rows[0].discord_user_id,
         createdAt: toIsoTimestamp(rows[0].created_at)
       };
-      return isSessionExpired(session) ? null : session;
+      return isSessionExpired(session, sessionTtlMs) ? null : session;
     },
     async getUserForSession(token) {
       const session = await this.getSession(token);
@@ -4057,4 +4090,4 @@ const createMysqlStore = (config) => {
   };
 };
 
-export const createStore = (config) => createCachedStore(config.driver === "mysql" ? createMysqlStore(config) : createMemoryStore());
+export const createStore = (config = {}) => createCachedStore(config.driver === "mysql" ? createMysqlStore(config) : createMemoryStore(config));

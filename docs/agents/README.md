@@ -224,7 +224,9 @@ Architecture invariants:
 - Card links are intentionally split: cover/art opens the best reader URL from `readerTarget`, and title/copy opens the
   canonical title page. Keep this accessible-link split in browse, library, and home shelf cards.
 - Moon chrome should collapse branding, auth, user identity, and first-owner bootstrap into
-  `/api/moon/chrome/bootstrap`, then fetch the Discord login URL lazily only when a signed-out screen needs it.
+  `/api/moon/chrome/bootstrap`. Signed-out shells should render the local `/api/moon/auth/discord/start?returnTo=...`
+  href immediately, keep `/api/moon/auth/discord/url` as JSON compatibility, and let the collapsed bootstrap subcalls
+  degrade independently under short Moon proxy timeouts.
   OAuth callbacks must stay bound to the short-lived browser state cookie.
 - Moon Settings and Status should paint saved or registry payloads first, then hydrate runtime-only data from
   `/api/moon-v3/admin/settings/runtime` and `/api/moon-v3/admin/system/status/runtime`.

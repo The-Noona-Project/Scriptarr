@@ -55,8 +55,12 @@ If the remembered path is missing, unsafe, or not allowed for the signed-in user
 Moon also binds the Discord callback to a short-lived HTTP-only OAuth-state cookie so a callback from another browser
 session cannot swap the signed-in account.
 Chrome startup uses `/api/moon/chrome/bootstrap?returnTo=...` to collapse branding, auth state, user identity, and
-first-owner bootstrap into one same-origin call. Moon only asks Sage for the Discord OAuth URL when a signed-out
-surface actually needs to render a login link.
+first-owner bootstrap into one same-origin call. The user and admin shells can render a local
+`/api/moon/auth/discord/start?returnTo=...` login link immediately; that route asks Sage for the Discord OAuth URL,
+sets Moon's browser-bound state cookie, and redirects to Discord. The older JSON
+`/api/moon/auth/discord/url?returnTo=...` route remains available for compatibility. Chrome bootstrap broker calls use
+short per-call timeouts so branding, auth, and first-owner status can degrade independently instead of one slow broker
+blocking the whole shell.
 The catalogue keeps a quick-jump index rail on the left, tighter search against titles, aliases, types, and tags, a
 remembered Grid/Rows view toggle, and paged InfiniteScroll with a manual fallback button. The home route is
 intentionally simpler too: it starts with a personalized "Your Bookshelf" continue-reading shelf, then stacks cover-led
