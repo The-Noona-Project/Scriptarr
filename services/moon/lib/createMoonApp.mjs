@@ -10,6 +10,40 @@ import {registerPublicApiRoutes} from "./registerPublicApiRoutes.mjs";
 import {createAdminNextRuntime} from "./createAdminNextRuntime.mjs";
 import {createReaderNextRuntime} from "./createReaderNextRuntime.mjs";
 import {createUserNextRuntime} from "./createUserNextRuntime.mjs";
+import {proxyRequest} from "./proxy.mjs";
+
+const SAGE_WARMUP_TIMEOUT_MS = 7000;
+
+/**
+ * Warm Moon's internal Sage connection before the public listener opens.
+ *
+ * @param {{sageBaseUrl: string}} config
+ * @param {{info?: Function, warn?: Function}} logger
+ * @returns {Promise<void>}
+ */
+const warmSageBrokerConnection = async (config, logger) => {
+  if (process.env.NODE_ENV === "test") {
+    return;
+  }
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), SAGE_WARMUP_TIMEOUT_MS);
+  try {
+    const response = await proxyRequest({
+      baseUrl: config.sageBaseUrl,
+      path: "/api/auth/status",
+      signal: controller.signal
+    });
+    logger.info?.("Moon warmed the Sage broker connection.", {
+      status: response.status
+    });
+  } catch (error) {
+    logger.warn?.("Moon could not warm the Sage broker connection.", {
+      error: error instanceof Error ? error.message : String(error)
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
+};
 
 /**
  * Build the Scriptarr Moon HTTP application.
@@ -32,6 +66,7 @@ export const createMoonApp = async ({logger = createLogger("MOON")} = {}) => {
   const adminNextRuntime = await createAdminNextRuntime({logger});
   const readerNextRuntime = await createReaderNextRuntime({logger});
   const userNextRuntime = await createUserNextRuntime({logger});
+  await warmSageBrokerConnection(config, logger);
 
   app.use(express.json());
 
