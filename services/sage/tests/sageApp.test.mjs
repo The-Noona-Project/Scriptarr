@@ -236,11 +236,12 @@ const defaultIntakePayload = Object.freeze({
  * Create a small dependency stub for Sage's Raven, Warden, Portal, and Oracle
  * calls so the Moon v3 broker routes can be tested in isolation.
  *
- * @param {{libraryTitles?: Array<Record<string, unknown>>, downloadTasks?: Array<Record<string, unknown>>, downloadTasksStatus?: number, ingestTasks?: Array<Record<string, unknown>>, ingestOverview?: Record<string, unknown>, importResult?: Record<string, unknown>, downloadRuntimeReloadStatus?: number, syncLinkedRequestOnQueue?: boolean, readerChapterTransientMisses?: Record<string, number>, readerMissingChaptersAsHtml?: boolean, readerPageFetchFails?: boolean, readerPageHangs?: boolean, publicSearchResultCount?: number}} [options]
+ * @param {{libraryTitles?: Array<Record<string, unknown>>, libraryDelayMs?: number, downloadTasks?: Array<Record<string, unknown>>, downloadTasksStatus?: number, ingestTasks?: Array<Record<string, unknown>>, ingestOverview?: Record<string, unknown>, importResult?: Record<string, unknown>, downloadRuntimeReloadStatus?: number, syncLinkedRequestOnQueue?: boolean, readerChapterTransientMisses?: Record<string, number>, readerMissingChaptersAsHtml?: boolean, readerPageFetchFails?: boolean, readerPageHangs?: boolean, publicSearchResultCount?: number}} [options]
  * @returns {Promise<{server: http.Server, calls: Record<string, number>}>}
  */
 const createDependencyStub = ({
   libraryTitles = [defaultLibraryTitle],
+  libraryDelayMs = 0,
   downloadTasks = [],
   downloadTasksStatus = 200,
   ingestTasks = [],
@@ -586,51 +587,61 @@ const createDependencyStub = ({
     if (request.url?.startsWith("/v1/library")) {
       const url = new URL(request.url, "http://scriptarr.test");
       if (url.pathname === "/v1/library") {
-        if (url.searchParams.get("view") === "card") {
-          calls.libraryCard += 1;
-          const pageSize = Math.min(100, Math.max(1, Number.parseInt(url.searchParams.get("pageSize") || "60", 10) || 60));
-          const cursor = Math.max(0, Number.parseInt(url.searchParams.get("cursor") || "0", 10) || 0);
-          const exactIds = Array.from(new Set(String(url.searchParams.get("ids") || "")
-            .split(",")
-            .map((entry) => entry.trim())
-            .filter(Boolean)));
-          const cardTitles = currentLibraryTitles.filter((title) => !exactIds.length || exactIds.includes(title.id)).map((title) => ({
-            id: title.id,
-            title: title.title,
-            mediaType: title.mediaType,
-            libraryTypeLabel: title.libraryTypeLabel,
-            libraryTypeSlug: title.libraryTypeSlug,
-            status: title.status,
-            latestChapter: title.latestChapter,
-            coverAccent: title.coverAccent,
-            coverUrl: title.coverUrl,
-            summary: title.summary,
-            releaseLabel: title.releaseLabel,
-            chapterCount: title.chapterCount,
-            chaptersDownloaded: title.chaptersDownloaded,
-            author: title.author,
-            tags: title.tags || [],
-            aliases: title.aliases || [],
-            updatedAt: title.updatedAt || "2026-04-25T00:00:00.000Z"
-          })).sort((left, right) => exactIds.length ? exactIds.indexOf(left.id) - exactIds.indexOf(right.id) : 0);
-          const page = cardTitles.slice(cursor, cursor + pageSize);
+        const sendLibraryResponse = () => {
+          if (response.destroyed || response.writableEnded) {
+            return;
+          }
+          if (url.searchParams.get("view") === "card") {
+            calls.libraryCard += 1;
+            const pageSize = Math.min(100, Math.max(1, Number.parseInt(url.searchParams.get("pageSize") || "60", 10) || 60));
+            const cursor = Math.max(0, Number.parseInt(url.searchParams.get("cursor") || "0", 10) || 0);
+            const exactIds = Array.from(new Set(String(url.searchParams.get("ids") || "")
+              .split(",")
+              .map((entry) => entry.trim())
+              .filter(Boolean)));
+            const cardTitles = currentLibraryTitles.filter((title) => !exactIds.length || exactIds.includes(title.id)).map((title) => ({
+              id: title.id,
+              title: title.title,
+              mediaType: title.mediaType,
+              libraryTypeLabel: title.libraryTypeLabel,
+              libraryTypeSlug: title.libraryTypeSlug,
+              status: title.status,
+              latestChapter: title.latestChapter,
+              coverAccent: title.coverAccent,
+              coverUrl: title.coverUrl,
+              summary: title.summary,
+              releaseLabel: title.releaseLabel,
+              chapterCount: title.chapterCount,
+              chaptersDownloaded: title.chaptersDownloaded,
+              author: title.author,
+              tags: title.tags || [],
+              aliases: title.aliases || [],
+              updatedAt: title.updatedAt || "2026-04-25T00:00:00.000Z"
+            })).sort((left, right) => exactIds.length ? exactIds.indexOf(left.id) - exactIds.indexOf(right.id) : 0);
+            const page = cardTitles.slice(cursor, cursor + pageSize);
+            response.writeHead(200, {"Content-Type": "application/json"});
+            response.end(JSON.stringify({
+              titles: page,
+              counts: {total: cardTitles.length, byLetter: {D: cardTitles.length}, byType: {webtoon: cardTitles.length}},
+              pageInfo: {
+                cursor: String(cursor),
+                nextCursor: cursor + page.length < cardTitles.length ? String(cursor + page.length) : "",
+                hasMore: cursor + page.length < cardTitles.length,
+                pageSize,
+                total: cardTitles.length
+              }
+            }));
+            return;
+          }
+          calls.library += 1;
           response.writeHead(200, {"Content-Type": "application/json"});
-          response.end(JSON.stringify({
-            titles: page,
-            counts: {total: cardTitles.length, byLetter: {D: cardTitles.length}, byType: {webtoon: cardTitles.length}},
-            pageInfo: {
-              cursor: String(cursor),
-              nextCursor: cursor + page.length < cardTitles.length ? String(cursor + page.length) : "",
-              hasMore: cursor + page.length < cardTitles.length,
-              pageSize,
-              total: cardTitles.length
-            }
-          }));
+          response.end(JSON.stringify({titles: currentLibraryTitles}));
+        };
+        if (libraryDelayMs > 0) {
+          setTimeout(sendLibraryResponse, libraryDelayMs);
           return;
         }
-        calls.library += 1;
-        response.writeHead(200, {"Content-Type": "application/json"});
-        response.end(JSON.stringify({titles: currentLibraryTitles}));
+        sendLibraryResponse();
         return;
       }
     }
@@ -2272,6 +2283,54 @@ test("sage keeps admin overview available when the Raven task feed fails", async
   assert.deepEqual(overview.queue, []);
   assert.match(overview.degraded.queue.error, /Raven tasks unavailable/);
   assert.equal(dependencyStub.calls.ingestTasks, 0);
+
+  await closeServer(sageServer);
+  await closeServer(vaultServer);
+  await closeServer(dependencyStub.server);
+});
+
+test("sage keeps admin overview bounded when the Raven library feed is slow", async () => {
+  const {app: vaultApp} = await createVaultApp();
+  const vaultServer = vaultApp.listen(0);
+  const vaultPort = vaultServer.address().port;
+
+  const dependencyStub = await createDependencyStub({
+    libraryDelayMs: 3000
+  });
+  dependencyStub.server.listen(0);
+  const dependencyPort = dependencyStub.server.address().port;
+
+  process.env.SCRIPTARR_VAULT_BASE_URL = `http://127.0.0.1:${vaultPort}`;
+  process.env.SCRIPTARR_WARDEN_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_PORTAL_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_ORACLE_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_RAVEN_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_PUBLIC_BASE_URL = "https://pax-kun.com";
+  process.env.SCRIPTARR_DISCORD_CLIENT_ID = "discord-client-id";
+  process.env.SCRIPTARR_DISCORD_CLIENT_SECRET = "discord-client-secret";
+
+  installDiscordFetchStub();
+
+  const {app: sageApp} = await createSageApp();
+  const sageServer = sageApp.listen(0);
+  const sagePort = sageServer.address().port;
+  const baseUrl = `http://127.0.0.1:${sagePort}`;
+
+  const ownerClaim = await signInViaDiscord(baseUrl);
+  const startedAt = Date.now();
+  const response = await fetch(`${baseUrl}/api/moon-v3/admin/overview`, {
+    headers: {
+      "Authorization": `Bearer ${ownerClaim.token}`
+    }
+  });
+  const overview = await response.json();
+  const durationMs = Date.now() - startedAt;
+
+  assert.equal(response.status, 200);
+  assert.equal(overview.counts.titles, 0);
+  assert.deepEqual(overview.titles, []);
+  assert.match(overview.degraded.library.error, /abort|timeout/i);
+  assert.ok(durationMs < 2900, `overview should stay bounded, got ${durationMs}ms`);
 
   await closeServer(sageServer);
   await closeServer(vaultServer);

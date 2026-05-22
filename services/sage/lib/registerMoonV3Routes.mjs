@@ -802,6 +802,11 @@ export const registerMoonV3Routes = (app, {
     return normalizeArray(payload?.titles).map(toTitleSummary);
   };
 
+  const loadOverviewLibrary = async () => {
+    const payload = await fetchRavenJson("/v1/library", {timeoutMs: OVERVIEW_SERVICE_STATUS_TIMEOUT_MS});
+    return normalizeArray(payload?.titles).map(toTitleSummary);
+  };
+
   const toQueryString = (query = {}) => {
     const params = new URLSearchParams();
     for (const [key, value] of Object.entries(query || {})) {
@@ -1828,7 +1833,7 @@ export const registerMoonV3Routes = (app, {
 
   app.get("/api/moon-v3/admin/overview", requireOverviewRead(async (_req, res) => {
     const [titlesResult, tasksResult, requestsResult, servicesResult] = await Promise.all([
-      loadOverviewSection("library", loadLibrary(), []),
+      loadOverviewSection("library", loadOverviewLibrary(), []),
       loadOverviewSection("queue", loadOverviewTasks(), []),
       loadOverviewSection("requests", loadRequests(), []),
       loadOverviewSection("services", loadServiceStatus(), {})
