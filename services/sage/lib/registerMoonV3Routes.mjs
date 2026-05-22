@@ -1707,6 +1707,48 @@ export const registerMoonV3Routes = (app, {
     return {warden, portal, oracle, raven};
   };
 
+  const serviceStatusFromRuntime = (runtime, serviceName) => {
+    const row = normalizeArray(runtime?.managedServices).find((entry) => normalizeString(entry.name) === serviceName);
+    if (!row) {
+      return {
+        ok: false,
+        service: serviceName,
+        health: "missing",
+        source: "warden-runtime"
+      };
+    }
+    const health = normalizeString(row.health, normalizeString(row.status, row.running ? "running" : "missing"));
+    return {
+      ok: row.running === true && !["missing", "unhealthy", "failed", "exited"].includes(health),
+      service: serviceName,
+      status: normalizeString(row.status),
+      health,
+      running: row.running === true,
+      source: "warden-runtime"
+    };
+  };
+
+  const loadOverviewServiceStatus = async () => {
+    const result = await serviceJson(config.wardenBaseUrl, "/api/runtime", {timeoutMs: OVERVIEW_SERVICE_STATUS_TIMEOUT_MS});
+    if (!result.ok) {
+      throw new Error(result.payload?.error || `Warden runtime failed with status ${result.status}.`);
+    }
+    const runtime = normalizeObject(result.payload, {}) || {};
+    const warden = normalizeObject(runtime.warden, {}) || {};
+    return {
+      warden: {
+        ok: warden.dockerSocketAvailable !== false,
+        service: "scriptarr-warden",
+        health: normalizeString(warden.health, "unknown"),
+        running: true,
+        source: "warden-runtime"
+      },
+      portal: serviceStatusFromRuntime(runtime, "scriptarr-portal"),
+      oracle: serviceStatusFromRuntime(runtime, "scriptarr-oracle"),
+      raven: serviceStatusFromRuntime(runtime, "scriptarr-raven")
+    };
+  };
+
   const loadOverviewSection = async (section, promise, fallback) => {
     try {
       return {value: await promise, degraded: null};
@@ -1836,7 +1878,7 @@ export const registerMoonV3Routes = (app, {
       loadOverviewSection("library", loadOverviewLibrary(), []),
       loadOverviewSection("queue", loadOverviewTasks(), []),
       loadOverviewSection("requests", loadRequests(), []),
-      loadOverviewSection("services", loadServiceStatus(), {})
+      loadOverviewSection("services", loadOverviewServiceStatus(), {})
     ]);
     const degraded = Object.fromEntries(
       [

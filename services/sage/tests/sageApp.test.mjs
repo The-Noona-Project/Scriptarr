@@ -437,7 +437,12 @@ const createDependencyStub = ({
         warden: {
           dockerSocketAvailable: true,
           attachedToManagedNetwork: true
-        }
+        },
+        managedServices: [
+          {name: "scriptarr-raven", running: true, status: "running", health: "healthy"},
+          {name: "scriptarr-portal", running: true, status: "running", health: "healthy"},
+          {name: "scriptarr-oracle", running: true, status: "running", health: "healthy"}
+        ]
       }));
       return;
     }
@@ -2331,6 +2336,8 @@ test("sage keeps admin overview bounded when the Raven library feed is slow", as
   assert.deepEqual(overview.titles, []);
   assert.match(overview.degraded.library.error, /abort|timeout/i);
   assert.ok(durationMs < 2900, `overview should stay bounded, got ${durationMs}ms`);
+  assert.equal(dependencyStub.calls.health, 0);
+  assert.ok(dependencyStub.calls.runtime >= 1);
 
   await closeServer(sageServer);
   await closeServer(vaultServer);
