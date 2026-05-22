@@ -2271,6 +2271,7 @@ test("sage keeps admin overview available when the Raven task feed fails", async
   assert.equal(overview.counts.activeTasks, 0);
   assert.deepEqual(overview.queue, []);
   assert.match(overview.degraded.queue.error, /Raven tasks unavailable/);
+  assert.equal(dependencyStub.calls.ingestTasks, 0);
 
   await closeServer(sageServer);
   await closeServer(vaultServer);

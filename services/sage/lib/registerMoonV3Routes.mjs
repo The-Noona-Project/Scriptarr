@@ -1224,10 +1224,13 @@ export const registerMoonV3Routes = (app, {
     return request ? toRequestSummary(request, userIndex) : null;
   };
 
-  const loadLiveRavenTasks = async () => {
+  const loadLiveRavenTasks = async ({includeIngest = true, timeoutMs = 0} = {}) => {
+    const requestOptions = timeoutMs > 0 ? {timeoutMs} : {};
     const [ravenPayload, ingestPayload] = await Promise.all([
-      fetchRavenJson("/v1/downloads/tasks"),
-      fetchRavenJson("/v1/ingest/tasks").catch(() => [])
+      fetchRavenJson("/v1/downloads/tasks", requestOptions),
+      includeIngest
+        ? fetchRavenJson("/v1/ingest/tasks", requestOptions).catch(() => [])
+        : Promise.resolve([])
     ]);
     const mergedTasks = new Map();
     for (const task of [...normalizeArray(ravenPayload), ...normalizeArray(ingestPayload)]) {
@@ -1377,7 +1380,7 @@ export const registerMoonV3Routes = (app, {
 
   const loadOverviewTasks = async () => {
     const activeStatuses = new Set(["queued", "running"]);
-    return (await loadLiveRavenTasks())
+    return (await loadLiveRavenTasks({includeIngest: false, timeoutMs: OVERVIEW_SERVICE_STATUS_TIMEOUT_MS}))
       .filter((task) => activeStatuses.has(normalizeString(task.status)))
       .sort((left, right) => taskTimestamp(right) - taskTimestamp(left));
   };
