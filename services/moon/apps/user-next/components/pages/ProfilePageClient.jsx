@@ -156,11 +156,7 @@ export const ProfilePageClient = () => {
 
   if (!auth) {
     return (
-      <AuthRequiredView
-        title={`Sign in to manage your ${siteName} profile`}
-        detail={`Profile stats, reading shortcuts, and local presentation controls need a signed-in ${siteName} session.`}
-        loginUrl={loginUrl}
-      />
+      <AuthRequiredView loginUrl={loginUrl} />
     );
   }
 

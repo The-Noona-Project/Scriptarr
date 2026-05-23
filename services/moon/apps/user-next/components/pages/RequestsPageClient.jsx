@@ -348,11 +348,7 @@ export const RequestsPageClient = () => {
 
   if (!auth || status === 401) {
     return (
-      <AuthRequiredView
-        loginUrl={loginUrl}
-        title="Sign in to request content"
-        detail="Connect Discord to search metadata, pick the exact title, and track moderated requests in one place."
-      />
+      <AuthRequiredView loginUrl={loginUrl} />
     );
   }
 

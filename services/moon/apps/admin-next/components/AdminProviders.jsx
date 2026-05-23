@@ -107,6 +107,13 @@ const AdminChromeProvider = ({children}) => {
     };
   }, [returnTo]);
 
+  useEffect(() => {
+    if (typeof window === "undefined" || chrome.loading || chrome.user || chrome.authError || !chrome.loginUrl) {
+      return;
+    }
+    window.location.replace(chrome.loginUrl);
+  }, [chrome.authError, chrome.loading, chrome.loginUrl, chrome.user]);
+
   const value = useMemo(() => ({
     ...chrome,
     canAccessAdmin: canAccessAdmin(chrome.user),

@@ -29,11 +29,7 @@ export const FollowingPageClient = () => {
 
   if (!auth || status === 401) {
     return (
-      <AuthRequiredView
-        loginUrl={loginUrl}
-        title="Sign in to view followed titles"
-        detail={`${siteName} uses your Discord session to keep followed series and chapter alerts tied to you.`}
-      />
+      <AuthRequiredView loginUrl={loginUrl} />
     );
   }
 

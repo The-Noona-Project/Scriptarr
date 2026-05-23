@@ -18,25 +18,21 @@ const toPublicAdminPath = (pathname) => {
   return `/admin${normalized === "/" ? "" : normalized}`;
 };
 
+const AdminAuthResolvingSurface = ({label = "Checking admin session."}) => (
+  <main className="admin-auth-resolving" role="status" aria-live="polite">
+    <span>{label}</span>
+  </main>
+);
+
 /**
  * Render the user identity block.
  *
- * @param {{user: any, loginUrl: string, bootstrap: any}} props
+ * @param {{user: any}} props
  * @returns {import("react").ReactNode}
  */
-const IdentityCard = ({user, loginUrl, bootstrap}) => {
+const IdentityCard = ({user}) => {
   if (!user) {
-    return (
-      <div className="admin-identity">
-        <div className="admin-avatar">?</div>
-        <div>
-          <span>Admin session</span>
-          <strong>Not signed in</strong>
-          <small>{bootstrap?.ownerClaimed ? "Discord login required" : `First owner: ${bootstrap?.superuserId || "missing"}`}</small>
-        </div>
-        {loginUrl ? <a className="admin-button solid" href={loginUrl}>Sign in</a> : null}
-      </div>
-    );
+    return null;
   }
 
   const initials = String(user.username || "Admin").slice(0, 2).toUpperCase();
@@ -85,6 +81,10 @@ export const AdminShell = ({children}) => {
     document.title = `${route.title} - ${siteName} Admin`;
   }, [route.title, siteName]);
 
+  if (chrome.loading || !chrome.user) {
+    return <AdminAuthResolvingSurface label={chrome.authError || (chrome.loading ? "Checking admin session." : "Opening login.")} />;
+  }
+
   return (
     <div className="admin-next-shell">
       <aside className="admin-sidebar">
@@ -121,7 +121,7 @@ export const AdminShell = ({children}) => {
             <p>{route.description}</p>
           </div>
           <div className="admin-topbar-actions">
-            <IdentityCard user={chrome.user} loginUrl={chrome.loginUrl} bootstrap={chrome.bootstrap} />
+            <IdentityCard user={chrome.user} />
             <a className="admin-button ghost" href="/">Open user app</a>
           </div>
         </header>

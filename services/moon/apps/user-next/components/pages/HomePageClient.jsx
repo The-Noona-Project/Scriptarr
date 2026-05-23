@@ -32,10 +32,7 @@ export const HomePageClient = () => {
 
   if (chromeLoaded && (!auth || status === 401)) {
     return (
-      <AuthRequiredView
-        loginUrl={loginUrl}
-        detail="Sign in with Discord to unlock your bookshelf, recent library drops, and personalized reading rows."
-      />
+      <AuthRequiredView loginUrl={loginUrl} />
     );
   }
 

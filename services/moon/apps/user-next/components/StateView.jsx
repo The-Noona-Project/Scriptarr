@@ -4,7 +4,8 @@
  * @file Shared loading and empty states for the Moon Next user app.
  */
 
-import {Button} from "./UiPrimitives.jsx";
+import {useEffect} from "react";
+import {buildMoonLoginHref} from "../lib/api.js";
 import {useMoonChrome} from "./MoonChromeContext.jsx";
 
 /**
@@ -44,29 +45,28 @@ export const ErrorView = ({title = "", detail = "Refresh the page or try again i
 };
 
 /**
- * Render a signed-out state for routes that need a Moon session.
+ * Defensively redirect routes that need a Moon session.
  *
- * @param {{title?: string, detail?: string, loginUrl?: string}} props
+ * @param {{loginUrl?: string}} props
  * @returns {import("react").ReactNode}
  */
 export const AuthRequiredView = ({
-  title = "Sign in to keep reading",
-  detail = "Use Discord login to open your library, requests, follows, and full reader progress.",
   loginUrl = ""
-}) => (
-  <section className="moon-panel moon-state-panel">
-    <div className="moon-kicker">Account</div>
-    <h2>{title}</h2>
-    <p>{detail}</p>
-    {loginUrl ? (
-      <div style={{marginTop: "16px"}}>
-        <Button href={loginUrl} variant="primary" size="m">
-          Continue with Discord
-        </Button>
-      </div>
-    ) : null}
-  </section>
-);
+}) => {
+  useEffect(() => {
+    if (typeof window === "undefined" || window.location.pathname === "/login") {
+      return;
+    }
+    const returnTo = `${window.location.pathname}${window.location.search}`;
+    window.location.replace(loginUrl || buildMoonLoginHref(returnTo));
+  }, [loginUrl]);
+
+  return (
+    <section className="moon-auth-resolving" role="status" aria-live="polite">
+      <span>Opening login.</span>
+    </section>
+  );
+};
 
 /**
  * Render a compact empty state.

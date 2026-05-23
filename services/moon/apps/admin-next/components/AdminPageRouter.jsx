@@ -78,14 +78,7 @@ export const AdminPageRouter = ({pathname}) => {
   }
 
   if (!chrome.user) {
-    return (
-      <section className="admin-panel admin-state-panel">
-        <div className="admin-kicker">Account</div>
-        <h2>Admin sign-in required</h2>
-        <p>Sign in with a Discord account that has Moon admin access.</p>
-        {chrome.loginUrl ? <a className="admin-button solid" href={chrome.loginUrl}>Continue with Discord</a> : null}
-      </section>
-    );
+    return <AdminRouteLoadingPanel />;
   }
 
   if (!canAccessAdmin(chrome.user)) {

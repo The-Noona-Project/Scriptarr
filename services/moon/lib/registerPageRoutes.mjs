@@ -178,6 +178,20 @@ const trimRecentChapters = async (keepPrefixes) => {
   }
 };
 
+const removeNavigationShells = async () => {
+  const cacheNames = await caches.keys();
+  await Promise.all(cacheNames.map(async (cacheName) => {
+    const cache = await caches.open(cacheName);
+    const requests = await cache.keys();
+    await Promise.all(requests
+      .filter((request) => {
+        const url = new URL(request.url);
+        return url.origin === self.location.origin && (request.mode === "navigate" || url.pathname === "/");
+      })
+      .map((request) => cache.delete(request)));
+  }));
+};
+
 const rememberChapter = async (requestUrl) => {
   const chapterPrefix = chapterPrefixFromPath(requestUrl.pathname);
   const entries = await readRecentIndex();
@@ -200,6 +214,7 @@ self.addEventListener("activate", (event) => {
     await Promise.all(keys
       .filter((key) => ![STATIC_CACHE, READER_CACHE].includes(key))
       .map((key) => caches.delete(key)));
+    await removeNavigationShells();
     await self.clients.claim();
   })());
 });

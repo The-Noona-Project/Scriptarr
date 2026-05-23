@@ -32,6 +32,20 @@ a {
   flex-direction: column;
 }
 
+.moon-auth-resolving {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  background:
+    radial-gradient(circle at top left, rgba(255, 168, 86, 0.14), transparent 32rem),
+    linear-gradient(135deg, rgba(9, 15, 20, 0.96), rgba(5, 8, 12, 0.98));
+  color: rgba(242, 247, 249, 0.72);
+  font-size: 0.9rem;
+  font-weight: 800;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
 .moon-header {
   position: sticky;
   top: 0;

@@ -59,8 +59,9 @@ standalone user app route that paints before chrome/bootstrap finishes, starts D
 `/api/moon/auth/discord/start`, and then runs a two-second-capped prep pass after Discord returns to
 `/login?prepare=1`.
 Chrome startup uses `/api/moon/chrome/bootstrap?returnTo=...` to collapse branding, auth state, user identity, and
-first-owner bootstrap into one same-origin call. The user, reader, and admin shells render local `/login?returnTo=...`
-links when they need a sign-in action. The older JSON
+first-owner bootstrap into one same-origin call. The user, reader, and admin shells treat protected routes as
+auth-gated after chrome resolves; signed-out shells replace the current location with `/login?returnTo=...` instead of
+rendering protected navigation or page-level sign-in cards. The older JSON
 `/api/moon/auth/discord/url?returnTo=...` route remains available for compatibility. Chrome bootstrap broker calls use
 short per-call timeouts so branding, auth, and first-owner status can degrade independently instead of one slow broker
 blocking the whole shell.

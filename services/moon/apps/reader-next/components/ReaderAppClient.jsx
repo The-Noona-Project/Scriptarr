@@ -224,8 +224,8 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = "", initialSessi
   const scrollDirectionRef = useRef("forward");
   const activeWebtoonPageRef = useRef({chapterId: bootChapterId, pageIndex: 0});
   const bootPagesPendingRef = useRef(bootPageState.size > 0);
+  const loginRedirectingRef = useRef(false);
 
-  const siteName = chrome.branding?.siteName || "Scriptarr";
   const title = initialSession?.title || null;
   const isPaged = layoutMode !== "webtoon";
   const currentPagedSession = sessionMap.get(pagedChapterId) || initialSession;
@@ -571,6 +571,25 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = "", initialSessi
       active = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || loginRedirectingRef.current) {
+      return;
+    }
+    const shouldRedirectForChrome = chrome.loaded && !chrome.auth && !chrome.authError;
+    const shouldRedirectForApi = status === 401;
+    if (!shouldRedirectForChrome && !shouldRedirectForApi) {
+      return;
+    }
+    loginRedirectingRef.current = true;
+    const returnTo = `${window.location.pathname}${window.location.search}`;
+    const fallbackLoginUrl = chrome.loginUrl || `/login?returnTo=${encodeURIComponent(returnTo)}`;
+    void loadMoonLoginUrl(returnTo).then((loginUrl) => {
+      window.location.replace(loginUrl || fallbackLoginUrl);
+    }, () => {
+      window.location.replace(fallbackLoginUrl);
+    });
+  }, [chrome.auth, chrome.authError, chrome.loaded, chrome.loginUrl, status]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -1122,16 +1141,7 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = "", initialSessi
   }
 
   if (!chrome.auth || status === 401) {
-    return (
-      <main className="reader-app reader-landing">
-        <section className="reader-empty-panel">
-          <span className="reader-eyebrow">Reader</span>
-          <h1>Sign in to read.</h1>
-          <p>{siteName} needs your Discord session to load chapters, progress, and bookmarks.</p>
-          {chrome.loginUrl ? <a href={chrome.loginUrl}>Sign in with Discord</a> : null}
-        </section>
-      </main>
-    );
+    return <ReaderInitialSkeleton />;
   }
 
   if (error && !initialSession) {

@@ -739,6 +739,8 @@ test("moon serves branded split entry documents, typed routes, PWA assets, and M
   assert.match(serviceWorkerSource, /moon-reader-/);
   assert.match(serviceWorkerSource, /isReaderPageRequest[\s\S]*searchParams\.has\("rev"\)/);
   assert.match(serviceWorkerSource, /isReaderPageChunkRequest[\s\S]*searchParams\.has\("rev"\)/);
+  assert.match(serviceWorkerSource, /removeNavigationShells/);
+  assert.match(serviceWorkerSource, /request\.mode === "navigate" \|\| url\.pathname === "\/"/);
   assert.doesNotMatch(serviceWorkerSource, /STATIC_ASSETS = \["\/"/);
   assert.doesNotMatch(serviceWorkerSource, /cache\.put\("\/"/);
   assert.doesNotMatch(serviceWorkerSource, /<!doctype html>/i);

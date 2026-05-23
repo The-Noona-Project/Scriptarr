@@ -58,14 +58,16 @@
   from another browser session.
 - Signed-out HTML navigations for user, reader, and admin pages should redirect to `/login?returnTo=...`. Exclude
   `/login`, Moon APIs, OAuth callback/start routes, Next assets, icons, the manifest, and the service worker so auth
-  redirects never trap assets or broker calls.
+  redirects never trap assets or broker calls. The user, reader, and admin client shells should enforce the same rule
+  after chrome auth resolves, rendering only a minimal transition while replacing stale signed-out protected routes
+  with `/login`.
 - `/login` is the system front door. It must render without waiting for chrome/bootstrap, use the same-origin Discord
   start route, run only the bounded allowlisted post-login prep when `prepare=1`, and always expose a continue action.
 - Keep HTML responses uncached and static admin or user assets versioned so publishes invalidate the browser cache
   without relying on manual hard refreshes.
 - User and admin chrome should start from `/api/moon/chrome/bootstrap?returnTo=...`, which returns branding, auth,
   user identity, and first-owner bootstrap status in one Moon-owned response. Do not include a Discord OAuth URL in
-  that payload. Signed-out shells should point to `/login?returnTo=...`; the login page renders the local
+  that payload. Signed-out protected shells should redirect to `/login?returnTo=...`; the login page renders the local
   `/api/moon/auth/discord/start?returnTo=...` href immediately. That Moon route sets the OAuth state cookie and
   redirects to Discord. Keep `/api/moon/auth/discord/url?returnTo=...` available as the JSON compatibility endpoint,
   and keep chrome bootstrap broker calls independently timeout-bounded so a slow branding, auth, or first-owner-status

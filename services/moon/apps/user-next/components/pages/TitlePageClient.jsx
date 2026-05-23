@@ -304,11 +304,7 @@ export const TitlePageClient = ({titleId, typeSlug = ""}) => {
 
   if (!auth || (summaryStatus === 401 && !auth)) {
     return (
-      <AuthRequiredView
-        loginUrl={loginUrl}
-        title="Sign in to open this title"
-        detail="Connect your Discord account to browse title metadata, requests, and readable chapters."
-      />
+      <AuthRequiredView loginUrl={loginUrl} />
     );
   }
 

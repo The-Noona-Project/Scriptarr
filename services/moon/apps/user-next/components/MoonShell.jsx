@@ -62,6 +62,12 @@ const buildMenuGroups = (pathname, libraryTypes = [], activeType = "") => {
   ];
 };
 
+const AuthResolvingSurface = ({label = "Checking session."}) => (
+  <div className="moon-auth-resolving" role="status" aria-live="polite">
+    <span>{label}</span>
+  </div>
+);
+
 /**
  * Wrap every user page in Moon's local Next shell.
  *
@@ -99,8 +105,9 @@ export const MoonShell = ({children}) => {
 
   useEffect(() => {
     let active = true;
-    const query = typeof window === "undefined" ? "" : window.location.search || "";
-    const currentRoute = query ? `${publicPathname}${query}` : publicPathname;
+    const currentRoute = typeof window === "undefined"
+      ? publicPathname
+      : `${window.location.pathname}${window.location.search}`;
     const localLoginUrl = buildMoonLoginHref(currentRoute);
     setChrome((current) => current.auth ? current : {...current, loginUrl: localLoginUrl});
     void loadMoonChromeContext(currentRoute).then((nextValue) => {
@@ -118,6 +125,13 @@ export const MoonShell = ({children}) => {
       active = false;
     };
   }, [publicPathname]);
+
+  useEffect(() => {
+    if (isLoginRoute || !chrome.loaded || chrome.auth || chrome.authError) {
+      return;
+    }
+    window.location.replace(buildMoonLoginHref(`${window.location.pathname}${window.location.search}`));
+  }, [chrome.auth, chrome.authError, chrome.loaded, isLoginRoute]);
 
   useEffect(() => {
     syncQueryTypeFromLocation();
@@ -190,6 +204,8 @@ export const MoonShell = ({children}) => {
         <div className="moon-login-shell">
           <main className="moon-login-stage">{children}</main>
         </div>
+      ) : !chrome.loaded || !chrome.auth ? (
+        <AuthResolvingSurface label={chrome.authError || (chrome.loaded ? "Opening login." : "Checking session.")} />
       ) : (
         <div className="moon-app-shell">
           <header className="moon-header">

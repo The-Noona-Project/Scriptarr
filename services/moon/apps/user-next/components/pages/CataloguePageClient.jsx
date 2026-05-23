@@ -267,11 +267,7 @@ export const CataloguePageClient = ({initialSearchParams = {}, initialTypeSlug =
 
   if (chromeLoaded && (!auth || status === 401)) {
     return (
-      <AuthRequiredView
-        loginUrl={loginUrl}
-        title="Sign in to open the library"
-        detail={`${siteName} keeps the full catalogue, type views, and reading history behind your Discord session.`}
-      />
+      <AuthRequiredView loginUrl={loginUrl} />
     );
   }
 
