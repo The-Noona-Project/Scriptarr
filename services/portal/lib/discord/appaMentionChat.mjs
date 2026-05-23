@@ -5,12 +5,15 @@ import {normalizeString} from "./utils.mjs";
 const defaultAppaAiQueue = createAiResponseQueue();
 
 const normalizeArray = (value) => Array.isArray(value) ? value : [];
+const escapeRegExp = (value) => normalizeString(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 const resolveGuildId = (message) =>
   normalizeString(message?.guildId || message?.guild?.id || (message?.inGuild?.() ? message?.guildId : ""));
 
 const resolveBotUserId = (message, getBotUserId) =>
   normalizeString(getBotUserId?.() || message?.client?.user?.id || "");
+
+const normalizeBotUserIds = (value) => normalizeArray(value).map((entry) => normalizeString(entry)).filter(Boolean);
 
 const hasMention = (message, botUserId) => {
   if (!botUserId) {
@@ -20,11 +23,21 @@ const hasMention = (message, botUserId) => {
   if (typeof users?.has === "function" && users.has(botUserId)) {
     return true;
   }
-  return new RegExp(`<@!?${botUserId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}>`).test(normalizeString(message?.content));
+  return new RegExp(`<@!?${escapeRegExp(botUserId)}>`).test(normalizeString(message?.content));
 };
 
-const stripMention = (content, botUserId) =>
-  normalizeString(content).replace(new RegExp(`<@!?${botUserId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}>`, "g"), "").trim();
+const stripMentions = (content, botUserIds) => normalizeBotUserIds(botUserIds).reduce(
+  (current, botUserId) => current.replace(new RegExp(`<@!?${escapeRegExp(botUserId)}>`, "g"), ""),
+  normalizeString(content)
+).replace(/\s+/g, " ").trim().replace(/^(?:and|,|&|\+)\s+/i, "").trim();
+
+const classifyChatFailure = (message) => {
+  const text = normalizeString(message).toLowerCase();
+  if (/timed out|timeout|aborted|fetch failed|network|econn|socket/.test(text)) {
+    return "sage-timeout";
+  }
+  return "sage-error";
+};
 
 const buildUserPayload = (author = {}, member = {}) => ({
   discordUserId: normalizeString(author.id),
@@ -44,6 +57,7 @@ const buildUserPayload = (author = {}, member = {}) => ({
  *   roleManager: {checkAccess: Function},
  *   logger?: {warn?: Function},
  *   onRuntimeEvent?: Function,
+ *   getPeerBotUserIds?: () => string[],
  *   aiQueue?: ReturnType<typeof createAiResponseQueue>
  * }} options
  * @returns {(message: any) => Promise<boolean>}
@@ -55,14 +69,26 @@ export const createAppaMentionHandler = ({
   roleManager,
   logger,
   onRuntimeEvent,
+  getPeerBotUserIds,
   aiQueue = defaultAppaAiQueue
 }) => async (message) => {
   const settings = getSettings?.() || {};
   const appa = settings.appa || {};
   const guildId = resolveGuildId(message);
   const botUserId = resolveBotUserId(message, getBotUserId);
+  const peerBotUserIds = normalizeBotUserIds(getPeerBotUserIds?.());
 
   if (!guildId || message?.author?.bot || appa.enabled !== true || !hasMention(message, botUserId)) {
+    return false;
+  }
+  if (peerBotUserIds.some((peerBotUserId) => hasMention(message, peerBotUserId))) {
+    onRuntimeEvent?.({
+      type: "appa-chat-rejected",
+      at: new Date().toISOString(),
+      reason: "co-mention-noona-led",
+      authorId: normalizeString(message?.author?.id),
+      channelId: normalizeString(message?.channelId || message?.channel?.id)
+    });
     return false;
   }
 
@@ -91,7 +117,7 @@ export const createAppaMentionHandler = ({
     return false;
   }
 
-  const prompt = stripMention(message?.content, botUserId);
+  const prompt = stripMentions(message?.content, [botUserId, ...peerBotUserIds]);
   if (!prompt) {
     return false;
   }
@@ -152,21 +178,33 @@ export const createAppaMentionHandler = ({
       }
     });
     const payload = response?.payload || {};
-    await editPublicAiReply({
+    const replies = await editPublicAiReply({
       message,
       placeholder,
       content: payload.reply || (response?.ok
         ? "Appa is watching the admin side."
-        : payload.error || "Appa is unavailable right now."),
+        : "Appa is having trouble reaching the admin thread right now. Try again soon."),
       userId,
       fallback: "Appa is here, but the review cloud is quiet."
     });
+    if (replies?.placeholderEditFailed) {
+      onRuntimeEvent?.({
+        type: "appa-chat-delivery-degraded",
+        at: new Date().toISOString(),
+        authorId: userId,
+        channelId,
+        reason: "placeholder-edit-failed",
+        message: replies.placeholderEditError || ""
+      });
+    }
     onRuntimeEvent?.({
       type: response?.ok ? "appa-chat-handled" : "appa-chat-error",
       at: new Date().toISOString(),
       authorId: userId,
       channelId,
-      message: payload.error || ""
+      message: response?.ok ? "" : "sage-error",
+      degraded: payload.oracle?.degraded === true,
+      degradedReason: payload.oracle?.degraded === true ? "oracle.degraded" : ""
     });
     return true;
   } catch (error) {
@@ -174,21 +212,37 @@ export const createAppaMentionHandler = ({
       return true;
     }
     const messageText = error instanceof Error ? error.message : String(error);
+    const reason = classifyChatFailure(messageText);
     logger?.warn?.("Portal Appa mention chat failed.", {error});
     onRuntimeEvent?.({
       type: "appa-chat-error",
       at: new Date().toISOString(),
       authorId: userId,
       channelId,
-      message: messageText
+      reason,
+      message: reason
     });
-    await editPublicAiReply({
-      message,
-      placeholder,
-      content: "Appa lost the admin thread for a second. Try again soon.",
-      userId,
-      fallback: "Appa lost the admin thread for a second. Try again soon."
-    });
+    try {
+      const replies = await editPublicAiReply({
+        message,
+        placeholder,
+        content: "Appa is having trouble reaching the admin thread right now. Try again soon.",
+        userId,
+        fallback: "Appa is having trouble reaching the admin thread right now. Try again soon."
+      });
+      if (replies?.placeholderEditFailed) {
+        onRuntimeEvent?.({
+          type: "appa-chat-delivery-degraded",
+          at: new Date().toISOString(),
+          authorId: userId,
+          channelId,
+          reason: "placeholder-edit-failed",
+          message: replies.placeholderEditError || ""
+        });
+      }
+    } catch (deliveryError) {
+      logger?.warn?.("Portal Appa mention chat could not post a public failure reply.", {error: deliveryError});
+    }
     return true;
   }
 };

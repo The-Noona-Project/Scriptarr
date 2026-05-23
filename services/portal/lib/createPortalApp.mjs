@@ -9,6 +9,39 @@ const normalizeString = (value, fallback = "") => {
   return normalized || fallback;
 };
 
+const bearerToken = (value = "") => {
+  const match = /^Bearer\s+(.+)$/i.exec(String(value || "").trim());
+  return normalizeString(match?.[1]);
+};
+
+const isAuthorizedServiceRequest = (req, config) => {
+  const token = bearerToken(req.headers.authorization);
+  if (!token) {
+    return false;
+  }
+  const allowed = new Set([
+    normalizeString(config.serviceToken),
+    ...Object.values(config.serviceTokens || {}).map((entry) => normalizeString(entry))
+  ].filter(Boolean));
+  return allowed.has(token);
+};
+
+const requireServiceToken = (config, handler) => async (req, res) => {
+  if (!isAuthorizedServiceRequest(req, config)) {
+    res.status(401).json({error: "Missing or invalid service token."});
+    return;
+  }
+  await handler(req, res);
+};
+
+const smokeErrorResponse = (error) => {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  if (/restricted|not connected|not available|required/i.test(message)) {
+    return message;
+  }
+  return "Noona smoke check failed.";
+};
+
 export const createPortalApp = async ({
   logger = createLogger("PORTAL"),
   clientFactory
@@ -61,6 +94,17 @@ export const createPortalApp = async ({
     res.json(runtimeStatePayload());
   });
 
+  app.post("/api/runtime/discord/smoke/noona", requireServiceToken(config, async (req, res) => {
+    try {
+      res.json(await runtime.sendNoonaSmokeMessage(req.body || {}));
+    } catch (error) {
+      logger.warn("Portal Noona smoke message failed.", {error});
+      res.status(409).json({
+        error: smokeErrorResponse(error)
+      });
+    }
+  }));
+
   app.get("/api/commands", (_req, res) => {
     const state = runtimeStatePayload();
     res.json({
@@ -69,6 +113,12 @@ export const createPortalApp = async ({
         connectionState: state.connectionState,
         connected: state.connected,
         guildId: state.guildId,
+        settingsLoaded: state.settingsLoaded,
+        settingsError: state.settingsError,
+        settingsRecoveryAttempts: state.settingsRecoveryAttempts,
+        settingsRecoveryMaxAttempts: state.settingsRecoveryMaxAttempts,
+        settingsRecoveryNextAt: state.settingsRecoveryNextAt,
+        settingsRecoveryExhausted: state.settingsRecoveryExhausted,
         registeredGuildId: state.registeredGuildId,
         lastSyncAt: state.lastSyncAt,
         registeredCount: state.registeredCount,

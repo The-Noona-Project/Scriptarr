@@ -39,7 +39,7 @@ const normalizeString = (value, fallback = "") => {
 };
 const normalizeArray = (value) => Array.isArray(value) ? value : [];
 const normalizeObject = (value, fallback = null) => value && typeof value === "object" && !Array.isArray(value) ? value : fallback;
-const DISCORD_AI_CHAT_TIMEOUT_MS = 90000;
+const DISCORD_AI_CHAT_TIMEOUT_MS = 85000;
 const NOONA_DISCORD_PERSONA_STYLE = [
   "Noona is Scriptarr's public Discord big-sister persona: warm, playful, attentive, specific, and a little cheeky without sounding like a support ticket.",
   "Reply like a present person in the channel. Use one short paragraph, or 2-3 tight bullets when that is clearer.",
@@ -51,16 +51,23 @@ const NOONA_DISCORD_PERSONA_STYLE = [
 
 const isActionPrompt = (message) => /\b(start|stop|cancel|end|run|check|probe)\b/i.test(normalizeString(message));
 
-const isStatusPrompt = (message) => /\b(status|health|alive|up|down|broken|working)\b/i.test(normalizeString(message));
+const isStatusPrompt = (message) => /\b(status|health|healthy|alive|online|offline|available|responding|connected|reachable|there|up|down|broken|working|callback|boot)\b/i.test(normalizeString(message));
 const isTriviaPrompt = (message) => /\btrivia\b/i.test(normalizeString(message));
 const isLibraryPrompt = (message) => /\b(library|search|find|have|manga|comic|manhwa|webtoon)\b/i.test(normalizeString(message));
 const isUpdatePrompt = (message) => /\b(update|updates|updated|changelog|change\s*log|release\s+notes?|what\s+changed|new\s+commit|github|how\s+(do|can)\s+i\s+use)\b/i.test(normalizeString(message));
+const shouldUseDeterministicStatusReply = (message) => isStatusPrompt(message)
+  && !isActionPrompt(message)
+  && !isTriviaPrompt(message)
+  && !isLibraryPrompt(message)
+  && !isUpdatePrompt(message)
+  && !isVisualIdentityPrompt(message);
 
 const buildServiceHealthContext = async ({config, serviceJson}) => {
   const services = [
     ["warden", config.wardenBaseUrl, "/health"],
     ["oracle", config.oracleBaseUrl, "/health"],
-    ["raven", config.ravenBaseUrl, "/health"]
+    ["raven", config.ravenBaseUrl, "/health"],
+    ["portal", config.portalBaseUrl, "/health"]
   ].filter(([, baseUrl]) => normalizeString(baseUrl));
   const results = await Promise.all(services.map(async ([service, baseUrl, path]) => {
     try {
@@ -78,7 +85,81 @@ const buildServiceHealthContext = async ({config, serviceJson}) => {
       }];
     }
   }));
-  return Object.fromEntries(results);
+  return {
+    checkedAt: new Date().toISOString(),
+    freshness: "live probe from Sage",
+    ...Object.fromEntries(results)
+  };
+};
+
+const summarizePortalRuntime = (payload = {}) => {
+  const discord = normalizeObject(payload.discord, null) || normalizeObject(payload.runtime, null) || {};
+  const capabilities = normalizeObject(discord.capabilities, {}) || {};
+  const appa = normalizeObject(discord.appa, {}) || {};
+  return {
+    checkedAt: new Date().toISOString(),
+    mode: normalizeString(discord.mode),
+    connectionState: normalizeString(discord.connectionState),
+    connected: discord.connected === true,
+    settingsLoaded: discord.settingsLoaded === true,
+    noonaChat: {
+      status: normalizeString(capabilities.noonaChat?.status),
+      detail: normalizeString(capabilities.noonaChat?.detail).slice(0, 180)
+    },
+    appa: {
+      enabled: appa.enabled === true || appa.settingsEnabled === true,
+      connected: appa.connected === true,
+      splitWanted: appa.splitWanted === true,
+      degradedReason: normalizeString(appa.degradedReason),
+      registeredGuildCount: Number.parseInt(String(appa.registeredGuildCount || 0), 10) || 0
+    },
+    lastNoonaMentionAt: normalizeString(discord.lastNoonaMentionAt),
+    lastNoonaMentionError: normalizeString(discord.lastNoonaMentionError).slice(0, 160)
+  };
+};
+
+const buildPortalRuntimeContext = async ({config, serviceJson}) => {
+  if (!normalizeString(config.portalBaseUrl)) {
+    return null;
+  }
+  try {
+    const result = await serviceJson(config.portalBaseUrl, "/api/commands", {timeoutMs: 2500});
+    return summarizePortalRuntime(result.payload || result);
+  } catch (error) {
+    return {
+      checkedAt: new Date().toISOString(),
+      connected: false,
+      settingsLoaded: false,
+      error: error instanceof Error ? error.message : String(error)
+    };
+  }
+};
+
+const summarizeHealthCounts = (serviceHealth = {}) => {
+  const entries = Object.entries(serviceHealth)
+    .filter(([, value]) => value && typeof value === "object" && "ok" in value);
+  const degraded = entries.filter(([, value]) => value.ok === false);
+  return {
+    total: entries.length,
+    degraded: degraded.length,
+    healthy: entries.length - degraded.length
+  };
+};
+
+const noonaStatusReply = (readContext = {}) => {
+  const counts = summarizeHealthCounts(readContext.serviceHealth || {});
+  const appa = readContext.discordRuntime?.appa || {};
+  const stackText = counts.total
+    ? counts.degraded
+      ? `I am online, but ${counts.degraded} part${counts.degraded === 1 ? "" : "s"} of the reading stack need attention.`
+      : "I am online. The quick stack check answered cleanly."
+    : "I am online. I could not get the full stack check in time, but this Discord path is responding.";
+  const appaText = appa.connected
+    ? "Appa is connected too."
+    : appa.enabled || appa.splitWanted
+      ? "Appa is configured, but I do not see him fully connected right now."
+      : "";
+  return [stackText, appaText].filter(Boolean).join(" ");
 };
 
 const buildLibraryContext = async ({vaultClient, message}) => {
@@ -138,6 +219,9 @@ const buildReadContext = async ({config, serviceJson, vaultClient, triviaService
   }
   if (isTriviaPrompt(message)) {
     context.trivia = await triviaService?.getState?.().catch(() => null);
+  }
+  if (isStatusPrompt(message) || /\bdiscord\b/i.test(normalizeString(message))) {
+    context.discordRuntime = await buildPortalRuntimeContext({config, serviceJson});
   }
   if (/\bdiscord\b/i.test(normalizeString(message))) {
     const settings = await readPortalDiscordSettings?.().catch(() => null);
@@ -270,6 +354,20 @@ export const createNoonaChatService = ({
       readPortalDiscordSettings,
       message
     });
+    if (shouldUseDeterministicStatusReply(message)) {
+      return {
+        ok: true,
+        reply: noonaStatusReply(readContext || {}),
+        memory: memoryContext,
+        readContext,
+        oracle: {
+          disabled: false,
+          degraded: false,
+          skipped: true
+        },
+        deterministic: true
+      };
+    }
     const oracle = await serviceJson(config.oracleBaseUrl, "/api/chat", {
       method: "POST",
       body: {

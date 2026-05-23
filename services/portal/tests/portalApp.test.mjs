@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
+import {EventEmitter} from "node:events";
 
 process.env.NODE_ENV = "test";
 
@@ -16,12 +17,15 @@ const withPortalEnv = async (overrides, handler) => {
     "DISCORD_TOKEN",
     "SCRIPTARR_DISCORD_TOKEN",
     "SCRIPTARR_DISCORD_CLIENT_ID",
+    "SCRIPTARR_APPA_DISCORD_TOKEN",
+    "SCRIPTARR_APPA_DISCORD_CLIENT_ID",
     "SCRIPTARR_DISCORD_BOT_PERSONA",
     "SCRIPTARR_DISCORD_AVATAR_MODE",
     "SCRIPTARR_DISCORD_GUILD_ID",
     "SCRIPTARR_DISCORD_SUPERUSER_ID",
     "SCRIPTARR_DISCORD_UPDATE_CHANNEL_ID",
-    "SCRIPTARR_ONBOARDING_TEMPLATE"
+    "SCRIPTARR_ONBOARDING_TEMPLATE",
+    "SCRIPTARR_SERVICE_TOKENS"
   ];
   const previous = new Map(keys.map((key) => [key, process.env[key]]));
 
@@ -45,6 +49,35 @@ const withPortalEnv = async (overrides, handler) => {
     }
   }
 };
+
+class FakeDiscordClient extends EventEmitter {
+  constructor(id) {
+    super();
+    this.user = {id, tag: `${id}#0001`};
+    this.sentChannelMessages = [];
+    this.application = {
+      commands: {
+        set: async (definitions) => definitions
+      }
+    };
+    this.channels = {
+      fetch: async (channelId) => ({
+        id: channelId,
+        send: async (payload) => {
+          const posted = {id: `${id}-message-${this.sentChannelMessages.length + 1}`, ...payload};
+          this.sentChannelMessages.push({channelId, payload});
+          return posted;
+        }
+      })
+    };
+  }
+
+  async login() {
+    queueMicrotask(() => this.emit("ready", this));
+  }
+
+  destroy() {}
+}
 
 const createJsonServer = async (routes) => {
   const hits = [];
@@ -262,6 +295,125 @@ test("portal HTTP surface covers command inventory, request routing, chat routin
   });
 
   await legacySage.close();
+});
+
+test("Noona smoke route is service-token gated and posts only to the smoke channel", async () => {
+  const diagnostics = [];
+  const noonaChats = [];
+  const sage = await createJsonServer({
+    "GET /api/internal/portal/discord/settings": async () => ({
+      body: {
+        guildId: "guild-1",
+        noonaChat: {enabled: true, allowedChannelIds: []},
+        commands: {chat: {enabled: true}},
+        appa: {
+          enabled: true,
+          adminMentionChannelIds: ["1352387716259778570"],
+          commands: {
+            status: {enabled: true},
+            discord: {enabled: true}
+          }
+        }
+      }
+    }),
+    "POST /api/internal/portal/appa-discord-diagnostic": async ({body}) => {
+      diagnostics.push(body);
+      return {body: {ok: true}};
+    },
+    "POST /api/internal/portal/noona-chat": async ({body}) => {
+      noonaChats.push(body);
+      return {body: {ok: true, reply: "Noona smoke ok"}};
+    }
+  });
+
+  try {
+    await withPortalEnv({
+      SCRIPTARR_SAGE_BASE_URL: sage.baseUrl,
+      SCRIPTARR_SERVICE_TOKEN: "portal-service-token",
+      SCRIPTARR_DISCORD_TOKEN: "noona-token",
+      SCRIPTARR_DISCORD_CLIENT_ID: "noona-client",
+      SCRIPTARR_APPA_DISCORD_TOKEN: "appa-token",
+      SCRIPTARR_APPA_DISCORD_CLIENT_ID: "appa-client"
+    }, async () => {
+      const noonaClient = new FakeDiscordClient("noona-1");
+      const appaClient = new FakeDiscordClient("appa-1");
+      const clients = [noonaClient, appaClient];
+      const portal = await createPortalServer({
+        clientFactory: async () => clients.shift()
+      });
+      try {
+        const unauthenticated = await fetch(`${portal.baseUrl}/api/runtime/discord/smoke/noona`, {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({channelId: "1352387716259778570"})
+        });
+        assert.equal(unauthenticated.status, 401);
+
+        await portal.runtime.start();
+
+        const wrongChannel = await fetch(`${portal.baseUrl}/api/runtime/discord/smoke/noona`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: "Bearer portal-service-token"
+          },
+          body: JSON.stringify({channelId: "wrong-channel"})
+        });
+        assert.equal(wrongChannel.status, 409);
+        assert.match((await wrongChannel.json()).error, /restricted/i);
+
+        const response = await fetch(`${portal.baseUrl}/api/runtime/discord/smoke/noona`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: "Bearer portal-service-token"
+          },
+          body: JSON.stringify({channelId: "1352387716259778570"})
+        });
+        const payload = await response.json();
+        assert.equal(response.status, 200);
+        assert.equal(payload.ok, true);
+        assert.equal(appaClient.sentChannelMessages.length, 1);
+        assert.match(appaClient.sentChannelMessages[0].payload.content, /^<@noona-1> \[smoke:[a-f0-9-]+\] are you online\?$/i);
+        assert.deepEqual(appaClient.sentChannelMessages[0].payload.allowedMentions, {
+          users: ["noona-1"],
+          repliedUser: false,
+          parse: []
+        });
+        assert.equal(diagnostics[0].messageExcerpt, "Noona AI smoke ping");
+
+        const replies = [];
+        const edits = [];
+        noonaClient.emit("messageCreate", {
+          id: "appa-smoke-message-1",
+          guildId: "guild-1",
+          channelId: "1352387716259778570",
+          content: appaClient.sentChannelMessages[0].payload.content,
+          author: {id: "appa-1", username: "Appa", bot: true},
+          member: {roles: {cache: new Set()}},
+          mentions: {users: new Set(["noona-1"]), has: (id) => id === "noona-1"},
+          channel: {id: "1352387716259778570", sendTyping: async () => {}},
+          reply: async (replyPayload) => {
+            replies.push(replyPayload);
+            return {
+              id: "noona-smoke-reply-1",
+              edit: async (editPayload) => {
+                edits.push(editPayload);
+                return editPayload;
+              }
+            };
+          }
+        });
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        assert.equal(noonaChats[0].message, "are you online?");
+        assert.equal(edits[0].content, "<@appa-1> Noona smoke ok");
+      } finally {
+        await portal.close();
+      }
+    });
+  } finally {
+    await sage.close();
+  }
 });
 
 test("portal notifier delivers follow, approval, denial, and completion DMs once", async () => {

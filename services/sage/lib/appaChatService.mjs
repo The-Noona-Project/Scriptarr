@@ -18,13 +18,17 @@ const normalizeString = (value, fallback = "") => {
 };
 const normalizeArray = (value) => Array.isArray(value) ? value : [];
 const normalizeObject = (value, fallback = null) => value && typeof value === "object" && !Array.isArray(value) ? value : fallback;
-const DISCORD_AI_CHAT_TIMEOUT_MS = 90000;
+const DISCORD_AI_CHAT_TIMEOUT_MS = 85000;
 const DISCORD_AI_REVIEW_TIMEOUT_MS = 60000;
 
 const isActionPrompt = (message) => /\b(start|stop|cancel|end|run|check|probe)\b/i.test(normalizeString(message));
-const isStatusPrompt = (message) => /\b(status|health|healthy|alive|up|down|broken|working)\b/i.test(normalizeString(message));
+const isStatusPrompt = (message) => /\b(status|health|healthy|alive|online|offline|available|responding|connected|reachable|there|up|down|broken|working|callback|boot)\b/i.test(normalizeString(message));
 const isTriviaPrompt = (message) => /\btrivia\b/i.test(normalizeString(message));
 const isDiscordPrompt = (message) => /\b(discord|command|bot|appa|noona)\b/i.test(normalizeString(message));
+const shouldUseDeterministicStatusReply = (message) => isStatusPrompt(message)
+  && !isActionPrompt(message)
+  && !isTriviaPrompt(message)
+  && !isVisualIdentityPrompt(message);
 
 const summarizeHealthPayload = (service, payload = {}) => {
   const explicit = normalizeString(payload?.status || payload?.service || payload?.message);
@@ -140,6 +144,28 @@ const compactDiscordSettings = (settings) => settings ? {
   triviaEnabled: settings.trivia?.enabled === true
 } : null;
 
+const summarizeHealthCounts = (serviceHealth = {}) => {
+  const entries = Object.entries(serviceHealth)
+    .filter(([, value]) => value && typeof value === "object" && "ok" in value);
+  const degraded = entries.filter(([, value]) => value.ok === false);
+  return {entries, degraded};
+};
+
+const appaStatusReply = (readContext = {}) => {
+  const {entries, degraded} = summarizeHealthCounts(readContext.serviceHealth || {});
+  const serviceText = entries.length
+    ? entries.map(([service, value]) => `${service}: ${value.ok === false ? "degraded" : "ok"}`).join(", ")
+    : "no live service probes returned";
+  const discord = readContext.discord;
+  const discordText = discord
+    ? `Discord settings: Noona chat ${discord.noonaChatEnabled ? "enabled" : "disabled"}, Appa ${discord.appaEnabled ? "enabled" : "disabled"}.`
+    : "";
+  const summary = degraded.length
+    ? `Appa is connected, but ${degraded.length} probe${degraded.length === 1 ? "" : "s"} are degraded.`
+    : "Appa is connected and the live probes are clean.";
+  return [summary, `Probes: ${serviceText}.`, discordText].filter(Boolean).join(" ");
+};
+
 const buildAppaReadContext = async ({config, serviceJson, triviaService, readPortalDiscordSettings, message}) => {
   const context = {};
   if (isStatusPrompt(message)) {
@@ -247,6 +273,19 @@ export const createAppaChatService = ({
     }
 
     const readContext = await buildAppaReadContext({config, serviceJson, triviaService, readPortalDiscordSettings, message});
+    if (shouldUseDeterministicStatusReply(message)) {
+      return {
+        ok: true,
+        reply: appaStatusReply(readContext || {}),
+        readContext,
+        oracle: {
+          disabled: false,
+          degraded: false,
+          skipped: true
+        },
+        deterministic: true
+      };
+    }
     const oracle = await serviceJson(config.oracleBaseUrl, "/api/chat", {
       method: "POST",
       body: {

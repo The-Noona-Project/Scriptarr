@@ -22,6 +22,10 @@ Oracle preserves the same internal contract used elsewhere in Scriptarr:
 Appa admin mentions. That context can carry persona hints, summarized Noona memory, user display information, and
 read-only status/library/trivia context. Oracle treats it as background only; it does not store memory, execute tools,
 mutate Scriptarr, or reveal raw identifiers/secrets back to Discord.
+Obvious status and presence prompts such as `online`, `connected`, `reachable`, `there`, `alive`, `status`, and
+`health` short-circuit to a read-only bounded status reply before any LLM call. When Sage does include curated
+`serviceHealth` or Discord runtime context, Oracle treats those summaries as the current bounded status check and avoids
+claiming it lacks live status.
 Sage may also include a small `visualIdentity` context for Noona and Appa appearance questions; Oracle treats those
 descriptions as read-only persona background and does not inspect image files directly.
 

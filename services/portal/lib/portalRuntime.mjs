@@ -1,3 +1,4 @@
+import {randomUUID} from "node:crypto";
 import {createDiscordClient} from "./discord/client.mjs";
 import {resolveDiscordBotIdentity} from "./discord/botIdentity.mjs";
 import {buildCommandInventory, filterCommandMap} from "./discord/commandCatalog.mjs";
@@ -37,6 +38,8 @@ const DOWNLOADALL_DENY_REACTION = "❌";
 
 const NOONA_SPLIT_COMMANDS = Object.freeze(["search", "request", "subscribe", "trivia"]);
 const APPA_SPLIT_COMMANDS = Object.freeze(["ding", "status", "trivia", "discord", "ingest", "downloadall"]);
+const NOONA_SMOKE_CHANNEL_ID = "1352387716259778570";
+const NOONA_SMOKE_TTL_MS = 90000;
 
 const collectErrorText = (error) => {
   const fragments = [];
@@ -90,6 +93,27 @@ const describeSettledFailure = (settled, label) => {
   return "";
 };
 
+const messageMentionsBotUser = (message, botUserId) => {
+  const id = normalizeString(botUserId);
+  if (!id) {
+    return false;
+  }
+  const users = message?.mentions?.users;
+  if (typeof users?.has === "function" && users.has(id)) {
+    return true;
+  }
+  if (typeof message?.mentions?.has === "function") {
+    try {
+      if (message.mentions.has(id)) {
+        return true;
+      }
+    } catch {
+      // Discord.js test shims may only implement mentions.users.
+    }
+  }
+  return new RegExp(`<@!?${id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}>`).test(normalizeString(message?.content));
+};
+
 const resolveConnectionState = (state) => {
   if (state.connected) {
     return "connected";
@@ -101,6 +125,15 @@ const resolveConnectionState = (state) => {
     return "disconnected";
   }
   return "missing";
+};
+
+const DEFAULT_SETTINGS_RECOVERY_MAX_ATTEMPTS = 6;
+const DEFAULT_SETTINGS_RECOVERY_INITIAL_DELAY_MS = 5000;
+const DEFAULT_SETTINGS_RECOVERY_MAX_DELAY_MS = 60000;
+
+const resolvePositiveInteger = (value, fallback) => {
+  const normalized = Number(value);
+  return Number.isInteger(normalized) && normalized > 0 ? normalized : fallback;
 };
 
 const createCapabilities = (state, settings) => {
@@ -126,6 +159,11 @@ const createCapabilities = (state, settings) => {
         status: "degraded",
         detail: state.syncError
       }
+      : connected && !state.settingsLoaded && state.settingsError
+        ? {
+          status: "degraded",
+          detail: `Portal is connected, but brokered Discord settings are unavailable: ${state.settingsError}`
+        }
       : connected && settings.guildId
         ? {
           status: "available",
@@ -297,12 +335,29 @@ export const createPortalRuntime = ({
   const legacyBotIdentity = resolveDiscordBotIdentity(config.discordBotPersona);
   const noonaBotIdentity = resolveDiscordBotIdentity("noona");
   const appaBotIdentity = resolveDiscordBotIdentity("appa");
+  const settingsRecoveryMaxAttempts = resolvePositiveInteger(
+    config.settingsRecoveryMaxAttempts,
+    DEFAULT_SETTINGS_RECOVERY_MAX_ATTEMPTS
+  );
+  const settingsRecoveryInitialDelayMs = resolvePositiveInteger(
+    config.settingsRecoveryInitialDelayMs,
+    DEFAULT_SETTINGS_RECOVERY_INITIAL_DELAY_MS
+  );
+  const settingsRecoveryMaxDelayMs = resolvePositiveInteger(
+    config.settingsRecoveryMaxDelayMs,
+    DEFAULT_SETTINGS_RECOVERY_MAX_DELAY_MS
+  );
+  let settingsRecoveryTimer = null;
   let state = {
     mode: config.discordToken && config.discordClientId ? "idle" : "disabled",
     connected: false,
     authConfigured: Boolean(config.discordToken && config.discordClientId),
     settingsLoaded: false,
     settingsError: null,
+    settingsRecoveryAttempts: 0,
+    settingsRecoveryMaxAttempts,
+    settingsRecoveryNextAt: null,
+    settingsRecoveryExhausted: false,
     splitEnabled: false,
     appa: {
       mode: config.appaDiscordToken && config.appaDiscordClientId ? "idle" : "disabled",
@@ -337,7 +392,11 @@ export const createPortalRuntime = ({
       lastCorrectionError: null,
       lastBotAvatarSyncAt: null,
       lastBotAvatarSyncStatus: null,
-      lastBotAvatarSyncError: null
+      lastBotAvatarSyncError: null,
+      lastMentionDegradedAt: null,
+      lastMentionDegradedReason: null,
+      lastMentionDeliveryIssueAt: null,
+      lastMentionDeliveryIssue: null
     },
     guildId: settings.guildId,
     registeredGuildId: "",
@@ -362,9 +421,18 @@ export const createPortalRuntime = ({
     lastNoonaMentionAt: null,
     lastNoonaMentionChannelId: null,
     lastNoonaMentionUserId: null,
-    lastNoonaMentionError: null
+    lastNoonaMentionError: null,
+    lastNoonaMentionDegradedAt: null,
+    lastNoonaMentionDegradedReason: null,
+    lastNoonaMentionDeliveryIssueAt: null,
+    lastNoonaMentionDeliveryIssue: null,
+    lastNoonaSmokePostAt: null,
+    lastNoonaSmokePostChannelId: null,
+    lastNoonaSmokePostMessageId: null,
+    lastNoonaSmokeConsumedAt: null
   };
   let brandName = "Scriptarr";
+  const noonaSmokeNonces = new Map();
 
   const trackDiscordClient = (client) => {
     if (client && typeof client.destroy === "function") {
@@ -471,6 +539,41 @@ export const createPortalRuntime = ({
               : sourceState.appa?.error || ""
     };
   };
+
+  const pruneNoonaSmokeNonces = (now = Date.now()) => {
+    for (const [nonce, entry] of noonaSmokeNonces.entries()) {
+      if (!entry?.expiresAtMs || entry.expiresAtMs <= now) {
+        noonaSmokeNonces.delete(nonce);
+      }
+    }
+  };
+
+  const consumeNoonaSmokeNonce = (message) => {
+    pruneNoonaSmokeNonces();
+    const appaBotUserId = normalizeString(appaDiscord?.client?.user?.id);
+    if (!appaBotUserId || normalizeString(message?.author?.id) !== appaBotUserId) {
+      return false;
+    }
+    const channelId = normalizeString(message?.channelId || message?.channel?.id);
+    if (channelId !== NOONA_SMOKE_CHANNEL_ID) {
+      return false;
+    }
+    const nonce = normalizeString(/\[smoke:([a-f0-9-]{16,})\]/i.exec(normalizeString(message?.content))?.[1]);
+    const entry = nonce ? noonaSmokeNonces.get(nonce) : null;
+    if (!entry || entry.channelId !== channelId || entry.expiresAtMs <= Date.now()) {
+      noonaSmokeNonces.delete(nonce);
+      return false;
+    }
+    noonaSmokeNonces.delete(nonce);
+    state = {
+      ...state,
+      lastNoonaSmokeConsumedAt: new Date().toISOString()
+    };
+    return true;
+  };
+
+  const prepareNoonaMentionPrompt = ({prompt}) =>
+    normalizeString(prompt).replace(/\[smoke:[^\]]+\]/gi, "").replace(/\s+/g, " ").trim();
 
   const handleNoonaReviewCandidate = async (candidate = {}) => {
     if (!isAppaSplitEnabled() || settings.appa?.reviewEnabled === false || settings.appa?.correctionMode === "off" || !appaDiscord) {
@@ -622,7 +725,21 @@ export const createPortalRuntime = ({
           lastMentionAt: event.at || new Date().toISOString(),
           lastMentionChannelId: normalizeString(event.channelId),
           lastMentionUserId: normalizeString(event.authorId),
-          lastMentionError: null
+          lastMentionError: null,
+          lastMentionDegradedAt: event.degraded ? event.at || new Date().toISOString() : state.appa.lastMentionDegradedAt,
+          lastMentionDegradedReason: event.degraded ? normalizeString(event.degradedReason, "oracle.degraded") : null
+        }
+      };
+      return;
+    }
+
+    if (event.type === "appa-chat-delivery-degraded") {
+      state = {
+        ...state,
+        appa: {
+          ...state.appa,
+          lastMentionDeliveryIssueAt: event.at || new Date().toISOString(),
+          lastMentionDeliveryIssue: normalizeString(event.reason, "delivery-degraded")
         }
       };
       return;
@@ -677,7 +794,18 @@ export const createPortalRuntime = ({
         lastNoonaMentionAt: event.at || new Date().toISOString(),
         lastNoonaMentionChannelId: normalizeString(event.channelId),
         lastNoonaMentionUserId: normalizeString(event.authorId),
-        lastNoonaMentionError: null
+        lastNoonaMentionError: null,
+        lastNoonaMentionDegradedAt: event.degraded ? event.at || new Date().toISOString() : state.lastNoonaMentionDegradedAt,
+        lastNoonaMentionDegradedReason: event.degraded ? normalizeString(event.degradedReason, "oracle.degraded") : null
+      };
+      return;
+    }
+
+    if (event.type === "noona-chat-delivery-degraded") {
+      state = {
+        ...state,
+        lastNoonaMentionDeliveryIssueAt: event.at || new Date().toISOString(),
+        lastNoonaMentionDeliveryIssue: normalizeString(event.reason, "delivery-degraded")
       };
       return;
     }
@@ -766,10 +894,106 @@ export const createPortalRuntime = ({
     }
   };
 
-  const refreshSettings = async () => {
+  const clearSettingsRecovery = ({resetAttempts = true} = {}) => {
+    if (settingsRecoveryTimer) {
+      clearTimeout(settingsRecoveryTimer);
+      settingsRecoveryTimer = null;
+    }
+    state = {
+      ...state,
+      ...(resetAttempts ? {settingsRecoveryAttempts: 0} : {}),
+      settingsRecoveryMaxAttempts,
+      settingsRecoveryNextAt: null,
+      settingsRecoveryExhausted: false
+    };
+  };
+
+  const scheduleSettingsRecovery = (reason = "settings-unavailable") => {
+    if (!state.authConfigured || state.settingsLoaded || settingsRecoveryTimer) {
+      return;
+    }
+    if (state.settingsRecoveryAttempts >= settingsRecoveryMaxAttempts) {
+      state = {
+        ...state,
+        settingsRecoveryMaxAttempts,
+        settingsRecoveryNextAt: null,
+        settingsRecoveryExhausted: true
+      };
+      logger?.warn?.("Portal Discord settings recovery exhausted.", {
+        reason,
+        attempts: state.settingsRecoveryAttempts,
+        maxAttempts: settingsRecoveryMaxAttempts,
+        settingsError: state.settingsError
+      });
+      return;
+    }
+
+    const nextAttempt = state.settingsRecoveryAttempts + 1;
+    const delayMs = Math.min(
+      settingsRecoveryMaxDelayMs,
+      settingsRecoveryInitialDelayMs * (2 ** state.settingsRecoveryAttempts)
+    );
+    const nextAt = new Date(Date.now() + delayMs).toISOString();
+    state = {
+      ...state,
+      settingsRecoveryMaxAttempts,
+      settingsRecoveryNextAt: nextAt,
+      settingsRecoveryExhausted: false
+    };
+    logger?.warn?.("Portal Discord settings unavailable; scheduled recovery.", {
+      reason,
+      attempt: nextAttempt,
+      maxAttempts: settingsRecoveryMaxAttempts,
+      nextAt,
+      settingsError: state.settingsError
+    });
+    settingsRecoveryTimer = setTimeout(() => {
+      settingsRecoveryTimer = null;
+      state = {
+        ...state,
+        settingsRecoveryAttempts: state.settingsRecoveryAttempts + 1,
+        settingsRecoveryMaxAttempts,
+        settingsRecoveryNextAt: null
+      };
+      void refreshSettings({source: "settings-recovery"}).catch((error) => {
+        logger?.warn?.("Portal Discord settings recovery attempt failed.", {
+          attempt: state.settingsRecoveryAttempts,
+          maxAttempts: settingsRecoveryMaxAttempts,
+          error
+        });
+        scheduleSettingsRecovery("settings-recovery-failed");
+      });
+    }, delayMs);
+    settingsRecoveryTimer.unref?.();
+  };
+
+  const runSettingsPhase = async (phase, operation) => {
+    const startedAt = Date.now();
+    try {
+      const result = await operation();
+      logger?.info?.("Portal Discord settings phase completed.", {
+        phase,
+        durationMs: Date.now() - startedAt,
+        ok: result?.ok !== false,
+        status: result?.status || null
+      });
+      return result;
+    } catch (error) {
+      logger?.warn?.("Portal Discord settings phase failed.", {
+        phase,
+        durationMs: Date.now() - startedAt,
+        error
+      });
+      throw error;
+    }
+  };
+
+  const refreshSettings = async (_options = {}) => {
     const [settingsResponse, brandingResponse] = await Promise.allSettled([
-      sage.getDiscordSettings(),
-      typeof sage.getBranding === "function" ? sage.getBranding() : Promise.resolve({ok: false, payload: null})
+      runSettingsPhase("discord-settings", () => sage.getDiscordSettings()),
+      runSettingsPhase("branding", () => (
+        typeof sage.getBranding === "function" ? sage.getBranding() : Promise.resolve({ok: false, payload: null})
+      ))
     ]);
     const settingsError = describeSettledFailure(settingsResponse, "Discord settings");
     if (settingsResponse.status === "fulfilled" && settingsResponse.value.ok) {
@@ -792,6 +1016,11 @@ export const createPortalRuntime = ({
         clientIdConfigured: Boolean(config.appaDiscordClientId)
       }
     };
+    if (settingsError) {
+      scheduleSettingsRecovery("settings-refresh-failed");
+    } else {
+      clearSettingsRecovery();
+    }
     if (discord && state.connected) {
       const wantsSplit = isAppaSplitEnabled();
       const hasSplit = Boolean(state.splitEnabled && appaDiscord && state.appa?.connected);
@@ -864,6 +1093,9 @@ export const createPortalRuntime = ({
       logger,
       onRuntimeEvent: recordRuntimeEvent,
       onReviewCandidate: handleNoonaReviewCandidate,
+      getPeerBotUserIds: () => [normalizeString(appaDiscord?.client?.user?.id)].filter(Boolean),
+      allowBotAuthoredMessage: consumeNoonaSmokeNonce,
+      preparePrompt: prepareNoonaMentionPrompt,
       aiQueue: noonaAiQueue
     });
     nextDiscord = trackDiscordClient(await createDiscordClient({
@@ -880,7 +1112,9 @@ export const createPortalRuntime = ({
       }),
       guildMessageHandler: async (message) => {
         const handledByNoona = await noonaMentionHandler(message);
-        if (!handledByNoona) {
+        const mentionsPortalBot = [nextDiscord?.client?.user?.id, appaDiscord?.client?.user?.id]
+          .some((botUserId) => messageMentionsBotUser(message, botUserId));
+        if (!handledByNoona && !mentionsPortalBot) {
           await triviaRuntime?.handleGuildMessage?.(message);
         }
       },
@@ -956,6 +1190,7 @@ export const createPortalRuntime = ({
       roleManager: appaRoleManager,
       logger,
       onRuntimeEvent: recordRuntimeEvent,
+      getPeerBotUserIds: () => [normalizeString(discord?.client?.user?.id)].filter(Boolean),
       aiQueue: appaAiQueue
     });
     nextAppa = trackDiscordClient(await createDiscordClient({
@@ -1215,6 +1450,7 @@ export const createPortalRuntime = ({
     }
     lifecycleGeneration += 1;
     stopPromise = (async () => {
+      clearSettingsRecovery();
       await cleanupRuntimePieces({cancelQueues: true});
       state = {
         ...state,
@@ -1389,6 +1625,51 @@ export const createPortalRuntime = ({
     return triviaRuntime.postLeaderboard(windowName, targetChannelId, {settings: overrideSettings || settings.trivia});
   };
 
+  const sendNoonaSmokeMessage = async (payload = {}) => {
+    const channelId = normalizeString(payload.channelId, NOONA_SMOKE_CHANNEL_ID);
+    if (channelId !== NOONA_SMOKE_CHANNEL_ID) {
+      throw new Error("Noona smoke checks are restricted to the configured smoke channel.");
+    }
+    if (!discord || !state.connected) {
+      throw new Error("Noona Discord runtime is not connected.");
+    }
+    if (!appaDiscord || !state.appa?.connected) {
+      throw new Error("Appa Discord runtime is not connected.");
+    }
+    const noonaBotUserId = normalizeString(discord?.client?.user?.id);
+    if (!noonaBotUserId) {
+      throw new Error("Noona bot user id is not available yet.");
+    }
+    const nonce = randomUUID();
+    const expiresAtMs = Date.now() + NOONA_SMOKE_TTL_MS;
+    const expiresAt = new Date(expiresAtMs).toISOString();
+    noonaSmokeNonces.set(nonce, {channelId, expiresAtMs});
+    const posted = await appaDiscord.sendChannelMessage(channelId, {
+      content: `<@${noonaBotUserId}> [smoke:${nonce}] are you online?`,
+      allowedMentions: {users: [noonaBotUserId], repliedUser: false, parse: []}
+    });
+    await sage.recordAppaDiscordDiagnostic?.({
+      action: "testpost",
+      guildId: normalizeString(settings.guildId),
+      channelId,
+      requestedBy: normalizeString(payload.requestedBy, "scriptarr-portal"),
+      messageId: normalizeString(posted?.id),
+      messageExcerpt: "Noona AI smoke ping"
+    }).catch((error) => logger?.warn?.("Portal could not persist Noona smoke diagnostic.", {error}));
+    state = {
+      ...state,
+      lastNoonaSmokePostAt: new Date().toISOString(),
+      lastNoonaSmokePostChannelId: channelId,
+      lastNoonaSmokePostMessageId: normalizeString(posted?.id)
+    };
+    return {
+      ok: true,
+      channelId,
+      messageId: normalizeString(posted?.id),
+      expiresAt
+    };
+  };
+
   return {
     start,
     stop,
@@ -1429,7 +1710,8 @@ export const createPortalRuntime = ({
     sendUpdateNotificationTest,
     startTriviaRound,
     stopTriviaRound,
-    postTriviaLeaderboard
+    postTriviaLeaderboard,
+    sendNoonaSmokeMessage
   };
 };
 

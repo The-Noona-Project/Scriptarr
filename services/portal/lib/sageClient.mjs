@@ -28,12 +28,18 @@ const TRIVIA_GUESS_TIMEOUT_MS = 9000;
 const TRIVIA_MUTATION_TIMEOUT_MS = 10000;
 const INGEST_PREVIEW_TIMEOUT_MS = 30000;
 const INGEST_RUN_TIMEOUT_MS = 900000;
+const DISCORD_SETTINGS_TIMEOUT_MS = 12000;
+const DISCORD_SETTINGS_RETRIES = 3;
+const DISCORD_SETTINGS_RETRY_DELAY_MS = 500;
+const BRANDING_TIMEOUT_MS = 5000;
+const BRANDING_RETRIES = 2;
+const BRANDING_RETRY_DELAY_MS = 250;
 
 const isRetryableNetworkError = (error) => {
   if (!(error instanceof Error)) {
     return false;
   }
-  return /fetch failed/i.test(error.message || "");
+  return /fetch failed|timed out|aborted/i.test(error.message || "");
 };
 
 const requestJson = async (baseUrl, headers, path, options = {}) => {
@@ -111,10 +117,22 @@ export const createSageClient = (config) => {
 
   return {
     getDiscordSettings() {
-      return requestJson(config.sageBaseUrl, authHeader, "/api/internal/portal/discord/settings");
+      return requestJson(config.sageBaseUrl, authHeader, "/api/internal/portal/discord/settings", {
+        retries: Number.isInteger(config.discordSettingsRetries) ? config.discordSettingsRetries : DISCORD_SETTINGS_RETRIES,
+        retryDelayMs: Number.isInteger(config.discordSettingsRetryDelayMs)
+          ? config.discordSettingsRetryDelayMs
+          : DISCORD_SETTINGS_RETRY_DELAY_MS,
+        timeoutMs: Number.isInteger(config.discordSettingsTimeoutMs)
+          ? config.discordSettingsTimeoutMs
+          : DISCORD_SETTINGS_TIMEOUT_MS
+      });
     },
     getBranding() {
-      return requestJson(config.sageBaseUrl, authHeader, "/api/moon-v3/public/branding");
+      return requestJson(config.sageBaseUrl, authHeader, "/api/moon-v3/public/branding", {
+        retries: Number.isInteger(config.brandingRetries) ? config.brandingRetries : BRANDING_RETRIES,
+        retryDelayMs: Number.isInteger(config.brandingRetryDelayMs) ? config.brandingRetryDelayMs : BRANDING_RETRY_DELAY_MS,
+        timeoutMs: Number.isInteger(config.brandingTimeoutMs) ? config.brandingTimeoutMs : BRANDING_TIMEOUT_MS
+      });
     },
     getStatusSummary() {
       return requestJson(config.sageBaseUrl, authHeader, "/api/internal/portal/status");

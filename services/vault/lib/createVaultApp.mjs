@@ -56,9 +56,36 @@ const sendStoreError = (logger, res, error, context = {}) => {
   return false;
 };
 
-export const createVaultApp = async ({logger = createLogger("VAULT")} = {}) => {
-  const config = resolveVaultConfig();
-  const store = createStore(config);
+const runTimedStoreOperation = async (logger, config, operation, action) => {
+  const startedAt = Date.now();
+  try {
+    const result = await action();
+    const durationMs = Date.now() - startedAt;
+    if (durationMs >= config.slowStoreOperationMs) {
+      logger.warn("Vault store operation was slow.", {
+        operation,
+        durationMs,
+        thresholdMs: config.slowStoreOperationMs
+      });
+    }
+    return result;
+  } catch (error) {
+    logger.warn("Vault store operation failed.", {
+      operation,
+      durationMs: Date.now() - startedAt,
+      error
+    });
+    throw error;
+  }
+};
+
+export const createVaultApp = async ({
+  logger = createLogger("VAULT"),
+  config: configOverride = null,
+  storeFactory = createStore
+} = {}) => {
+  const config = configOverride || resolveVaultConfig();
+  const store = storeFactory(config);
   await store.init();
   const pruneExpiredSessions = async (reason) => {
     if (typeof store.pruneExpiredSessions !== "function") {
@@ -93,12 +120,30 @@ export const createVaultApp = async ({logger = createLogger("VAULT")} = {}) => {
     void pruneExpiredSessions("interval");
   }, SESSION_PRUNE_INTERVAL_MS);
   sessionPruneTimer.unref?.();
+  let mysqlKeepAliveRunning = false;
+  const mysqlKeepAliveTimer = config.driver === "mysql" && config.mysqlKeepAliveIntervalMs > 0
+    ? setInterval(() => {
+      if (mysqlKeepAliveRunning) {
+        logger.warn("Vault MySQL keepalive skipped because the previous probe is still running.");
+        return;
+      }
+      mysqlKeepAliveRunning = true;
+      void runTimedStoreOperation(logger, config, "mysql-keepalive", () => store.health())
+        .catch((error) => {
+          logger.warn("Vault MySQL keepalive failed.", {error});
+        })
+        .finally(() => {
+          mysqlKeepAliveRunning = false;
+        });
+    }, config.mysqlKeepAliveIntervalMs)
+    : null;
+  mysqlKeepAliveTimer?.unref?.();
 
   const app = express();
   const auth = serviceAuth(config);
 
   app.get("/health", async (_req, res) => {
-    const health = await store.health();
+    const health = await runTimedStoreOperation(logger, config, "health", () => store.health());
     res.json({
       ok: true,
       service: "scriptarr-vault",
@@ -312,7 +357,12 @@ export const createVaultApp = async ({logger = createLogger("VAULT")} = {}) => {
   });
 
   app.get("/api/service/settings/:key", async (req, res) => {
-    const setting = await store.getSetting(req.params.key);
+    const setting = await runTimedStoreOperation(
+      logger,
+      config,
+      `settings.get:${req.params.key}`,
+      () => store.getSetting(req.params.key)
+    );
     res.json(setting || {key: req.params.key, value: null});
   });
 
@@ -625,6 +675,9 @@ export const createVaultApp = async ({logger = createLogger("VAULT")} = {}) => {
     close() {
       clearInterval(eventPruneTimer);
       clearInterval(sessionPruneTimer);
+      if (mysqlKeepAliveTimer) {
+        clearInterval(mysqlKeepAliveTimer);
+      }
     }
   };
 };

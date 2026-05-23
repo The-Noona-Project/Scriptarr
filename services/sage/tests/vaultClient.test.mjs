@@ -81,3 +81,37 @@ test("vault auth methods attach timeout signals", async () => {
   ]);
   assert.equal(calls.every((call) => call.hasSignal), true);
 });
+
+test("vault getSetting retries transient fetch failures with bounded timeouts", async () => {
+  const calls = [];
+  globalThis.fetch = async (input, init = {}) => {
+    calls.push({
+      url: String(input),
+      method: init.method || "GET",
+      hasSignal: init.signal instanceof AbortSignal
+    });
+    if (calls.length === 1) {
+      throw new Error("fetch failed");
+    }
+    return jsonResponse({key: "portal.discord", value: {guildId: "guild-1"}});
+  };
+
+  const client = createVaultClient({
+    vaultBaseUrl: "http://vault.test",
+    serviceToken: "vault-token"
+  });
+
+  const setting = await client.getSetting("portal.discord", {
+    timeoutMs: 123,
+    retries: 2,
+    retryDelayMs: 1,
+    context: "Failed to load Portal Discord settings from Vault"
+  });
+
+  assert.deepEqual(setting, {key: "portal.discord", value: {guildId: "guild-1"}});
+  assert.deepEqual(calls.map((call) => `${call.method} ${new URL(call.url).pathname}`), [
+    "GET /api/service/settings/portal.discord",
+    "GET /api/service/settings/portal.discord"
+  ]);
+  assert.equal(calls.every((call) => call.hasSignal), true);
+});

@@ -6,6 +6,58 @@ process.env.SCRIPTARR_SERVICE_TOKENS = JSON.stringify({"scriptarr-sage": "sage-d
 
 const {createVaultApp} = await import("../lib/createVaultApp.mjs");
 
+test("vault MySQL keepalive skips overlapping probes", async () => {
+  let healthCalls = 0;
+  const healthResolvers = [];
+  const warnings = [];
+  const store = {
+    driver: "mysql",
+    async init() {},
+    async pruneExpiredSessions() {
+      return {removed: 0};
+    },
+    async pruneEvents() {
+      return {removed: 0};
+    },
+    health() {
+      healthCalls += 1;
+      return new Promise((resolve) => {
+        healthResolvers.push(resolve);
+      });
+    }
+  };
+  const runtime = await createVaultApp({
+    config: {
+      driver: "mysql",
+      serviceTokens: {},
+      mysqlKeepAliveIntervalMs: 5,
+      slowStoreOperationMs: 1
+    },
+    storeFactory: () => store,
+    logger: {
+      info() {},
+      warn(message, payload) {
+        warnings.push({message, payload});
+      }
+    }
+  });
+
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+
+    assert.equal(healthCalls, 1);
+    assert.equal(
+      warnings.some((entry) => /keepalive skipped/i.test(entry.message)),
+      true
+    );
+  } finally {
+    runtime.close();
+    for (const resolve of healthResolvers) {
+      resolve({database: "ok"});
+    }
+  }
+});
+
 test("vault exposes bootstrap status and request intake lifecycle", async () => {
   const {app} = await createVaultApp();
   const server = app.listen(0);

@@ -1889,6 +1889,7 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
     vaultClient,
     requireService,
     serviceJson,
+    logger,
     readRequestWorkflowSettings: () => readRequestWorkflowSettings(vaultClient)
   });
 

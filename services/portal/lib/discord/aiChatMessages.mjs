@@ -83,11 +83,19 @@ export const editPublicAiReply = async ({
   const replies = [];
   const firstPayload = payloadFor(chunks[0], userId);
   if (typeof placeholder?.edit === "function") {
-    replies.push(await placeholder.edit(firstPayload));
-  } else if (typeof message?.channel?.send === "function") {
-    replies.push(await message.channel.send(firstPayload));
-  } else if (typeof message?.reply === "function") {
-    replies.push(await message.reply(firstPayload));
+    try {
+      replies.push(await placeholder.edit(firstPayload));
+    } catch (error) {
+      replies.placeholderEditFailed = true;
+      replies.placeholderEditError = error instanceof Error ? error.message : String(error ?? "");
+    }
+  }
+  if (!replies.length) {
+    if (typeof message?.channel?.send === "function") {
+      replies.push(await message.channel.send(firstPayload));
+    } else if (typeof message?.reply === "function") {
+      replies.push(await message.reply(firstPayload));
+    }
   }
   for (const chunk of chunks.slice(1)) {
     if (typeof message?.channel?.send === "function") {

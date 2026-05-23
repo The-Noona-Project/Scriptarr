@@ -67,6 +67,52 @@ test("bulkQueueDownload retries one transient fetch failure before surfacing suc
   }
 });
 
+test("getDiscordSettings retries transient Sage settings fetch failures", async () => {
+  let hits = 0;
+  const server = http.createServer(async (req, res) => {
+    hits += 1;
+
+    if (hits === 1) {
+      req.socket.destroy();
+      return;
+    }
+
+    assert.equal(req.method, "GET");
+    assert.equal(req.url, "/api/internal/portal/discord/settings");
+    assert.equal(req.headers.authorization, "Bearer portal-service-token");
+
+    res.writeHead(200, {"Content-Type": "application/json"});
+    res.end(JSON.stringify({
+      guildId: "guild-1",
+      appa: {enabled: true}
+    }));
+  });
+
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const baseUrl = `http://127.0.0.1:${server.address().port}`;
+  const sage = createSageClient({
+    sageBaseUrl: baseUrl,
+    serviceToken: "portal-service-token",
+    discordSettingsTimeoutMs: 250,
+    discordSettingsRetries: 2,
+    discordSettingsRetryDelayMs: 1
+  });
+
+  try {
+    const response = await sage.getDiscordSettings();
+
+    assert.equal(response.ok, true);
+    assert.equal(response.status, 200);
+    assert.equal(response.payload.guildId, "guild-1");
+    assert.equal(response.payload.appa.enabled, true);
+    assert.equal(hits, 2);
+  } finally {
+    await new Promise((resolve, reject) => {
+      server.close((error) => error ? reject(error) : resolve());
+    });
+  }
+});
+
 test("bulkQueueDownload times out when Sage never answers", async () => {
   const server = http.createServer(() => {
     // Intentionally leave the request hanging to simulate a stalled broker call.

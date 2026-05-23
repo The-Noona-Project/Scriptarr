@@ -9,7 +9,9 @@ const createMessage = ({
   guildId = "guild-1",
   channelId = "general",
   author = {id: "user-1", username: "CaptainPax", bot: false},
-  roleIds = ["role-chat"]
+  roleIds = ["role-chat"],
+  mentionIds = ["bot-1"],
+  editThrows = false
 } = {}) => {
   const calls = {reply: [], send: [], edit: [], typing: 0};
   return {
@@ -19,8 +21,8 @@ const createMessage = ({
     content,
     author,
     mentions: {
-      users: new Set(["bot-1"]),
-      has: (id) => id === "bot-1"
+      users: new Set(mentionIds),
+      has: (id) => mentionIds.includes(id)
     },
     member: {
       displayName: "CaptainPax",
@@ -44,6 +46,9 @@ const createMessage = ({
         id: `reply-${calls.reply.length}`,
         ...payload,
         edit: async (nextPayload) => {
+          if (editThrows) {
+            throw new Error("edit failed");
+          }
           calls.edit.push(nextPayload);
           Object.assign(editable, nextPayload);
           return editable;
@@ -55,7 +60,14 @@ const createMessage = ({
   };
 };
 
-const createHandler = ({settings = {}, sage = {}, events = []} = {}) => {
+const createHandler = ({
+  settings = {},
+  sage = {},
+  events = [],
+  getPeerBotUserIds,
+  allowBotAuthoredMessage,
+  preparePrompt
+} = {}) => {
   const mergedSettings = {
     guildId: "guild-1",
     noonaChat: {
@@ -75,7 +87,10 @@ const createHandler = ({settings = {}, sage = {}, events = []} = {}) => {
     getBotUserId: () => "bot-1",
     sage,
     roleManager: createRoleManager({getSettings: () => mergedSettings}),
-    onRuntimeEvent: (event) => events.push(event)
+    onRuntimeEvent: (event) => events.push(event),
+    getPeerBotUserIds,
+    allowBotAuthoredMessage,
+    preparePrompt
   });
 };
 
@@ -124,6 +139,50 @@ test("Noona mention handler sends Thinking, edits the public reply, and preserve
   assert.equal(events[0].type, "noona-chat-handled");
 });
 
+test("Noona mention handler strips peer bot mentions before calling Sage", async () => {
+  const payloads = [];
+  const handler = createHandler({
+    getPeerBotUserIds: () => ["appa-1"],
+    sage: {
+      async noonaChat(payload) {
+        payloads.push(payload);
+        return {ok: true, payload: {reply: "Noona leads this one."}};
+      }
+    }
+  });
+  const message = createMessage({
+    content: "<@bot-1> and <@appa-1> are you online?",
+    mentionIds: ["bot-1", "appa-1"]
+  });
+
+  assert.equal(await handler(message), true);
+  assert.equal(payloads[0].message, "are you online?");
+  assert.equal(message.__calls.edit[0].content, "<@user-1> Noona leads this one.");
+});
+
+test("Noona mention handler allows one guarded Appa smoke message", async () => {
+  const payloads = [];
+  const handler = createHandler({
+    allowBotAuthoredMessage: () => true,
+    preparePrompt: ({prompt}) => prompt.replace(/\[smoke:[^\]]+\]/, "").replace(/\s+/g, " ").trim(),
+    sage: {
+      async noonaChat(payload) {
+        payloads.push(payload);
+        return {ok: true, payload: {reply: "I am online."}};
+      }
+    }
+  });
+  const message = createMessage({
+    content: "<@bot-1> [smoke:abc123] are you online?",
+    author: {id: "appa-1", username: "Appa", bot: true},
+    mentionIds: ["bot-1"]
+  });
+
+  assert.equal(await handler(message), true);
+  assert.equal(payloads[0].message, "are you online?");
+  assert.equal(message.__calls.edit[0].content, "<@appa-1> I am online.");
+});
+
 test("Noona mention handler applies the chat role gate before calling Sage", async () => {
   const handler = createHandler({
     sage: {
@@ -136,6 +195,42 @@ test("Noona mention handler applies the chat role gate before calling Sage", asy
 
   assert.equal(await handler(message), true);
   assert.match(message.__calls.reply[0].content, /<@user-1> .*permission/i);
+});
+
+test("Noona mention handler suppresses raw Sage errors in public replies", async () => {
+  const events = [];
+  const handler = createHandler({
+    events,
+    sage: {
+      async noonaChat() {
+        return {ok: false, payload: {error: "fetch failed token=secret"}};
+      }
+    }
+  });
+  const message = createMessage();
+
+  assert.equal(await handler(message), true);
+  assert.doesNotMatch(message.__calls.edit[0].content, /fetch failed|token=secret/i);
+  assert.match(message.__calls.edit[0].content, /trouble reaching her brain/i);
+  assert.equal(events[0].type, "noona-chat-error");
+  assert.equal(events[0].message, "sage-error");
+});
+
+test("Noona mention handler falls back when placeholder edit fails", async () => {
+  const events = [];
+  const handler = createHandler({
+    events,
+    sage: {
+      async noonaChat() {
+        return {ok: true, payload: {reply: "fallback delivery worked"}};
+      }
+    }
+  });
+  const message = createMessage({editThrows: true});
+
+  assert.equal(await handler(message), true);
+  assert.equal(message.__calls.send[0].content, "<@user-1> fallback delivery worked");
+  assert.equal(events.some((event) => event.type === "noona-chat-delivery-degraded"), true);
 });
 
 test("Noona mention handler edits the first long chunk and sends overflow chunks", async () => {

@@ -765,11 +765,13 @@ def test_status_keywords_return_read_only_status_reply_without_llm_call():
 
     with TestClient(app) as client:
         response = client.post("/api/chat", json={"message": "What is the callback status?"})
+        online_response = client.post("/api/chat", json={"message": "are you online?"})
+        appa_response = client.post("/api/chat", json={"message": "are you connected?", "personaName": "Appa"})
 
     payload = response.json()
     assert payload == {
         "ok": True,
-        "reply": "Noona checked Scriptarr. The stack responded. Oracle is currently off.",
+        "reply": "Noona is online. The stack responded. AI chat is currently off.",
         "status": {
             "ok": True,
             "callbackUrl": "https://scriptarr.test/api/moon/auth/discord/callback",
@@ -777,6 +779,8 @@ def test_status_keywords_return_read_only_status_reply_without_llm_call():
             "services": {"vault": {"ok": True}, "sage": {"ok": True}}
         }
     }
+    assert online_response.json()["reply"] == "Noona is online. The stack responded. AI chat is currently off."
+    assert appa_response.json()["reply"] == "Appa checked Scriptarr. The stack responded. AI chat is currently off."
     assert invoked["count"] == 0
 
 
@@ -1239,7 +1243,7 @@ def test_alive_keyword_returns_read_only_status_reply_without_llm_call():
 
     payload = response.json()
     assert payload["ok"] is True
-    assert payload["reply"] == "Noona checked Scriptarr. The stack responded. Oracle is currently off."
+    assert payload["reply"] == "Noona is online. The stack responded. AI chat is currently off."
     assert invoked["count"] == 0
 
 

@@ -331,11 +331,12 @@ export const normalizePortalDiscordSettings = (value) => {
 /**
  * Load the normalized Portal Discord settings from Vault through Sage.
  *
- * @param {{getSetting: (key: string) => Promise<{value?: unknown} | null>}} vaultClient
+ * @param {{getSetting: (key: string, options?: Record<string, unknown>) => Promise<{value?: unknown} | null>}} vaultClient
+ * @param {Record<string, unknown>} [options]
  * @returns {Promise<ReturnType<typeof defaultPortalDiscordSettings>>}
  */
-export const readPortalDiscordSettings = async (vaultClient) => {
-  const setting = await vaultClient.getSetting(PORTAL_DISCORD_KEY);
+export const readPortalDiscordSettings = async (vaultClient, options = {}) => {
+  const setting = await vaultClient.getSetting(PORTAL_DISCORD_KEY, options);
   return normalizePortalDiscordSettings(setting?.value ?? defaultPortalDiscordSettings());
 };
 

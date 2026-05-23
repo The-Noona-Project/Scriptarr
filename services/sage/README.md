@@ -21,6 +21,9 @@ Sage also brokers public Noona mention chat for Portal. Portal sends natural `@N
 `/api/internal/portal/noona-chat`; Sage upserts the Discord user, applies capped Vault-backed memory summaries, gathers
 only conservative read context, optionally drafts low-risk admin proposals, and then calls Oracle with optional context.
 Oracle remains non-mutating, and Portal never calls Oracle directly for public chat.
+For presence and health questions such as "are you online?", "are you connected?", or "are you there?", Sage answers
+from a bounded live status path instead of waiting on the LLM. The public Noona reply uses safe user-facing wording and
+can include whether Appa is connected, while the Appa admin reply may include the service-level probe summary.
 Sage also brokers Appa admin mention chat through `/api/internal/portal/appa-chat`. Appa uses the same Oracle provider
 settings with an Appa persona prompt, admin-only read context, and the conservative proposal allowlist for Discord
 admin surfaces. Portal never lets Appa execute actions directly.

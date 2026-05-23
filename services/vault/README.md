@@ -11,6 +11,9 @@ other user's admin access is derived from one or more permission groups plus a r
 new or returning Discord sign-ins.
 Session reads stay on the fast path: Vault looks up the requested token, checks its TTL, and leaves expired-row cleanup
 to startup and periodic pruning. MySQL stores keep session and role indexes for auth/bootstrap lookups.
+For external MySQL deployments, Vault keeps the shared pool warm with a guarded low-frequency health probe and logs
+slow `health` or service settings reads without exposing setting values. The keepalive never overlaps itself, so a
+stalled cold connection cannot pile up duplicate probes.
 Vault now also persists title-level and chapter-level read state for Moon's bookshelf and completion logic. Progress
 rows still track the current reading position, while the read-state model determines whether a title is active on the
 bookshelf or fully completed.

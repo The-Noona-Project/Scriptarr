@@ -28,6 +28,11 @@ const normalizeOptionalString = (value) => {
   return normalized || null;
 };
 
+const parsePositiveInteger = (value, fallback) => {
+  const normalized = Number(value);
+  return Number.isInteger(normalized) && normalized > 0 ? normalized : fallback;
+};
+
 const normalizeCommandEnvKey = (commandName) =>
   String(commandName || "")
     .trim()
@@ -77,6 +82,15 @@ export const resolvePortalConfig = (env = process.env) => ({
   appaDiscordClientId: normalizeString(env.SCRIPTARR_APPA_DISCORD_CLIENT_ID || "", ""),
   discordBotPersona: normalizeString(env.SCRIPTARR_DISCORD_BOT_PERSONA, "noona").toLowerCase(),
   discordAvatarMode: normalizeString(env.SCRIPTARR_DISCORD_AVATAR_MODE, "missing").toLowerCase(),
+  discordSettingsTimeoutMs: parsePositiveInteger(env.SCRIPTARR_PORTAL_DISCORD_SETTINGS_TIMEOUT_MS, 12000),
+  discordSettingsRetries: parsePositiveInteger(env.SCRIPTARR_PORTAL_DISCORD_SETTINGS_RETRIES, 3),
+  discordSettingsRetryDelayMs: parsePositiveInteger(env.SCRIPTARR_PORTAL_DISCORD_SETTINGS_RETRY_DELAY_MS, 500),
+  brandingTimeoutMs: parsePositiveInteger(env.SCRIPTARR_PORTAL_BRANDING_TIMEOUT_MS, 5000),
+  brandingRetries: parsePositiveInteger(env.SCRIPTARR_PORTAL_BRANDING_RETRIES, 2),
+  brandingRetryDelayMs: parsePositiveInteger(env.SCRIPTARR_PORTAL_BRANDING_RETRY_DELAY_MS, 250),
+  settingsRecoveryMaxAttempts: parsePositiveInteger(env.SCRIPTARR_PORTAL_SETTINGS_RECOVERY_MAX_ATTEMPTS, 6),
+  settingsRecoveryInitialDelayMs: parsePositiveInteger(env.SCRIPTARR_PORTAL_SETTINGS_RECOVERY_INITIAL_DELAY_MS, 5000),
+  settingsRecoveryMaxDelayMs: parsePositiveInteger(env.SCRIPTARR_PORTAL_SETTINGS_RECOVERY_MAX_DELAY_MS, 60000),
   discordDefaults: {
     guildId: normalizeOptionalString(env.SCRIPTARR_DISCORD_GUILD_ID || env.REQUIRED_GUILD_ID),
     superuserId: normalizeOptionalString(env.SCRIPTARR_DISCORD_SUPERUSER_ID || env.SUPERUSER_ID),

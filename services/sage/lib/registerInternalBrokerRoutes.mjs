@@ -56,6 +56,9 @@ const normalizeScalarString = (value, fallback = "") => {
 
 const normalizeArray = (value) => Array.isArray(value) ? value : [];
 const normalizeObject = (value, fallback = null) => value && typeof value === "object" && !Array.isArray(value) ? value : fallback;
+const PORTAL_DISCORD_SETTINGS_TIMEOUT_MS = 20000;
+const PORTAL_DISCORD_SETTINGS_RETRIES = 3;
+const PORTAL_DISCORD_SETTINGS_RETRY_DELAY_MS = 500;
 
 const buildPortalOracleChatBody = (body = {}) => {
   const source = normalizeObject(body, {}) || {};
@@ -1170,7 +1173,8 @@ const buildDownloadAllNotifications = async ({config, vaultClient}) => {
  *   vaultClient: ReturnType<import("./vaultClient.mjs").createVaultClient>,
  *   requireService: (allowedServices: string | string[]) => import("express").RequestHandler,
  *   readRequestWorkflowSettings: () => Promise<Record<string, unknown>>,
- *   serviceJson: (baseUrl: string, path: string, options?: {method?: string, body?: unknown, headers?: Record<string, string>}) => Promise<{ok: boolean, status: number, payload: any}>
+ *   serviceJson: (baseUrl: string, path: string, options?: {method?: string, body?: unknown, headers?: Record<string, string>}) => Promise<{ok: boolean, status: number, payload: any}>,
+ *   logger?: {info?: Function, warn?: Function}
  * }} options
  */
 export const registerInternalBrokerRoutes = (app, {
@@ -1178,7 +1182,8 @@ export const registerInternalBrokerRoutes = (app, {
   vaultClient,
   requireService,
   readRequestWorkflowSettings,
-  serviceJson
+  serviceJson,
+  logger
 }) => {
   const triviaService = createPortalTriviaService({
     config,
@@ -1200,6 +1205,36 @@ export const registerInternalBrokerRoutes = (app, {
     triviaService,
     readPortalDiscordSettings: () => readPortalDiscordSettings(vaultClient)
   });
+  const readPortalDiscordSettingsForRuntime = async () => {
+    const startedAt = Date.now();
+    try {
+      const settings = await readPortalDiscordSettings(vaultClient, {
+        timeoutMs: PORTAL_DISCORD_SETTINGS_TIMEOUT_MS,
+        retries: PORTAL_DISCORD_SETTINGS_RETRIES,
+        retryDelayMs: PORTAL_DISCORD_SETTINGS_RETRY_DELAY_MS,
+        context: "Failed to load Portal Discord settings from Vault"
+      });
+      logger?.info?.("Sage Portal Discord settings read completed.", {
+        phase: "vault-setting",
+        durationMs: Date.now() - startedAt
+      });
+      return settings;
+    } catch (error) {
+      const durationMs = Date.now() - startedAt;
+      logger?.warn?.("Sage Portal Discord settings read failed.", {
+        phase: "vault-setting",
+        durationMs,
+        error
+      });
+      error.publicPayload = {
+        error: "Portal Discord settings unavailable.",
+        phase: "vault-setting",
+        durationMs,
+        detail: "Sage could not read brokered Discord settings from Vault before the bounded retry window closed."
+      };
+      throw error;
+    }
+  };
   const appendServiceEvent = (serviceName, payload) => appendDurableEvent(vaultClient, {
     ...buildServiceActor(serviceName),
     ...payload
@@ -1881,21 +1916,44 @@ export const registerInternalBrokerRoutes = (app, {
   }));
 
   app.get("/api/internal/portal/discord/settings", withService(requireService, ["scriptarr-portal"], async (_req, res) => {
-    res.json(await readPortalDiscordSettings(vaultClient));
+    try {
+      res.json(await readPortalDiscordSettingsForRuntime());
+    } catch (error) {
+      res.status(503).json(error.publicPayload || {
+        error: "Portal Discord settings unavailable.",
+        phase: "vault-setting",
+        detail: "Sage could not read brokered Discord settings from Vault."
+      });
+    }
   }));
 
   app.get("/api/internal/portal/discord-config", withService(requireService, ["scriptarr-portal"], async (_req, res) => {
-    const [discord, branding] = await Promise.all([
-      readPortalDiscordSettings(vaultClient),
-      vaultClient.getSetting("moon.branding")
-    ]);
-    res.json({
-      discord,
-      branding: branding?.value || {siteName: "Scriptarr"},
-      authConfigured: Boolean(config.discordClientId && config.discordClientSecret),
-      botTokenConfigured: Boolean(config.discordToken),
-      commandCatalog: knownPortalDiscordCommands
-    });
+    try {
+      const [discord, branding] = await Promise.all([
+        readPortalDiscordSettingsForRuntime(),
+        vaultClient.getSetting("moon.branding")
+      ]);
+      res.json({
+        discord,
+        branding: branding?.value || {siteName: "Scriptarr"},
+        authConfigured: Boolean(config.discordClientId && config.discordClientSecret),
+        botTokenConfigured: Boolean(config.discordToken),
+        commandCatalog: knownPortalDiscordCommands
+      });
+    } catch (error) {
+      res.status(503).json({
+        ...(error.publicPayload || {
+          error: "Portal Discord settings unavailable.",
+          phase: "vault-setting",
+          detail: "Sage could not read brokered Discord settings from Vault."
+        }),
+        discord: null,
+        branding: {siteName: "Scriptarr"},
+        authConfigured: Boolean(config.discordClientId && config.discordClientSecret),
+        botTokenConfigured: Boolean(config.discordToken),
+        commandCatalog: knownPortalDiscordCommands
+      });
+    }
   }));
 
   app.get("/api/internal/portal/trivia/state", withService(requireService, ["scriptarr-portal"], async (_req, res) => {

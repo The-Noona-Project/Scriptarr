@@ -21,7 +21,7 @@ const createVault = () => {
   };
 };
 
-const appaPayload = (message = "how healthy is Scriptarr?") => ({
+const appaPayload = (message = "tell me about the discord bot setup") => ({
   message,
   guildId: "guild-1",
   channelId: "admin-chat",
@@ -33,7 +33,7 @@ const appaPayload = (message = "how healthy is Scriptarr?") => ({
   }
 });
 
-test("Appa admin chat uses the Appa persona and Sage-curated read context", async () => {
+test("Appa admin chat uses the Appa persona and Sage-curated Discord context", async () => {
   const vault = createVault();
   const calls = [];
   const service = createAppaChatService({
@@ -75,16 +75,48 @@ test("Appa admin chat uses the Appa persona and Sage-curated read context", asyn
   assert.equal(vault.users[0].role, "admin");
   assert.equal(oracleCall.options.body.personaName, "Appa");
   assert.equal(oracleCall.options.body.context.source, "discord-appa-admin-mention");
-  assert.equal(oracleCall.options.body.context.readContext.serviceHealth.portal.summary, "ok");
-  assert.equal(oracleCall.options.body.context.readContext.serviceHealth.oracle.summary, "ok=true, enabled=true, provider=localai, model=Hermes");
-  assert.deepEqual(oracleCall.options.body.context.readContext.serviceHealth.oracle.details, {
-    ok: true,
-    enabled: true,
-    provider: "localai",
-    model: "Hermes"
-  });
-  assert.equal(oracleCall.options.body.context.readContext.discord, undefined);
+  assert.equal(oracleCall.options.timeoutMs, 85000);
+  assert.equal(oracleCall.options.body.context.readContext.discord.appaEnabled, true);
+  assert.equal(oracleCall.options.body.context.readContext.serviceHealth, undefined);
   assert.equal(oracleCall.options.body.context.readContext.visualIdentity, undefined);
+});
+
+test("Appa admin chat answers online status prompts without Oracle", async () => {
+  const vault = createVault();
+  const calls = [];
+  const service = createAppaChatService({
+    config: {
+      oracleBaseUrl: "http://oracle.test",
+      wardenBaseUrl: "http://warden.test",
+      ravenBaseUrl: "http://raven.test",
+      portalBaseUrl: "http://portal.test"
+    },
+    vaultClient: vault,
+    readPortalDiscordSettings: async () => ({
+      guildId: "guild-1",
+      noonaChat: {enabled: true},
+      appa: {enabled: true, reviewEnabled: true},
+      trivia: {enabled: true}
+    }),
+    serviceJson: async (baseUrl, path, options = {}) => {
+      calls.push({baseUrl, path, options});
+      if (path === "/api/chat") {
+        throw new Error("Oracle should not be called for status prompts.");
+      }
+      if (baseUrl === "http://oracle.test" && path === "/health") {
+        return {ok: true, status: 200, payload: {ok: true, enabled: true, provider: "localai", model: "Hermes"}};
+      }
+      return {ok: true, status: 200, payload: {status: "ok"}};
+    }
+  });
+
+  const result = await service.handlePortalAdminMention(appaPayload("are you online?"));
+
+  assert.equal(result.ok, true);
+  assert.equal(result.deterministic, true);
+  assert.match(result.reply, /Appa is connected/i);
+  assert.match(result.reply, /oracle: ok/i);
+  assert.equal(calls.some((call) => call.path === "/api/chat"), false);
 });
 
 test("Appa review stores redacted recommendation and records correction delivery separately", async () => {

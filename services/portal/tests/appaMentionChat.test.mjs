@@ -9,7 +9,9 @@ const createMessage = ({
   guildId = "guild-1",
   channelId = "admins",
   author = {id: "admin-1", username: "CaptainPax", bot: false},
-  roleIds = ["role-appa"]
+  roleIds = ["role-appa"],
+  mentionIds = ["appa-1"],
+  editThrows = false
 } = {}) => {
   const calls = {reply: [], send: [], edit: [], typing: 0};
   return {
@@ -19,8 +21,8 @@ const createMessage = ({
     content,
     author,
     mentions: {
-      users: new Set(["appa-1"]),
-      has: (id) => id === "appa-1"
+      users: new Set(mentionIds),
+      has: (id) => mentionIds.includes(id)
     },
     member: {
       displayName: "CaptainPax",
@@ -44,6 +46,9 @@ const createMessage = ({
         id: `appa-reply-${calls.reply.length}`,
         ...payload,
         edit: async (nextPayload) => {
+          if (editThrows) {
+            throw new Error("edit failed");
+          }
           calls.edit.push(nextPayload);
           Object.assign(editable, nextPayload);
           return editable;
@@ -55,7 +60,7 @@ const createMessage = ({
   };
 };
 
-const createHandler = ({settings = {}, sage = {}, events = []} = {}) => {
+const createHandler = ({settings = {}, sage = {}, events = [], getPeerBotUserIds} = {}) => {
   const mergedSettings = {
     guildId: "guild-1",
     appa: {
@@ -75,7 +80,8 @@ const createHandler = ({settings = {}, sage = {}, events = []} = {}) => {
       getSettings: () => mergedSettings,
       getCommandSettings: (currentSettings, commandName) => currentSettings.appa.commands[commandName] || {}
     }),
-    onRuntimeEvent: (event) => events.push(event)
+    onRuntimeEvent: (event) => events.push(event),
+    getPeerBotUserIds
   });
 };
 
@@ -118,6 +124,64 @@ test("Appa mention handler applies the admin role gate before calling Sage", asy
   assert.match(message.__calls.reply[0].content, /<@admin-1> .*permission/i);
   assert.equal(events[0].type, "appa-chat-rejected");
   assert.equal(events[0].reason, "role-denied");
+});
+
+test("Appa mention handler lets Noona lead dual public mentions", async () => {
+  const events = [];
+  const handler = createHandler({
+    events,
+    getPeerBotUserIds: () => ["noona-1"],
+    sage: {
+      async appaChat() {
+        throw new Error("Appa should not answer co-mentions.");
+      }
+    }
+  });
+  const message = createMessage({
+    content: "<@noona-1> and <@appa-1> are you online?",
+    mentionIds: ["noona-1", "appa-1"]
+  });
+
+  assert.equal(await handler(message), false);
+  assert.equal(message.__calls.reply.length, 0);
+  assert.equal(events[0].type, "appa-chat-rejected");
+  assert.equal(events[0].reason, "co-mention-noona-led");
+});
+
+test("Appa mention handler suppresses raw Sage errors in public replies", async () => {
+  const events = [];
+  const handler = createHandler({
+    events,
+    sage: {
+      async appaChat() {
+        return {ok: false, payload: {error: "fetch failed token=secret"}};
+      }
+    }
+  });
+  const message = createMessage();
+
+  assert.equal(await handler(message), true);
+  assert.doesNotMatch(message.__calls.edit[0].content, /fetch failed|token=secret/i);
+  assert.match(message.__calls.edit[0].content, /trouble reaching the admin thread/i);
+  assert.equal(events[0].type, "appa-chat-error");
+  assert.equal(events[0].message, "sage-error");
+});
+
+test("Appa mention handler falls back when placeholder edit fails", async () => {
+  const events = [];
+  const handler = createHandler({
+    events,
+    sage: {
+      async appaChat() {
+        return {ok: true, payload: {reply: "fallback delivery worked"}};
+      }
+    }
+  });
+  const message = createMessage({editThrows: true});
+
+  assert.equal(await handler(message), true);
+  assert.equal(message.__calls.send[0].content, "<@admin-1> fallback delivery worked");
+  assert.equal(events.some((event) => event.type === "appa-chat-delivery-degraded"), true);
 });
 
 test("Appa mention handler queues concurrent Appa requests", async () => {

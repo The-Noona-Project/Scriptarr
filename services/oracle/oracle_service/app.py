@@ -47,6 +47,10 @@ LOCALAI_MODEL_DISCOVERY_NETWORK_ERRORS = (
     "connection aborted"
 )
 LOCALAI_STARTUP_RETRY_GATES = {"settings_unavailable", "oracle_disabled", "provider_not_localai"}
+STATUS_PROMPT_PATTERN = re.compile(
+    r"status|health|healthy|boot|callback|alive|online|offline|available|responding|connected|reachable|\bthere\b|\bup\b|\bdown\b|broken|working",
+    re.IGNORECASE,
+)
 
 
 def _localai_models_url(base_url: str) -> str:
@@ -77,6 +81,19 @@ def _provider_fallback_reply(persona_name: str, provider: str) -> str:
 def _normalize_string(value: object, fallback: str = "") -> str:
     normalized = str(value).strip() if value is not None else ""
     return normalized or fallback
+
+
+def _is_status_prompt(message: str) -> bool:
+    return bool(STATUS_PROMPT_PATTERN.search(message or ""))
+
+
+def _build_status_reply(persona_name: str, status_payload: dict[str, object], runtime: object) -> str:
+    persona = _normalize_string(persona_name, "Noona")
+    stack_text = "The stack responded." if status_payload.get("ok") else "The stack status is currently degraded."
+    ai_text = "AI chat is enabled." if getattr(runtime, "enabled", False) else "AI chat is currently off."
+    if persona.lower() == "appa":
+        return f"Appa checked Scriptarr. {stack_text} {ai_text}"
+    return f"{persona} is online. {stack_text} {ai_text}"
 
 
 def _normalize_provider(value: object, fallback: str = "openai") -> str:
@@ -399,14 +416,10 @@ def create_app(
         )
         maybe_start_embedded_local_ai(runtime)
         # Short-circuit obvious health/status prompts so Oracle can answer without an LLM round trip.
-        if re.search(r"status|health|boot|callback|alive", message, re.IGNORECASE):
+        if _is_status_prompt(message):
             return {
                 "ok": True,
-                "reply": (
-                    f"{persona_name} checked Scriptarr. "
-                    f"{'The stack responded.' if status_payload.get('ok') else 'The stack status is currently degraded.'}"
-                    f"{f' Oracle is using {runtime.provider}.' if runtime.enabled else ' Oracle is currently off.'}"
-                ),
+                "reply": _build_status_reply(persona_name, status_payload, runtime),
                 "status": status_payload
             }
 

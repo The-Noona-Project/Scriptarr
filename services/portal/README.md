@@ -64,7 +64,10 @@ command-sync health, onboarding capability, requested intents or partials, the m
 last handled `downloadall` timestamp, the last `downloadall` error text, Noona mention-chat availability, Appa
 settings/env/auth/sync diagnostics, Appa mention/review/correction state, default-avatar sync results, the most recent
 Appa mention-gate rejection, and the last meaningful Discord runtime error when a bot disconnects. A settings refresh
-can also retry the split runtime when Appa was waiting on brokered settings or previously fell back to Noona.
+can also retry the split runtime when Appa was waiting on brokered settings or previously fell back to Noona. If
+Portal starts before Sage or Vault can return the brokered Discord settings, it now reports a connected-but-unconfigured
+degraded state, retries settings in the background with bounded backoff, and automatically re-registers Noona/Appa
+commands once the settings read succeeds.
 
 Noona mention chat lets guild users talk naturally to the real bot user id, such as `@Noona Ai are you alive?`. Portal
 detects the bot mention by Discord user id, removes the mention from the prompt, checks the same `/chat` role gate used
@@ -75,6 +78,14 @@ guilds, empty prompts, disallowed channels, and ordinary unmentioned chatter. Me
 message pipeline when it handles a message, so trivia does not also process the same message as a guess. Portal allows
 only the requesting Discord user mention in these AI replies and keeps long response chunking by editing the first
 chunk, then sending overflow chunks as follow-ups.
+When a message mentions both Noona and Appa, Noona leads the public reply and Appa stays quiet unless the message is an
+Appa-only admin mention in an allowed Appa channel. Portal strips both bot mentions before sending the prompt through
+Sage, suppresses trivia for any Portal bot mention, and falls back to a fresh channel reply if Discord rejects editing
+the original `Thinking...` placeholder. Internal failure details stay in runtime diagnostics instead of being shown as
+raw `fetch failed` text in Discord.
+Portal also exposes an internal service-token guarded Noona smoke route at `/api/runtime/discord/smoke/noona`. It is
+restricted to the configured production smoke channel, posts a one-shot Appa nonce mention, and lets Noona consume that
+single bot-authored message while keeping the normal bot-ignore loop guard for every other message.
 
 The `portal.discord.noonaChat` setting owns the rollout shape:
 

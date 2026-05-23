@@ -166,9 +166,16 @@ Architecture invariants:
   Appa admin mentions and Appa review work share Appa's queue. Visible AI replies should mention only the requester,
   send or edit a `Thinking...` placeholder immediately, show the number of request(s) ahead when queued, and edit the
   placeholder with the first response chunk before sending overflow chunks.
+- Noona leads shared Noona/Appa public mentions. Strip all Portal bot mentions before sending prompts to Sage, suppress
+  trivia for any Portal bot mention, and keep raw Sage/Oracle/Discord delivery errors in runtime diagnostics rather
+  than public Discord copy. Production Noona smoke should use the guarded Appa nonce path for the configured smoke
+  channel only.
 - Appa runtime diagnostics should distinguish missing env, disabled settings, settings fetch failures, login failures,
   intent failures, command sync failures, and recent mention-gate rejections. Settings refreshes should retry the split
-  runtime when Appa becomes available instead of leaving Noona fallback stuck until a manual reload.
+  runtime when Appa becomes available instead of leaving Noona fallback stuck until a manual reload. If Portal starts
+  before Sage/Vault can return `portal.discord`, it should surface `settingsLoaded`, `settingsError`, recovery attempt
+  fields, and connected-but-unconfigured command sync while the bounded background recovery loop retries and then
+  re-registers guild commands.
 - Moon now serves trusted API-key surfaces and plain same-origin Swagger docs. Search is public, protected calls use
   `X-Scriptarr-Api-Key`, system keys inherit assigned permission groups, user keys stay scoped to the owning reader,
   and accepted external requests must stay at the lowest queue priority.

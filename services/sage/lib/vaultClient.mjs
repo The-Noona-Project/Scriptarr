@@ -33,26 +33,61 @@ const withTimeoutSignal = (timeoutMs) => {
     : {};
 };
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const isRetryableVaultError = (error) => {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  return /fetch failed|timed out|aborted|econnreset|socket/i.test(error.message || "");
+};
+
 const requestJson = async (
   baseUrl,
   headers,
   path,
-  {method = "GET", body, allowStatuses = [], context = "Vault request failed", timeoutMs} = {}
+  {
+    method = "GET",
+    body,
+    allowStatuses = [],
+    context = "Vault request failed",
+    timeoutMs,
+    retries = 1,
+    retryDelayMs = 0
+  } = {}
 ) => {
-  const response = await fetch(`${baseUrl}${path}`, {
-    method,
-    headers,
-    body: body == null ? undefined : JSON.stringify(body),
-    ...withTimeoutSignal(timeoutMs)
-  });
-  const payload = await json(response);
-  if (!response.ok && !allowStatuses.includes(response.status)) {
-    throw buildHttpError(response.status, payload, context);
+  const attempts = Number.isInteger(retries) ? Math.max(1, retries) : 1;
+  const delayMs = Number.isInteger(retryDelayMs) ? Math.max(0, retryDelayMs) : 0;
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      const response = await fetch(`${baseUrl}${path}`, {
+        method,
+        headers,
+        body: body == null ? undefined : JSON.stringify(body),
+        ...withTimeoutSignal(timeoutMs)
+      });
+      const payload = await json(response);
+      if (!response.ok && !allowStatuses.includes(response.status)) {
+        throw buildHttpError(response.status, payload, context);
+      }
+      return {
+        status: response.status,
+        payload
+      };
+    } catch (error) {
+      lastError = error?.name === "AbortError" || error?.name === "TimeoutError"
+        ? new Error(`Request timed out after ${timeoutMs}ms`)
+        : error;
+      if (attempt >= attempts || !isRetryableVaultError(lastError)) {
+        throw lastError;
+      }
+      await sleep(delayMs);
+    }
   }
-  return {
-    status: response.status,
-    payload
-  };
+
+  throw lastError;
 };
 
 /**
@@ -87,7 +122,7 @@ const requestJson = async (
  *   pruneEvents: (retentionDays?: number) => Promise<any>,
  *   listRequests: () => Promise<any>,
  *   getRequest: (id: string | number) => Promise<any>,
- *   getSetting: (key: string) => Promise<any>,
+ *   getSetting: (key: string, options?: {timeoutMs?: number, retries?: number, retryDelayMs?: number, context?: string}) => Promise<any>,
  *   setSetting: (key: string, value: unknown) => Promise<any>,
  *   getDatabaseOverview: () => Promise<any>,
  *   getDatabaseTable: (tableName: string, filters?: Record<string, unknown>) => Promise<any>,
@@ -330,11 +365,18 @@ export const createVaultClient = (config) => {
       });
       return status === 404 ? null : payload;
     },
-    async getSetting(key) {
-      const response = await fetch(`${baseUrl}/api/service/settings/${encodeURIComponent(key)}`, {
-        headers
-      });
-      return json(response);
+    async getSetting(key, {
+      timeoutMs,
+      retries,
+      retryDelayMs,
+      context = "Failed to load a setting from Vault"
+    } = {}) {
+      return (await requestJson(baseUrl, headers, `/api/service/settings/${encodeURIComponent(key)}`, {
+        timeoutMs,
+        retries,
+        retryDelayMs,
+        context
+      })).payload;
     },
     async setSetting(key, value) {
       const response = await fetch(`${baseUrl}/api/service/settings/${encodeURIComponent(key)}`, {

@@ -37,7 +37,8 @@ const createService = ({vault = createMemoryVault(), calls = []} = {}) => ({
     config: {
       oracleBaseUrl: "http://oracle.test",
       ravenBaseUrl: "http://raven.test",
-      wardenBaseUrl: "http://warden.test"
+      wardenBaseUrl: "http://warden.test",
+      portalBaseUrl: "http://portal.test"
     },
     vaultClient: vault,
     triviaService: {
@@ -57,6 +58,23 @@ const createService = ({vault = createMemoryVault(), calls = []} = {}) => ({
       }
       if (path === "/api/chat") {
         return {ok: true, status: 200, payload: {reply: "Noona heard you."}};
+      }
+      if (path === "/api/commands") {
+        return {
+          ok: true,
+          status: 200,
+          payload: {
+            discord: {
+              mode: "split",
+              connectionState: "connected",
+              connected: true,
+              settingsLoaded: true,
+              capabilities: {noonaChat: {status: "available", detail: "Noona can answer public mentions."}},
+              appa: {enabled: true, connected: true, splitWanted: true, registeredGuildCount: 6},
+              lastNoonaMentionAt: "2026-05-23T10:00:00.000Z"
+            }
+          }
+        };
       }
       return {ok: true, status: 200, payload: {}};
     }
@@ -119,7 +137,33 @@ test("Noona chat sends curated memory and read context to Oracle without mutatin
   assert.match(oracleCall.options.body.context.personaStyle, /specific|support ticket|raw commit rows/i);
   assert.deepEqual(oracleCall.options.body.context.memory.userFacts, ["I read late at night"]);
   assert.equal(oracleCall.options.body.context.readContext.serviceHealth.oracle.ok, true);
+  assert.equal(oracleCall.options.body.context.readContext.discordRuntime.appa.connected, true);
   assert.equal(oracleCall.options.body.context.readContext.library.results[0].title, "Yotsuba&!");
+});
+
+test("Noona chat answers online status prompts without waiting on Oracle", async () => {
+  const calls = [];
+  const {service} = createService({calls});
+
+  const result = await service.handlePortalMention(mentionPayload("are you online?"));
+
+  assert.equal(result.ok, true);
+  assert.equal(result.deterministic, true);
+  assert.match(result.reply, /I am online/i);
+  assert.match(result.reply, /Appa is connected/i);
+  assert.equal(calls.some((call) => call.path === "/api/chat"), false);
+  assert.equal(calls.some((call) => call.baseUrl === "http://portal.test" && call.path === "/api/commands"), true);
+  assert.equal(result.readContext.discordRuntime.appa.registeredGuildCount, 6);
+});
+
+test("Noona chat uses a shorter inner Oracle timeout for non-status AI replies", async () => {
+  const calls = [];
+  const {service} = createService({calls});
+
+  await service.handlePortalMention(mentionPayload("what changed in the update?"));
+  const oracleCall = calls.find((call) => call.path === "/api/chat");
+
+  assert.equal(oracleCall.options.timeoutMs, 85000);
 });
 
 test("Noona chat injects latest posted update digest for update questions", async () => {

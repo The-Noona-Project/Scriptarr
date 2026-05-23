@@ -10,9 +10,9 @@ const {createInteractionHandler} = await import("../lib/discord/interactionRoute
 const {createTriviaRuntime} = await import("../lib/discord/triviaRuntime.mjs");
 
 class FakeDiscordClient extends EventEmitter {
-  constructor() {
+  constructor(id = "bot-1") {
     super();
-    this.user = {id: "bot-1", tag: "Portal#0001"};
+    this.user = {id, tag: "Portal#0001"};
     this.destroyed = false;
     this.application = {
       commands: {
@@ -59,6 +59,19 @@ const createLogger = () => ({
   warn() {},
   error() {}
 });
+
+const waitFor = async (predicate, {timeoutMs = 1000, intervalMs = 10} = {}) => {
+  const deadline = Date.now() + timeoutMs;
+  let lastValue = null;
+  while (Date.now() <= deadline) {
+    lastValue = await predicate();
+    if (lastValue) {
+      return lastValue;
+    }
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  return lastValue;
+};
 
 const createInteraction = ({commandName, guildId = "guild-1", roleIds = [], strings = {}, userId = "user-1"}) => {
   const calls = {reply: [], editReply: [], deferReply: []};
@@ -529,6 +542,96 @@ test("portal runtime reports settings-unavailable Appa diagnostics and joins spl
     assert.equal(refreshedState.appa.connected, true);
     assert.equal(refreshedState.appa.degradedReason, null);
     assert.equal(refreshedState.capabilities.appa.status, "available");
+  } finally {
+    await runtime.stop();
+  }
+});
+
+test("portal runtime self-recovers delayed Discord settings and starts Appa split mode", async () => {
+  const clients = [new FakeDiscordClient(), new FakeDiscordClient(), new FakeDiscordClient()];
+  const settingsResponses = [
+    {ok: false, status: 503, payload: {error: "Portal Discord settings unavailable."}},
+    {
+      ok: true,
+      payload: {
+        guildId: "guild-1",
+        appa: {
+          enabled: true,
+          commands: {
+            status: {enabled: true, roleId: ""}
+          }
+        }
+      }
+    },
+    {
+      ok: true,
+      payload: {
+        guildId: "guild-1",
+        appa: {
+          enabled: true,
+          commands: {
+            status: {enabled: true, roleId: ""}
+          }
+        }
+      }
+    }
+  ];
+  const sage = {
+    async getDiscordSettings() {
+      return settingsResponses.shift() || settingsResponses.at(-1);
+    },
+    async getBranding() {
+      return {ok: true, payload: {siteName: "Pax-Kun"}};
+    },
+    async listFollowNotifications() {
+      return {ok: true, payload: {notifications: []}};
+    }
+  };
+
+  const runtime = createPortalRuntime({
+    config: {
+      ...baseConfig,
+      appaDiscordToken: "appa-token",
+      appaDiscordClientId: "appa-client-id",
+      settingsRecoveryInitialDelayMs: 5,
+      settingsRecoveryMaxDelayMs: 5,
+      settingsRecoveryMaxAttempts: 3
+    },
+    sage,
+    logger: createLogger(),
+    clientFactory: async (options = {}) => {
+      const client = clients.shift();
+      client.options = options;
+      return client;
+    }
+  });
+
+  try {
+    await runtime.start();
+    const initialState = runtime.getState();
+    assert.equal(initialState.connected, true);
+    assert.equal(initialState.settingsLoaded, false);
+    assert.equal(initialState.settingsRecoveryAttempts, 0);
+    assert.equal(initialState.settingsRecoveryExhausted, false);
+    assert.ok(initialState.settingsRecoveryNextAt);
+    assert.equal(initialState.capabilities.commandSync.status, "degraded");
+    assert.equal(initialState.appa.degradedReason, "settings-unavailable");
+
+    await waitFor(() => {
+      const state = runtime.getState();
+      return state.settingsLoaded && state.splitEnabled && state.appa.connected ? state : null;
+    }, {timeoutMs: 1000});
+
+    const recoveredState = runtime.getState();
+    assert.equal(recoveredState.settingsLoaded, true);
+    assert.equal(recoveredState.settingsError, null);
+    assert.equal(recoveredState.settingsRecoveryAttempts, 0);
+    assert.equal(recoveredState.settingsRecoveryNextAt, null);
+    assert.equal(recoveredState.settingsRecoveryExhausted, false);
+    assert.equal(recoveredState.splitEnabled, true);
+    assert.equal(recoveredState.appa.connected, true);
+    assert.equal(recoveredState.capabilities.commandSync.status, "available");
+    assert.equal(recoveredState.capabilities.appa.status, "available");
   } finally {
     await runtime.stop();
   }
@@ -1190,6 +1293,77 @@ test("portal runtime handles Noona mentions publicly before trivia processing", 
     const state = runtime.getState();
     assert.equal(state.lastNoonaMentionChannelId, "trivia-channel");
     assert.equal(state.lastNoonaMentionError, null);
+  } finally {
+    await runtime.stop();
+  }
+});
+
+test("portal runtime suppresses trivia for Appa-only bot mentions seen by Noona", async () => {
+  const noonaClient = new FakeDiscordClient("noona-1");
+  const appaClient = new FakeDiscordClient("appa-1");
+  const calls = {guess: 0};
+  const sage = {
+    async getDiscordSettings() {
+      return {
+        ok: true,
+        payload: {
+          guildId: "guild-1",
+          noonaChat: {enabled: true, allowedChannelIds: []},
+          commands: {chat: {enabled: true}},
+          appa: {
+            enabled: true,
+            adminMentionChannelIds: ["admin-channel"],
+            commands: {status: {enabled: true}}
+          },
+          trivia: {
+            enabled: true,
+            channelId: "trivia-channel",
+            leaderboardAfterRound: false
+          }
+        }
+      };
+    },
+    async listFollowNotifications() {
+      return {ok: true, payload: {notifications: []}};
+    },
+    async getTriviaState() {
+      return {ok: true, payload: {activeRound: {id: "round-1", status: "open"}}};
+    },
+    async submitTriviaGuess() {
+      calls.guess += 1;
+      return {ok: true, payload: {ok: true, correct: false}};
+    }
+  };
+  const clients = [noonaClient, appaClient];
+  const runtime = createPortalRuntime({
+    config: {
+      ...baseConfig,
+      appaDiscordToken: "appa-token",
+      appaDiscordClientId: "appa-client"
+    },
+    sage,
+    logger: createLogger(),
+    clientFactory: async () => clients.shift()
+  });
+
+  try {
+    await runtime.start();
+    noonaClient.emit("messageCreate", {
+      id: "guild-message-appa-only",
+      guildId: "guild-1",
+      channelId: "trivia-channel",
+      content: "<@appa-1> are you online?",
+      author: {id: "user-1", username: "Reader", bot: false},
+      member: {roles: {cache: new Set(["role-chat"])}},
+      mentions: {users: new Set(["appa-1"]), has: (id) => id === "appa-1"},
+      channel: {id: "trivia-channel", sendTyping: async () => {}},
+      react: async () => {
+        throw new Error("Trivia should not see Portal bot mentions.");
+      }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    assert.equal(calls.guess, 0);
   } finally {
     await runtime.stop();
   }

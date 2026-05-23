@@ -141,6 +141,10 @@ Warden is now URL-first for database setup:
 Vault creates the auth/session indexes it needs on both new and existing databases, including session creation-time
 indexes and the user role index used by bootstrap/admin flows. Expired sessions are checked during token lookup but are
 deleted by Vault's startup and periodic pruning pass, keeping warm auth checks on the indexed token path.
+Vault also keeps external MySQL pools warm with a guarded health probe (`SCRIPTARR_MYSQL_KEEPALIVE_INTERVAL_MS`,
+default `45000`; set `0` to disable) and logs slow `health` or settings reads when they exceed
+`SCRIPTARR_VAULT_SLOW_STORE_OPERATION_MS` (default `2000`). The keepalive skips overlapping probes so a stalled cold
+connection does not create its own backlog.
 
 ## Discord Callback Setup
 
@@ -484,6 +488,12 @@ too. Portal now replies immediately with a requester-mentioned `Thinking...` pla
 the final answer, and reports how many request(s) are ahead when Noona or Appa is already answering another AI request.
 Only the requester mention is allowed in AI replies. Leave the allowed-channel list blank to allow every channel in the
 configured guild, or restrict it to known safe channel ids for a quieter rollout.
+If a user mentions both Noona and Appa, Noona leads the public reply and Appa stays quiet unless the message is an
+Appa-only admin mention in an allowed Appa channel. Status or presence prompts such as "are you online?", "are you
+connected?", and "are you there?" use Sage's bounded live status path instead of waiting on the AI provider. Portal also
+keeps an internal service-token guarded smoke route for operators that posts a one-shot Appa nonce mention in the
+configured smoke channel; this is for production verification only and does not disable the normal bot-message loop
+guard.
 
 Discord's Message Content intent must be enabled in the Discord developer portal for mention chat, trivia guesses, and
 legacy DM text fallback handling. Scriptarr requests the intent in code, but Discord will not deliver message content
@@ -568,6 +578,9 @@ can stay online while onboarding is marked degraded, and `/admin/discord` will s
 command-sync error instead of only a generic disconnected state. Appa diagnostics distinguish settings fetch failures,
 the admin toggle being disabled, missing Appa env, login failures, intent failures, command-sync failures, and recent
 mention-gate rejections; refreshing settings can retry the split runtime after brokered settings become available.
+Cold Sage or Vault settings reads no longer leave Portal stuck after startup: Portal records the settings error,
+reports command sync as connected-but-unconfigured, retries the settings load in the background with bounded backoff,
+and automatically restarts/syncs the split runtime when the brokered `portal.discord` setting becomes available.
 That runtime view now also surfaces the requested intents or partials, the most recent DM receive timestamp, the last
 handled `downloadall`, the last `downloadall` error, Noona mention-chat status, Appa mention/review/correction status,
 and recent redacted Appa review audit events so owner-only DM and public chat failures are easier to trace.
