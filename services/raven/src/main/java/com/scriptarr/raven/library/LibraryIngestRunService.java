@@ -377,9 +377,12 @@ public final class LibraryIngestRunService {
     }
 
     private List<LibraryTitle> titlesForType(String libraryTypeSlug) {
-        return libraryService.listTitles().stream()
-            .filter((title) -> libraryTypeSlug.equals(stringValue(title.libraryTypeSlug()).toLowerCase(Locale.ROOT)))
-            .sorted(Comparator.comparing((title) -> stringValue(title.title()).toLowerCase(Locale.ROOT)))
+        return libraryService.listCompactTitleRows(Map.of("type", libraryTypeSlug)).stream()
+            .sorted(Comparator.comparing((row) -> stringValue(row.get("title")).toLowerCase(Locale.ROOT)))
+            .map((row) -> stringValue(row.get("id")))
+            .filter((titleId) -> !titleId.isBlank())
+            .map(libraryService::findTitleById)
+            .filter((title) -> title != null)
             .toList();
     }
 

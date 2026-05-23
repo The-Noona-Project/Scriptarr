@@ -167,7 +167,7 @@ OAuth state cookie and Discord redirect do not wait for the broader chrome boots
 `/login?prepare=1`, Moon runs a two-second-capped warmup for safe user home, compact library card/count, and profile
 payloads before continuing to the remembered route. The user, reader, and admin client shells repeat this rule for
 stale service-worker navigations or client-side transitions, replacing signed-out protected pages with `/login`
-instead of showing in-app sign-in fallback panels. Sage keeps the callback bounded and diagnosable with
+instead of showing in-app sign-in fallback panels or degraded auth-broker error screens. Sage keeps the callback bounded and diagnosable with
 phase-level timings for Discord token exchange, Discord profile lookup, Vault user lookup/upsert, Vault session
 creation, and auth-event persistence; if the auth event fails after the session exists, login still completes. Warden
 now passes Sage an explicit `SCRIPTARR_VAULT_AUTH_TIMEOUT_MS` value, defaulting to `8000` ms, so cold Vault/MySQL auth
@@ -397,7 +397,8 @@ the Raven downloads mount, confirm title and chapter metadata, and Raven copies 
 completion counts, and retry controls. Failed ingest keeps the CBZ in place and appears as retryable work instead of
 making the title readable.
 Appa can also start a type-wide WebP-only rebuild from Discord with
-`/ingest type:<manga|manhwa|manhua|webtoon|comic|oel>`. The command previews title count and Raven hardware state,
+`/ingest type:<manga|manhwa|manhua|webtoon|comic|oel>`. The command previews title count from Raven's compact
+title-card projection plus Raven hardware state,
 requires a confirm button within five minutes, and then Sage asks Raven to create a durable `raven-library-ingest` run.
 The run rebuilds derived WebP pages from existing canonical CBZ archives without redownloading chapters or changing
 metadata.

@@ -88,7 +88,8 @@ in `returnTo`. The login page starts Discord OAuth through Moon's same-origin st
 post-login warmup for safe user shelves, compact library counts/cards, and profile data only when that target needs it.
 Moon keeps protected and personalized HTML out of service-worker caches; only versioned static assets and revisioned
 reader page/chunk responses are cached. User, reader, and admin client shells also redirect stale signed-out client
-navigations back to `/login` instead of rendering protected app chrome or in-app sign-in cards.
+navigations back to `/login` instead of rendering protected app chrome, in-app sign-in cards, or degraded auth-broker
+errors.
 That reader supports webtoon, single-page, double-page, and manga-double layouts, LTR/RTL direction, page-fit controls,
 keyboard/touch/controller navigation, and still persists Moon-native progress plus bookmarks behind the same typed
 reader routes.

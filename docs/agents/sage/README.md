@@ -64,8 +64,9 @@
   payloads to Raven `/v1/imports`, while `/api/moon-v3/admin/ingest` reads the ingest backlog and retries
   `/v1/ingest/:titleId/retry`.
 - Sage owns Appa's Portal ingest broker too. Keep `/api/internal/portal/library/ingest/preview` read-only and
-  service-token protected, and keep `/api/internal/portal/library/ingest/runs` as the only Portal path to Raven's
-  `/v1/ingest/runs` durable WebP rebuild API. Portal should disable empty previews and acknowledge confirm
+  service-token protected, and make the preview use Raven's compact title-card counts plus hardware status instead of
+  full `/v1/ingest` backlog payloads. Keep `/api/internal/portal/library/ingest/runs` as the only Portal path to
+  Raven's `/v1/ingest/runs` durable WebP rebuild API. Portal should disable empty previews and acknowledge confirm
   interactions before calling this route.
 - Queue retry code must treat `raven-ingest` tasks as ingest retries from the existing CBZ. Do not send those through
   normal download retry or delete canonical CBZ files from queue cleanup.

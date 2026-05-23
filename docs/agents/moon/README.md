@@ -60,7 +60,7 @@
   `/login`, Moon APIs, OAuth callback/start routes, Next assets, icons, the manifest, and the service worker so auth
   redirects never trap assets or broker calls. The user, reader, and admin client shells should enforce the same rule
   after chrome auth resolves, rendering only a minimal transition while replacing stale signed-out protected routes
-  with `/login`.
+  with `/login`, even when chrome bootstrap reports a degraded auth-broker read.
 - `/login` is the system front door. It must render without waiting for chrome/bootstrap, use the same-origin Discord
   start route, run only the bounded allowlisted post-login prep when `prepare=1`, and always expose a continue action.
 - Keep HTML responses uncached and static admin or user assets versioned so publishes invalidate the browser cache

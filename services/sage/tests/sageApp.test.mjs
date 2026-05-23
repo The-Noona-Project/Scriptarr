@@ -406,7 +406,14 @@ const createDependencyStub = ({
     if (request.url === "/health") {
       calls.health += 1;
       response.writeHead(200, {"Content-Type": "application/json"});
-      response.end(JSON.stringify({ok: true, service: "scriptarr-warden-health", dockerSocketAvailable: true}));
+      response.end(JSON.stringify({
+        ok: true,
+        service: "scriptarr-warden-health",
+        dockerSocketAvailable: true,
+        ingest: {
+          hardware: ingestOverview?.summary?.hardware || {profile: "cpu-webp", state: "ready", encoder: "cwebp/libwebp"}
+        }
+      }));
       return;
     }
 
@@ -678,7 +685,10 @@ const createDependencyStub = ({
               .split(",")
               .map((entry) => entry.trim())
               .filter(Boolean)));
-            const cardTitles = currentLibraryTitles.filter((title) => !exactIds.length || exactIds.includes(title.id)).map((title) => ({
+            const requestedType = String(url.searchParams.get("type") || "").trim().toLowerCase();
+            const cardTitles = currentLibraryTitles
+              .filter((title) => !requestedType || String(title.libraryTypeSlug || title.mediaType || "").toLowerCase() === requestedType)
+              .filter((title) => !exactIds.length || exactIds.includes(title.id)).map((title) => ({
               id: title.id,
               title: title.title,
               mediaType: title.mediaType,
@@ -692,6 +702,9 @@ const createDependencyStub = ({
               releaseLabel: title.releaseLabel,
               chapterCount: title.chapterCount,
               chaptersDownloaded: title.chaptersDownloaded,
+              ingestStatus: title.ingestStatus || "pending",
+              ingestedChapterCount: title.ingestedChapterCount || 0,
+              ingestError: title.ingestError || "",
               author: title.author,
               tags: title.tags || [],
               aliases: title.aliases || [],
@@ -701,7 +714,7 @@ const createDependencyStub = ({
             response.writeHead(200, {"Content-Type": "application/json"});
             response.end(JSON.stringify({
               titles: page,
-              counts: {total: cardTitles.length, byLetter: {D: cardTitles.length}, byType: {webtoon: cardTitles.length}},
+              counts: {total: cardTitles.length, byLetter: {D: cardTitles.length}, byType: {[requestedType || "webtoon"]: cardTitles.length}},
               pageInfo: {
                 cursor: String(cursor),
                 nextCursor: cursor + page.length < cardTitles.length ? String(cursor + page.length) : "",
@@ -5582,6 +5595,11 @@ test("sage brokers Portal library ingest preview and run creation through Raven"
   const vaultPort = vaultServer.address().port;
 
   const dependencyStub = await createDependencyStub({
+    libraryTitles: [
+      {id: "dan-da-dan", title: "Dandadan", libraryTypeSlug: "webtoon", libraryTypeLabel: "Webtoon", ingestStatus: "failed", chapterCount: 10},
+      {id: "solo-leveling", title: "Solo Leveling", libraryTypeSlug: "webtoon", libraryTypeLabel: "Webtoon", ingestStatus: "pending", chapterCount: 42},
+      {id: "berserk", title: "Berserk", libraryTypeSlug: "manga", libraryTypeLabel: "Manga", ingestStatus: "ready", chapterCount: 1}
+    ],
     ingestOverview: {
       summary: {
         total: 3,
@@ -5597,11 +5615,6 @@ test("sage brokers Portal library ingest preview and run creation through Raven"
       runs: [
         {runId: "ingest-run-manga", status: "running", filters: {libraryTypeSlug: "manga"}},
         {runId: "ingest-run-webtoon", status: "running", filters: {libraryTypeSlug: "webtoon"}}
-      ],
-      titles: [
-        {id: "dan-da-dan", title: "Dandadan", libraryTypeSlug: "webtoon", libraryTypeLabel: "Webtoon", ingestStatus: "failed"},
-        {id: "solo-leveling", title: "Solo Leveling", libraryTypeSlug: "webtoon", libraryTypeLabel: "Webtoon", ingestStatus: "pending"},
-        {id: "berserk", title: "Berserk", libraryTypeSlug: "manga", libraryTypeLabel: "Manga", ingestStatus: "ready"}
       ]
     }
   });
@@ -5665,8 +5678,11 @@ test("sage brokers Portal library ingest preview and run creation through Raven"
     assert.equal(preview.libraryTypeLabel, "Webtoon");
     assert.equal(preview.titleCount, 2);
     assert.equal(preview.hardware.profile, "gpu-webp");
-    assert.equal(preview.activeRun.runId, "ingest-run-webtoon");
-    assert.equal(dependencyStub.calls.ingestOverview, 1);
+    assert.equal(preview.activeRun, null);
+    assert.equal(dependencyStub.calls.library, 0);
+    assert.equal(dependencyStub.calls.ingestOverview, 0);
+    assert.equal(dependencyStub.calls.libraryCard, 1);
+    assert.equal(dependencyStub.calls.health >= 1, true);
 
     const runResponse = await fetch(`${baseUrl}/api/internal/portal/library/ingest/runs`, {
       method: "POST",

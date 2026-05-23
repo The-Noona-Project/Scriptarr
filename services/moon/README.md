@@ -61,7 +61,7 @@ standalone user app route that paints before chrome/bootstrap finishes, starts D
 Chrome startup uses `/api/moon/chrome/bootstrap?returnTo=...` to collapse branding, auth state, user identity, and
 first-owner bootstrap into one same-origin call. The user, reader, and admin shells treat protected routes as
 auth-gated after chrome resolves; signed-out shells replace the current location with `/login?returnTo=...` instead of
-rendering protected navigation or page-level sign-in cards. The older JSON
+rendering protected navigation, page-level sign-in cards, or degraded auth-broker errors. The older JSON
 `/api/moon/auth/discord/url?returnTo=...` route remains available for compatibility. Chrome bootstrap broker calls use
 short per-call timeouts so branding, auth, and first-owner status can degrade independently instead of one slow broker
 blocking the whole shell.

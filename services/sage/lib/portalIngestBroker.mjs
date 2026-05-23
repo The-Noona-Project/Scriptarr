@@ -98,6 +98,8 @@ export const buildPortalIngestPreview = (ravenPayload, {libraryTypeSlug}) => {
   const titles = normalizeArray(payload.titles)
     .filter((title) => titleTypeSlug(title) === normalizedType);
   const firstTitle = titles[0] || {};
+  const countByType = Number.parseInt(String(payload.counts?.byType?.[normalizedType] ?? ""), 10);
+  const pageTotal = Number.parseInt(String(payload.pageInfo?.total ?? ""), 10);
   const hardware = normalizeObject(payload.hardware || payload.summary?.hardware, {}) || {};
 
   return {
@@ -105,7 +107,11 @@ export const buildPortalIngestPreview = (ravenPayload, {libraryTypeSlug}) => {
     type: normalizedType,
     libraryTypeSlug: normalizedType,
     libraryTypeLabel: normalizeString(firstTitle.libraryTypeLabel, humanizeTypeSlug(normalizedType)),
-    titleCount: titles.length,
+    titleCount: Number.isFinite(countByType)
+      ? countByType
+      : Number.isFinite(pageTotal)
+        ? pageTotal
+        : titles.length,
     hardware,
     activeRun: findActiveIngestRun(payload, normalizedType)
   };

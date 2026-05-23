@@ -182,10 +182,63 @@ public final class LibraryService {
             logger.warn("LIBRARY", "Failed to list Raven title cards.", error.getMessage());
         }
 
-        return Map.of("titles", listTitles().stream()
-            .filter(Objects::nonNull)
-            .map(this::toTitleCard)
-            .toList());
+        return Map.of("titles", List.of(), "pageInfo", Map.of("hasMore", false, "total", 0));
+    }
+
+    private Map<String, Object> listCompactTitleCardPage(Map<String, String> query) {
+        try {
+            JsonNode payload = brokerClient.listLibraryTitleCards(query == null ? Map.of() : query);
+            if (payload != null && payload.isObject()) {
+                return objectMapper.convertValue(payload, new TypeReference<Map<String, Object>>() {
+                });
+            }
+        } catch (Exception error) {
+            logger.warn("LIBRARY", "Failed to list compact Raven title cards.", error.getMessage());
+        }
+        return Map.of("titles", List.of(), "pageInfo", Map.of("hasMore", false));
+    }
+
+    /**
+     * List all compact title cards for background/admin work without loading
+     * chapter arrays or filesystem roots.
+     *
+     * @param filters optional card filters such as library type
+     * @return immutable compact card rows
+     */
+    public List<Map<String, Object>> listCompactTitleRows(Map<String, String> filters) {
+        List<Map<String, Object>> rows = new ArrayList<>();
+        String cursor = "";
+        Map<String, String> baseFilters = filters == null ? Map.of() : filters;
+        for (int guard = 0; guard < 100; guard += 1) {
+            Map<String, String> query = new LinkedHashMap<>(baseFilters);
+            query.put("pageSize", "100");
+            if (!cursor.isBlank()) {
+                query.put("cursor", cursor);
+            }
+            Map<String, Object> page = listCompactTitleCardPage(query);
+            Object titles = page.get("titles");
+            if (titles instanceof List<?> titleRows) {
+                for (Object entry : titleRows) {
+                    if (entry instanceof Map<?, ?> row) {
+                        rows.add(normalizeMap(row));
+                    }
+                }
+            }
+            Map<String, Object> pageInfo = normalizeMap(page.get("pageInfo"));
+            if (!Boolean.TRUE.equals(pageInfo.get("hasMore"))) {
+                break;
+            }
+            String nextCursor = stringValue(pageInfo.get("nextCursor"));
+            if (nextCursor.isBlank() || nextCursor.equals(cursor)) {
+                break;
+            }
+            cursor = nextCursor;
+        }
+        return List.copyOf(rows);
+    }
+
+    private List<Map<String, Object>> listAllCompactTitleCards() {
+        return listCompactTitleRows(Map.of());
     }
 
     /**
@@ -200,11 +253,10 @@ public final class LibraryService {
         }
 
         try {
-            JsonNode payload = brokerClient.getLibraryTitle(id);
-            if (payload == null || payload.isMissingNode() || payload.path("error").isTextual()) {
+            LibraryTitle resolved = loadTitleById(id);
+            if (resolved == null) {
                 return null;
             }
-            LibraryTitle resolved = objectMapper.treeToValue(payload, LibraryTitle.class);
             String identityKey = titleIdentityKey(resolved);
             if (identityKey.isBlank()) {
                 return normalizeLibraryTitle(resolved);
@@ -213,6 +265,32 @@ public final class LibraryService {
                 .filter((candidate) -> identityKey.equals(titleIdentityKey(candidate)))
                 .findFirst()
                 .orElse(normalizeLibraryTitle(resolved));
+        } catch (Exception error) {
+            logger.warn("LIBRARY", "Failed to load Raven title.", error.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Load a title by its stable id without materializing the full catalog.
+     *
+     * @param id stable title id
+     * @return matching title or {@code null} when it is unknown
+     */
+    public LibraryTitle findTitleById(String id) {
+        return loadTitleById(id);
+    }
+
+    private LibraryTitle loadTitleById(String id) {
+        if (id == null || id.isBlank()) {
+            return null;
+        }
+        try {
+            JsonNode payload = brokerClient.getLibraryTitle(id);
+            if (payload == null || payload.isMissingNode() || payload.path("error").isTextual()) {
+                return null;
+            }
+            return normalizeLibraryTitle(objectMapper.treeToValue(payload, LibraryTitle.class));
         } catch (Exception error) {
             logger.warn("LIBRARY", "Failed to load Raven title.", error.getMessage());
             return null;
@@ -465,7 +543,7 @@ public final class LibraryService {
      * @return updated title
      */
     public synchronized LibraryTitle ingestTitle(String titleId, String requestedBy) {
-        LibraryTitle title = findTitle(titleId);
+        LibraryTitle title = loadTitleById(titleId);
         if (title == null) {
             throw new IllegalArgumentException("Raven title not found.");
         }
@@ -534,32 +612,19 @@ public final class LibraryService {
      * @return ingest summary and title rows
      */
     public Map<String, Object> listIngestBacklog() {
-        List<Map<String, Object>> rows = listTitles().stream()
+        List<Map<String, Object>> rows = listAllCompactTitleCards().stream()
             .map((title) -> {
                 Map<String, Object> row = new LinkedHashMap<>();
-                row.put("id", firstNonBlank(title.id(), ""));
-                row.put("title", firstNonBlank(title.title(), "Untitled"));
-                row.put("libraryTypeLabel", firstNonBlank(title.libraryTypeLabel(), "Manga"));
-                row.put("libraryTypeSlug", firstNonBlank(title.libraryTypeSlug(), "manga"));
-                row.put("status", firstNonBlank(title.status(), "active"));
-                row.put("ingestStatus", firstNonBlank(title.ingestStatus(), "pending"));
-                row.put("ingestedChapterCount", title.ingestedChapterCount());
-                row.put("chapterCount", title.chapterCount());
-                row.put("ingestError", firstNonBlank(title.ingestError(), ""));
-                row.put("updatedAt", firstNonBlank(title.updatedAt(), ""));
-                row.put("chapters", Optional.ofNullable(title.chapters()).orElse(List.of()).stream()
-                    .map((chapter) -> {
-                        Map<String, Object> chapterRow = new LinkedHashMap<>();
-                        chapterRow.put("id", firstNonBlank(chapter.id(), ""));
-                        chapterRow.put("label", firstNonBlank(chapter.label(), ""));
-                        chapterRow.put("chapterNumber", firstNonBlank(chapter.chapterNumber(), ""));
-                        chapterRow.put("ingestStatus", firstNonBlank(chapter.ingestStatus(), "pending"));
-                        chapterRow.put("ingestedPageCount", chapter.ingestedPageCount());
-                        chapterRow.put("ingestRevision", firstNonBlank(chapter.ingestRevision(), ""));
-                        chapterRow.put("ingestError", firstNonBlank(chapter.ingestError(), ""));
-                        return Map.copyOf(chapterRow);
-                    })
-                    .toList());
+                row.put("id", firstNonBlank(stringValue(title.get("id")), ""));
+                row.put("title", firstNonBlank(stringValue(title.get("title")), "Untitled"));
+                row.put("libraryTypeLabel", firstNonBlank(stringValue(title.get("libraryTypeLabel")), "Manga"));
+                row.put("libraryTypeSlug", firstNonBlank(stringValue(title.get("libraryTypeSlug")), "manga"));
+                row.put("status", firstNonBlank(stringValue(title.get("status")), "active"));
+                row.put("ingestStatus", firstNonBlank(stringValue(title.get("ingestStatus")), "pending"));
+                row.put("ingestedChapterCount", integerValue(title.get("ingestedChapterCount")));
+                row.put("chapterCount", integerValue(title.get("chapterCount")));
+                row.put("ingestError", firstNonBlank(stringValue(title.get("ingestError")), ""));
+                row.put("updatedAt", firstNonBlank(stringValue(title.get("updatedAt")), ""));
                 return Map.copyOf(row);
             })
             .toList();
@@ -1991,6 +2056,17 @@ public final class LibraryService {
 
     private String stringValue(Object value) {
         return value == null ? "" : String.valueOf(value).trim();
+    }
+
+    private int integerValue(Object value) {
+        if (value instanceof Number number) {
+            return number.intValue();
+        }
+        try {
+            return Integer.parseInt(stringValue(value));
+        } catch (NumberFormatException error) {
+            return 0;
+        }
     }
 
     private Map<String, Object> normalizeMap(Object value) {

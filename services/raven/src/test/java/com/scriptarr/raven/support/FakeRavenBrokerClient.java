@@ -100,6 +100,13 @@ public final class FakeRavenBrokerClient implements RavenBrokerClient {
             pageSize = 60;
         }
         pageSize = Math.min(100, Math.max(1, pageSize));
+        int cursor = 0;
+        try {
+            cursor = Math.max(0, Integer.parseInt(query.getOrDefault("cursor", "0")));
+        } catch (NumberFormatException ignored) {
+            cursor = 0;
+        }
+        String type = query.getOrDefault("type", "").trim().toLowerCase();
         List<String> exactIds = List.of(query.getOrDefault("ids", "").split(",")).stream()
             .map(String::trim)
             .filter((entry) -> !entry.isBlank())
@@ -118,10 +125,14 @@ public final class FakeRavenBrokerClient implements RavenBrokerClient {
                 card.put("coverUrl", title.path("coverUrl").asText(""));
                 card.put("chapterCount", title.path("chapterCount").asInt(0));
                 card.put("chaptersDownloaded", title.path("chaptersDownloaded").asInt(0));
+                card.put("ingestStatus", title.path("ingestStatus").asText("pending"));
+                card.put("ingestedChapterCount", title.path("ingestedChapterCount").asInt(0));
+                card.put("ingestError", title.path("ingestError").asText(""));
                 card.put("updatedAt", title.path("updatedAt").asText(""));
                 return card;
             })
             .filter((card) -> exactIds.isEmpty() || exactIds.contains(String.valueOf(card.get("id"))))
+            .filter((card) -> type.isBlank() || type.equals(String.valueOf(card.get("libraryTypeSlug")).toLowerCase()))
             .sorted((left, right) -> {
                 if (exactIds.isEmpty()) {
                     return 0;
@@ -131,17 +142,20 @@ public final class FakeRavenBrokerClient implements RavenBrokerClient {
                     exactIds.indexOf(String.valueOf(right.get("id")))
                 );
             })
+            .toList();
+        List<Map<String, Object>> page = cards.stream()
+            .skip(cursor)
             .limit(pageSize)
             .toList();
         return objectMapper.valueToTree(Map.of(
-            "titles", cards,
+            "titles", page,
             "counts", Map.of("total", titles.size(), "byLetter", Map.of(), "byType", Map.of()),
             "pageInfo", Map.of(
-                "cursor", "0",
-                "nextCursor", titles.size() > cards.size() ? String.valueOf(cards.size()) : "",
-                "hasMore", titles.size() > cards.size(),
+                "cursor", String.valueOf(cursor),
+                "nextCursor", cards.size() > cursor + page.size() ? String.valueOf(cursor + page.size()) : "",
+                "hasMore", cards.size() > cursor + page.size(),
                 "pageSize", pageSize,
-                "total", titles.size()
+                "total", cards.size()
             )
         ));
     }

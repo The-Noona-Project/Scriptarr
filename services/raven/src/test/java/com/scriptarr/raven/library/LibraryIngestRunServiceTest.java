@@ -42,6 +42,8 @@ class LibraryIngestRunServiceTest {
         LibraryTitle manga = recordTitle(libraryService, tempDir, "Blue Box", "Manga", "001.png");
         LibraryTitle manhwa = recordTitle(libraryService, tempDir, "Solo Leveling", "Manhwa", "001.png");
         LibraryIngestRunService runService = new LibraryIngestRunService(libraryService, brokerClient, logger);
+        int fullCatalogCallsBeforeRun = brokerClient.listLibraryTitlesCalls();
+        int cardCallsBeforeRun = brokerClient.listLibraryTitleCardsCalls();
 
         Map<String, Object> created = runService.createRun(Map.of(
             "libraryTypeSlug", "manga",
@@ -55,9 +57,11 @@ class LibraryIngestRunServiceTest {
         assertEquals(1, map(status.get("result")).get("totalTitles"));
         assertEquals(1, map(status.get("result")).get("completedTitles"));
         assertEquals(0, map(status.get("result")).get("failedTitles"));
-        assertEquals("ready", libraryService.findTitle(manga.id()).ingestStatus());
-        assertTrue(Files.exists(Path.of(libraryService.findTitle(manga.id()).chapters().getFirst().ingestManifestPath())));
-        assertEquals("pending", libraryService.findTitle(manhwa.id()).ingestStatus());
+        assertEquals("ready", libraryService.findTitleById(manga.id()).ingestStatus());
+        assertTrue(Files.exists(Path.of(libraryService.findTitleById(manga.id()).chapters().getFirst().ingestManifestPath())));
+        assertEquals("pending", libraryService.findTitleById(manhwa.id()).ingestStatus());
+        assertEquals(fullCatalogCallsBeforeRun, brokerClient.listLibraryTitlesCalls());
+        assertTrue(brokerClient.listLibraryTitleCardsCalls() > cardCallsBeforeRun);
         runService.shutdown();
     }
 
@@ -88,8 +92,8 @@ class LibraryIngestRunServiceTest {
         assertEquals(1, map(status.get("result")).get("completedTitles"));
         assertEquals(1, map(status.get("result")).get("failedTitles"));
         assertEquals(List.of(badTitle.id()), map(status.get("result")).get("failedTitleIds"));
-        assertEquals("failed", libraryService.findTitle(badTitle.id()).ingestStatus());
-        assertEquals("ready", libraryService.findTitle(goodTitle.id()).ingestStatus());
+        assertEquals("failed", libraryService.findTitleById(badTitle.id()).ingestStatus());
+        assertEquals("ready", libraryService.findTitleById(goodTitle.id()).ingestStatus());
         assertTrue(statuses(status).containsAll(List.of("completed", "failed")));
         runService.shutdown();
     }

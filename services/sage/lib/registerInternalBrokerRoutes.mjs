@@ -2028,13 +2028,25 @@ export const registerInternalBrokerRoutes = (app, {
       return;
     }
 
-    const result = await safeServiceJson(serviceJson(config.ravenBaseUrl, "/v1/ingest"));
-    if (!result.ok) {
-      res.status(result.status).json(result.payload);
+    const [libraryResult, healthResult] = await Promise.all([
+      safeServiceJson(serviceJson(
+        config.ravenBaseUrl,
+        `/v1/library?view=card&type=${encodeURIComponent(libraryTypeSlug)}&pageSize=1`
+      )),
+      safeServiceJson(serviceJson(config.ravenBaseUrl, "/health"))
+    ]);
+    if (!libraryResult.ok) {
+      res.status(libraryResult.status).json(libraryResult.payload);
       return;
     }
 
-    res.json(buildPortalIngestPreview(result.payload, {libraryTypeSlug}));
+    res.json(buildPortalIngestPreview({
+      ...libraryResult.payload,
+      summary: {
+        ...normalizeObject(libraryResult.payload?.summary, {}),
+        hardware: normalizeObject(healthResult.payload?.ingest?.hardware, {}) || {}
+      }
+    }, {libraryTypeSlug}));
   }));
 
   app.post("/api/internal/portal/library/ingest/runs", withService(requireService, ["scriptarr-portal"], async (req, res) => {

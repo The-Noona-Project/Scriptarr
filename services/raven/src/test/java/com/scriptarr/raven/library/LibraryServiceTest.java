@@ -533,6 +533,56 @@ class LibraryServiceTest {
     }
 
     /**
+     * Verify the ingest backlog uses compact title cards instead of loading
+     * every chapter row through the full catalog broker path.
+     */
+    @Test
+    void ingestBacklogUsesCompactBrokerProjection() {
+        FakeRavenBrokerClient brokerClient = new FakeRavenBrokerClient();
+        ScriptarrLogger logger = mock(ScriptarrLogger.class);
+        LibraryService service = new LibraryService(brokerClient, new RavenSettingsService(brokerClient, logger, List.of()), logger);
+
+        brokerClient.setLibraryTitle(new LibraryTitle(
+            "dandadan",
+            "Dandadan",
+            "manga",
+            "Manga",
+            "manga",
+            "active",
+            "166",
+            "#de6d3a",
+            "Aliens and yokai.",
+            "2021",
+            2,
+            2,
+            "Yukinobu Tatsu",
+            List.of("action"),
+            List.of("Dan Da Dan"),
+            "mangadex",
+            Instant.parse("2026-04-18T08:00:00Z").toString(),
+            List.of(),
+            "https://weebcentral.com/series/dandadan",
+            "https://images.example/dandadan.jpg",
+            "/downloads/downloading/manga/Dandadan",
+            "/downloads/downloaded/manga/Dandadan",
+            List.of(new LibraryChapter("dandadan-c166", "Chapter 166", "166", 24, Instant.parse("2026-04-20T08:00:00Z").toString(), true, "/downloads/downloaded/manga/Dandadan/ch166.cbz", null, null)),
+            null
+        ));
+
+        Map<String, Object> backlog = service.listIngestBacklog();
+
+        assertEquals(1, brokerClient.listLibraryTitleCardsCalls());
+        assertEquals(0, brokerClient.listLibraryTitlesCalls());
+        assertTrue(backlog.get("titles") instanceof List<?>);
+        Map<?, ?> row = (Map<?, ?>) ((List<?>) backlog.get("titles")).getFirst();
+        assertEquals("Dandadan", row.get("title"));
+        assertEquals("pending", row.get("ingestStatus"));
+        assertFalse(row.containsKey("chapters"));
+        assertFalse(row.containsKey("downloadRoot"));
+        assertFalse(row.containsKey("workingRoot"));
+    }
+
+    /**
      * Verify source download lifecycle labels are normalized into the shared
      * Scriptarr title status vocabulary.
      *

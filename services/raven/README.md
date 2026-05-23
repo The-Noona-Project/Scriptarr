@@ -125,5 +125,7 @@ for Moon and keeps Missing Content quality fields available for damaged source d
 Raven also accepts `POST /v1/ingest/runs` for Appa/Sage-owned library-type reingest jobs. These jobs rebuild only the
 derived WebP reader pages from existing canonical CBZ archives, create one durable task per ready title, continue after
 per-title failures, and reuse the active queued or running run id when the same library type is already being rebuilt.
+Raven keeps `/v1/ingest` and Appa preview paths on compact title-card projections so backlog and count views do not
+hydrate full chapter arrays; full title payloads stay reserved for single-title, reader, and actual ingest work.
 For long-running WeebCentral series, Raven now follows the source page's HTMX full-chapter-list flow instead of only
 the initial visible subset, which fixes partial-history titles such as Tomb Raider King.

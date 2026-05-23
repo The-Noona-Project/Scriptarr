@@ -124,7 +124,7 @@ intake and forwards accepted import payloads to Raven `/v1/imports`; `/api/moon-
 backlog and retries Raven `/v1/ingest/:titleId/retry`. Queue recovery routes detect `raven-ingest` tasks and retry
 ingest from the existing CBZ instead of rerouting through download retry.
 Sage also exposes Portal-only service-token routes for Appa's `/ingest` command:
-`/api/internal/portal/library/ingest/preview` reads Raven's type-scoped title and hardware state without mutation, and
+`/api/internal/portal/library/ingest/preview` reads Raven's type-scoped compact card count and hardware state without mutation, and
 `/api/internal/portal/library/ingest/runs` starts Raven's durable WebP-only rebuild job through `/v1/ingest/runs`.
 Portal disables the confirm button when preview reports zero eligible titles and acknowledges confirm interactions
 before the run request so Discord does not expire slow Sage/Raven starts.

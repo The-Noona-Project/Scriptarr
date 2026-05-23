@@ -576,7 +576,7 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = "", initialSessi
     if (typeof window === "undefined" || loginRedirectingRef.current) {
       return;
     }
-    const shouldRedirectForChrome = chrome.loaded && !chrome.auth && !chrome.authError;
+    const shouldRedirectForChrome = chrome.loaded && !chrome.auth;
     const shouldRedirectForApi = status === 401;
     if (!shouldRedirectForChrome && !shouldRedirectForApi) {
       return;
@@ -1134,10 +1134,6 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = "", initialSessi
 
   if (!chrome.loaded || (loading && !initialSession)) {
     return <ReaderInitialSkeleton />;
-  }
-
-  if (chrome.authError) {
-    return <main className="reader-app"><div className="reader-empty-panel">{chrome.authError}</div></main>;
   }
 
   if (!chrome.auth || status === 401) {

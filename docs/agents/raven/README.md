@@ -32,6 +32,8 @@
 - Library-type reingest runs live at `/v1/ingest/runs` for Sage/Appa. They rebuild only derived WebP pages from
   existing canonical CBZ archives, create durable per-title tasks, continue through individual title failures, and
   return the existing run id when the same type already has a queued or running rebuild.
+- Keep `/v1/ingest` backlog and Appa preview/count paths lightweight. They should use compact title-card projections
+  and must not pull full title records with chapter arrays just to count eligible library types.
 - Reader serving is WebP-first. A chapter is readable only after ingest writes stable `p000001.webp`-style page slugs,
   a `manifest.json`, and ready ingest metadata into the catalog.
 - Ingest failures keep the CBZ, delete only staged or derived ingest output, and surface as retryable Needs attention
