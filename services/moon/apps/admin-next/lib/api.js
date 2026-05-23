@@ -71,7 +71,7 @@ export const normalizeAdminReturnTo = (returnTo = "/admin") => {
  * @returns {string}
  */
 export const buildAdminLoginHref = (returnTo = "/admin") =>
-  `/api/moon/auth/discord/start?returnTo=${encodeURIComponent(normalizeAdminReturnTo(returnTo))}`;
+  `/login?returnTo=${encodeURIComponent(normalizeAdminReturnTo(returnTo))}`;
 
 /**
  * Fetch the collapsed admin chrome bootstrap payload.

@@ -31,8 +31,8 @@ const normalizeChannelMap = (value = {}) => {
   return Object.fromEntries(entries);
 };
 
-export const DEFAULT_COMMANDS = ["ding", "status", "chat", "search", "request", "subscribe", "trivia", "downloadall"];
-export const DEFAULT_APPA_COMMANDS = ["ding", "status", "trivia", "downloadall"];
+export const DEFAULT_COMMANDS = ["ding", "status", "chat", "search", "request", "subscribe", "trivia", "ingest", "downloadall"];
+export const DEFAULT_APPA_COMMANDS = ["ding", "status", "trivia", "discord", "ingest", "downloadall"];
 
 const normalizeBoolean = (value, fallback = false) => typeof value === "boolean" ? value : fallback;
 const normalizeInteger = (value, fallback, min = 0, max = Number.MAX_SAFE_INTEGER) => {

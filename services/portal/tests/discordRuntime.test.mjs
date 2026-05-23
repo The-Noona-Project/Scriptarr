@@ -148,6 +148,7 @@ const baseConfig = {
       search: {enabled: true, roleId: null},
       request: {enabled: true, roleId: null},
       subscribe: {enabled: true, roleId: null},
+      ingest: {enabled: true, roleId: null},
       downloadall: {enabled: true, roleId: null}
     }
   }
@@ -213,6 +214,7 @@ test("portal runtime syncs enabled commands and exposes Discord runtime state", 
       "search",
       "request",
       "discord",
+      "ingest",
       "trivia"
     ]);
   } finally {
@@ -234,6 +236,7 @@ test("portal runtime splits reader and admin commands when Appa is enabled", asy
               ding: {enabled: true, roleId: "role-appa"},
               status: {enabled: true, roleId: "role-appa"},
               trivia: {enabled: true, roleId: "role-appa"},
+              ingest: {enabled: true, roleId: "role-appa"},
               downloadall: {enabled: true, roleId: ""}
             }
           }
@@ -272,6 +275,7 @@ test("portal runtime splits reader and admin commands when Appa is enabled", asy
       "ding",
       "discord",
       "downloadall",
+      "ingest",
       "request",
       "search",
       "status",

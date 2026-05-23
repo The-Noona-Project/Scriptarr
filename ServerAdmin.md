@@ -157,9 +157,11 @@ Scriptarr no longer exposes a dev-session claim path, so Discord login is the su
 flow. When login starts from a same-origin Scriptarr page, Scriptarr now remembers that route and returns the user there
 after Discord OAuth completes. If the original route is missing, invalid, or no longer allowed for the signed-in user,
 Scriptarr falls back to the user home page at `/`.
-Signed-out user and admin shells should link directly to Moon's same-origin
-`/api/moon/auth/discord/start?returnTo=...` route. That route sets the short-lived OAuth state cookie and redirects to
-Discord without waiting for the slower chrome bootstrap data. Sage keeps the callback bounded and diagnosable with
+Signed-out user, reader, and admin HTML navigations redirect to `/login?returnTo=...`. The dedicated login page renders
+the Discord action immediately, then calls Moon's same-origin `/api/moon/auth/discord/start?returnTo=...` route so the
+OAuth state cookie and Discord redirect do not wait for the broader chrome bootstrap. After Discord returns to
+`/login?prepare=1`, Moon runs a two-second-capped warmup for safe user home, compact library card/count, and profile
+payloads before continuing to the remembered route. Sage keeps the callback bounded and diagnosable with
 phase-level timings for Discord token exchange, Discord profile lookup, Vault user lookup/upsert, Vault session
 creation, and auth-event persistence; if the auth event fails after the session exists, login still completes.
 
@@ -384,6 +386,11 @@ the Raven downloads mount, confirm title and chapter metadata, and Raven copies 
 `/admin/ingest` is the WebP backlog and recovery surface. It shows Raven's per-title ingest status, hardware state,
 completion counts, and retry controls. Failed ingest keeps the CBZ in place and appears as retryable work instead of
 making the title readable.
+Appa can also start a type-wide WebP-only rebuild from Discord with
+`/ingest type:<manga|manhwa|manhua|webtoon|comic|oel>`. The command previews title count and Raven hardware state,
+requires a confirm button within five minutes, and then Sage asks Raven to create a durable `raven-library-ingest` run.
+The run rebuilds derived WebP pages from existing canonical CBZ archives without redownloading chapters or changing
+metadata.
 `/admin/users` is now the access-control workspace: a dense user directory, reusable permission-group editor, group
 assignment panel, and recent auth or access events in one page. Staff access is no longer a flat role toggle. Moon now
 evaluates unioned permission groups with route-family `read`, `write`, or `root` grants, while the bootstrap owner
@@ -483,8 +490,8 @@ unless the application setting allows it.
 The split Discord command set is:
 
 - Noona: `/search`, `/request`, `/subscribe`, `/trivia status`, and `/trivia leaderboard`
-- Appa: `/ding`, `/status`, owner-only DM `/downloadall`, `/trivia start`, `/trivia stop`, `/discord inspect`, and
-  `/discord testpost`
+- Appa: `/ding`, `/status`, `/ingest`, owner-only DM `/downloadall`, `/trivia start`, `/trivia stop`,
+  `/discord inspect`, and `/discord testpost`
 
 When Appa is disabled or unavailable, Noona registers the legacy single-bot command set, including `/ding`, `/status`,
 `/chat`, `/search`, `/request`, `/subscribe`, `/trivia`, and owner-only DM `/downloadall`. Split mode does not

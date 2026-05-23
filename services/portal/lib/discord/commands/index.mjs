@@ -6,6 +6,7 @@ import {createRequestCommand} from "./requestCommand.mjs";
 import {createSubscribeCommand} from "./subscribeCommand.mjs";
 import {createDownloadAllCommand} from "./downloadAllCommand.mjs";
 import {createDiscordDiagnosticsCommand} from "./discordDiagnosticsCommand.mjs";
+import {createIngestCommand} from "./ingestCommand.mjs";
 import {createTriviaCommand} from "./triviaCommand.mjs";
 
 export const createPortalCommands = ({
@@ -31,6 +32,10 @@ export const createPortalCommands = ({
   commands.set("discord", createDiscordDiagnosticsCommand({
     sage,
     getSettings
+  }));
+  commands.set("ingest", createIngestCommand({
+    sage,
+    getBrandName
   }));
   commands.set("downloadall", createDownloadAllCommand({
     sage,

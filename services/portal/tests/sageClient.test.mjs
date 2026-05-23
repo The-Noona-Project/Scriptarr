@@ -163,6 +163,66 @@ test("bulk run helpers call the Sage async downloadall broker routes", async () 
   }
 });
 
+test("ingest helpers call the Sage preview and run broker routes", async () => {
+  const seen = [];
+  const server = http.createServer(async (req, res) => {
+    const chunks = [];
+    for await (const chunk of req) {
+      chunks.push(chunk);
+    }
+    const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    seen.push({method: req.method, url: req.url, authorization: req.headers.authorization, body});
+    res.writeHead(200, {"Content-Type": "application/json"});
+    res.end(JSON.stringify({
+      status: req.url.endsWith("/run") ? "started" : "preview",
+      runId: req.url.endsWith("/run") ? "ingest-run-1" : undefined,
+      previewId: req.url.endsWith("/preview") ? "preview-1" : undefined
+    }));
+  });
+
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const baseUrl = `http://127.0.0.1:${server.address().port}`;
+  const sage = createSageClient({
+    sageBaseUrl: baseUrl,
+    serviceToken: "portal-service-token"
+  });
+
+  try {
+    await sage.previewIngestRun({
+      type: "webtoon",
+      requestedBy: "admin-1",
+      source: "discord-appa-slash"
+    });
+    await sage.runIngest({
+      type: "webtoon",
+      requestedBy: "admin-1",
+      confirmedBy: "admin-1",
+      previewId: "preview-1"
+    });
+
+    assert.deepEqual(seen.map((entry) => [entry.method, entry.url]), [
+      ["POST", "/api/internal/portal/library/ingest/preview"],
+      ["POST", "/api/internal/portal/library/ingest/runs"]
+    ]);
+    assert.equal(seen[0].authorization, "Bearer portal-service-token");
+    assert.deepEqual(seen[0].body, {
+      type: "webtoon",
+      requestedBy: "admin-1",
+      source: "discord-appa-slash"
+    });
+    assert.deepEqual(seen[1].body, {
+      type: "webtoon",
+      requestedBy: "admin-1",
+      confirmedBy: "admin-1",
+      previewId: "preview-1"
+    });
+  } finally {
+    await new Promise((resolve, reject) => {
+      server.close((error) => error ? reject(error) : resolve());
+    });
+  }
+});
+
 test("noonaChat calls the Sage-brokered public mention route", async () => {
   const seen = [];
   const server = http.createServer(async (req, res) => {

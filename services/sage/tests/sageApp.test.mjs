@@ -308,7 +308,7 @@ const defaultIntakePayload = Object.freeze({
  * Create a small dependency stub for Sage's Raven, Warden, Portal, and Oracle
  * calls so the Moon v3 broker routes can be tested in isolation.
  *
- * @param {{libraryTitles?: Array<Record<string, unknown>>, libraryDelayMs?: number, downloadTasks?: Array<Record<string, unknown>>, downloadTasksStatus?: number, ingestTasks?: Array<Record<string, unknown>>, ingestOverview?: Record<string, unknown>, importResult?: Record<string, unknown>, downloadRuntimeReloadStatus?: number, syncLinkedRequestOnQueue?: boolean, readerChapterTransientMisses?: Record<string, number>, readerMissingChaptersAsHtml?: boolean, readerPageFetchFails?: boolean, readerPageHangs?: boolean, publicSearchResultCount?: number}} [options]
+ * @param {{libraryTitles?: Array<Record<string, unknown>>, libraryDelayMs?: number, downloadTasks?: Array<Record<string, unknown>>, downloadTasksStatus?: number, ingestTasks?: Array<Record<string, unknown>>, ingestOverview?: Record<string, unknown>, ingestRunResult?: Record<string, unknown>, importResult?: Record<string, unknown>, downloadRuntimeReloadStatus?: number, syncLinkedRequestOnQueue?: boolean, readerChapterTransientMisses?: Record<string, number>, readerMissingChaptersAsHtml?: boolean, readerPageFetchFails?: boolean, readerPageHangs?: boolean, publicSearchResultCount?: number}} [options]
  * @returns {Promise<{server: http.Server, calls: Record<string, number>}>}
  */
 const createDependencyStub = ({
@@ -318,6 +318,7 @@ const createDependencyStub = ({
   downloadTasksStatus = 200,
   ingestTasks = [],
   ingestOverview = null,
+  ingestRunResult = null,
   importResult = null,
   downloadRuntimeReloadStatus = 200,
   syncLinkedRequestOnQueue = false,
@@ -358,6 +359,7 @@ const createDependencyStub = ({
     metadataSearchUrls: [],
     ingestTasks: 0,
     ingestOverview: 0,
+    ingestRunCreate: 0,
     ingestRetry: 0,
     importLibrary: 0,
     downloadRetry: 0,
@@ -900,6 +902,28 @@ const createDependencyStub = ({
           ingestError: title.ingestError || ""
         }))
       }));
+      return;
+    }
+
+    if (request.url === "/v1/ingest/runs" && request.method === "POST") {
+      calls.ingestRunCreate += 1;
+      readRequestBody(request).then((buffer) => {
+        const payload = JSON.parse(buffer.toString() || "{}");
+        response.writeHead(202, {"Content-Type": "application/json"});
+        response.end(JSON.stringify(ingestRunResult || {
+          runId: "ingest-run-1",
+          status: "running",
+          message: "Library ingest run started.",
+          filters: {
+            libraryTypeSlug: payload.libraryTypeSlug || "",
+            type: payload.type || "",
+            requestedBy: payload.requestedBy || ""
+          }
+        }));
+      }).catch((error) => {
+        response.writeHead(500, {"Content-Type": "application/json"});
+        response.end(JSON.stringify({error: error instanceof Error ? error.message : String(error)}));
+      });
       return;
     }
 
@@ -5546,6 +5570,117 @@ test("sage defaults a blank LocalAI model to the embedded Hermes model", async (
   await closeServer(sageServer);
   await closeServer(vaultServer);
   await closeServer(dependencyStub.server);
+});
+
+test("sage brokers Portal library ingest preview and run creation through Raven", async () => {
+  const {app: vaultApp} = await createVaultApp();
+  const vaultServer = vaultApp.listen(0);
+  const vaultPort = vaultServer.address().port;
+
+  const dependencyStub = await createDependencyStub({
+    ingestOverview: {
+      summary: {
+        total: 3,
+        ready: 1,
+        failed: 1,
+        pending: 1,
+        hardware: {
+          profile: "gpu-webp",
+          state: "ready",
+          encoder: "cwebp/libwebp"
+        }
+      },
+      runs: [
+        {runId: "ingest-run-manga", status: "running", filters: {libraryTypeSlug: "manga"}},
+        {runId: "ingest-run-webtoon", status: "running", filters: {libraryTypeSlug: "webtoon"}}
+      ],
+      titles: [
+        {id: "dan-da-dan", title: "Dandadan", libraryTypeSlug: "webtoon", libraryTypeLabel: "Webtoon", ingestStatus: "failed"},
+        {id: "solo-leveling", title: "Solo Leveling", libraryTypeSlug: "webtoon", libraryTypeLabel: "Webtoon", ingestStatus: "pending"},
+        {id: "berserk", title: "Berserk", libraryTypeSlug: "manga", libraryTypeLabel: "Manga", ingestStatus: "ready"}
+      ]
+    }
+  });
+  dependencyStub.server.listen(0);
+  const dependencyPort = dependencyStub.server.address().port;
+
+  process.env.SCRIPTARR_VAULT_BASE_URL = `http://127.0.0.1:${vaultPort}`;
+  process.env.SCRIPTARR_WARDEN_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_PORTAL_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_ORACLE_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_RAVEN_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+
+  const {app: sageApp} = await createSageApp();
+  const sageServer = sageApp.listen(0);
+  const sagePort = sageServer.address().port;
+  const baseUrl = `http://127.0.0.1:${sagePort}`;
+  const portalHeaders = {
+    "Authorization": "Bearer portal-dev-token",
+    "Content-Type": "application/json"
+  };
+  const oracleHeaders = {
+    "Authorization": "Bearer oracle-dev-token",
+    "Content-Type": "application/json"
+  };
+
+  try {
+    const missingToken = await fetch(`${baseUrl}/api/internal/portal/library/ingest/preview`, {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({libraryTypeSlug: "webtoon"})
+    });
+    assert.equal(missingToken.status, 401);
+
+    const wrongService = await fetch(`${baseUrl}/api/internal/portal/library/ingest/runs`, {
+      method: "POST",
+      headers: oracleHeaders,
+      body: JSON.stringify({libraryTypeSlug: "webtoon"})
+    });
+    assert.equal(wrongService.status, 403);
+
+    const missingType = await fetch(`${baseUrl}/api/internal/portal/library/ingest/preview`, {
+      method: "POST",
+      headers: portalHeaders,
+      body: JSON.stringify({})
+    });
+    assert.equal(missingType.status, 400);
+
+    const discordConfig = await fetch(`${baseUrl}/api/internal/portal/discord-config`, {
+      headers: portalHeaders
+    }).then((response) => response.json());
+    assert.equal(discordConfig.commandCatalog.find((command) => command.id === "ingest")?.splitOwner, "appa");
+    assert.equal(discordConfig.discord.appa.commands.ingest.enabled, true);
+
+    const preview = await fetch(`${baseUrl}/api/internal/portal/library/ingest/preview`, {
+      method: "POST",
+      headers: portalHeaders,
+      body: JSON.stringify({libraryTypeSlug: "Webtoon"})
+    }).then((response) => response.json());
+    assert.equal(preview.type, "webtoon");
+    assert.equal(preview.libraryTypeSlug, "webtoon");
+    assert.equal(preview.libraryTypeLabel, "Webtoon");
+    assert.equal(preview.titleCount, 2);
+    assert.equal(preview.hardware.profile, "gpu-webp");
+    assert.equal(preview.activeRun.runId, "ingest-run-webtoon");
+    assert.equal(dependencyStub.calls.ingestOverview, 1);
+
+    const runResponse = await fetch(`${baseUrl}/api/internal/portal/library/ingest/runs`, {
+      method: "POST",
+      headers: portalHeaders,
+      body: JSON.stringify({libraryTypeSlug: "webtoon", requestedBy: "owner-1"})
+    });
+    const runPayload = await runResponse.json();
+    assert.equal(runResponse.status, 202);
+    assert.equal(runPayload.runId, "ingest-run-1");
+    assert.equal(runPayload.filters.libraryTypeSlug, "webtoon");
+    assert.equal(runPayload.filters.type, "webtoon");
+    assert.equal(runPayload.filters.requestedBy, "owner-1");
+    assert.equal(dependencyStub.calls.ingestRunCreate, 1);
+  } finally {
+    await closeServer(sageServer);
+    await closeServer(vaultServer);
+    await closeServer(dependencyStub.server);
+  }
 });
 
 test("sage brokers service-to-service routes with internal service auth", async () => {

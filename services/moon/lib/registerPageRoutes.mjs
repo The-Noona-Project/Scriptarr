@@ -43,12 +43,89 @@ const resolveAssetVersion = async (rootPath, extensions) => {
 
 const canAccessAdmin = (user) => canAccessMoonAdmin(user);
 
+const PUBLIC_HTML_PATHS = new Set(["/login"]);
+const PUBLIC_ASSET_PATHS = new Set([
+  "/favicon.ico",
+  "/icon.svg",
+  "/icon-maskable.svg",
+  "/manifest.webmanifest",
+  "/service-worker.js"
+]);
+
+/**
+ * Decide whether a request path must bypass login navigation redirects.
+ *
+ * @param {string} pathname
+ * @returns {boolean}
+ */
+const isAssetOrAuthPath = (pathname) =>
+  PUBLIC_ASSET_PATHS.has(pathname)
+  || pathname.startsWith("/api/")
+  || pathname.startsWith("/_next/")
+  || pathname.startsWith("/admin/_next/")
+  || pathname.startsWith("/reader/_next/")
+  || pathname.startsWith("/admin-assets/");
+
+/**
+ * Check whether the request is asking for a browser HTML navigation.
+ *
+ * @param {import("express").Request} req
+ * @returns {boolean}
+ */
+const acceptsHtmlNavigation = (req) => {
+  const accept = String(req.get?.("accept") || "").toLowerCase();
+  return !accept || accept.includes("text/html") || accept.includes("*/*");
+};
+
+/**
+ * Resolve whether a path belongs to the public login page.
+ *
+ * @param {string} pathname
+ * @returns {boolean}
+ */
+const isPublicHtmlPath = (pathname) => PUBLIC_HTML_PATHS.has(pathname) || pathname.startsWith("/login/");
+
+/**
+ * Normalize a protected HTML destination before placing it in /login.
+ *
+ * @param {string} value
+ * @param {string} [fallback]
+ * @returns {string}
+ */
+const sanitizeHtmlReturnToPath = (value, fallback = "/") => {
+  const normalized = typeof value === "string" ? value.trim() : "";
+  if (!normalized.startsWith("/") || normalized.startsWith("//")) {
+    return fallback;
+  }
+  let parsed;
+  try {
+    parsed = new URL(normalized, "https://moon.local");
+  } catch {
+    return fallback;
+  }
+  if (isPublicHtmlPath(parsed.pathname) || isAssetOrAuthPath(parsed.pathname)) {
+    return fallback;
+  }
+  return `${parsed.pathname}${parsed.search}`;
+};
+
+/**
+ * Build the login redirect URL for a signed-out HTML navigation.
+ *
+ * @param {import("express").Request} req
+ * @returns {string}
+ */
+const buildLoginRedirectLocation = (req) => {
+  const returnTo = sanitizeHtmlReturnToPath(req.originalUrl || req.url || "/", "/");
+  return `/login?returnTo=${encodeURIComponent(returnTo)}`;
+};
+
 const renderServiceWorker = ({assetVersion}) => `
 const STATIC_CACHE = "moon-static-${assetVersion}";
 const READER_CACHE = "moon-reader-${assetVersion}";
 const INDEX_REQUEST = "/__moon_recent_chapters__";
 const MAX_RECENT_CHAPTERS = 5;
-const STATIC_ASSETS = ["/", "/manifest.webmanifest", "/icon.svg", "/icon-maskable.svg"];
+const STATIC_ASSETS = ["/manifest.webmanifest", "/icon.svg", "/icon-maskable.svg"];
 
 const isReaderApiPath = (requestUrl) =>
   requestUrl.pathname.startsWith("/api/moon/v3/user/reader/title/") ||
@@ -137,13 +214,9 @@ self.addEventListener("fetch", (event) => {
   if (event.request.mode === "navigate") {
     event.respondWith((async () => {
       try {
-        const response = await fetch(event.request, {cache: "no-store"});
-        const cache = await caches.open(STATIC_CACHE);
-        await cache.put("/", response.clone());
-        return response;
+        return await fetch(event.request, {cache: "no-store"});
       } catch {
-        const cache = await caches.open(STATIC_CACHE);
-        return (await cache.match("/")) || Response.error();
+        return Response.error();
       }
     })());
     return;
@@ -267,6 +340,27 @@ export const registerPageRoutes = (app, {adminNextRuntime = null, config = {}, g
       ]
       : fallbackManifestIcons();
   };
+  /**
+   * Redirect signed-out browser HTML navigations into the dedicated login page.
+   *
+   * @param {import("express").Request} req
+   * @param {import("express").Response} res
+   * @returns {boolean}
+   */
+  const redirectSignedOutHtmlNavigation = (req, res) => {
+    const pathname = req.path || "/";
+    if (
+      !acceptsHtmlNavigation(req)
+      || isPublicHtmlPath(pathname)
+      || isAssetOrAuthPath(pathname)
+      || getSessionToken(req)
+    ) {
+      return false;
+    }
+    res.setHeader("Cache-Control", "no-store");
+    res.redirect(302, buildLoginRedirectLocation(req));
+    return true;
+  };
 
   app.get("/downloads", (_req, res) => {
     res.redirect("/admin/activity/queue");
@@ -336,7 +430,8 @@ export const registerPageRoutes = (app, {adminNextRuntime = null, config = {}, g
       });
 
       if (auth.status === 401) {
-        return false;
+        res.redirect(302, buildLoginRedirectLocation(req));
+        return true;
       }
 
       const user = auth.payload?.user || auth.payload || null;
@@ -359,6 +454,9 @@ export const registerPageRoutes = (app, {adminNextRuntime = null, config = {}, g
   }
 
   app.get("/admin", async (req, res) => {
+    if (redirectSignedOutHtmlNavigation(req, res)) {
+      return;
+    }
     if (await guardAdminRequest(req, res)) {
       return;
     }
@@ -373,6 +471,9 @@ export const registerPageRoutes = (app, {adminNextRuntime = null, config = {}, g
   });
 
   app.get("/admin/*splat", async (req, res) => {
+    if (redirectSignedOutHtmlNavigation(req, res)) {
+      return;
+    }
     if (await guardAdminRequest(req, res)) {
       return;
     }
@@ -395,6 +496,9 @@ export const registerPageRoutes = (app, {adminNextRuntime = null, config = {}, g
   });
 
   app.get("/reader", async (req, res) => {
+    if (redirectSignedOutHtmlNavigation(req, res)) {
+      return;
+    }
     res.setHeader("Cache-Control", "no-store");
     if (readerNextRuntime) {
       await readerNextRuntime.handle(req, res);
@@ -407,6 +511,9 @@ export const registerPageRoutes = (app, {adminNextRuntime = null, config = {}, g
   });
 
   app.get("/reader/*splat", async (req, res) => {
+    if (redirectSignedOutHtmlNavigation(req, res)) {
+      return;
+    }
     res.setHeader("Cache-Control", "no-store");
     if (readerNextRuntime) {
       await readerNextRuntime.handle(req, res);
@@ -418,10 +525,13 @@ export const registerPageRoutes = (app, {adminNextRuntime = null, config = {}, g
     }));
   });
 
-  app.get("/", async (_req, res) => {
+  app.get("/", async (req, res) => {
+    if (redirectSignedOutHtmlNavigation(req, res)) {
+      return;
+    }
     res.setHeader("Cache-Control", "no-store");
     if (userNextRuntime) {
-      await userNextRuntime.handle(_req, res);
+      await userNextRuntime.handle(req, res);
       return;
     }
     const branding = await loadBranding();
@@ -444,10 +554,13 @@ export const registerPageRoutes = (app, {adminNextRuntime = null, config = {}, g
     res.status(404).json({error: "Admin assets moved to /admin/_next."});
   });
 
-  app.get("/*splat", async (_req, res) => {
+  app.get("/*splat", async (req, res) => {
+    if (redirectSignedOutHtmlNavigation(req, res)) {
+      return;
+    }
     res.setHeader("Cache-Control", "no-store");
     if (userNextRuntime) {
-      await userNextRuntime.handle(_req, res);
+      await userNextRuntime.handle(req, res);
       return;
     }
     const branding = await loadBranding();

@@ -18,8 +18,9 @@ existing installs do not lose admin controls. When Appa is enabled and `SCRIPTAR
 
 - Noona owns reader-facing `/search`, `/request`, `/subscribe`, `/trivia status`, `/trivia leaderboard`, public
   mention chat, trivia posts and guesses, onboarding, request DMs, release posts, and update posts.
-- Appa owns admin `/ding`, `/status`, owner-only DM `/downloadall`, `/trivia start`, `/trivia stop`, admin mentions,
-  legacy raw DM `downloadall ...`, downloadall reactions, and serious public corrections after Noona replies.
+- Appa owns admin `/ding`, `/status`, `/ingest`, owner-only DM `/downloadall`, `/trivia start`, `/trivia stop`,
+  admin mentions, legacy raw DM `downloadall ...`, downloadall reactions, and serious public corrections after Noona
+  replies.
 - Split mode does not register the legacy `/chat` slash command; Noona's natural mention chat still reuses that saved
   command gate for role checks. In single-bot fallback mode, legacy `/chat` uses Noona's same one-at-a-time AI queue
   and edits its ephemeral `Thinking...` response when the answer is ready.
@@ -44,6 +45,11 @@ queueing it. Portal only queues titles with one confident metadata match and rep
 already-current, appended, adult-content, no-metadata, ambiguous-metadata, invalid-source, and failed outcomes in the
 DM summary. For `nsfw:false`, Raven only queues titles whose WeebCentral detail page explicitly says
 `Adult Content: No`; adult or unverified titles are skipped.
+
+Appa also owns `/ingest type:<manga|manhwa|manhua|webtoon|comic|oel>` for admin WebP rebuilds from existing
+canonical CBZ archives. The slash command previews the type, title count, hardware state, and any active run without
+mutating state. A 5-minute confirm button starts Sage's brokered Raven ingest run, rejects expired or wrong-user
+confirms, and lets Raven continue through per-title failures without redownloading chapters or changing metadata.
 
 Guild id, onboarding settings, release notification channel id, GitHub update channel id, DM superuser id, Noona
 mention-chat settings, Appa split/review settings, and per-command role gates are managed from Moon admin at
@@ -84,7 +90,8 @@ The `portal.discord.appa` setting owns the optional admin split:
 - `adminMentionChannelIds`: empty means every channel in the configured guild
 - `reviewEnabled`: lets Appa review public Noona mention-chat replies
 - `correctionMode`: `serious` or `off`
-- `commands`: Appa-specific enable and role gates for `/ding`, `/status`, `/trivia start|stop`, and `/downloadall`
+- `commands`: Appa-specific enable and role gates for `/ding`, `/status`, `/ingest`, `/trivia start|stop`, and
+  `/downloadall`
 
 Discord's Message Content intent must be enabled in the Discord developer portal for mention chat, trivia guesses, and
 legacy DM text fallback handling. Portal requests the gateway intent, but Discord will not deliver message content

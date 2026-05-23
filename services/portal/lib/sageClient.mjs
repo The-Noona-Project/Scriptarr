@@ -26,6 +26,8 @@ const DISCORD_AI_REVIEW_TIMEOUT_MS = 60000;
 const TRIVIA_STATE_TIMEOUT_MS = 2500;
 const TRIVIA_GUESS_TIMEOUT_MS = 9000;
 const TRIVIA_MUTATION_TIMEOUT_MS = 10000;
+const INGEST_PREVIEW_TIMEOUT_MS = 30000;
+const INGEST_RUN_TIMEOUT_MS = 900000;
 
 const isRetryableNetworkError = (error) => {
   if (!(error instanceof Error)) {
@@ -162,6 +164,24 @@ export const createSageClient = (config) => {
         retries: 2,
         retryDelayMs: 250,
         timeoutMs: Number.isInteger(config.bulkQueueTimeoutMs) ? config.bulkQueueTimeoutMs : 900000
+      });
+    },
+    previewIngestRun(payload, options = {}) {
+      return requestJson(config.sageBaseUrl, jsonHeaders, "/api/internal/portal/library/ingest/preview", {
+        method: "POST",
+        body: payload,
+        timeoutMs: options.timeoutMs || INGEST_PREVIEW_TIMEOUT_MS,
+        signal: options.signal
+      });
+    },
+    runIngest(payload, options = {}) {
+      return requestJson(config.sageBaseUrl, jsonHeaders, "/api/internal/portal/library/ingest/runs", {
+        method: "POST",
+        body: payload,
+        retries: 2,
+        retryDelayMs: 250,
+        timeoutMs: options.timeoutMs || (Number.isInteger(config.ingestRunTimeoutMs) ? config.ingestRunTimeoutMs : INGEST_RUN_TIMEOUT_MS),
+        signal: options.signal
       });
     },
     createBulkRun(payload) {

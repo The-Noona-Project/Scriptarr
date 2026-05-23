@@ -56,16 +56,23 @@
   and the callback relay should send users back to the page where login started whenever that route is still allowed,
   falling back to `/` otherwise. Keep the browser-bound OAuth-state cookie check in place so callbacks cannot be replayed
   from another browser session.
+- Signed-out HTML navigations for user, reader, and admin pages should redirect to `/login?returnTo=...`. Exclude
+  `/login`, Moon APIs, OAuth callback/start routes, Next assets, icons, the manifest, and the service worker so auth
+  redirects never trap assets or broker calls.
+- `/login` is the system front door. It must render without waiting for chrome/bootstrap, use the same-origin Discord
+  start route, run only the bounded allowlisted post-login prep when `prepare=1`, and always expose a continue action.
 - Keep HTML responses uncached and static admin or user assets versioned so publishes invalidate the browser cache
   without relying on manual hard refreshes.
 - User and admin chrome should start from `/api/moon/chrome/bootstrap?returnTo=...`, which returns branding, auth,
   user identity, and first-owner bootstrap status in one Moon-owned response. Do not include a Discord OAuth URL in
-  that payload. Signed-out shells should render the local `/api/moon/auth/discord/start?returnTo=...` href immediately;
-  that Moon route sets the OAuth state cookie and redirects to Discord. Keep `/api/moon/auth/discord/url?returnTo=...`
-  available as the JSON compatibility endpoint, and keep chrome bootstrap broker calls independently timeout-bounded so
-  a slow branding, auth, or first-owner-status response does not block the whole shell.
+  that payload. Signed-out shells should point to `/login?returnTo=...`; the login page renders the local
+  `/api/moon/auth/discord/start?returnTo=...` href immediately. That Moon route sets the OAuth state cookie and
+  redirects to Discord. Keep `/api/moon/auth/discord/url?returnTo=...` available as the JSON compatibility endpoint,
+  and keep chrome bootstrap broker calls independently timeout-bounded so a slow branding, auth, or first-owner-status
+  response does not block the whole shell.
 - Keep the user app installable. `manifest.webmanifest` and `/service-worker.js` are Moon-owned routes, and the
-  service worker should cache the app shell plus only a small rolling set of recent reader chapters.
+  service worker must not cache protected or personalized HTML as `/`. Cache versioned static assets and successful
+  revisioned reader page assets only.
 - The user app now runs as an embedded Next.js App Router program. Preserve the existing public Moon routes and
   same-origin APIs while keeping the lightweight local shell primitives, single-row megamenu navigation, compact
   avatar dropdown, `/profile` route for the lazy StylePanel bridge or install actions, and simple footer inside
@@ -115,6 +122,9 @@
 - The user app has a browser-local return-visit JSON cache in `apps/user-next/lib/persistentJsonCache.js`. Use it only
   through `useMoonJson({persistentCache})` for signed-in home, browse, library, and profile card/preview payloads;
   keep auth, cookies, API keys, requests mutations, title detail, reader state, and admin data live-only.
+- The post-login prep helper may warm only safe signed-in user payloads: home, library type counts, default compact
+  library cards, the exact returned library/browse card URL, and profile only when returning to profile. It must skip
+  admin data, API keys, request mutations, title detail, reader pages, image data, and direct internal service URLs.
 - `/library` is the canonical catalogue route. `/browse` and `/library/:type` should feed the same catalogue client and
   settle into `/library` URL state. Use `q`, `type`, `letter`, `view`, and `pageSize`, debounce URL replacement, keep
   previously loaded cards or rows visible while new results refresh, remember the user's grid/row view locally, and

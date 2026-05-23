@@ -101,14 +101,15 @@ const shouldUseSecureCookie = (config, req) => {
 
 const renderAuthRelayPage = ({targetPath, publicOrigin}) => {
   const safeTarget = JSON.stringify(sanitizeReturnToPath(targetPath, "/"));
+  const safeTargetPath = sanitizeReturnToPath(targetPath, "/");
   const safeOrigin = JSON.stringify(publicOrigin || "");
   return `<!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Signing in…</title>
-    <meta http-equiv="refresh" content="2;url=${escapeHtml(targetPath)}">
+    <title>Signing in...</title>
+    <meta http-equiv="refresh" content="2;url=${escapeHtml(safeTargetPath)}">
     <style>
       body { font-family: system-ui, sans-serif; background: #0f1418; color: #f3efe8; display: grid; place-items: center; min-height: 100vh; margin: 0; }
       main { max-width: 420px; padding: 24px; border-radius: 18px; background: rgba(17, 24, 31, 0.92); border: 1px solid rgba(112, 132, 152, 0.2); }
@@ -118,8 +119,8 @@ const renderAuthRelayPage = ({targetPath, publicOrigin}) => {
   <body>
     <main>
       <h1>Scriptarr finished signing you in.</h1>
-      <p>Returning you to Scriptarr…</p>
-      <p><a href="${escapeHtml(targetPath)}">Continue now</a></p>
+      <p>Returning you to Scriptarr...</p>
+      <p><a href="${escapeHtml(safeTargetPath)}">Continue now</a></p>
     </main>
     <script>
       const targetPath = ${safeTarget};
@@ -340,7 +341,8 @@ export const registerAuthRoutes = (app, {config, getSessionToken, logger}) => {
       .type("html")
       .send(renderAuthRelayPage({
         targetPath,
-        publicOrigin: resolvePublicOrigin(config, req)
+        publicOrigin: resolvePublicOrigin(config, req),
+        user: result.payload?.user || null
       }));
   });
 

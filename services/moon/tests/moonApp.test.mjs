@@ -653,14 +653,16 @@ test("moon serves branded split entry documents, typed routes, PWA assets, and M
   const baseUrl = `http://127.0.0.1:${server.address().port}`;
 
   try {
+  const memberPageHeaders = {cookie: "scriptarr_session=member-token"};
+  const adminPageHeaders = {cookie: "scriptarr_session=admin-token"};
   const [userPageResponse, adminPageResponse, libraryRouteResponse, titleRouteResponse, readerRouteResponse, untypedReaderRouteResponse, profileRouteResponse] = await Promise.all([
-    fetch(`${baseUrl}/`),
-    fetch(`${baseUrl}/admin`),
-    fetch(`${baseUrl}/library/webtoon`),
-    fetch(`${baseUrl}/title/webtoon/dan-da-dan`),
-    fetch(`${baseUrl}/reader/webtoon/dan-da-dan/chapter-1`),
-    fetch(`${baseUrl}/reader/dan-da-dan/chapter-1`),
-    fetch(`${baseUrl}/profile`)
+    fetch(`${baseUrl}/`, {headers: memberPageHeaders}),
+    fetch(`${baseUrl}/admin`, {headers: adminPageHeaders}),
+    fetch(`${baseUrl}/library/webtoon`, {headers: memberPageHeaders}),
+    fetch(`${baseUrl}/title/webtoon/dan-da-dan`, {headers: memberPageHeaders}),
+    fetch(`${baseUrl}/reader/webtoon/dan-da-dan/chapter-1`, {headers: memberPageHeaders}),
+    fetch(`${baseUrl}/reader/dan-da-dan/chapter-1`, {headers: memberPageHeaders}),
+    fetch(`${baseUrl}/profile`, {headers: memberPageHeaders})
   ]);
 
   const userPage = await userPageResponse.text();
@@ -737,6 +739,8 @@ test("moon serves branded split entry documents, typed routes, PWA assets, and M
   assert.match(serviceWorkerSource, /moon-reader-/);
   assert.match(serviceWorkerSource, /isReaderPageRequest[\s\S]*searchParams\.has\("rev"\)/);
   assert.match(serviceWorkerSource, /isReaderPageChunkRequest[\s\S]*searchParams\.has\("rev"\)/);
+  assert.doesNotMatch(serviceWorkerSource, /STATIC_ASSETS = \["\/"/);
+  assert.doesNotMatch(serviceWorkerSource, /cache\.put\("\/"/);
   assert.doesNotMatch(serviceWorkerSource, /<!doctype html>/i);
 
   const brandingResponse = await fetch(`${baseUrl}/api/moon/v3/public/branding`);
@@ -1194,6 +1198,40 @@ test("moon redirects signed-in non-admin sessions away from admin while allowing
   const {app} = await createMoonApp();
   const server = app.listen(0);
   const baseUrl = `http://127.0.0.1:${server.address().port}`;
+
+  const signedOutRoot = await fetch(`${baseUrl}/`, {
+    headers: {accept: "text/html"},
+    redirect: "manual"
+  });
+  assert.equal(signedOutRoot.status, 302);
+  assert.equal(signedOutRoot.headers.get("location"), "/login?returnTo=%2F");
+
+  const signedOutLibrary = await fetch(`${baseUrl}/library?type=webtoon`, {
+    headers: {accept: "text/html"},
+    redirect: "manual"
+  });
+  assert.equal(signedOutLibrary.status, 302);
+  assert.equal(signedOutLibrary.headers.get("location"), "/login?returnTo=%2Flibrary%3Ftype%3Dwebtoon");
+
+  const signedOutReader = await fetch(`${baseUrl}/reader/webtoon/dan-da-dan/chapter-1`, {
+    headers: {accept: "text/html"},
+    redirect: "manual"
+  });
+  assert.equal(signedOutReader.status, 302);
+  assert.equal(signedOutReader.headers.get("location"), "/login?returnTo=%2Freader%2Fwebtoon%2Fdan-da-dan%2Fchapter-1");
+
+  const signedOutAdmin = await fetch(`${baseUrl}/admin`, {
+    headers: {accept: "text/html"},
+    redirect: "manual"
+  });
+  assert.equal(signedOutAdmin.status, 302);
+  assert.equal(signedOutAdmin.headers.get("location"), "/login?returnTo=%2Fadmin");
+
+  const apiResponse = await fetch(`${baseUrl}/api/nope`, {
+    headers: {accept: "text/html"},
+    redirect: "manual"
+  });
+  assert.equal(apiResponse.status, 404);
 
   const memberResponse = await fetch(`${baseUrl}/admin`, {
     headers: {cookie: "scriptarr_session=member-token"},

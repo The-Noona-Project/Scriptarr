@@ -71,6 +71,7 @@ const buildMenuGroups = (pathname, libraryTypes = [], activeType = "") => {
 export const MoonShell = ({children}) => {
   const pathname = usePathname();
   const publicPathname = pathname || "/";
+  const isLoginRoute = publicPathname === "/login";
   const [queryType, setQueryType] = useState("");
   const [chrome, setChrome] = useState({
     branding: {siteName: "Scriptarr"},
@@ -185,60 +186,66 @@ export const MoonShell = ({children}) => {
 
   return (
     <MoonChromeContext.Provider value={chromeContextValue}>
-      <div className="moon-app-shell">
-        <header className="moon-header">
-          <div className="moon-header-top">
-            <Link className="moon-brandmark" href="/">
-              {logoUrl ? <img src={logoUrl} alt="" /> : null}
-              <strong>{title}</strong>
-            </Link>
-            <Flex gap="16" vertical="center" className="moon-header-actions">
-              <div className="moon-nav-desktop">
-                <DesktopNavigation menuGroups={menuGroups} onGroupOpen={(group) => {
-                  if (group?.id === "library") {
-                    syncQueryTypeFromLocation();
-                    ensureLibraryTypes();
-                  }
-                }} />
-              </div>
-              <div className="moon-nav-mobile">
-                <button
-                  className="moon-mobile-menu-trigger"
-                  type="button"
-                  onClick={() => {
-                    setMobileMenuOpen((value) => {
-                      const nextValue = !value;
-                      if (nextValue) {
-                        ensureLibraryTypes();
-                      }
-                      return nextValue;
-                    });
-                  }}
-                >
-                  {mobileMenuOpen ? "Close" : "Menu"}
-                </button>
-                {mobileMenuOpen ? (
-                  <div className="moon-mobile-menu-surface">
-                    <MobileNavigation
-                      menuGroups={menuGroups}
-                      onClose={() => setMobileMenuOpen(false)}
-                      onGroupOpen={(group) => {
-                        if (group?.id === "library") {
-                          syncQueryTypeFromLocation();
+      {isLoginRoute ? (
+        <div className="moon-login-shell">
+          <main className="moon-login-stage">{children}</main>
+        </div>
+      ) : (
+        <div className="moon-app-shell">
+          <header className="moon-header">
+            <div className="moon-header-top">
+              <Link className="moon-brandmark" href="/">
+                {logoUrl ? <img src={logoUrl} alt="" /> : null}
+                <strong>{title}</strong>
+              </Link>
+              <Flex gap="16" vertical="center" className="moon-header-actions">
+                <div className="moon-nav-desktop">
+                  <DesktopNavigation menuGroups={menuGroups} onGroupOpen={(group) => {
+                    if (group?.id === "library") {
+                      syncQueryTypeFromLocation();
+                      ensureLibraryTypes();
+                    }
+                  }} />
+                </div>
+                <div className="moon-nav-mobile">
+                  <button
+                    className="moon-mobile-menu-trigger"
+                    type="button"
+                    onClick={() => {
+                      setMobileMenuOpen((value) => {
+                        const nextValue = !value;
+                        if (nextValue) {
                           ensureLibraryTypes();
                         }
-                      }}
-                    />
-                  </div>
-                ) : null}
-              </div>
-              <ProfileMenu user={chrome.auth} loginUrl={chrome.loginUrl} />
-            </Flex>
-          </div>
-        </header>
-        <main className="moon-main-stage">{children}</main>
-        <SiteFooter siteName={title} />
-      </div>
+                        return nextValue;
+                      });
+                    }}
+                  >
+                    {mobileMenuOpen ? "Close" : "Menu"}
+                  </button>
+                  {mobileMenuOpen ? (
+                    <div className="moon-mobile-menu-surface">
+                      <MobileNavigation
+                        menuGroups={menuGroups}
+                        onClose={() => setMobileMenuOpen(false)}
+                        onGroupOpen={(group) => {
+                          if (group?.id === "library") {
+                            syncQueryTypeFromLocation();
+                            ensureLibraryTypes();
+                          }
+                        }}
+                      />
+                    </div>
+                  ) : null}
+                </div>
+                <ProfileMenu user={chrome.auth} loginUrl={chrome.loginUrl} />
+              </Flex>
+            </div>
+          </header>
+          <main className="moon-main-stage">{children}</main>
+          <SiteFooter siteName={title} />
+        </div>
+      )}
     </MoonChromeContext.Provider>
   );
 };

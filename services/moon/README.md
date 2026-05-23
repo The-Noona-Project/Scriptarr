@@ -54,13 +54,19 @@ title, reader, browse, request, or admin page returns to that page instead of al
 If the remembered path is missing, unsafe, or not allowed for the signed-in user, Moon falls back to `/`.
 Moon also binds the Discord callback to a short-lived HTTP-only OAuth-state cookie so a callback from another browser
 session cannot swap the signed-in account.
+Signed-out HTML navigations to user, reader, and admin surfaces now redirect to `/login?returnTo=...`. `/login` is a
+standalone user app route that paints before chrome/bootstrap finishes, starts Discord OAuth through
+`/api/moon/auth/discord/start`, and then runs a two-second-capped prep pass after Discord returns to
+`/login?prepare=1`.
 Chrome startup uses `/api/moon/chrome/bootstrap?returnTo=...` to collapse branding, auth state, user identity, and
-first-owner bootstrap into one same-origin call. The user and admin shells can render a local
-`/api/moon/auth/discord/start?returnTo=...` login link immediately; that route asks Sage for the Discord OAuth URL,
-sets Moon's browser-bound state cookie, and redirects to Discord. The older JSON
+first-owner bootstrap into one same-origin call. The user, reader, and admin shells render local `/login?returnTo=...`
+links when they need a sign-in action. The older JSON
 `/api/moon/auth/discord/url?returnTo=...` route remains available for compatibility. Chrome bootstrap broker calls use
 short per-call timeouts so branding, auth, and first-owner status can degrade independently instead of one slow broker
 blocking the whole shell.
+The post-login prep pass writes only the existing allowlisted browser-local JSON cache entries: home, compact library
+count/cards, exact library or browse card queries, and profile data for profile returns. It never preloads admin data,
+API-key payloads, reader page/image data, request mutations, title detail, or internal service URLs.
 The catalogue keeps a quick-jump index rail on the left, tighter search against titles, aliases, types, and tags, a
 remembered Grid/Rows view toggle, and paged InfiniteScroll with a manual fallback button. The home route is
 intentionally simpler too: it starts with a personalized "Your Bookshelf" continue-reading shelf, then stacks cover-led
@@ -164,6 +170,8 @@ program now ships in a dark-only theme by default.
 Moon no longer exposes a dev-session claim path. Discord login is the supported first-owner and admin sign-in flow, and
 Moon serves versioned CSS or JS asset URLs with `no-store` HTML responses so new publishes invalidate stale browser
 bundles automatically.
+The service worker does not cache protected or personalized HTML navigations. It keeps versioned static app assets and
+the bounded revisioned reader page/chunk cache only.
 Moon's admin event history now comes from the shared Vault-backed durable event log, and the admin SPA subscribes to
 same-origin `/api/moon-v3/admin/events*` feeds for live updates instead of page-specific ad hoc polling.
 The admin System pages for Logs, Events, and Updates are now purpose-built Next surfaces rather than generic record

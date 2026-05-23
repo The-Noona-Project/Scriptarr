@@ -2087,6 +2087,80 @@ a {
   letter-spacing: 0.08em;
 }
 
+.moon-login-shell {
+  min-height: 100vh;
+  display: grid;
+  background:
+    linear-gradient(180deg, rgba(6, 10, 14, 0.82), rgba(8, 14, 20, 0.94)),
+    radial-gradient(circle at 20% 12%, rgba(255, 152, 96, 0.24), transparent 30%),
+    radial-gradient(circle at 82% 18%, rgba(104, 163, 255, 0.18), transparent 28%);
+}
+
+.moon-login-stage {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  padding: 28px;
+}
+
+.moon-login-page {
+  width: min(460px, 100%);
+}
+
+.moon-login-panel {
+  display: grid;
+  gap: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  background: rgba(10, 16, 23, 0.94);
+  box-shadow: 0 34px 90px rgba(0, 0, 0, 0.34);
+  padding: 28px;
+}
+
+.moon-login-panel h1 {
+  margin: 0;
+  font-size: clamp(2rem, 8vw, 3.2rem);
+  line-height: 1;
+}
+
+.moon-login-copy {
+  margin: 0;
+  color: rgba(240, 237, 232, 0.76);
+  line-height: 1.6;
+}
+
+.moon-login-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.moon-login-progress {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.moon-login-progress span {
+  display: block;
+  width: 42%;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, rgba(255, 176, 112, 0.94), rgba(112, 165, 255, 0.9));
+  animation: moon-login-progress 1.1s ease-in-out infinite alternate;
+}
+
+@keyframes moon-login-progress {
+  from {
+    transform: translateX(-10%);
+  }
+
+  to {
+    transform: translateX(150%);
+  }
+}
+
 @media (max-width: 1080px) {
   .moon-hero,
   .moon-title-hero,

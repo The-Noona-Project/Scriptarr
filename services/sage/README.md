@@ -118,6 +118,9 @@ Sage also brokers the separated Raven library import and ingest surfaces. `/api/
 intake and forwards accepted import payloads to Raven `/v1/imports`; `/api/moon-v3/admin/ingest` reports the WebP
 backlog and retries Raven `/v1/ingest/:titleId/retry`. Queue recovery routes detect `raven-ingest` tasks and retry
 ingest from the existing CBZ instead of rerouting through download retry.
+Sage also exposes Portal-only service-token routes for Appa's `/ingest` command:
+`/api/internal/portal/library/ingest/preview` reads Raven's type-scoped title and hardware state without mutation, and
+`/api/internal/portal/library/ingest/runs` starts Raven's durable WebP-only rebuild job through `/v1/ingest/runs`.
 
 Sage also brokers the Next admin System pages. `/admin/system/logs` reads Warden's allowlisted redacted Docker log
 tail through Sage, `/admin/system/events` forwards richer durable-event filters into Vault, and

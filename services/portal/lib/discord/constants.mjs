@@ -1,6 +1,7 @@
 export const EPHEMERAL_FLAG = 64;
 export const MAX_VISIBLE_RESULTS = 5;
 export const REQUEST_SESSION_TTL_MS = 10 * 60 * 1000;
+export const INGEST_CONFIRM_TTL_MS = 5 * 60 * 1000;
 export const FOLLOW_NOTIFICATION_POLL_MS = 30 * 1000;
 
 export const DOWNLOAD_ALL_PATTERN = /^(?:\/|!)?downloadall\b/i;

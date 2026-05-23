@@ -25,6 +25,12 @@ import {
   normalizeReleaseNotificationState
 } from "./releaseNotifications.mjs";
 import {
+  buildPortalIngestPreview,
+  buildPortalIngestRunPayload,
+  isPortalIngestTypeSlug,
+  normalizePortalIngestTypeSlug
+} from "./portalIngestBroker.mjs";
+import {
   attachRequestWaitlistEntry,
   buildActiveRequestDuplicatePayload,
   buildLibraryDuplicatePayload,
@@ -483,6 +489,27 @@ const buildPortalBulkDownloadPayload = (body = {}) => {
     batchesPerApproval,
     requestedBy: normalizeString(body?.requestedBy, "scriptarr-portal")
   };
+};
+
+const portalIngestTypeFromBody = (body = {}) => normalizePortalIngestTypeSlug(body?.libraryTypeSlug || body?.type || body?.mediaType);
+
+/**
+ * Validate a Portal-requested library type slug before brokering to Raven.
+ *
+ * @param {import("express").Response} res
+ * @param {string} libraryTypeSlug
+ * @returns {boolean}
+ */
+const validatePortalIngestType = (res, libraryTypeSlug) => {
+  if (!libraryTypeSlug) {
+    res.status(400).json({error: "libraryTypeSlug is required."});
+    return false;
+  }
+  if (!isPortalIngestTypeSlug(libraryTypeSlug)) {
+    res.status(400).json({error: "libraryTypeSlug must be one of manga, manhwa, manhua, webtoon, comic, or oel."});
+    return false;
+  }
+  return true;
 };
 
 const buildPortalStatusSummary = async ({config, vaultClient, serviceJson}) => {
@@ -1935,6 +1962,33 @@ export const registerInternalBrokerRoutes = (app, {
       query,
       results
     });
+  }));
+
+  app.post("/api/internal/portal/library/ingest/preview", withService(requireService, ["scriptarr-portal"], async (req, res) => {
+    const libraryTypeSlug = portalIngestTypeFromBody(req.body);
+    if (!validatePortalIngestType(res, libraryTypeSlug)) {
+      return;
+    }
+
+    const result = await safeServiceJson(serviceJson(config.ravenBaseUrl, "/v1/ingest"));
+    if (!result.ok) {
+      res.status(result.status).json(result.payload);
+      return;
+    }
+
+    res.json(buildPortalIngestPreview(result.payload, {libraryTypeSlug}));
+  }));
+
+  app.post("/api/internal/portal/library/ingest/runs", withService(requireService, ["scriptarr-portal"], async (req, res) => {
+    const libraryTypeSlug = portalIngestTypeFromBody(req.body);
+    if (!validatePortalIngestType(res, libraryTypeSlug)) {
+      return;
+    }
+
+    await proxyResult(res, serviceJson(config.ravenBaseUrl, "/v1/ingest/runs", {
+      method: "POST",
+      body: buildPortalIngestRunPayload(req.body, {libraryTypeSlug})
+    }));
   }));
 
   app.get("/api/internal/portal/intake/search", withService(requireService, ["scriptarr-portal"], async (req, res) => {

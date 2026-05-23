@@ -2,6 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {buildMoonLoginHref, loadMoonChromeContext, loadMoonLoginUrl, logoutMoonSession, requestJson} from "../apps/user-next/lib/api.js";
+import {buildMoonDiscordLoginStartHref, normalizeLoginReturnTo} from "../apps/user-next/lib/loginReturnTo.js";
+import {resolvePostLoginPrepUrls} from "../apps/user-next/lib/loginPrep.js";
 import {
   buildLibraryPath,
   buildProfilePath,
@@ -55,7 +57,7 @@ test("loadMoonChromeContext normalizes nested auth payloads from Moon auth statu
   }
 });
 
-test("loadMoonLoginUrl resolves Moon's local Discord start route without a broker fetch", async () => {
+test("loadMoonLoginUrl resolves Moon's local login page without a broker fetch", async () => {
   const previousFetch = globalThis.fetch;
   globalThis.fetch = async (url) => {
     throw new Error(`Unexpected URL ${String(url)}`);
@@ -64,13 +66,42 @@ test("loadMoonLoginUrl resolves Moon's local Discord start route without a broke
   try {
     assert.equal(
       await loadMoonLoginUrl("/browse?q=moon"),
-      "/api/moon/auth/discord/start?returnTo=%2Fbrowse%3Fq%3Dmoon"
+      "/login?returnTo=%2Fbrowse%3Fq%3Dmoon"
     );
-    assert.equal(buildMoonLoginHref("//evil.example/login"), "/api/moon/auth/discord/start?returnTo=%2F");
-    assert.equal(buildMoonLoginHref("/api/moon/auth/status"), "/api/moon/auth/discord/start?returnTo=%2F");
+    assert.equal(buildMoonLoginHref("//evil.example/login"), "/login?returnTo=%2F");
+    assert.equal(buildMoonLoginHref("/api/moon/auth/status"), "/login?returnTo=%2F");
+    assert.equal(
+      buildMoonDiscordLoginStartHref("/library?type=webtoon"),
+      "/api/moon/auth/discord/start?returnTo=%2Flogin%3FreturnTo%3D%252Flibrary%253Ftype%253Dwebtoon%26prepare%3D1"
+    );
   } finally {
     globalThis.fetch = previousFetch;
   }
+});
+
+test("login return and prep helpers keep post-login cache warming allowlisted", () => {
+  assert.equal(normalizeLoginReturnTo("/reader/webtoon/t/c"), "/reader/webtoon/t/c");
+  assert.equal(normalizeLoginReturnTo("/admin/system/api"), "/admin/system/api");
+  assert.equal(normalizeLoginReturnTo("/login?returnTo=/admin"), "/");
+  assert.equal(normalizeLoginReturnTo("/api/moon-v3/user/api-keys"), "/");
+
+  assert.deepEqual(resolvePostLoginPrepUrls("/admin/system/api"), [
+    "/api/moon-v3/user/home",
+    "/api/moon-v3/user/library?view=card&pageSize=1",
+    "/api/moon-v3/user/library?view=card&pageSize=72"
+  ]);
+  assert.deepEqual(resolvePostLoginPrepUrls("/reader/webtoon/title/chapter"), [
+    "/api/moon-v3/user/home",
+    "/api/moon-v3/user/library?view=card&pageSize=1",
+    "/api/moon-v3/user/library?view=card&pageSize=72"
+  ]);
+  assert.deepEqual(resolvePostLoginPrepUrls("/library?type=webtoon&q=moon&view=grid&pageSize=36"), [
+    "/api/moon-v3/user/home",
+    "/api/moon-v3/user/library?view=card&pageSize=1",
+    "/api/moon-v3/user/library?view=card&pageSize=72",
+    "/api/moon-v3/user/library?view=card&pageSize=36&q=moon&type=webtoon"
+  ]);
+  assert.equal(resolvePostLoginPrepUrls("/profile").at(-1), "/api/moon-v3/user/profile");
 });
 
 test("requestJson preserves 401 Moon auth payloads for signed-out route handling", async () => {

@@ -62,6 +62,9 @@
 - Sage owns the Moon-safe split between manual import and WebP ingest: `/api/moon-v3/admin/import` forwards CBZ import
   payloads to Raven `/v1/imports`, while `/api/moon-v3/admin/ingest` reads the ingest backlog and retries
   `/v1/ingest/:titleId/retry`.
+- Sage owns Appa's Portal ingest broker too. Keep `/api/internal/portal/library/ingest/preview` read-only and
+  service-token protected, and keep `/api/internal/portal/library/ingest/runs` as the only Portal path to Raven's
+  `/v1/ingest/runs` durable WebP rebuild API.
 - Queue retry code must treat `raven-ingest` tasks as ingest retries from the existing CBZ. Do not send those through
   normal download retry or delete canonical CBZ files from queue cleanup.
 - Keep section bulk queue actions brokered here too: cancel all queued work for `activity.write`, cancel all running

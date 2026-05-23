@@ -206,8 +206,7 @@ export const loadMoonChromeContext = async (returnTo = "/reader") => {
  * @returns {Promise<string>}
  */
 export const loadMoonLoginUrl = async (returnTo = "/reader") => {
-  const discordUrl = await requestJson(`/api/moon/auth/discord/url?returnTo=${encodeURIComponent(normalizeReturnTo(returnTo))}`);
-  return discordUrl.ok ? String(discordUrl.payload?.oauthUrl || "").trim() : "";
+  return `/login?returnTo=${encodeURIComponent(normalizeReturnTo(returnTo))}`;
 };
 
 export default {

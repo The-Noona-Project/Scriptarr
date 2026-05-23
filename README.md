@@ -83,6 +83,11 @@ channels, GitHub update-summary posts, Noona trivia, public mention-chat setting
 optional Appa admin/reviewer settings, and Portal runtime visibility without exposing Discord credentials.
 Scriptarr's user app now runs as an embedded Next.js App Router frontend with a megamenu header, avatar profile
 controls, and a simple footer, while the fullscreen reader runs as its own embedded `/reader` Next app.
+Signed-out browser navigations now land on the dedicated Moon `/login` front door first, with the original route kept
+in `returnTo`. The login page starts Discord OAuth through Moon's same-origin start route, then runs a bounded
+post-login warmup for safe user shelves, compact library counts/cards, and profile data only when that target needs it.
+Moon keeps protected and personalized HTML out of service-worker caches; only versioned static assets and revisioned
+reader page/chunk responses are cached.
 That reader supports webtoon, single-page, double-page, and manga-double layouts, LTR/RTL direction, page-fit controls,
 keyboard/touch/controller navigation, and still persists Moon-native progress plus bookmarks behind the same typed
 reader routes.
@@ -134,9 +139,9 @@ For end-to-end Docker verification, use:
 5. Watch the Warden logs while it reconciles the sibling containers. First boot now surfaces when Docker is creating or
    downloading the managed images.
    Docker health checks now report `healthy` for Warden plus the managed services once each container settles.
-6. Open the Scriptarr web app, confirm the bootstrap surface shows the configured first owner id, and use Discord login
-   to claim the first owner session. The visible sign-in action uses Moon's same-origin
-   `/api/moon/auth/discord/start` route so it can appear before the full chrome bootstrap finishes.
+6. Open the Scriptarr web app, confirm `/login` shows the configured first owner id once bootstrap data arrives, and
+   use Discord login to claim the first owner session. The visible sign-in action is rendered by `/login` immediately
+   and then uses Moon's same-origin `/api/moon/auth/discord/start` route.
 7. Copy the callback URL surfaced by the stack into the Discord developer portal.
 8. Finish branding, logo, notification, integrations, library, metadata, download-provider, VPN, Oracle, moderation,
    and managed-service update settings in the admin app.
@@ -169,9 +174,9 @@ For end-to-end Docker verification, use:
   Scriptarr blocks the duplicate row and sends a Discord DM when the title becomes ready.
 - Portal now owns a real Discord command runtime again. Noona handles reader-facing `/search`, `/request`,
   `/subscribe`, public mention chat, trivia status/leaderboards, release posts, update posts, and requester DMs. When
-  Appa is enabled with its own Discord token/client id, Appa owns admin `/ding`, `/status`, `/downloadall`,
-  `/trivia start|stop`, `/discord inspect|testpost`, admin mentions, and serious corrections. If Appa is disabled or
-  fails, Noona keeps the legacy single-bot admin fallback.
+  Appa is enabled with its own Discord token/client id, Appa owns admin `/ding`, `/status`,
+  `/ingest type:<library-type>`, `/downloadall`, `/trivia start|stop`, `/discord inspect|testpost`, admin mentions,
+  and serious corrections. If Appa is disabled or fails, Noona keeps the legacy single-bot admin fallback.
 - Public guild mention chat is now optional in `/admin/discord`. When enabled, users can say `@Noona Ai are you alive?`
   in allowed guild channels and Portal will reply publicly through Sage. The flow reuses the `/chat` command role gate,
   ignores unmentioned chatter, bots, wrong guilds, and empty prompts, and keeps trivia message handling separate so one
@@ -190,6 +195,9 @@ For end-to-end Docker verification, use:
   Multi-batch selections pause after the configured `groupsize` batch count; paused summary DMs get check/cross
   reactions so the owner can continue or cancel without typing the command. Portal still keeps the old raw DM text
   form as a legacy best-effort fallback, but that path also creates a durable run.
+- Appa `/ingest type:<manga|manhwa|manhua|webtoon|comic|oel>` previews the selected library type, shows title count
+  and Raven hardware state, then requires a five-minute confirm button before Sage starts Raven's durable
+  `raven-library-ingest` WebP-only rebuild from existing canonical CBZ archives.
 - The bulk flow only queues titles with one confident metadata match and reports already-active, completed,
   already-current, adult-content, no-metadata, ambiguous-metadata, invalid-source, appended, and failed outcomes back
   in the Discord DM summary. Completed library titles are skipped, in-progress titles append only missing or new

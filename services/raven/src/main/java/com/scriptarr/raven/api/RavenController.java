@@ -5,6 +5,7 @@ import com.scriptarr.raven.downloader.BulkQueueDownloadResult;
 import com.scriptarr.raven.downloader.BulkRunService;
 import com.scriptarr.raven.downloader.DownloadIntakeService;
 import com.scriptarr.raven.downloader.DownloaderService;
+import com.scriptarr.raven.library.LibraryIngestRunService;
 import com.scriptarr.raven.library.ReaderChapterPayload;
 import com.scriptarr.raven.library.ReaderManifest;
 import com.scriptarr.raven.library.LibraryService;
@@ -41,6 +42,7 @@ public class RavenController {
     private final VpnService vpnService;
     private final RavenSettingsService settingsService;
     private final LibraryService libraryService;
+    private final LibraryIngestRunService ingestRunService;
 
     /**
      * Create the Raven controller.
@@ -52,6 +54,7 @@ public class RavenController {
      * @param vpnService VPN status service
      * @param settingsService Raven settings service
      * @param libraryService library projection service
+     * @param ingestRunService durable WebP rebuild run service
      */
     public RavenController(
         MetadataService metadataService,
@@ -60,7 +63,8 @@ public class RavenController {
         BulkRunService bulkRunService,
         VpnService vpnService,
         RavenSettingsService settingsService,
-        LibraryService libraryService
+        LibraryService libraryService,
+        LibraryIngestRunService ingestRunService
     ) {
         this.metadataService = metadataService;
         this.downloadIntakeService = downloadIntakeService;
@@ -69,6 +73,7 @@ public class RavenController {
         this.vpnService = vpnService;
         this.settingsService = settingsService;
         this.libraryService = libraryService;
+        this.ingestRunService = ingestRunService;
     }
 
     /**
@@ -207,6 +212,24 @@ public class RavenController {
     @GetMapping("/v1/ingest/tasks")
     public List<Map<String, Object>> ingestTasks() {
         return libraryService.listIngestTasks();
+    }
+
+    /**
+     * Start a durable WebP-only rebuild from existing canonical CBZ archives
+     * for one library type slug.
+     *
+     * @param body run payload with libraryTypeSlug/type and requestedBy
+     * @return accepted durable run payload or validation error
+     */
+    @PostMapping("/v1/ingest/runs")
+    public ResponseEntity<?> createIngestRun(@RequestBody(required = false) Map<String, Object> body) {
+        try {
+            return ResponseEntity.accepted().body(ingestRunService.createRun(body));
+        } catch (IllegalArgumentException error) {
+            return ResponseEntity.badRequest().body(Map.of("error", error.getMessage()));
+        } catch (IllegalStateException error) {
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("error", error.getMessage()));
+        }
     }
 
     /**

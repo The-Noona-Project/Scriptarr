@@ -12,6 +12,7 @@ import {
   readPersistentMoonJsonCache,
   writePersistentMoonJsonCache
 } from "./persistentJsonCache.js";
+import {buildMoonLoginPageHref, normalizeLoginReturnTo} from "./loginReturnTo.js";
 
 /**
  * Perform a same-origin JSON request against Moon.
@@ -76,12 +77,7 @@ export const requestJson = async (url, options = {}) => {
  * @returns {string}
  */
 export const normalizeMoonReturnTo = (returnTo = "/") => {
-  const trimmedReturnTo = typeof returnTo === "string" ? returnTo.trim() : "";
-  return trimmedReturnTo.startsWith("/")
-      && !trimmedReturnTo.startsWith("//")
-      && !trimmedReturnTo.startsWith("/api/")
-    ? trimmedReturnTo
-    : "/";
+  return normalizeLoginReturnTo(returnTo);
 };
 
 /**
@@ -91,7 +87,7 @@ export const normalizeMoonReturnTo = (returnTo = "/") => {
  * @returns {string}
  */
 export const buildMoonLoginHref = (returnTo = "/") =>
-  `/api/moon/auth/discord/start?returnTo=${encodeURIComponent(normalizeMoonReturnTo(returnTo))}`;
+  buildMoonLoginPageHref(returnTo);
 
 /**
  * Clear Moon's local auth session cookie.

@@ -29,6 +29,9 @@
   - `/downloads/ingested/<type-slug>/<titleId>/<chapterId>` for derived WebP reader pages
 - Manual imports and normal downloads must converge on the same canonical CBZ layout before ingest. `/v1/imports`
   should only accept Raven-visible CBZ files under import-staging or downloaded storage, then queue WebP ingest.
+- Library-type reingest runs live at `/v1/ingest/runs` for Sage/Appa. They rebuild only derived WebP pages from
+  existing canonical CBZ archives, create durable per-title tasks, continue through individual title failures, and
+  return the existing run id when the same type already has a queued or running rebuild.
 - Reader serving is WebP-first. A chapter is readable only after ingest writes stable `p000001.webp`-style page slugs,
   a `manifest.json`, and ready ingest metadata into the catalog.
 - Ingest failures keep the CBZ, delete only staged or derived ingest output, and surface as retryable Needs attention

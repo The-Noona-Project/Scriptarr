@@ -6,7 +6,7 @@
 - Portal is not allowed to call Vault or Oracle directly. First-party internal traffic must go through Sage's token-authenticated broker routes.
 - In split mode, Noona owns reader-facing `/search`, `/request`, `/subscribe`, `/trivia status|leaderboard`, public
   mention chat, trivia posts/guesses, onboarding, requester DMs, release posts, and update posts. Appa owns admin
-  `/ding`, `/status`, owner-only DM `/downloadall`, `/trivia start|stop`, `/discord inspect|testpost`, admin
+  `/ding`, `/status`, `/ingest`, owner-only DM `/downloadall`, `/trivia start|stop`, `/discord inspect|testpost`, admin
   mentions, legacy raw DM `downloadall ...`, downloadall reactions, and serious Noona corrections.
 - If Appa is disabled, missing env, or degraded at startup, Noona must retain the legacy single-bot admin fallback,
   including `/chat`, admin slash commands, DM `downloadall`, and downloadall reactions.
@@ -92,6 +92,9 @@
   cancels remaining work. Completed, failed, and cancelled summaries are informational and should not create decision
   prompts.
 - Preserve `groupsize` across slash-command and legacy DM parsing as `batchesPerApproval` with bounds `1-25`.
+- Appa `/ingest type:<manga|manhwa|manhua|webtoon|comic|oel>` is admin-facing and role-managed through
+  `portal.discord.appa.commands.ingest`. Preview must not mutate, confirm buttons expire after 5 minutes, only the
+  requesting admin can confirm, and the confirmed run must go through Sage to Raven instead of calling Raven directly.
 - Portal runtime state should keep enough DM diagnostics to explain silent failures quickly: requested intents,
   requested partials, last DM receive timestamp, last handled `downloadall`, last `downloadall` error, and last Noona
   mention-chat time/error. Include Appa connection, mention, review, correction, and avatar sync state when split mode

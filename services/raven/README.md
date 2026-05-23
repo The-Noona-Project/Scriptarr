@@ -122,5 +122,8 @@ Reader page serving now reads the ingested WebP folder instead of extracting CBZ
 extracts ordered archive pages, writes stable page slugs such as `p000001.webp` at quality `92`, stores a per-chapter
 manifest, and serves `image/webp` through the existing Moon/Sage reader routes. Raven also exposes a redacted page probe
 for Moon and keeps Missing Content quality fields available for damaged source detection.
+Raven also accepts `POST /v1/ingest/runs` for Appa/Sage-owned library-type reingest jobs. These jobs rebuild only the
+derived WebP reader pages from existing canonical CBZ archives, create one durable task per ready title, continue after
+per-title failures, and reuse the active queued or running run id when the same library type is already being rebuilt.
 For long-running WeebCentral series, Raven now follows the source page's HTMX full-chapter-list flow instead of only
 the initial visible subset, which fixes partial-history titles such as Tomb Raider King.
