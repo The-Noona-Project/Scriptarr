@@ -945,6 +945,34 @@ def test_embedded_localai_verify_generation_retries_first_load_failure():
     assert probes == []
 
 
+def test_embedded_localai_status_uses_cached_generation_probe():
+    class Logger:
+        def warning(self, *args, **kwargs):
+            return None
+
+    manager = EmbeddedLocalAiManager(config=build_embedded_config(), logger=Logger())
+    manager.running = lambda: True
+    manager.model_status = lambda _model_url: {
+        "id": "Hermes-3-Llama-3.1-8B-Q4_K_S.gguf",
+        "downloaded": True
+    }
+
+    async def fail_probe_generation(*, force=False, model_url=None):
+        raise AssertionError("/api/status should not trigger a generation probe")
+
+    async def fail_prepare():
+        raise AssertionError("/api/status should not prepare LocalAI")
+
+    manager.probe_generation = fail_probe_generation
+    manager.prepare = fail_prepare
+
+    result = asyncio.run(manager.status())
+
+    assert result["ready"] is False
+    assert result["generationProbe"]["reason"] == "not_checked"
+    assert result["generationProbe"]["stale"] is True
+
+
 def test_embedded_localai_startup_autostart_skips_when_oracle_is_disabled():
     class Logger:
         def warning(self, *args, **kwargs):

@@ -19,6 +19,12 @@ import {
   normalizeGithubUpdateDigestState
 } from "./githubUpdateDigest.mjs";
 import {
+  INGEST_RUN_NOTIFICATION_ACK_KEY,
+  buildIngestRunNotifications,
+  mergeIngestRunNotificationAck,
+  normalizeIngestRunNotificationState
+} from "./ingestRunNotifications.mjs";
+import {
   RELEASE_NOTIFICATION_ACK_KEY,
   buildReleaseNotificationDigests,
   mergeReleaseNotificationAck,
@@ -153,6 +159,7 @@ const SYSTEM_NOTIFICATION_ACK_KEY = "portal.systemNotifications.localaiLifecycle
 const DOWNLOADALL_NOTIFICATION_ACK_KEY = "portal.downloadAllNotifications";
 const DOWNLOADALL_DECISION_PROMPT_KEY = "portal.downloadAllDecisionPrompts";
 const LOCALAI_JOB_KIND = "localai-lifecycle";
+const RAVEN_LIBRARY_INGEST_JOB_KIND = "raven-library-ingest";
 const DOWNLOADALL_PROMPT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 const normalizeTitleKey = (value) => normalizeString(value)
@@ -311,6 +318,12 @@ const writeDownloadAllDecisionPrompts = async (vaultClient, prompts) =>
     .map((entry) => normalizeObject(entry, {}) || {})
     .filter((entry) => normalizeString(entry.messageId) && normalizeString(entry.runId))
     .slice(-500));
+
+const readIngestRunNotificationState = async (vaultClient) =>
+  normalizeIngestRunNotificationState((await vaultClient.getSetting(INGEST_RUN_NOTIFICATION_ACK_KEY))?.value);
+
+const writeIngestRunNotificationState = async (vaultClient, state) =>
+  vaultClient.setSetting(INGEST_RUN_NOTIFICATION_ACK_KEY, normalizeIngestRunNotificationState(state));
 
 const isPromptExpired = (prompt = {}) => {
   const createdAt = normalizeString(prompt.createdAt);
@@ -744,6 +757,17 @@ const buildUpdateNotifications = async ({vaultClient}) => {
       url: normalizeString(commit.url)
     }))
   }];
+};
+
+const buildPortalIngestRunNotifications = async ({vaultClient}) => {
+  const [jobs, state] = await Promise.all([
+    vaultClient.listJobs({
+      ownerService: "scriptarr-raven",
+      kind: RAVEN_LIBRARY_INGEST_JOB_KIND
+    }),
+    readIngestRunNotificationState(vaultClient)
+  ]);
+  return buildIngestRunNotifications({jobs, state});
 };
 
 const buildRequestNotifications = async ({config, vaultClient, serviceJson}) => {
@@ -2396,6 +2420,7 @@ export const registerInternalBrokerRoutes = (app, {
       await writeGithubUpdateDigestState(vaultClient, {
         ...state,
         lastPostedSha: normalizeString(pending.latestFullSha, normalizeString(pending.latestSha)),
+        lastBaselineSha: normalizeString(pending.latestFullSha, normalizeString(pending.latestSha)),
         lastPostedAt: postedAt,
         latestPosted,
         pending: null,
@@ -2409,6 +2434,32 @@ export const registerInternalBrokerRoutes = (app, {
     res.json({
       ok: true,
       notificationId
+    });
+  }));
+
+  app.get("/api/internal/portal/notifications/ingest-runs", withService(requireService, ["scriptarr-portal"], async (_req, res) => {
+    res.json({
+      notifications: await buildPortalIngestRunNotifications({vaultClient})
+    });
+  }));
+
+  app.post("/api/internal/portal/notifications/ingest-runs/:notificationId/ack", withService(requireService, ["scriptarr-portal"], async (req, res) => {
+    const notificationId = normalizeString(req.params.notificationId);
+    if (!notificationId.startsWith("ingest:")) {
+      res.status(400).json({error: "A valid ingest run notification id is required."});
+      return;
+    }
+
+    const nextState = mergeIngestRunNotificationAck(
+      await readIngestRunNotificationState(vaultClient),
+      notificationId
+    );
+    await writeIngestRunNotificationState(vaultClient, nextState);
+
+    res.json({
+      ok: true,
+      notificationId,
+      state: nextState
     });
   }));
 

@@ -282,6 +282,20 @@ export const createSageClient = (config) => {
         }
       );
     },
+    listIngestRunNotifications() {
+      return requestJson(config.sageBaseUrl, authHeader, "/api/internal/portal/notifications/ingest-runs");
+    },
+    acknowledgeIngestRunNotification(notificationId) {
+      return requestJson(
+        config.sageBaseUrl,
+        jsonHeaders,
+        `/api/internal/portal/notifications/ingest-runs/${encodeURIComponent(notificationId)}/ack`,
+        {
+          method: "POST",
+          body: {}
+        }
+      );
+    },
     listRequestNotifications() {
       return requestJson(config.sageBaseUrl, authHeader, "/api/internal/portal/notifications/requests");
     },

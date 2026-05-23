@@ -208,6 +208,9 @@ is active, and a real generation probe can pass. If the model is missing or Loca
 healthy and `/admin/system/ai` shows the startup phase, gate reason, and last error instead of blocking the stack. If
 Oracle starts before its saved settings can be read, later health, status, model-list, or chat requests retry the
 embedded startup after the LocalAI settings become available.
+Oracle `/api/status` is intentionally quick: it reports cached embedded generation readiness instead of starting a
+fresh generation probe on normal status reads. Manual lifecycle actions and explicit readiness probes still perform the
+real generation check before marking LocalAI ready.
 
 Warden plans the `scriptarr-oracle` container instead of a `scriptarr-localai` sidecar. It mounts persistent
 `localai/models` and `localai/data` folders into Oracle and passes hardware flags for the selected profile. NVIDIA
@@ -402,7 +405,8 @@ Appa can also start a type-wide WebP-only rebuild from Discord with
 title-card projection plus Raven hardware state,
 requires a confirm button within five minutes, and then Sage asks Raven to create a durable `raven-library-ingest` run.
 The run rebuilds derived WebP pages from existing canonical CBZ archives without redownloading chapters or changing
-metadata.
+metadata. Appa DMs the confirming admin at 25%, 50%, 75%, and final completion or failure; missed milestones are not
+replayed once the run is already terminal.
 `/admin/users` is now the access-control workspace: a dense user directory, reusable permission-group editor, group
 assignment panel, and recent auth or access events in one page. Staff access is no longer a flat role toggle. Moon now
 evaluates unioned permission groups with route-family `read`, `write`, or `root` grants, while the bootstrap owner
@@ -465,8 +469,8 @@ Moon admin now owns the Discord workflow settings that Portal uses at runtime:
 - DM superuser id for the private `downloadall` command
 - onboarding channel id and message template
 - release and update channel ids. Release posts announce completed Raven downloads; update posts announce AI-written
-  GitHub update summaries from `The-Noona-Project/Scriptarr` with raw commit details kept behind the compare/admin
-  links.
+  GitHub update summaries from `The-Noona-Project/Scriptarr` with raw commit details kept behind a quiet `View changes`
+  link button instead of visible branch, SHA, repository, or admin fields.
 - Noona public mention-chat enable state, allowed channels, memory toggle, conservative proposal mode, and memory clear
   actions
 - Appa admin bot enable state, admin mention channels, review toggle, correction mode, review audit, and Appa command
@@ -572,9 +576,12 @@ If an update channel id is configured, Sage checks `The-Noona-Project/Scriptarr`
 inside the scheduled or manual `update-check` task. New commits since the last posted update are summarized by Oracle
 in Noona's voice, stored durably, and posted by Portal with a stable `update:<latestSha>` id. If Oracle is unavailable
 or returns degraded, disabled, fallback, or empty summary text, Sage keeps the commit range pending and retries on the
-next update check instead of posting a weak fallback. After an update post is acknowledged, public Noona mention chat
-can answer questions like "what
-changed?" or "how do I use it?" from the latest posted digest in any channel already allowed for Noona mention chat.
+next update check instead of posting a weak fallback. Operators can intentionally skip a stuck pending range for
+future-only posts; that clears `pending`, records `latestSkipped`, and moves the comparison baseline forward without
+sending a backlog Discord post. The maintenance helper is
+`services/sage/scripts/skip-github-update-digest.mjs --skip-pending-update-digest --reason=future-only --apply`. After
+an update post is acknowledged, public Noona mention chat can answer questions like "what changed?" or "how do I use
+it?" from the latest posted digest in any channel already allowed for Noona mention chat.
 When a duplicate request is blocked because Scriptarr is already tracking the same concrete work, Sage now attaches the
 user to a hidden notification waitlist instead of creating a second visible request row. Portal DMs those waitlisted
 users when the title is ready. Portal also DMs requesters when an unavailable request later finds a source and moves
@@ -594,7 +601,8 @@ For admin dual mentions in configured Appa channels, Noona answers first, Appa r
 its own response from the Appa bot. If Noona hits a bounded AI failure and posts fallback copy, Appa still answers with
 that safe context. Appa remains quiet on other Noona co-mentions to avoid duplicate public replies. Appa `/ingest`
 previews disable confirmation when no titles are eligible and acknowledge button presses before starting Sage/Raven
-work so Discord does not show an interaction timeout.
+work so Discord does not show an interaction timeout. Started ingest runs also DM the confirming admin with milestone
+and final progress.
 
 ## Public Moon API
 

@@ -28,8 +28,8 @@
   post Noona's AI-written summary to the configured update channel, and acknowledge only after Discord accepts the
   message. Portal must not call GitHub or Oracle directly for this workflow.
 - Noona update posts should feel like a channel announcement, not a raw changelog dump. Keep the AI summary once,
-  keep build/compare/admin traceability in embed fields, and avoid duplicate content or raw commit rows above and
-  inside the embed.
+  keep branch/SHA/repository/admin traceability out of visible fields, put source traceability behind link buttons, and
+  avoid duplicate content or raw commit rows above and inside the embed.
 - Portal owns Noona trivia runtime delivery. It should start/stop rounds through Sage, treat normal messages in the
   configured trivia channel as guesses, post quiet reactions for wrong guesses, announce the first correct winner, and
   acknowledge leaderboard posts only after Discord accepts the message.
@@ -96,7 +96,9 @@
   `portal.discord.appa.commands.ingest`. Preview must not mutate, confirm buttons expire after 5 minutes, only the
   requesting admin can confirm, zero-title previews must not expose a runnable confirm button, button interactions
   must be acknowledged before Sage/Raven work starts, and the confirmed run must go through Sage to Raven instead of
-  calling Raven directly.
+  calling Raven directly. Portal should also poll Sage's ingest-run notification queue, DM the confirming admin at
+  25%, 50%, 75%, and terminal status, and acknowledge each stable `ingest:<runId>:...` id only after Discord accepts
+  the DM.
 - Admin dual mentions in configured Appa channels are Noona-led but not Noona-only: Noona replies, Appa review runs
   next, then Appa posts its own admin reply. Keep the direct Appa listener's co-mention suppression so the same Discord
   message cannot produce duplicate Appa responses from both clients.

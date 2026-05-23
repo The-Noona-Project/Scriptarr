@@ -143,7 +143,8 @@ const formatRunMessage = ({brandName, type, response}) => {
     `${brandName} ingest ${status} for **${typeLabel(type)}**.`,
     runId ? `Run ID: ${runId}` : "",
     queued == null ? "" : `Queued: ${queued}`,
-    message ? truncate(message, 360) : ""
+    message ? truncate(message, 360) : "",
+    "Appa will DM you progress at 25%, 50%, 75%, and when it finishes."
   ].filter(Boolean).join("\n");
 };
 

@@ -870,10 +870,8 @@ class EmbeddedLocalAiManager:
         return last
 
     async def status(self) -> dict[str, Any]:
-        if self.enabled and not self.running():
-            await self.prepare()
         model = self.model_status(self.config.local_ai_default_model_url)
-        probe = await self.probe_generation() if self.enabled and model["downloaded"] and self.running() else {
+        probe = self.generation_status() if self.enabled and model["downloaded"] and self.running() else {
             "ready": False,
             "status": "not_ready",
             "reason": "model_missing" if not model["downloaded"] else "runtime_not_running",

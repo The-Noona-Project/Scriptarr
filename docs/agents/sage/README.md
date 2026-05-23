@@ -67,7 +67,9 @@
   service-token protected, and make the preview use Raven's compact title-card counts plus hardware status instead of
   full `/v1/ingest` backlog payloads. Keep `/api/internal/portal/library/ingest/runs` as the only Portal path to
   Raven's `/v1/ingest/runs` durable WebP rebuild API. Portal should disable empty previews and acknowledge confirm
-  interactions before calling this route.
+  interactions before calling this route. Expose `/api/internal/portal/notifications/ingest-runs` and ack routes from
+  durable `scriptarr-raven` `raven-library-ingest` jobs, using stable milestone ids and the bounded
+  `portal.ingestRunNotifications` setting.
 - Queue retry code must treat `raven-ingest` tasks as ingest retries from the existing CBZ. Do not send those through
   normal download retry or delete canonical CBZ files from queue cleanup.
 - Keep section bulk queue actions brokered here too: cancel all queued work for `activity.write`, cancel all running
@@ -198,10 +200,16 @@
   system task must call Warden's image check first, then compare `The-Noona-Project/Scriptarr` commits against the
   last posted update baseline, ask Oracle for the Noona summary, store pending retry state when Oracle is unavailable
   or returns degraded/disabled fallback copy, and use stable `update:<latestSha>` ids that are acknowledged only after
-  Portal confirms the Discord channel send.
+  Portal confirms the Discord channel send. If an operator skips a stuck pending range for future-only posting, preserve
+  that latest SHA as `lastBaselineSha`, record `latestSkipped`, and clear `pending` without faking a Discord post.
 - Keep the GitHub update digest guard strict while tuning tone. A summary with disabled/degraded/fallback text, raw
   commit rows, SHAs, timestamps, compare URLs, character-count notes, generic how-to steps, sign-off memes, or
-  support-bot closers should stay pending and retry later instead of reaching Portal.
+  support-bot closers should stay pending and retry later instead of reaching Portal. Return reason-coded validation
+  failures so operators can tell degraded providers, missing sections, raw metadata, internal codenames, generic
+  closers, and headline/emoji copy apart.
+- Sage should expose acked ingest-run notification queues for Portal from Raven durable WebP rebuild jobs. Emit active
+  25/50/75 milestones when crossed, skip missed milestones once a run is terminal, always emit one terminal
+  completion/failure notification, and only mark them acknowledged after Portal confirms the requester DM.
 - Sage should expose acked downloadall notification queues for Portal from Raven durable run jobs. Use stable
   `downloadall:<runId>:<batchId>:<status>` ids and only mark them acknowledged after Portal confirms the requester DM.
 - Sage also owns downloadall reaction decision prompts. Store the paused-notification DM message id, owner id, run id,

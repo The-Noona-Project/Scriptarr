@@ -244,6 +244,7 @@ test("Appa ingest confirm expires after five minutes and fresh confirms call Sag
     await handler(confirm);
     assert.equal(confirm.__calls.deferReply.length, 1);
     assert.match(confirm.__calls.editReply[0].content, /Run ID: ingest-run-2/);
+    assert.match(confirm.__calls.editReply[0].content, /DM you progress at 25%, 50%, 75%/);
     assert.equal(runCalls.length, 1);
     assert.equal(runCalls[0].type, "comic");
     assert.equal(runCalls[0].requestedBy, "admin-1");
@@ -297,6 +298,7 @@ test("Appa ingest confirm defers before Sage starts a run", async () => {
 
   assert.deepEqual(order, ["defer", "run"]);
   assert.match(confirm.__calls.editReply[0].content, /Run ID: ingest-run-3/);
+  assert.match(confirm.__calls.editReply[0].content, /when it finishes/);
 });
 
 test("Appa ingest preview does not expose a runnable button when no titles are eligible", async () => {

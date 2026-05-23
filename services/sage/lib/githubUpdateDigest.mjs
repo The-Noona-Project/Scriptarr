@@ -33,6 +33,10 @@ const FALLBACK_SUMMARY_PATTERNS = Object.freeze([
   /\b(unavailable|disabled|not configured|quiet|off)\b.*\b(localai|openai|oracle|ai provider)\b/i
 ]);
 
+const INTERNAL_CODENAME_PATTERNS = Object.freeze([
+  /\b(?:Moon|Raven|Sage|Vault|Portal|Warden|Oracle|LocalAI)\b/
+]);
+
 const RAW_UPDATE_COPY_PATTERNS = Object.freeze([
   /^\s*(?:\d+[\.)]\s*)?[a-f0-9]{7,40}\s+.+$/im,
   /^\s*(?:#{1,6}\s*)?\*\*[^*\n]*(?:scriptarr|update|exciting|new)[^*\n]*\*\*/im,
@@ -48,23 +52,51 @@ const RAW_UPDATE_COPY_PATTERNS = Object.freeze([
   /^\s*(?:updates?|changes?|release notes?):\s*$/im
 ]);
 
+const hasSummarySection = (summary, label) =>
+  new RegExp(`\\*\\*\\s*${label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*:?\\s*\\*\\*`, "i").test(summary);
+
 /**
- * Decide whether an Oracle reply is a real Noona update summary rather than
- * degraded provider copy that should stay queued for retry.
+ * Validate whether an Oracle reply is a real Noona update summary rather than
+ * degraded provider copy or raw metadata that should stay queued for retry.
+ *
+ * @param {string} summary
+ * @param {Record<string, unknown>} payload
+ * @returns {{ok: boolean, reason: string}}
+ */
+export const validateGithubUpdateSummary = (summary, payload = {}) => {
+  const normalized = normalizeString(summary);
+  if (!normalized || payload?.degraded === true || payload?.disabled === true) {
+    return {ok: false, reason: payload?.degraded === true || payload?.disabled === true ? "degraded-provider" : "missing-sections"};
+  }
+  if (!hasSummarySection(normalized, "What changed") || !hasSummarySection(normalized, "Try it")) {
+    return {ok: false, reason: "missing-sections"};
+  }
+  if (FALLBACK_SUMMARY_PATTERNS.some((pattern) => pattern.test(normalized))) {
+    return {ok: false, reason: "degraded-provider"};
+  }
+  if (INTERNAL_CODENAME_PATTERNS.some((pattern) => pattern.test(normalized))) {
+    return {ok: false, reason: "internal-codenames"};
+  }
+  if (RAW_UPDATE_COPY_PATTERNS.some((pattern) => pattern.test(normalized))) {
+    const reason = /\p{Extended_Pictographic}/u.test(normalized) || /^\s*(?:#{1,6}\s*)?\*\*[^*\n]*(?:scriptarr|update|exciting|new)[^*\n]*\*\*/im.test(normalized)
+      ? "headline-or-emoji"
+      : /\b(let me know if you have any questions|feel free to (?:reach out|ask)|ask me anything|hope this helps)\b/i.test(normalized)
+        ? "generic-closer"
+        : "raw-metadata";
+    return {ok: false, reason};
+  }
+  return {ok: true, reason: ""};
+};
+
+/**
+ * Decide whether an Oracle reply is a real Noona update summary.
  *
  * @param {string} summary
  * @param {Record<string, unknown>} payload
  * @returns {boolean}
  */
 export const isUsableGithubUpdateSummary = (summary, payload = {}) => {
-  const normalized = normalizeString(summary);
-  if (!normalized || payload?.degraded === true || payload?.disabled === true) {
-    return false;
-  }
-  if (!/\*\*What changed\*\*/i.test(normalized) || !/\*\*Try it\*\*/i.test(normalized)) {
-    return false;
-  }
-  return ![...FALLBACK_SUMMARY_PATTERNS, ...RAW_UPDATE_COPY_PATTERNS].some((pattern) => pattern.test(normalized));
+  return validateGithubUpdateSummary(summary, payload).ok;
 };
 
 /**
@@ -84,11 +116,47 @@ export const normalizeGithubUpdateDigestState = (value = {}) => {
     },
     lastCheckedAt: normalizeString(source.lastCheckedAt),
     lastSeenSha: normalizeString(source.lastSeenSha),
+    lastBaselineSha: normalizeString(source.lastBaselineSha),
     lastPostedSha: normalizeString(source.lastPostedSha),
     lastPostedAt: normalizeString(source.lastPostedAt),
     pending: normalizeObject(source.pending, null),
     latestPosted: normalizeObject(source.latestPosted, null),
+    latestSkipped: normalizeObject(source.latestSkipped, null),
     updatedAt: normalizeString(source.updatedAt)
+  };
+};
+
+/**
+ * Build the next digest state when an operator skips a pending range without
+ * posting it, preserving the latest SHA as the future comparison baseline.
+ *
+ * @param {Record<string, unknown>} value
+ * @param {{reason?: string, skippedAt?: string}} [options]
+ * @returns {{state: Record<string, unknown>, skipped: Record<string, unknown> | null}}
+ */
+export const buildSkippedGithubUpdateDigestState = (value = {}, {reason = "future-only", skippedAt = nowIso()} = {}) => {
+  const state = normalizeGithubUpdateDigestState(value);
+  const pending = normalizeObject(state.pending, null);
+  if (!pending) {
+    return {state, skipped: null};
+  }
+  const skipped = {
+    ...pending,
+    status: "skipped",
+    skipReason: normalizeString(reason, "future-only"),
+    skippedAt,
+    updatedAt: skippedAt
+  };
+  const latestSha = normalizeString(pending.latestFullSha, normalizeString(pending.latestSha));
+  return {
+    skipped,
+    state: normalizeGithubUpdateDigestState({
+      ...state,
+      lastBaselineSha: latestSha || state.lastBaselineSha || state.lastPostedSha || state.lastSeenSha,
+      latestSkipped: skipped,
+      pending: null,
+      updatedAt: skippedAt
+    })
   };
 };
 
@@ -184,6 +252,7 @@ const buildOracleMessage = ({branch, baseSha, compareUrl, commits, truncated}) =
   "Hard format: one friendly sentence, then exactly two sections: **What changed** with 2-3 bullets, and **Try it** with 1-2 bullets.",
   "Do not add a headline, title, emoji, greeting, or celebration line before the friendly sentence.",
   "Use reader/admin outcomes, not implementation chores. If a commit is only docs or plumbing, say the docs/admin area got clearer instead of inventing setup steps.",
+  "Avoid internal service codenames such as Moon, Raven, Sage, Vault, Portal, Warden, Oracle, or LocalAI; translate them into site, library, reader, Discord, update, AI, or admin settings outcomes.",
   "Do not include raw SHAs, authors, dates, compare links, repository names, numbered commit rows, markdown code fences, character counts, or 'ask me anything' lines.",
   "Do not turn a commit title into a how-to guide unless the title explicitly says a user-facing workflow changed.",
   "Portal renders traceability and links separately, so your output must be only the polished summary body.",
@@ -215,8 +284,9 @@ const requestOracleSummary = async ({config, serviceJson, branch, baseSha, compa
   if (!result?.ok) {
     throw new Error(normalizeString(result?.payload?.error, "Oracle did not return an update summary."));
   }
-  if (!isUsableGithubUpdateSummary(reply, normalizeObject(result?.payload, {}) || {})) {
-    throw new Error("Oracle update summary is not ready.");
+  const validation = validateGithubUpdateSummary(reply, normalizeObject(result?.payload, {}) || {});
+  if (!validation.ok) {
+    throw new Error(`Oracle update summary rejected: ${validation.reason}.`);
   }
   return reply.slice(0, 1800);
 };
@@ -306,8 +376,11 @@ export const createGithubUpdateDigestService = ({
       };
     }
     const baselineSha = normalizeString(
-      state.lastPostedSha,
-      normalizeString(existingPending?.baseFullSha, normalizeString(existingPending?.baseSha, normalizeString(state.lastSeenSha)))
+      state.lastBaselineSha,
+      normalizeString(
+        state.lastPostedSha,
+        normalizeString(existingPending?.baseFullSha, normalizeString(existingPending?.baseSha, normalizeString(state.lastSeenSha)))
+      )
     );
 
     if (!baselineSha && !normalizeObject(state.pending, null)) {
@@ -446,7 +519,9 @@ export const createGithubUpdateDigestService = ({
 export default {
   GITHUB_UPDATE_DIGEST_SETTING_KEY,
   GITHUB_UPDATE_REPOSITORY,
+  buildSkippedGithubUpdateDigestState,
   createGithubUpdateDigestService,
   isUsableGithubUpdateSummary,
-  normalizeGithubUpdateDigestState
+  normalizeGithubUpdateDigestState,
+  validateGithubUpdateSummary
 };

@@ -17,6 +17,10 @@ Oracle preserves the same internal contract used elsewhere in Scriptarr:
 - `GET /api/status`
 - `POST /api/chat`
 
+`GET /api/status` returns saved runtime state and cached embedded LocalAI generation-readiness details immediately. It
+does not start a slow generation probe on ordinary status reads; explicit LocalAI lifecycle and readiness actions still
+perform the real `scriptarr-ok` probe before marking the embedded model ready.
+
 `POST /api/chat` still accepts the existing `{ "message": "..." }` payload. Sage may also include an optional
 `personaName` (`Noona` or `Appa`) and `context` object for brokered surfaces such as public Discord mention chat and
 Appa admin mentions. That context can carry persona hints, summarized Noona memory, user display information, and

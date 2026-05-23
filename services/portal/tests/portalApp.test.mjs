@@ -608,7 +608,7 @@ test("portal notifier delivers follow, approval, denial, and completion DMs once
   assert.ok(sent.some((entry) => entry.payload?.content.includes("moved it back into staff review")));
   assert.ok(sent.some((entry) => entry.payload?.content.includes("expired after 90 days")));
   assert.ok(sent.some((entry) => entry.payload?.content.includes("LocalAI startup completed")));
-  assert.ok(sent.some((entry) => entry.channelId === "updates-channel" && entry.payload?.content.includes("Scriptarr update posted by Noona")));
+  assert.ok(sent.some((entry) => entry.channelId === "updates-channel" && entry.payload?.content.includes("New Scriptarr update is ready.")));
   assert.ok(sent.some((entry) => entry.payload?.content.includes("https://pax-kun.com/myrequests")));
   assert.ok(sent.some((entry) => entry.payload?.embeds?.[0]?.image?.url === "https://images.example/solo.jpg"));
   assert.deepEqual(acknowledged.sort(), [
@@ -674,7 +674,7 @@ test("portal notifier skips overlapping polls and stops before stale Discord sen
   assert.deepEqual(sent, []);
 });
 
-test("update channel payload keeps Noona summary out of duplicate message content", () => {
+test("update channel payload keeps Noona summary clean and traceability behind buttons", () => {
   const payload = buildUpdateChannelPayload({
     repository: "The-Noona-Project/Scriptarr",
     branch: "main",
@@ -689,12 +689,15 @@ test("update channel payload keeps Noona summary out of duplicate message conten
     }]
   }, "https://pax-kun.com", "Scriptarr");
 
-  assert.match(payload.content, /Scriptarr update posted by Noona/);
+  assert.match(payload.content, /New Scriptarr update is ready/);
   assert.doesNotMatch(payload.content, /pages are ready before you turn them/);
-  assert.equal(payload.embeds[0].title, "Scriptarr Update");
+  assert.equal(payload.embeds[0].title, "Scriptarr update");
   assert.equal(payload.embeds[0].description, "Noona tuned the reader so pages are ready before you turn them.");
-  assert.match(payload.embeds[0].fields[0].value, /2 commits/);
-  assert.match(payload.embeds[0].fields[0].value, /Latest `abc123def456`/);
+  assert.deepEqual(payload.embeds[0].fields, []);
+  assert.equal(payload.embeds[0].footer.text, "2 changes included");
+  assert.equal(payload.components[0].components[0].label, "View changes");
   assert.equal(payload.embeds[0].fields.some((field) => field.name === "Recent commits"), false);
   assert.equal(payload.embeds[0].fields.some((field) => field.name === "Included commits"), false);
+  assert.doesNotMatch(JSON.stringify(payload), /abc123def456/);
+  assert.doesNotMatch(JSON.stringify(payload), /admin\/system\/updates/);
 });

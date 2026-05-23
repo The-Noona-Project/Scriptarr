@@ -216,13 +216,15 @@ test("ingest helpers call the Sage preview and run broker routes", async () => {
     for await (const chunk of req) {
       chunks.push(chunk);
     }
-    const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    const body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : null;
     seen.push({method: req.method, url: req.url, authorization: req.headers.authorization, body});
     res.writeHead(200, {"Content-Type": "application/json"});
     res.end(JSON.stringify({
-      status: req.url.endsWith("/run") ? "started" : "preview",
-      runId: req.url.endsWith("/run") ? "ingest-run-1" : undefined,
-      previewId: req.url.endsWith("/preview") ? "preview-1" : undefined
+      status: req.url.endsWith("/runs") ? "started" : "preview",
+      runId: req.url.endsWith("/runs") ? "ingest-run-1" : undefined,
+      previewId: req.url.endsWith("/preview") ? "preview-1" : undefined,
+      notifications: req.url.endsWith("/ingest-runs") ? [] : undefined,
+      ok: true
     }));
   });
 
@@ -245,10 +247,14 @@ test("ingest helpers call the Sage preview and run broker routes", async () => {
       confirmedBy: "admin-1",
       previewId: "preview-1"
     });
+    await sage.listIngestRunNotifications();
+    await sage.acknowledgeIngestRunNotification("ingest:ingestrun_1:25");
 
     assert.deepEqual(seen.map((entry) => [entry.method, entry.url]), [
       ["POST", "/api/internal/portal/library/ingest/preview"],
-      ["POST", "/api/internal/portal/library/ingest/runs"]
+      ["POST", "/api/internal/portal/library/ingest/runs"],
+      ["GET", "/api/internal/portal/notifications/ingest-runs"],
+      ["POST", "/api/internal/portal/notifications/ingest-runs/ingest%3Aingestrun_1%3A25/ack"]
     ]);
     assert.equal(seen[0].authorization, "Bearer portal-service-token");
     assert.deepEqual(seen[0].body, {

@@ -6,8 +6,10 @@ import assert from "node:assert/strict";
 
 import {
   GITHUB_UPDATE_DIGEST_SETTING_KEY,
+  buildSkippedGithubUpdateDigestState,
   createGithubUpdateDigestService,
-  isUsableGithubUpdateSummary
+  isUsableGithubUpdateSummary,
+  validateGithubUpdateSummary
 } from "../lib/githubUpdateDigest.mjs";
 
 const createVault = async (initial = {}) => {
@@ -34,10 +36,11 @@ const createGithubFetch = ({commits = []} = {}) => async (url) => {
       headers: {"Content-Type": "application/json"}
     });
   }
-  if (parsed.pathname.endsWith("/compare/base-sha...main")) {
+  if (parsed.pathname.includes("/compare/") && parsed.pathname.endsWith("...main")) {
+    const range = parsed.pathname.split("/compare/")[1] || "base-sha...main";
     return new Response(JSON.stringify({
       ahead_by: commits.length,
-      html_url: "https://github.com/The-Noona-Project/Scriptarr/compare/base-sha...main",
+      html_url: `https://github.com/The-Noona-Project/Scriptarr/compare/${range}`,
       commits
     }), {
       status: 200,
@@ -182,7 +185,7 @@ test("GitHub update digest waits when Oracle returns degraded fallback copy", as
   assert.equal(result.status, "pending-summary");
   assert.equal(state.pending.status, "pending-summary");
   assert.equal(state.pending.summary, "");
-  assert.match(state.pending.error, /not ready/);
+  assert.match(state.pending.error, /degraded-provider/);
 });
 
 test("GitHub update digest waits when Oracle is disabled or returns no summary", async () => {
@@ -294,7 +297,90 @@ test("GitHub update digest rejects raw metadata copy as Noona summary", () => {
     false
   );
   assert.equal(
-    isUsableGithubUpdateSummary("Noona tuned the reader so pages are ready before you turn them.\n**What changed**\n- Reader pages preload more smoothly.\n**Try it**\n- Open a chapter and turn a page."),
+    isUsableGithubUpdateSummary("Noona tuned the reader so pages are ready before you turn them.\n**What changed:**\n- Reader pages preload more smoothly.\n**Try it:**\n- Open a chapter and turn a page."),
     true
   );
+});
+
+test("GitHub update digest validation returns reason codes", () => {
+  assert.deepEqual(
+    validateGithubUpdateSummary("Noona is in read-only fallback mode because LocalAI is unavailable.", {degraded: true}),
+    {ok: false, reason: "degraded-provider"}
+  );
+  assert.deepEqual(
+    validateGithubUpdateSummary("Noona tuned the reader.\n**What changed:**\n- Reader pages load sooner.\n**Try it:**\n- Open a chapter in the reader."),
+    {ok: true, reason: ""}
+  );
+  assert.equal(
+    validateGithubUpdateSummary("Noona tuned Oracle.\n**What changed:**\n- Oracle status is clearer.\n**Try it:**\n- Open the admin AI page.").reason,
+    "internal-codenames"
+  );
+  assert.equal(
+    validateGithubUpdateSummary("**Exciting Scriptarr Update!**\n**What changed:**\n- Reader pages load sooner.\n**Try it:**\n- Open a chapter.").reason,
+    "headline-or-emoji"
+  );
+});
+
+test("GitHub update digest can skip a pending range for future-only posts", () => {
+  const pending = {
+    id: "update:abc123def456",
+    status: "pending-summary",
+    latestSha: "abc123def456",
+    latestFullSha: "abc123def4567890",
+    error: "Oracle update summary rejected: degraded-provider."
+  };
+  const {state, skipped} = buildSkippedGithubUpdateDigestState({
+    key: GITHUB_UPDATE_DIGEST_SETTING_KEY,
+    lastPostedSha: "base-sha",
+    pending
+  }, {
+    reason: "future-only",
+    skippedAt: "2026-05-23T02:00:00.000Z"
+  });
+
+  assert.equal(skipped.id, "update:abc123def456");
+  assert.equal(skipped.status, "skipped");
+  assert.equal(state.pending, null);
+  assert.equal(state.lastBaselineSha, "abc123def4567890");
+  assert.equal(state.latestSkipped.skipReason, "future-only");
+});
+
+test("GitHub update digest uses the skipped baseline before last posted sha", async () => {
+  const vault = await createVault({
+    [GITHUB_UPDATE_DIGEST_SETTING_KEY]: {
+      key: GITHUB_UPDATE_DIGEST_SETTING_KEY,
+      lastPostedSha: "base-sha",
+      lastBaselineSha: "skipped-sha"
+    }
+  });
+  const service = createGithubUpdateDigestService({
+    config: {oracleBaseUrl: "http://oracle.test"},
+    vaultClient: vault,
+    fetchImpl: createGithubFetch({
+      commits: [commit("def456abc1237890", "Use future digest baseline")]
+    }),
+    serviceJson: async (_baseUrl, path, options) => {
+      assert.equal(path, "/api/chat");
+      assert.match(options.body.message, /Base SHA: skipped-sha/);
+      return {
+        ok: true,
+        status: 200,
+        payload: {
+          reply: [
+            "Noona kept the update lane focused on the next fresh change.",
+            "**What changed:**",
+            "- Future update posts now start after the skipped range.",
+            "**Try it:**",
+            "- Watch the update channel for the next real summary."
+          ].join("\n")
+        }
+      };
+    },
+    logger: {}
+  });
+
+  const result = await service.checkForNewCommits();
+
+  assert.equal(result.status, "ready");
+  assert.equal(vault.read(GITHUB_UPDATE_DIGEST_SETTING_KEY).pending.baseFullSha, "skipped-sha");
 });

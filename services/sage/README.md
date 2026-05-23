@@ -127,7 +127,10 @@ Sage also exposes Portal-only service-token routes for Appa's `/ingest` command:
 `/api/internal/portal/library/ingest/preview` reads Raven's type-scoped compact card count and hardware state without mutation, and
 `/api/internal/portal/library/ingest/runs` starts Raven's durable WebP-only rebuild job through `/v1/ingest/runs`.
 Portal disables the confirm button when preview reports zero eligible titles and acknowledges confirm interactions
-before the run request so Discord does not expire slow Sage/Raven starts.
+before the run request so Discord does not expire slow Sage/Raven starts. Sage also exposes
+`/api/internal/portal/notifications/ingest-runs` plus per-notification ack routes so Portal can DM the confirming
+admin at 25%, 50%, 75%, and final completion/failure. Ack state lives in the bounded
+`portal.ingestRunNotifications` Vault setting.
 
 Sage also brokers the Next admin System pages. `/admin/system/logs` reads Warden's allowlisted redacted Docker log
 tail through Sage, `/admin/system/events` forwards richer durable-event filters into Vault, and
@@ -164,5 +167,8 @@ settings still normalize correctly. The scheduled or manual update-check task al
 `The-Noona-Project/Scriptarr` commits since the last posted update, asks Oracle for an AI-written Noona summary, and
 exposes a stable `update:<latestSha>` channel notification when an update channel is configured. If Oracle cannot
 summarize the commits or returns degraded/disabled fallback copy, raw commit rows, invented how-to steps, or generic
-support-bot closers, Sage stores the pending range for retry instead of posting a fallback. Portal acknowledges release
-and update notifications through Sage only after Discord accepts the channel message.
+support-bot closers, Sage stores the pending range for retry instead of posting a fallback. The digest state can also
+store `lastBaselineSha` and `latestSkipped` when an operator intentionally skips a stuck pending range for future-only
+posting; use `services/sage/scripts/skip-github-update-digest.mjs --skip-pending-update-digest --reason=future-only`
+with `--apply` from a Sage-compatible environment for that maintenance action. Portal acknowledges release and update
+notifications through Sage only after Discord accepts the channel message.

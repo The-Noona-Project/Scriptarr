@@ -5496,6 +5496,49 @@ test("sage round-trips brokered Portal Discord settings and exposes them in admi
   }).then((response) => response.json());
   assert.deepEqual(updateNotificationsAfterAck.notifications, []);
 
+  await fetch(`http://127.0.0.1:${vaultPort}/api/service/jobs/ingestrun_test_1`, {
+    method: "PUT",
+    headers: {
+      "Authorization": "Bearer vault-dev-token",
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      kind: "raven-library-ingest",
+      ownerService: "scriptarr-raven",
+      status: "running",
+      requestedBy: "owner-1",
+      payload: {
+        libraryTypeSlug: "manga",
+        libraryTypeLabel: "Manga",
+        titleCount: 4
+      },
+      result: {
+        totalTitles: 4,
+        completedTitles: 2,
+        failedTitles: 0,
+        remainingTitles: 2
+      },
+      createdAt: "2026-05-23T01:00:00.000Z",
+      updatedAt: "2026-05-23T01:10:00.000Z"
+    })
+  });
+  const ingestNotifications = await fetch(`${baseUrl}/api/internal/portal/notifications/ingest-runs`, {
+    headers: {"Authorization": "Bearer portal-dev-token"}
+  }).then((response) => response.json());
+  assert.equal(ingestNotifications.notifications[0].id, "ingest:ingestrun_test_1:25");
+  assert.equal(ingestNotifications.notifications[1].id, "ingest:ingestrun_test_1:50");
+  assert.equal(ingestNotifications.notifications[0].discordUserId, "owner-1");
+
+  const ingestAck = await fetch(`${baseUrl}/api/internal/portal/notifications/ingest-runs/ingest%3Aingestrun_test_1%3A25/ack`, {
+    method: "POST",
+    headers: {"Authorization": "Bearer portal-dev-token"}
+  }).then((response) => response.json());
+  assert.equal(ingestAck.ok, true);
+  const ingestNotificationsAfterAck = await fetch(`${baseUrl}/api/internal/portal/notifications/ingest-runs`, {
+    headers: {"Authorization": "Bearer portal-dev-token"}
+  }).then((response) => response.json());
+  assert.equal(ingestNotificationsAfterAck.notifications.some((entry) => entry.id === "ingest:ingestrun_test_1:25"), false);
+
   const aggregatedSettings = await fetch(`${baseUrl}/api/moon-v3/admin/settings`, {
     headers: {
       "Authorization": `Bearer ${ownerClaim.token}`

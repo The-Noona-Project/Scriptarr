@@ -6,6 +6,9 @@
 - Oracle now runs as a FastAPI Python service while preserving the existing `/health`, `/api/status`, and `/api/chat`
   contract for the rest of Scriptarr, plus `/api/assist` for Sage-brokered planning, trivia matching advice, concise
   message assistance, and Appa review decisions.
+- `/api/status` should return cached embedded LocalAI generation readiness immediately. Do not start or force a slow
+  generation probe from ordinary status reads; keep real generation probes in explicit startup/readiness/lifecycle
+  paths.
 - `/api/chat` accepts optional Sage-curated context and `personaName` (`Noona` or `Appa`) while preserving the
   message-only contract. Use context for persona, summarized memory, and read-only status/library/trivia background
   only; do not store it, expose raw ids or secrets, or treat it as permission to mutate anything.

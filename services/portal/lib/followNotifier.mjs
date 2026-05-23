@@ -250,9 +250,92 @@ export const buildDownloadAllDirectMessagePayload = (notification = {}, publicBa
   };
 };
 
+const resolveIngestRunLink = (notification = {}, publicBaseUrl = "") => {
+  const explicitLink = normalizeString(notification.linkUrl || notification.moonUrl || notification.adminUrl);
+  const baseUrl = normalizeString(publicBaseUrl).replace(/\/+$/g, "");
+  if (explicitLink.startsWith("/") && baseUrl) {
+    return `${baseUrl}${explicitLink}`;
+  }
+  if (explicitLink) {
+    return explicitLink;
+  }
+  return baseUrl ? `${baseUrl}/admin/activity/queue` : "";
+};
+
+const resolveIngestRunColor = (status) => {
+  switch (normalizeString(status).toLowerCase()) {
+    case "completed":
+      return 0x16a34a;
+    case "failed":
+      return 0xdc2626;
+    case "cancelled":
+    case "canceled":
+      return 0x64748b;
+    default:
+      return 0x60a5fa;
+  }
+};
+
+export const buildIngestRunDirectMessagePayload = (notification = {}, publicBaseUrl = "", brandName = "Scriptarr") => {
+  const runId = normalizeString(notification.runId || notification.jobId);
+  const status = normalizeString(notification.status, "running").toLowerCase();
+  const typeLabel = normalizeString(notification.libraryTypeLabel, formatTypeLabel(notification.libraryTypeSlug || "library"));
+  const totalTitles = toCount(notification.totalTitles, 0);
+  const completedTitles = toCount(notification.completedTitles, 0);
+  const failedTitles = toCount(notification.failedTitles, 0);
+  const remainingTitles = toCount(notification.remainingTitles, Math.max(0, totalTitles - completedTitles - failedTitles));
+  const milestone = toCount(notification.milestone, 0);
+  const percent = notification.terminal ? 100 : toCount(notification.percent, milestone);
+  const linkUrl = resolveIngestRunLink(notification, publicBaseUrl);
+  const doneLine = notification.terminal
+    ? failedTitles > 0 || status === "failed"
+      ? `${brandName} ingest finished with issues for ${typeLabel}.`
+      : `${brandName} ingest completed for ${typeLabel}.`
+    : `${brandName} ingest is ${milestone || percent}% done for ${typeLabel}.`;
+  const runLine = runId ? `Run \`${compactRunId(runId)}\`` : "Library ingest run";
+  const linkLine = linkUrl ? `\nOpen queue: ${linkUrl}` : "";
+
+  return {
+    content: `${doneLine}${linkLine}`,
+    embeds: [{
+      title: notification.terminal ? `${brandName} ingest ${titleCase(status)}` : `${brandName} ingest ${milestone || percent}%`,
+      description: `${runLine} - ${typeLabel}`,
+      url: linkUrl || undefined,
+      color: resolveIngestRunColor(status),
+      fields: [
+        {
+          name: "Progress",
+          value: [
+            `Completed: **${completedTitles}** / **${totalTitles}** title(s)`,
+            `Remaining: **${remainingTitles}**`
+          ].join("\n"),
+          inline: true
+        },
+        {
+          name: "Issues",
+          value: failedTitles ? `Failed title(s): **${failedTitles}**` : "None reported",
+          inline: true
+        },
+        runId ? {
+          name: "Run",
+          value: `\`${compactRunId(runId)}\``,
+          inline: true
+        } : null
+      ].filter(Boolean),
+      footer: notification.terminal
+        ? {text: "Final ingest update"}
+        : {text: "Appa will DM the next milestone when the run crosses it."}
+    }]
+  };
+};
+
 const buildDirectMessagePayload = (notification, kind, publicBaseUrl, requestCommand, brandName = "Scriptarr") => {
   if (kind === "downloadall") {
     return buildDownloadAllDirectMessagePayload(notification, publicBaseUrl, brandName);
+  }
+
+  if (kind === "ingest") {
+    return buildIngestRunDirectMessagePayload(notification, publicBaseUrl, brandName);
   }
 
   if (kind === "system") {
@@ -453,43 +536,30 @@ export const buildReleaseChannelPayload = (notification = {}, publicBaseUrl = ""
 };
 
 export const buildUpdateChannelPayload = (notification = {}, publicBaseUrl = "", brandName = "Scriptarr") => {
-  const repository = normalizeString(notification.repository, "The-Noona-Project/Scriptarr");
-  const branch = normalizeString(notification.branch, "main");
   const summary = normalizeString(notification.summary, `Noona found a ${brandName} update.`);
   const compareUrl = normalizeString(notification.compareUrl);
-  const adminUrl = normalizeString(publicBaseUrl) ? `${normalizeString(publicBaseUrl).replace(/\/+$/g, "")}/admin/system/updates` : "";
   const commitCount = toCount(notification.commitCount, normalizeArray(notification.commits).length);
-  const latestSha = normalizeString(notification.latestSha);
-  return {
-    content: truncate(`${brandName} update posted by Noona. Mention Noona if you want the plain-language walkthrough.`, 1900),
-    embeds: [{
-      title: `${brandName} Update`,
-      description: truncate(summary, 1600),
-      url: compareUrl || adminUrl || undefined,
-      color: 0x8b5cf6,
-      fields: [
-        {
-          name: "Build",
-          value: [
-            `${commitCount} commit${commitCount === 1 ? "" : "s"} on \`${branch}\``,
-            latestSha ? `Latest \`${latestSha}\`` : "",
-            repository
-          ].join("\n"),
-          inline: false
-        },
-        compareUrl ? {
-          name: "Compare",
-          value: `[Open compare](${compareUrl})`,
-          inline: true
-        } : null,
-        adminUrl ? {
-          name: `${brandName} admin`,
-          value: `[Open updates](${adminUrl})`,
-          inline: true
-        } : null
-      ].filter(Boolean),
-      footer: {text: "Noona keeps the explanation here; commit details stay behind the links."}
+  const components = compareUrl
+    ? [{
+      type: 1,
+      components: [{
+        type: 2,
+        style: 5,
+        label: "View changes",
+        url: compareUrl
+      }]
     }]
+    : [];
+  return {
+    content: truncate(`New ${brandName} update is ready.`, 1900),
+    embeds: [{
+      title: `${brandName} update`,
+      description: truncate(summary, 1600),
+      color: 0x8b5cf6,
+      fields: [],
+      footer: {text: `${commitCount || 1} change${commitCount === 1 ? "" : "s"} included`}
+    }],
+    components
   };
 };
 
@@ -796,6 +866,20 @@ export const createFollowNotifier = ({
         list: () => sage?.listUpdateNotifications?.(),
         acknowledge: (id) => sage?.acknowledgeUpdateNotification?.(id),
         discord,
+        logger,
+        publicBaseUrl,
+        getBrandName,
+        shouldContinue: canContinue
+      });
+      if (!canContinue()) {
+        return;
+      }
+      await deliverNotifications({
+        list: () => sage?.listIngestRunNotifications?.(),
+        acknowledge: (id) => sage?.acknowledgeIngestRunNotification?.(id),
+        kind: "ingest",
+        discord: adminDiscord || discord,
+        sage,
         logger,
         publicBaseUrl,
         getBrandName,

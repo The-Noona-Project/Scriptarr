@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   buildDownloadAllDirectMessagePayload,
+  buildIngestRunDirectMessagePayload,
   buildReleaseChannelPayload,
   createFollowNotifier
 } from "../lib/followNotifier.mjs";
@@ -112,6 +113,41 @@ test("downloadall payload uses compact content and grouped embed fields", () => 
   assert.equal(payload.embeds[0].fields.some((field) => field.name === "Next action" && /next \*\*5\*\*/i.test(field.value)), true);
 });
 
+test("ingest run payload summarizes milestones and final failures", () => {
+  const milestone = buildIngestRunDirectMessagePayload({
+    id: "ingest:run-1:50",
+    runId: "ingestrun_1234567890abcdef",
+    milestone: 50,
+    percent: 55,
+    status: "running",
+    libraryTypeLabel: "Manga",
+    totalTitles: 20,
+    completedTitles: 11,
+    failedTitles: 0,
+    remainingTitles: 9,
+    linkUrl: "/admin/activity/queue"
+  }, "https://pax-kun.com", "Scriptarr");
+
+  assert.match(milestone.content, /50% done/);
+  assert.match(milestone.content, /https:\/\/pax-kun.com\/admin\/activity\/queue/);
+  assert.equal(milestone.embeds[0].fields.some((field) => field.name === "Progress" && /11/.test(field.value)), true);
+
+  const failed = buildIngestRunDirectMessagePayload({
+    id: "ingest:run-1:terminal",
+    runId: "ingestrun_1234567890abcdef",
+    terminal: true,
+    status: "failed",
+    libraryTypeLabel: "Manga",
+    totalTitles: 20,
+    completedTitles: 19,
+    failedTitles: 1,
+    remainingTitles: 0
+  }, "https://pax-kun.com", "Scriptarr");
+
+  assert.match(failed.content, /finished with issues/);
+  assert.equal(failed.embeds[0].fields.some((field) => field.name === "Issues" && /1/.test(field.value)), true);
+});
+
 test("portal release notifier sends channel messages and acks after delivery", async () => {
   const sent = [];
   const acked = [];
@@ -179,6 +215,57 @@ test("portal release notifier sends channel messages and acks after delivery", a
   assert.equal(acked[0].id, "release:digest:task-1:2");
   assert.deepEqual(acked[0].payload.ackItemIds, ["release:task-1", "release:task-2"]);
   assert.equal(acked[0].payload.silenceThrough, "2026-05-16T00:02:00.000Z");
+});
+
+test("portal notifier sends ingest run DMs and acks after delivery", async () => {
+  const sent = [];
+  const acked = [];
+  const notifier = createFollowNotifier({
+    sage: {
+      async listIngestRunNotifications() {
+        return {
+          ok: true,
+          payload: {
+            notifications: acked.length ? [] : [{
+              id: "ingest:ingestrun_1:25",
+              runId: "ingestrun_1",
+              discordUserId: "admin-1",
+              milestone: 25,
+              percent: 25,
+              status: "running",
+              libraryTypeLabel: "Manga",
+              totalTitles: 8,
+              completedTitles: 2,
+              failedTitles: 0,
+              remainingTitles: 6,
+              linkUrl: "/admin/activity/queue"
+            }]
+          }
+        };
+      },
+      async acknowledgeIngestRunNotification(id) {
+        acked.push(id);
+        return {ok: true};
+      }
+    },
+    discord: {
+      async sendDirectMessage(discordUserId, payload) {
+        sent.push({discordUserId, payload});
+      },
+      async sendChannelMessage() {}
+    },
+    logger: {error() {}},
+    publicBaseUrl: "https://pax-kun.com",
+    pollMs: 1000
+  });
+
+  notifier.start();
+  await waitFor(() => acked.length > 0);
+  notifier.stop();
+
+  assert.equal(sent[0].discordUserId, "admin-1");
+  assert.match(sent[0].payload.content, /25% done/);
+  assert.deepEqual(acked, ["ingest:ingestrun_1:25"]);
 });
 
 test("portal release notifier sends every typed delivery before one ack", async () => {
