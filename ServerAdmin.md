@@ -123,7 +123,8 @@ grants plus baseline user capabilities. New and returning Discord users land in 
 and admin activity now comes from one shared durable event log instead of page-local summaries.
 Raven now only marks download work complete after the promoted files also persist into the brokered catalog, and it
 rescans the existing `downloaded/<type>/...` tree on boot so already-finished archives can repopulate Moon's library
-without forcing a re-download.
+without forcing a re-download. Startup recovery uses compact title-card indexes and skips unchanged folders so large
+libraries do not flood Vault with repeated full-catalog reads during login/bootstrap.
 Raven's WeebCentral chapter scraper now follows the live source's HTMX full-chapter-list flow for long-running
 series, which is required for titles such as Tomb Raider King that hide older chapters behind a show-all request.
 

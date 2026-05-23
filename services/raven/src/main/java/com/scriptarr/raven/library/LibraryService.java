@@ -891,10 +891,11 @@ public final class LibraryService {
         }
 
         try {
-            scanManagedDownloadedRoot(downloadsRoot.resolve(DOWNLOADED_FOLDER_NAME));
-            scanLegacyDownloadedRoot(downloadsRoot);
+            ScanCatalogContext scanContext = buildScanCatalogContext();
+            scanManagedDownloadedRoot(downloadsRoot.resolve(DOWNLOADED_FOLDER_NAME), scanContext);
+            scanLegacyDownloadedRoot(downloadsRoot, scanContext);
             persistRescanJob("completed", "Raven library rescan completed.", startedAt, Instant.now(), Map.of(
-                "titles", listTitles().size()
+                "titles", listCompactTitleRows(Map.of()).size()
             ));
         } catch (IOException error) {
             logger.warn("LIBRARY", "Raven import scan failed.", error.getMessage());
@@ -1147,7 +1148,7 @@ public final class LibraryService {
         return normalized.length() > 240 ? normalized.substring(0, 240) : normalized;
     }
 
-    private void scanManagedDownloadedRoot(Path downloadedRoot) throws IOException {
+    private void scanManagedDownloadedRoot(Path downloadedRoot, ScanCatalogContext scanContext) throws IOException {
         if (!Files.exists(downloadedRoot) || !Files.isDirectory(downloadedRoot)) {
             return;
         }
@@ -1157,14 +1158,14 @@ public final class LibraryService {
                 String typeSlug = typeFolder.getFileName().toString();
                 try (var titleFolders = Files.list(typeFolder).filter(Files::isDirectory).sorted()) {
                     for (Path titleFolder : titleFolders.toList()) {
-                        scanTitleFolder(titleFolder, typeSlug, resolveWorkingRoot(downloadedRoot.getParent(), typeSlug, titleFolder.getFileName().toString()));
+                        scanTitleFolder(titleFolder, typeSlug, resolveWorkingRoot(downloadedRoot.getParent(), typeSlug, titleFolder.getFileName().toString()), scanContext);
                     }
                 }
             }
         }
     }
 
-    private void scanLegacyDownloadedRoot(Path downloadsRoot) throws IOException {
+    private void scanLegacyDownloadedRoot(Path downloadsRoot, ScanCatalogContext scanContext) throws IOException {
         try (var typeFolders = Files.list(downloadsRoot).filter(Files::isDirectory).sorted()) {
             for (Path typeFolder : typeFolders.toList()) {
                 String folderName = typeFolder.getFileName().toString();
@@ -1174,14 +1175,31 @@ public final class LibraryService {
 
                 try (var titleFolders = Files.list(typeFolder).filter(Files::isDirectory).sorted()) {
                     for (Path titleFolder : titleFolders.toList()) {
-                        scanTitleFolder(titleFolder, folderName, null);
+                        scanTitleFolder(titleFolder, folderName, null, scanContext);
                     }
                 }
             }
         }
     }
 
-    private void scanTitleFolder(Path folder, String rawType, Path workingRoot) {
+    private ScanCatalogContext buildScanCatalogContext() {
+        Map<String, String> titleIdsByTypeSlugAndTitleSlug = new LinkedHashMap<>();
+        for (Map<String, Object> row : listCompactTitleRows(Map.of())) {
+            String titleId = stringValue(row.get("id"));
+            String title = stringValue(row.get("title"));
+            String typeSlug = LibraryNaming.normalizeTypeSlug(firstNonBlank(
+                stringValue(row.get("libraryTypeSlug")),
+                stringValue(row.get("mediaType"))
+            ));
+            String key = scanTitleKey(typeSlug, title);
+            if (!titleId.isBlank() && !key.isBlank()) {
+                titleIdsByTypeSlugAndTitleSlug.putIfAbsent(key, titleId);
+            }
+        }
+        return new ScanCatalogContext(settingsService.getNamingSettings(), Map.copyOf(titleIdsByTypeSlugAndTitleSlug));
+    }
+
+    private void scanTitleFolder(Path folder, String rawType, Path workingRoot, ScanCatalogContext scanContext) {
         try {
             List<Path> archives = listArchiveFiles(folder);
             if (archives.isEmpty()) {
@@ -1191,9 +1209,9 @@ public final class LibraryService {
             String titleName = LibraryNaming.titleFromFolder(folder.getFileName().toString());
             String typeLabel = LibraryNaming.normalizeTypeLabel(rawType);
             String typeSlug = LibraryNaming.normalizeTypeSlug(typeLabel);
-            RavenNamingSettings namingSettings = settingsService.getNamingSettings();
+            RavenNamingSettings namingSettings = scanContext.namingSettings();
             List<LibraryChapter> chapters = new ArrayList<>();
-            LibraryTitle existing = findMatchingTitle(titleName, "", typeSlug, folder);
+            LibraryTitle existing = findExistingTitleForScan(titleName, typeSlug, scanContext);
             String titleId = existing != null && existing.id() != null && !existing.id().isBlank()
                 ? existing.id()
                 : UUID.randomUUID().toString();
@@ -1213,6 +1231,9 @@ public final class LibraryService {
                 ));
             }
             chapters = normalizeChapters(titleId, chapters);
+            if (existing != null && scannedTitleIsUnchanged(existing, chapters, folder, workingRoot)) {
+                return;
+            }
 
             LibraryTitle title = new LibraryTitle(
                 titleId,
@@ -1245,6 +1266,44 @@ public final class LibraryService {
         } catch (Exception error) {
             logger.warn("LIBRARY", "Raven import scan could not index a title folder.", error.getMessage());
         }
+    }
+
+    private LibraryTitle findExistingTitleForScan(String titleName, String typeSlug, ScanCatalogContext scanContext) {
+        String titleId = scanContext.titleIdsByTypeSlugAndTitleSlug().get(scanTitleKey(typeSlug, titleName));
+        return titleId == null || titleId.isBlank() ? null : findTitleById(titleId);
+    }
+
+    private String scanTitleKey(String typeSlug, String titleName) {
+        String normalizedType = LibraryNaming.normalizeTypeSlug(typeSlug);
+        String normalizedTitle = LibraryNaming.slugifySegment(titleName);
+        return normalizedType.isBlank() || normalizedTitle.isBlank() ? "" : normalizedType + ":" + normalizedTitle;
+    }
+
+    private boolean scannedTitleIsUnchanged(LibraryTitle existing, List<LibraryChapter> scannedChapters, Path folder, Path workingRoot) {
+        if (existing == null || scannedChapters == null) {
+            return false;
+        }
+        if (!Objects.equals(stringValue(existing.downloadRoot()), folder.toString())) {
+            return false;
+        }
+        if (workingRoot != null && !Objects.equals(stringValue(existing.workingRoot()), workingRoot.toString())) {
+            return false;
+        }
+        List<LibraryChapter> existingChapters = Optional.ofNullable(existing.chapters()).orElse(List.of());
+        if (existingChapters.size() != scannedChapters.size()) {
+            return false;
+        }
+        Map<String, String> archiveByChapterNumber = new LinkedHashMap<>();
+        for (LibraryChapter chapter : existingChapters) {
+            archiveByChapterNumber.put(normalizeStoredChapterNumber(chapter.chapterNumber()), stringValue(chapter.archivePath()));
+        }
+        for (LibraryChapter chapter : scannedChapters) {
+            String chapterNumber = normalizeStoredChapterNumber(chapter.chapterNumber());
+            if (!Objects.equals(archiveByChapterNumber.get(chapterNumber), stringValue(chapter.archivePath()))) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private List<Path> listArchiveFiles(Path folder) throws IOException {
@@ -2256,6 +2315,12 @@ public final class LibraryService {
     private record FilesystemImportOutcome(
         List<LibraryChapter> chapters,
         Set<String> chapterNumbers
+    ) {
+    }
+
+    private record ScanCatalogContext(
+        RavenNamingSettings namingSettings,
+        Map<String, String> titleIdsByTypeSlugAndTitleSlug
     ) {
     }
 

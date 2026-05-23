@@ -118,6 +118,42 @@ class LibraryServiceTest {
     }
 
     /**
+     * Verify startup rescans use compact title-card indexes instead of pulling
+     * the full chapter catalog for every existing folder.
+     *
+     * @param tempDir temporary test directory
+     * @throws Exception when the test fixture cannot be prepared
+     */
+    @Test
+    void rescanDownloadedFilesUsesCompactIndexForExistingFolders(@TempDir Path tempDir) throws Exception {
+        FakeRavenBrokerClient brokerClient = new FakeRavenBrokerClient();
+        ScriptarrLogger logger = mock(ScriptarrLogger.class);
+        when(logger.getDownloadsRoot()).thenReturn(tempDir);
+        LibraryService service = new LibraryService(brokerClient, new RavenSettingsService(brokerClient, logger, List.of()), logger);
+
+        Path titleFolder = tempDir.resolve("downloaded").resolve("manga").resolve("Dandadan");
+        Files.createDirectories(titleFolder);
+        Path archivePath = writeArchive(titleFolder.resolve("Dandadan_c1.cbz"));
+        service.recordDownloadedTitle(
+            "Dandadan",
+            "Manga",
+            "",
+            "",
+            null,
+            List.of(new LibraryChapter("", "Chapter 1", "1", 1, null, true, archivePath.toString(), "", null)),
+            null,
+            titleFolder
+        );
+        int fullCallsBeforeRescan = brokerClient.listLibraryTitlesCalls();
+        int cardCallsBeforeRescan = brokerClient.listLibraryTitleCardsCalls();
+
+        service.rescanDownloadedFiles();
+
+        assertEquals(fullCallsBeforeRescan, brokerClient.listLibraryTitlesCalls());
+        assertTrue(brokerClient.listLibraryTitleCardsCalls() > cardCallsBeforeRescan);
+    }
+
+    /**
      * Verify Raven rescans chapter archives with the configured naming template
      * instead of falling back to the first number in the file name.
      *

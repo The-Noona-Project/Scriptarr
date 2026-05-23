@@ -102,7 +102,8 @@ Download completion now waits for file promotion, brokered catalog persistence, 
 `100%`. If catalog persistence or ingest fails, Raven marks the task failed instead of leaving it stuck at `90%`.
 Ingest failures keep the CBZ and publish retryable `Needs attention` work; cleanup removes only staged or derived ingest
 files. On boot, Raven also rescans the existing `downloaded/<type>/...` tree to backfill missing catalog rows from
-already-finished archives.
+already-finished archives. That startup scan uses compact title-card indexes and skips unchanged folders so a large
+library cannot force repeated full-title catalog reads while auth and admin bootstrap are trying to start.
 
 Raven's global title-download concurrency is now controlled by the Sage-backed `raven.download.runtime` setting. The
 default remains two active title downloads, admins can choose `1` through `6` from Moon Settings, and Raven reloads the

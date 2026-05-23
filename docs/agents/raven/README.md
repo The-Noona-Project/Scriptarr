@@ -76,8 +76,9 @@
   through Sage's internal broker routes so Vault can append them into the shared durable event log.
 - Startup recovery should rescan finished `downloaded/<type>/...` content, backfill missing catalog rows, and collapse
   duplicate restorable tasks so Moon queue views only see one logical download. Keep this recovery after Spring's ready
-  event and keep Sage broker calls explicitly timeout-bound so a large catalog or slow broker write cannot hold Raven
-  below healthy.
+  event, use compact title-card indexes before loading individual existing titles, skip unchanged folders, and keep
+  Sage broker calls explicitly timeout-bound so a large catalog or slow broker write cannot hold Raven below healthy or
+  starve auth/bootstrap traffic.
 - Raven title-download concurrency is brokered through `raven.download.runtime`. Keep the default at two active titles,
   allow only `1` through `6`, reload it live without cancelling running downloads, and preserve priority ordering plus
   queued-task move up/down behavior for work that has not started yet. Per-title page download concurrency stays fixed.
