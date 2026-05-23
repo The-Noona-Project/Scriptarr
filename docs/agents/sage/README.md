@@ -51,8 +51,9 @@
   the final fallback to `/` when the remembered route is invalid or the signed-in user cannot access it.
 - Keep the Discord callback phases explicit and bounded: `discord-token`, `discord-user`, `vault-user`,
   `vault-session`, and `auth-event`. Use the Sage Vault client timeout options for auth reads/writes, keep one
-  bootstrap-status read in the callback path, log per-phase timing, return user-safe phase errors, and never let
-  auth-event persistence failure reject a session that Vault already created.
+  bootstrap-status read in the callback path, log per-phase timing plus redacted `vault-user` substeps, retry
+  transient Vault auth reads and idempotent user upserts, return user-safe phase errors, and never let auth-event
+  persistence failure reject a session that Vault already created.
 - Moon's root-only content reset is Sage-owned orchestration. Keep the preview plus execute flow brokered, require the
   explicit confirmation string, append `content-reset-started` and `content-reset-completed` events, clear Vault's
   content-side state first, then trigger Raven's managed storage reset.
@@ -64,7 +65,8 @@
   `/v1/ingest/:titleId/retry`.
 - Sage owns Appa's Portal ingest broker too. Keep `/api/internal/portal/library/ingest/preview` read-only and
   service-token protected, and keep `/api/internal/portal/library/ingest/runs` as the only Portal path to Raven's
-  `/v1/ingest/runs` durable WebP rebuild API.
+  `/v1/ingest/runs` durable WebP rebuild API. Portal should disable empty previews and acknowledge confirm
+  interactions before calling this route.
 - Queue retry code must treat `raven-ingest` tasks as ingest retries from the existing CBZ. Do not send those through
   normal download retry or delete canonical CBZ files from queue cleanup.
 - Keep section bulk queue actions brokered here too: cancel all queued work for `activity.write`, cancel all running

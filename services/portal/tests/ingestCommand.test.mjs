@@ -61,8 +61,8 @@ const createInteraction = ({
 };
 
 const createButtonInteraction = ({customId, userId = "admin-1"} = {}) => {
-  const calls = {reply: [], editReply: []};
-  return {
+  const calls = {reply: [], editReply: [], deferReply: []};
+  const interaction = {
     customId,
     user: {
       id: userId,
@@ -73,16 +73,23 @@ const createButtonInteraction = ({customId, userId = "admin-1"} = {}) => {
     isButton: () => true,
     reply: async (payload) => {
       calls.reply.push(payload);
+      interaction.replied = true;
       return payload;
     },
     editReply: async (payload) => {
       calls.editReply.push(payload);
       return payload;
     },
+    deferReply: async (payload) => {
+      calls.deferReply.push(payload);
+      interaction.deferred = true;
+      return payload;
+    },
     deferred: false,
     replied: false,
     __calls: calls
   };
+  return interaction;
 };
 
 const createAppaIngestHandler = ({settings, sage}) => {
@@ -166,7 +173,8 @@ test("Appa ingest command uses appa.commands.ingest and previews through Sage be
 
   const wrongUser = createButtonInteraction({customId: confirmId, userId: "admin-2"});
   await handler(wrongUser);
-  assert.match(wrongUser.__calls.reply[0].content, /Only the user/i);
+  assert.equal(wrongUser.__calls.deferReply.length, 1);
+  assert.match(wrongUser.__calls.editReply[0].content, /Only the user/i);
   assert.equal(runCalls.length, 0);
 });
 
@@ -221,7 +229,8 @@ test("Appa ingest confirm expires after five minutes and fresh confirms call Sag
 
     const expired = createButtonInteraction({customId: staleConfirmId});
     await handler(expired);
-    assert.match(expired.__calls.reply[0].content, /expired/i);
+    assert.equal(expired.__calls.deferReply.length, 1);
+    assert.match(expired.__calls.editReply[0].content, /expired/i);
     assert.equal(runCalls.length, 0);
 
     const freshPreview = createInteraction({
@@ -233,7 +242,8 @@ test("Appa ingest confirm expires after five minutes and fresh confirms call Sag
 
     const confirm = createButtonInteraction({customId: freshConfirmId});
     await handler(confirm);
-    assert.match(confirm.__calls.reply[0].content, /Run ID: ingest-run-2/);
+    assert.equal(confirm.__calls.deferReply.length, 1);
+    assert.match(confirm.__calls.editReply[0].content, /Run ID: ingest-run-2/);
     assert.equal(runCalls.length, 1);
     assert.equal(runCalls[0].type, "comic");
     assert.equal(runCalls[0].requestedBy, "admin-1");
@@ -244,4 +254,87 @@ test("Appa ingest confirm expires after five minutes and fresh confirms call Sag
   } finally {
     Date.now = originalNow;
   }
+});
+
+test("Appa ingest confirm defers before Sage starts a run", async () => {
+  const order = [];
+  const settings = {
+    guildId: "guild-1",
+    appa: {
+      commands: {
+        ingest: {enabled: true, roleId: "role-appa-ingest"}
+      }
+    }
+  };
+  const handler = createAppaIngestHandler({
+    settings,
+    sage: {
+      async previewIngestRun() {
+        return {ok: true, payload: {previewId: "preview-3", titleCount: 1}};
+      },
+      async runIngest() {
+        order.push("run");
+        return {ok: true, payload: {runId: "ingest-run-3", status: "started"}};
+      }
+    }
+  });
+
+  const preview = createInteraction({
+    roleIds: ["role-appa-ingest"],
+    strings: {type: "manga"}
+  });
+  await handler(preview);
+  const confirmId = preview.__calls.editReply[0].components[0].components[0].custom_id;
+  const confirm = createButtonInteraction({customId: confirmId});
+  confirm.deferReply = async (payload) => {
+    order.push("defer");
+    confirm.__calls.deferReply.push(payload);
+    confirm.deferred = true;
+    return payload;
+  };
+
+  await handler(confirm);
+
+  assert.deepEqual(order, ["defer", "run"]);
+  assert.match(confirm.__calls.editReply[0].content, /Run ID: ingest-run-3/);
+});
+
+test("Appa ingest preview does not expose a runnable button when no titles are eligible", async () => {
+  const settings = {
+    guildId: "guild-1",
+    appa: {
+      commands: {
+        ingest: {enabled: true, roleId: "role-appa-ingest"}
+      }
+    }
+  };
+  const handler = createAppaIngestHandler({
+    settings,
+    sage: {
+      async previewIngestRun() {
+        return {
+          ok: true,
+          payload: {
+            previewId: "preview-empty",
+            titleCount: 0,
+            hardware: {state: "ready"}
+          }
+        };
+      },
+      async runIngest() {
+        throw new Error("empty previews should not create a runnable confirm.");
+      }
+    }
+  });
+
+  const preview = createInteraction({
+    roleIds: ["role-appa-ingest"],
+    strings: {type: "oel"}
+  });
+  await handler(preview);
+
+  const reply = preview.__calls.editReply[0];
+  assert.match(reply.content, /Titles: 0/);
+  assert.match(reply.content, /No eligible titles/);
+  assert.deepEqual(reply.components, []);
 });

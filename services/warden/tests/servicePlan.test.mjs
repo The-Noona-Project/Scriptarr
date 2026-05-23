@@ -32,6 +32,7 @@ test("service plan exposes the fixed Scriptarr network and selfhost mysql by def
   assert.equal(plan.services.find((service) => service.name === "scriptarr-portal").env.SCRIPTARR_SAGE_BASE_URL, "http://scriptarr-sage:3004");
   assert.equal(plan.services.find((service) => service.name === "scriptarr-sage").env.SCRIPTARR_APPA_DISCORD_TOKEN, "appa-token");
   assert.equal(plan.services.find((service) => service.name === "scriptarr-sage").env.SCRIPTARR_APPA_DISCORD_CLIENT_ID, "appa-client-id");
+  assert.equal(plan.services.find((service) => service.name === "scriptarr-sage").env.SCRIPTARR_VAULT_AUTH_TIMEOUT_MS, "8000");
   assert.equal(plan.services.find((service) => service.name === "scriptarr-portal").env.SCRIPTARR_APPA_DISCORD_TOKEN, "appa-token");
   assert.equal(plan.services.find((service) => service.name === "scriptarr-portal").env.SCRIPTARR_APPA_DISCORD_CLIENT_ID, "appa-client-id");
   assert.equal(moon.env.SCRIPTARR_MOON_READER_PAGE_CACHE_DIR, "/app/reader-page-cache");
@@ -47,6 +48,19 @@ test("service plan exposes the fixed Scriptarr network and selfhost mysql by def
   assert.match(plan.services.find((service) => service.name === "scriptarr-raven").healthCheck.command, /curl -fsS http:\/\/127\.0\.0\.1:8080\/health/);
   assert.match(plan.services.find((service) => service.name === "scriptarr-oracle").healthCheck.command, /python -c/);
   assert.match(plan.services.find((service) => service.name === "scriptarr-oracle").healthCheck.command, /127\.0\.0\.1:3001\/health/);
+});
+
+test("service plan passes explicit Sage Vault auth timeout overrides", () => {
+  const plan = resolveServicePlan({
+    env: {
+      SCRIPTARR_MYSQL_URL: "SELFHOST",
+      SCRIPTARR_MYSQL_USER: "scriptarr",
+      SCRIPTARR_MYSQL_PASSWORD: "secret",
+      SCRIPTARR_VAULT_AUTH_TIMEOUT_MS: "12000"
+    }
+  });
+
+  assert.equal(plan.services.find((service) => service.name === "scriptarr-sage").env.SCRIPTARR_VAULT_AUTH_TIMEOUT_MS, "12000");
 });
 
 test("service plan gives embedded Oracle LocalAI NVIDIA runtime args when hinted", () => {

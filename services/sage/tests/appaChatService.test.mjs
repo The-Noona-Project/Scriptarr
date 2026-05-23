@@ -67,7 +67,14 @@ test("Appa admin chat uses the Appa persona and Sage-curated Discord context", a
     }
   });
 
-  const result = await service.handlePortalAdminMention(appaPayload());
+  const result = await service.handlePortalAdminMention({
+    ...appaPayload(),
+    noona: {
+      ok: true,
+      reply: "Noona said token=secret and can help with requests.",
+      replyMessageId: "noona-reply-1"
+    }
+  });
   const oracleCall = calls.find((call) => call.path === "/api/chat");
 
   assert.equal(result.ok, true);
@@ -77,6 +84,9 @@ test("Appa admin chat uses the Appa persona and Sage-curated Discord context", a
   assert.equal(oracleCall.options.body.context.source, "discord-appa-admin-mention");
   assert.equal(oracleCall.options.timeoutMs, 85000);
   assert.equal(oracleCall.options.body.context.readContext.discord.appaEnabled, true);
+  assert.equal(oracleCall.options.body.context.readContext.noona.ok, true);
+  assert.equal(oracleCall.options.body.context.readContext.noona.reply.includes("token=secret"), false);
+  assert.match(oracleCall.options.body.context.readContext.noona.reply, /Noona said/);
   assert.equal(oracleCall.options.body.context.readContext.serviceHealth, undefined);
   assert.equal(oracleCall.options.body.context.readContext.visualIdentity, undefined);
 });

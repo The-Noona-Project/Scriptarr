@@ -115,3 +115,58 @@ test("vault getSetting retries transient fetch failures with bounded timeouts", 
   ]);
   assert.equal(calls.every((call) => call.hasSignal), true);
 });
+
+test("vault auth user methods retry transient fetch failures with bounded timeouts", async () => {
+  const calls = [];
+  globalThis.fetch = async (input, init = {}) => {
+    calls.push({
+      url: String(input),
+      method: init.method || "GET",
+      hasSignal: init.signal instanceof AbortSignal
+    });
+    if (calls.length === 1 || calls.length === 3 || calls.length === 5) {
+      throw new Error("fetch failed");
+    }
+    const pathname = new URL(String(input)).pathname;
+    if (pathname === "/api/public/bootstrap-status") {
+      return jsonResponse({ownerClaimed: false});
+    }
+    if (pathname.includes("/api/service/users/by-discord/")) {
+      return jsonResponse({discordUserId: "owner-1", role: "member"});
+    }
+    if (pathname === "/api/service/users/upsert-discord") {
+      return jsonResponse({discordUserId: "owner-1", role: "owner"});
+    }
+    return jsonResponse({ok: true});
+  };
+
+  const client = createVaultClient({
+    vaultBaseUrl: "http://vault.test",
+    serviceToken: "vault-token"
+  });
+
+  assert.deepEqual(await client.getBootstrapStatus({timeoutMs: 123, retries: 2, retryDelayMs: 1}), {ownerClaimed: false});
+  assert.deepEqual(await client.getUserByDiscordId("owner-1", {timeoutMs: 123, retries: 2, retryDelayMs: 1}), {
+    discordUserId: "owner-1",
+    role: "member"
+  });
+  assert.deepEqual(await client.upsertDiscordUser({discordUserId: "owner-1"}, {
+    timeoutMs: 123,
+    retries: 2,
+    retryDelayMs: 1,
+    throwOnError: true
+  }), {
+    discordUserId: "owner-1",
+    role: "owner"
+  });
+
+  assert.deepEqual(calls.map((call) => `${call.method} ${new URL(call.url).pathname}`), [
+    "GET /api/public/bootstrap-status",
+    "GET /api/public/bootstrap-status",
+    "GET /api/service/users/by-discord/owner-1",
+    "GET /api/service/users/by-discord/owner-1",
+    "POST /api/service/users/upsert-discord",
+    "POST /api/service/users/upsert-discord"
+  ]);
+  assert.equal(calls.every((call) => call.hasSignal), true);
+});

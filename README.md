@@ -188,7 +188,9 @@ For end-to-end Docker verification, use:
 - Appa review is optional. Noona replies first; Sage then asks Oracle for a structured Appa review and Portal posts an
   Appa correction only for serious public-chat issues such as leaked secrets, unsafe action claims, admin-boundary
   mistakes, or clearly wrong operational facts. Review and correction-delivery events are redacted durable audit
-  entries, not full transcripts.
+  entries, not full transcripts. When an admin mentions Noona and Appa together in a configured Appa channel, Portal
+  keeps that same order and then lets Appa post its own answer after the review. If Noona falls back because AI is
+  unavailable, Appa still answers with that safe context.
 - The DM-only `downloadall` flow now stays provider-browse first but resolves metadata before queueing each title. It
   now uses a global DM slash command as the supported path: `/downloadall run ...`, `/downloadall status ...`,
   `/downloadall continue ...`, `/downloadall cancel ...`, and `/downloadall help`. Every run is durable now, including
@@ -198,7 +200,8 @@ For end-to-end Docker verification, use:
   form as a legacy best-effort fallback, but that path also creates a durable run.
 - Appa `/ingest type:<manga|manhwa|manhua|webtoon|comic|oel>` previews the selected library type, shows title count
   and Raven hardware state, then requires a five-minute confirm button before Sage starts Raven's durable
-  `raven-library-ingest` WebP-only rebuild from existing canonical CBZ archives.
+  `raven-library-ingest` WebP-only rebuild from existing canonical CBZ archives. Empty previews do not expose a run
+  button, and confirm clicks are acknowledged before the slower Sage/Raven work starts.
 - The bulk flow only queues titles with one confident metadata match and reports already-active, completed,
   already-current, adult-content, no-metadata, ambiguous-metadata, invalid-source, appended, and failed outcomes back
   in the Discord DM summary. Completed library titles are skipped, in-progress titles append only missing or new

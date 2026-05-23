@@ -169,7 +169,11 @@ payloads before continuing to the remembered route. The user, reader, and admin 
 stale service-worker navigations or client-side transitions, replacing signed-out protected pages with `/login`
 instead of showing in-app sign-in fallback panels. Sage keeps the callback bounded and diagnosable with
 phase-level timings for Discord token exchange, Discord profile lookup, Vault user lookup/upsert, Vault session
-creation, and auth-event persistence; if the auth event fails after the session exists, login still completes.
+creation, and auth-event persistence; if the auth event fails after the session exists, login still completes. Warden
+now passes Sage an explicit `SCRIPTARR_VAULT_AUTH_TIMEOUT_MS` value, defaulting to `8000` ms, so cold Vault/MySQL auth
+reads have a wider production budget than the old 3-second fallback. Sage also logs redacted `vault-user` substeps for
+bootstrap, existing-user lookup, and owner/member upsert to distinguish first-owner repair issues from session
+creation failures.
 
 ## Network Topology
 
@@ -488,12 +492,12 @@ too. Portal now replies immediately with a requester-mentioned `Thinking...` pla
 the final answer, and reports how many request(s) are ahead when Noona or Appa is already answering another AI request.
 Only the requester mention is allowed in AI replies. Leave the allowed-channel list blank to allow every channel in the
 configured guild, or restrict it to known safe channel ids for a quieter rollout.
-If a user mentions both Noona and Appa, Noona leads the public reply and Appa stays quiet unless the message is an
-Appa-only admin mention in an allowed Appa channel. Status or presence prompts such as "are you online?", "are you
-connected?", and "are you there?" use Sage's bounded live status path instead of waiting on the AI provider. Portal also
-keeps an internal service-token guarded smoke route for operators that posts a one-shot Appa nonce mention in the
-configured smoke channel; this is for production verification only and does not disable the normal bot-message loop
-guard.
+If an admin mentions both Noona and Appa in a configured Appa channel, Noona leads the public reply, Appa reviews it,
+and Appa then posts its own answer. In other channels, Noona leads dual mentions and Appa stays quiet to avoid duplicate
+bot replies. Status or presence prompts such as "are you online?", "are you connected?", and "are you there?" use
+Sage's bounded live status path instead of waiting on the AI provider. Portal also keeps an internal service-token
+guarded smoke route for operators that posts a one-shot Appa nonce mention in the configured smoke channel; this is for
+production verification only and does not disable the normal bot-message loop guard.
 
 Discord's Message Content intent must be enabled in the Discord developer portal for mention chat, trivia guesses, and
 legacy DM text fallback handling. Scriptarr requests the intent in code, but Discord will not deliver message content
@@ -584,6 +588,11 @@ and automatically restarts/syncs the split runtime when the brokered `portal.dis
 That runtime view now also surfaces the requested intents or partials, the most recent DM receive timestamp, the last
 handled `downloadall`, the last `downloadall` error, Noona mention-chat status, Appa mention/review/correction status,
 and recent redacted Appa review audit events so owner-only DM and public chat failures are easier to trace.
+For admin dual mentions in configured Appa channels, Noona answers first, Appa reviews that reply, and Appa then posts
+its own response from the Appa bot. If Noona hits a bounded AI failure and posts fallback copy, Appa still answers with
+that safe context. Appa remains quiet on other Noona co-mentions to avoid duplicate public replies. Appa `/ingest`
+previews disable confirmation when no titles are eligible and acknowledge button presses before starting Sage/Raven
+work so Discord does not show an interaction timeout.
 
 ## Public Moon API
 

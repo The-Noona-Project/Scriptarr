@@ -96,9 +96,9 @@ const requestJson = async (
  *
  * @param {{vaultBaseUrl: string, serviceToken: string}} config
  * @returns {{
- *   getBootstrapStatus: (options?: {timeoutMs?: number}) => Promise<any>,
- *   upsertDiscordUser: (payload: Record<string, unknown>, options?: {timeoutMs?: number, throwOnError?: boolean}) => Promise<any>,
- *   getUserByDiscordId: (discordUserId: string, options?: {timeoutMs?: number}) => Promise<any>,
+ *   getBootstrapStatus: (options?: {timeoutMs?: number, retries?: number, retryDelayMs?: number}) => Promise<any>,
+ *   upsertDiscordUser: (payload: Record<string, unknown>, options?: {timeoutMs?: number, throwOnError?: boolean, retries?: number, retryDelayMs?: number}) => Promise<any>,
+ *   getUserByDiscordId: (discordUserId: string, options?: {timeoutMs?: number, retries?: number, retryDelayMs?: number}) => Promise<any>,
  *   listUsers: () => Promise<any>,
  *   getAccessOverview: () => Promise<any>,
  *   listPermissionGroups: () => Promise<any>,
@@ -146,29 +146,32 @@ export const createVaultClient = (config) => {
     : 5000;
 
   return {
-    async getBootstrapStatus({timeoutMs = authTimeoutMs} = {}) {
+    async getBootstrapStatus({timeoutMs = authTimeoutMs, retries = 1, retryDelayMs = 0} = {}) {
       return (await requestJson(baseUrl, {}, "/api/public/bootstrap-status", {
         timeoutMs,
+        retries,
+        retryDelayMs,
         context: "Failed to load bootstrap status from Vault"
       })).payload;
     },
-    async upsertDiscordUser(payload, {timeoutMs = authTimeoutMs, throwOnError = false} = {}) {
-      const response = await fetch(`${baseUrl}/api/service/users/upsert-discord`, {
+    async upsertDiscordUser(payload, {timeoutMs = authTimeoutMs, throwOnError = false, retries = 1, retryDelayMs = 0} = {}) {
+      const response = await requestJson(baseUrl, headers, "/api/service/users/upsert-discord", {
         method: "POST",
-        headers,
-        body: JSON.stringify(payload),
-        ...withTimeoutSignal(timeoutMs)
+        body: payload,
+        timeoutMs,
+        retries,
+        retryDelayMs,
+        allowStatuses: throwOnError ? [] : [400, 401, 403, 404, 409, 500, 502, 503, 504],
+        context: "Failed to upsert Discord user in Vault"
       });
-      const payloadJson = await json(response);
-      if (throwOnError && !response.ok) {
-        throw buildHttpError(response.status, payloadJson, "Failed to upsert Discord user in Vault");
-      }
-      return payloadJson;
+      return response.payload;
     },
-    async getUserByDiscordId(discordUserId, {timeoutMs = authTimeoutMs} = {}) {
+    async getUserByDiscordId(discordUserId, {timeoutMs = authTimeoutMs, retries = 1, retryDelayMs = 0} = {}) {
       const {status, payload} = await requestJson(baseUrl, headers, `/api/service/users/by-discord/${encodeURIComponent(discordUserId)}`, {
         allowStatuses: [404],
         timeoutMs,
+        retries,
+        retryDelayMs,
         context: "Failed to load Discord user from Vault"
       });
       return status === 404 ? null : payload;

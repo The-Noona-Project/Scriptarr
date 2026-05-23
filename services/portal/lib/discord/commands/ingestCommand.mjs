@@ -1,4 +1,4 @@
-import {INGEST_CONFIRM_TTL_MS} from "../constants.mjs";
+import {EPHEMERAL_FLAG, INGEST_CONFIRM_TTL_MS} from "../constants.mjs";
 import {createSessionStore} from "../sessionStore.mjs";
 import {normalizeString, resolveDiscordId, sendInteractionReply, truncate} from "../utils.mjs";
 import {createBrandNameGetter} from "../branding.mjs";
@@ -60,6 +60,11 @@ const coerceNumber = (...values) => {
 
 const maybeCount = (label, value) => value == null ? null : `${label}: ${value}`;
 
+const previewTitleCount = (payload = {}) => {
+  const summary = normalizeObject(payload.summary);
+  return coerceNumber(payload.titleCount, payload.totalTitles, summary.totalTitles, summary.total);
+};
+
 const extractPreviewReference = (payload = {}) => ({
   previewId: normalizeString(payload.previewId || payload.planId || payload.id),
   previewToken: normalizeString(payload.previewToken || payload.confirmationToken || payload.token)
@@ -77,7 +82,7 @@ const formatPreviewMessage = ({brandName, type, payload, customId}) => {
   const summary = normalizeObject(payload.summary);
   const hardware = normalizeObject(payload.hardware || summary.hardware);
   const activeRun = normalizeObject(payload.activeRun);
-  const titleCount = coerceNumber(payload.titleCount, payload.totalTitles, summary.totalTitles, summary.total);
+  const titleCount = previewTitleCount(payload);
   const queued = coerceNumber(
     payload.queuedCount,
     payload.queueCount,
@@ -111,10 +116,12 @@ const formatPreviewMessage = ({brandName, type, payload, customId}) => {
       details.length ? details.join(" | ") : "Sage prepared an ingest run preview.",
       activeRun?.runId || activeRun?.jobId ? `Active run: ${truncate(normalizeString(activeRun.runId || activeRun.jobId), 90)}` : "",
       warnings.length ? `Warnings: ${warnings.map((entry) => truncate(entry, 90)).join(" | ")}` : "",
-      "Confirm within 5 minutes to start the Sage-run ingest job."
+      titleCount === 0
+        ? "No eligible titles are ready for this ingest type."
+        : "Confirm within 5 minutes to start the Sage-run ingest job."
     ].filter(Boolean).join("\n"),
     ephemeral: true,
-    components: [
+    components: titleCount === 0 ? [] : [
       buildButtonRow([
         buildButton({
           customId,
@@ -154,7 +161,7 @@ export const createIngestCommand = ({sage, getBrandName}) => {
       ]
     },
     async execute(interaction) {
-      await interaction.deferReply?.({flags: 64});
+      await interaction.deferReply?.({flags: EPHEMERAL_FLAG});
       const type = normalizeType(interaction.options?.getString?.("type"));
       if (!ALLOWED_TYPES.has(type)) {
         await sendInteractionReply(interaction, {
@@ -178,13 +185,16 @@ export const createIngestCommand = ({sage, getBrandName}) => {
         }
 
         const preview = normalizeObject(response.payload);
+        const titleCount = previewTitleCount(preview);
         const {previewId, previewToken} = extractPreviewReference(preview);
-        const sessionId = confirmStore.create({
-          discordUserId: resolveDiscordId(interaction),
-          request,
-          previewId,
-          previewToken
-        });
+        const sessionId = titleCount === 0
+          ? ""
+          : confirmStore.create({
+            discordUserId: resolveDiscordId(interaction),
+            request,
+            previewId,
+            previewToken
+          });
         await sendInteractionReply(interaction, formatPreviewMessage({
           brandName: brandName(),
           type,
@@ -204,6 +214,7 @@ export const createIngestCommand = ({sage, getBrandName}) => {
       if (!customId.startsWith(CONFIRM_PREFIX)) {
         return false;
       }
+      await interaction.deferReply?.({flags: EPHEMERAL_FLAG});
 
       const sessionId = customId.slice(CONFIRM_PREFIX.length);
       const session = confirmStore.read(sessionId);

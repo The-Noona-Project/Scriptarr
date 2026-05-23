@@ -94,7 +94,12 @@
 - Preserve `groupsize` across slash-command and legacy DM parsing as `batchesPerApproval` with bounds `1-25`.
 - Appa `/ingest type:<manga|manhwa|manhua|webtoon|comic|oel>` is admin-facing and role-managed through
   `portal.discord.appa.commands.ingest`. Preview must not mutate, confirm buttons expire after 5 minutes, only the
-  requesting admin can confirm, and the confirmed run must go through Sage to Raven instead of calling Raven directly.
+  requesting admin can confirm, zero-title previews must not expose a runnable confirm button, button interactions
+  must be acknowledged before Sage/Raven work starts, and the confirmed run must go through Sage to Raven instead of
+  calling Raven directly.
+- Admin dual mentions in configured Appa channels are Noona-led but not Noona-only: Noona replies, Appa review runs
+  next, then Appa posts its own admin reply. Keep the direct Appa listener's co-mention suppression so the same Discord
+  message cannot produce duplicate Appa responses from both clients.
 - Portal runtime state should keep enough DM diagnostics to explain silent failures quickly: requested intents,
   requested partials, last DM receive timestamp, last handled `downloadall`, last `downloadall` error, and last Noona
   mention-chat time/error. Include Appa connection, mention, review, correction, and avatar sync state when split mode

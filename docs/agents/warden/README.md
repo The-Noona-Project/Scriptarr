@@ -36,6 +36,8 @@
   but those requests terminate at Oracle's embedded runtime routes. Keep Warden's role focused on service-plan mounts,
   environment, GPU device requests, and drift detection.
 - Warden should inject Sage broker settings into Portal, Oracle, and Raven instead of direct first-party base URLs.
+- Warden should inject Sage's `SCRIPTARR_VAULT_AUTH_TIMEOUT_MS`, defaulting managed production to `8000` ms while
+  honoring explicit `SCRIPTARR_VAULT_AUTH_TIMEOUT_MS` or legacy `SCRIPTARR_AUTH_VAULT_TIMEOUT_MS` overrides.
 - Warden should launch Raven with the VPN runtime device/capability contract (`NET_ADMIN` and `/dev/net/tun`) when not
   explicitly disabled, and drift detection should recreate Raven when those flags disappear.
 - Warden should pass Raven ingest NVIDIA runtime env and args when `SCRIPTARR_RAVEN_INGEST_GPU_PROFILE=nvidia` or the

@@ -65,6 +65,9 @@ const createHandler = ({
   sage = {},
   events = [],
   getPeerBotUserIds,
+  onReviewCandidate,
+  onPeerMentionFollowup,
+  isPeerMentionAllowed,
   allowBotAuthoredMessage,
   preparePrompt
 } = {}) => {
@@ -88,7 +91,10 @@ const createHandler = ({
     sage,
     roleManager: createRoleManager({getSettings: () => mergedSettings}),
     onRuntimeEvent: (event) => events.push(event),
+    onReviewCandidate,
+    onPeerMentionFollowup,
     getPeerBotUserIds,
+    isPeerMentionAllowed,
     allowBotAuthoredMessage,
     preparePrompt
   });
@@ -158,6 +164,91 @@ test("Noona mention handler strips peer bot mentions before calling Sage", async
   assert.equal(await handler(message), true);
   assert.equal(payloads[0].message, "are you online?");
   assert.equal(message.__calls.edit[0].content, "<@user-1> Noona leads this one.");
+});
+
+test("Noona mention handler awaits review before peer follow-up on dual mentions", async () => {
+  const order = [];
+  const handler = createHandler({
+    getPeerBotUserIds: () => ["appa-1"],
+    onReviewCandidate: async (candidate) => {
+      order.push(`review:${candidate.reply}`);
+    },
+    onPeerMentionFollowup: async (candidate) => {
+      order.push(`appa:${candidate.reply}`);
+    },
+    sage: {
+      async noonaChat() {
+        order.push("noona");
+        return {ok: true, payload: {reply: "Noona answers first."}};
+      }
+    }
+  });
+  const message = createMessage({
+    content: "<@bot-1> and <@appa-1> tell me what you can do",
+    mentionIds: ["bot-1", "appa-1"]
+  });
+
+  assert.equal(await handler(message), true);
+  assert.deepEqual(order, [
+    "noona",
+    "review:Noona answers first.",
+    "appa:Noona answers first."
+  ]);
+});
+
+test("Noona mention handler still runs peer follow-up after a Noona failure fallback", async () => {
+  const followups = [];
+  const handler = createHandler({
+    getPeerBotUserIds: () => ["appa-1"],
+    onPeerMentionFollowup: async (candidate) => {
+      followups.push(candidate);
+    },
+    sage: {
+      async noonaChat() {
+        throw new Error("fetch failed");
+      }
+    }
+  });
+  const message = createMessage({
+    content: "<@bot-1> and <@appa-1> are you okay?",
+    mentionIds: ["bot-1", "appa-1"]
+  });
+
+  assert.equal(await handler(message), true);
+  assert.match(message.__calls.edit[0].content, /trouble reaching her brain/);
+  assert.equal(followups.length, 1);
+  assert.equal(followups[0].noonaOk, false);
+  assert.equal(followups[0].noonaErrorReason, "sage-timeout");
+});
+
+test("Noona mention handler can allow Appa-channel dual mentions outside normal Noona channels", async () => {
+  const payloads = [];
+  const handler = createHandler({
+    settings: {
+      noonaChat: {
+        enabled: true,
+        memoryEnabled: true,
+        proposalMode: "conservative",
+        allowedChannelIds: ["public-only"]
+      }
+    },
+    getPeerBotUserIds: () => ["appa-1"],
+    isPeerMentionAllowed: ({channelId}) => channelId === "admins",
+    sage: {
+      async noonaChat(payload) {
+        payloads.push(payload);
+        return {ok: true, payload: {reply: "Noona can lead here for admins."}};
+      }
+    }
+  });
+  const message = createMessage({
+    channelId: "admins",
+    content: "<@bot-1> and <@appa-1> help",
+    mentionIds: ["bot-1", "appa-1"]
+  });
+
+  assert.equal(await handler(message), true);
+  assert.equal(payloads[0].channelId, "admins");
 });
 
 test("Noona mention handler allows one guarded Appa smoke message", async () => {

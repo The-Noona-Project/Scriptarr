@@ -5,6 +5,9 @@ the Discord callback URL, and selects the appropriate LocalAI AIO image profile 
 
 Warden is also responsible for injecting the internal service topology that keeps first-party HTTP behind Sage. Raven,
 Portal, and Oracle now receive Sage broker settings instead of direct first-party base URLs.
+Warden also injects Sage's production Vault auth timeout as `SCRIPTARR_VAULT_AUTH_TIMEOUT_MS`, defaulting to `8000`
+milliseconds unless the operator provides `SCRIPTARR_VAULT_AUTH_TIMEOUT_MS` or the legacy
+`SCRIPTARR_AUTH_VAULT_TIMEOUT_MS`.
 
 The supported install shape is to run Warden as its own Docker container and let it reconcile the other first-party
 containers through the Docker socket. Outside test mode, Warden should not be published publicly; Moon remains the

@@ -811,6 +811,51 @@ test("vault returns conflicts for duplicate owner claims and stale request revis
   server.close();
 });
 
+test("vault promotes an existing configured member when they claim first owner", async () => {
+  const {app} = await createVaultApp();
+  const server = app.listen(0);
+  const {port} = server.address();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const headers = {
+    "Authorization": "Bearer sage-dev-token",
+    "Content-Type": "application/json"
+  };
+
+  try {
+    const member = await fetch(`${baseUrl}/api/service/users/upsert-discord`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        discordUserId: "owner-1",
+        username: "Existing Owner",
+        role: "member"
+      })
+    }).then((response) => response.json());
+    assert.equal(member.role, "member");
+
+    const bootstrapBefore = await fetch(`${baseUrl}/api/public/bootstrap-status`).then((response) => response.json());
+    assert.equal(bootstrapBefore.ownerClaimed, false);
+
+    const promoted = await fetch(`${baseUrl}/api/service/users/upsert-discord`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        discordUserId: "owner-1",
+        username: "Existing Owner",
+        role: "owner",
+        claimOwner: true
+      })
+    }).then((response) => response.json());
+    assert.equal(promoted.role, "owner");
+
+    const bootstrapAfter = await fetch(`${baseUrl}/api/public/bootstrap-status`).then((response) => response.json());
+    assert.equal(bootstrapAfter.ownerClaimed, true);
+    assert.equal(bootstrapAfter.ownerDiscordUserId, "owner-1");
+  } finally {
+    server.close();
+  }
+});
+
 test("vault manages permission groups, durable events, and deleted-user recreation through the default group", async () => {
   const {app} = await createVaultApp();
   const server = app.listen(0);

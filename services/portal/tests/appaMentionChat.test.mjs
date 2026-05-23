@@ -148,6 +148,51 @@ test("Appa mention handler lets Noona lead dual public mentions", async () => {
   assert.equal(events[0].reason, "co-mention-noona-led");
 });
 
+test("Appa mention handler can be invoked by Noona-led dual flow without duplicating prompt mentions", async () => {
+  const payloads = [];
+  const events = [];
+  const settings = {
+    guildId: "guild-1",
+    appa: {
+      enabled: true,
+      adminMentionChannelIds: ["admins"],
+      commands: {
+        status: {enabled: true, roleId: "role-appa"}
+      }
+    }
+  };
+  const handler = createAppaMentionHandler({
+    getSettings: () => settings,
+    getBotUserId: () => "appa-1",
+    sage: {
+      async appaChat(payload) {
+        payloads.push(payload);
+        return {ok: true, payload: {reply: "Appa joins after review."}};
+      }
+    },
+    roleManager: createRoleManager({
+      getSettings: () => settings,
+      getCommandSettings: (currentSettings, commandName) => currentSettings.appa.commands[commandName] || {}
+    }),
+    onRuntimeEvent: (event) => events.push(event),
+    getPeerBotUserIds: () => ["noona-1"],
+    allowPeerBotMentions: true,
+    preparePrompt: () => "tell me what you can do",
+    buildExtraPayload: () => ({source: "discord-noona-appa-dual-mention", noona: {ok: true}})
+  });
+  const message = createMessage({
+    content: "<@noona-1> and <@appa-1> tell me what you can do",
+    mentionIds: ["noona-1", "appa-1"]
+  });
+
+  assert.equal(await handler(message), true);
+  assert.equal(payloads[0].message, "tell me what you can do");
+  assert.equal(payloads[0].source, "discord-noona-appa-dual-mention");
+  assert.deepEqual(payloads[0].noona, {ok: true});
+  assert.equal(message.__calls.edit[0].content, "<@admin-1> Appa joins after review.");
+  assert.equal(events[0].type, "appa-chat-handled");
+});
+
 test("Appa mention handler suppresses raw Sage errors in public replies", async () => {
   const events = [];
   const handler = createHandler({

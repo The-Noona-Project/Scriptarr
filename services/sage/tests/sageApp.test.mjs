@@ -1591,6 +1591,10 @@ test("sage completes Discord login when auth event persistence fails after sessi
       "auth-event"
     ]);
     assert.equal(loggedPhaseEntries.at(-1).status, "failed");
+    const vaultUserSteps = callbackLogs
+      .filter((entry) => entry.message === "Discord callback vault-user step completed.")
+      .map((entry) => entry.payload.step);
+    assert.deepEqual(vaultUserSteps, ["vault-bootstrap", "vault-owner-upsert"]);
   } finally {
     await closeServer(sageServer);
     await closeServer(vaultProxy.server);

@@ -577,7 +577,7 @@ export const createPortalRuntime = ({
 
   const handleNoonaReviewCandidate = async (candidate = {}) => {
     if (!isAppaSplitEnabled() || settings.appa?.reviewEnabled === false || settings.appa?.correctionMode === "off" || !appaDiscord) {
-      return;
+      return null;
     }
     const {message: _message, ...reviewPayload} = candidate;
     let result = null;
@@ -640,6 +640,111 @@ export const createPortalRuntime = ({
       corrected,
       error: correctionError || normalizeString(payload.error)
     });
+    return {
+      ok: result?.ok === true,
+      payload,
+      decision,
+      corrected,
+      correctionError
+    };
+  };
+
+  const isNoonaLedAppaFollowupAllowed = ({message, guildId, channelId} = {}) => {
+    if (!isAppaSplitEnabled() || !appaDiscord || settings.appa?.enabled !== true) {
+      return false;
+    }
+    const configuredGuildId = normalizeString(settings.guildId);
+    if (configuredGuildId && normalizeString(guildId) !== configuredGuildId) {
+      return false;
+    }
+    const allowedChannelIds = Array.isArray(settings.appa?.adminMentionChannelIds)
+      ? settings.appa.adminMentionChannelIds.map((entry) => normalizeString(entry)).filter(Boolean)
+      : [];
+    if (allowedChannelIds.length && !allowedChannelIds.includes(normalizeString(channelId))) {
+      return false;
+    }
+    const access = appaRoleManager.checkAccess({
+      guildId,
+      guild: message?.guild,
+      user: message?.author,
+      member: message?.member
+    }, "status", {});
+    return access.allowed === true;
+  };
+
+  const createAppaRelayMessage = (candidate = {}) => {
+    const message = candidate.message || {};
+    const channelId = normalizeString(candidate.channelId || message.channelId || message.channel?.id);
+    const appaBotUserId = normalizeString(appaDiscord?.client?.user?.id);
+    const content = `<@${appaBotUserId}> ${normalizeString(candidate.prompt)}`.trim();
+    const relayPayload = (payload = {}) => ({
+      ...(payload && typeof payload === "object" && !Array.isArray(payload) ? payload : {content: normalizeString(payload)}),
+      ...(message.id ? {
+        reply: {
+          messageReference: normalizeString(message.id),
+          failIfNotExists: false
+        }
+      } : {})
+    });
+    return {
+      ...message,
+      client: appaDiscord?.client,
+      content,
+      mentions: {
+        users: new Set(appaBotUserId ? [appaBotUserId] : []),
+        has: (id) => normalizeString(id) === appaBotUserId
+      },
+      channel: {
+        ...(message.channel || {}),
+        id: channelId,
+        sendTyping: async () => {},
+        send: async (payload) => appaDiscord.sendChannelMessage(channelId, payload)
+      },
+      reply: async (payload) => appaDiscord.sendChannelMessage(channelId, relayPayload(payload)),
+      __noonaLedAppa: {
+        prompt: normalizeString(candidate.prompt),
+        noonaOk: candidate.noonaOk === true,
+        noonaErrorReason: normalizeString(candidate.noonaErrorReason),
+        noonaReply: normalizeString(candidate.reply),
+        noonaReplyMessageId: normalizeString(candidate.replyMessageId)
+      }
+    };
+  };
+
+  const handleNoonaLedAppaFollowup = async (candidate = {}) => {
+    if (!isNoonaLedAppaFollowupAllowed(candidate)) {
+      recordRuntimeEvent({
+        type: "appa-chat-rejected",
+        at: new Date().toISOString(),
+        reason: "noona-led-gate-denied",
+        authorId: normalizeString(candidate.user?.discordUserId || candidate.message?.author?.id),
+        channelId: normalizeString(candidate.channelId)
+      });
+      return false;
+    }
+    const appaFollowupHandler = createAppaMentionHandler({
+      getSettings: appaSettings,
+      getBotUserId: () => normalizeString(appaDiscord?.client?.user?.id),
+      sage,
+      roleManager: appaRoleManager,
+      logger,
+      onRuntimeEvent: recordRuntimeEvent,
+      getPeerBotUserIds: () => [normalizeString(discord?.client?.user?.id)].filter(Boolean),
+      allowPeerBotMentions: true,
+      replyOnAccessDenied: false,
+      preparePrompt: ({message}) => normalizeString(message?.__noonaLedAppa?.prompt),
+      buildExtraPayload: ({message}) => ({
+        source: "discord-noona-appa-dual-mention",
+        noona: {
+          ok: message?.__noonaLedAppa?.noonaOk === true,
+          errorReason: normalizeString(message?.__noonaLedAppa?.noonaErrorReason),
+          reply: normalizeString(message?.__noonaLedAppa?.noonaReply).slice(0, 1200),
+          replyMessageId: normalizeString(message?.__noonaLedAppa?.noonaReplyMessageId)
+        }
+      }),
+      aiQueue: appaAiQueue
+    });
+    return appaFollowupHandler(createAppaRelayMessage(candidate));
   };
 
   const recordRuntimeEvent = (event = {}) => {
@@ -1093,7 +1198,9 @@ export const createPortalRuntime = ({
       logger,
       onRuntimeEvent: recordRuntimeEvent,
       onReviewCandidate: handleNoonaReviewCandidate,
+      onPeerMentionFollowup: handleNoonaLedAppaFollowup,
       getPeerBotUserIds: () => [normalizeString(appaDiscord?.client?.user?.id)].filter(Boolean),
+      isPeerMentionAllowed: isNoonaLedAppaFollowupAllowed,
       allowBotAuthoredMessage: consumeNoonaSmokeNonce,
       preparePrompt: prepareNoonaMentionPrompt,
       aiQueue: noonaAiQueue

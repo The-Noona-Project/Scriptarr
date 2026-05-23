@@ -48,8 +48,10 @@ DM summary. For `nsfw:false`, Raven only queues titles whose WeebCentral detail 
 
 Appa also owns `/ingest type:<manga|manhwa|manhua|webtoon|comic|oel>` for admin WebP rebuilds from existing
 canonical CBZ archives. The slash command previews the type, title count, hardware state, and any active run without
-mutating state. A 5-minute confirm button starts Sage's brokered Raven ingest run, rejects expired or wrong-user
-confirms, and lets Raven continue through per-title failures without redownloading chapters or changing metadata.
+mutating state. If there are no eligible titles, the preview does not expose a runnable confirm button. Otherwise a
+5-minute confirm button immediately acknowledges Discord before it starts Sage's brokered Raven ingest run, rejects
+expired or wrong-user confirms, and lets Raven continue through per-title failures without redownloading chapters or
+changing metadata.
 
 Guild id, onboarding settings, release notification channel id, GitHub update channel id, DM superuser id, Noona
 mention-chat settings, Appa split/review settings, and per-command role gates are managed from Moon admin at
@@ -78,11 +80,13 @@ guilds, empty prompts, disallowed channels, and ordinary unmentioned chatter. Me
 message pipeline when it handles a message, so trivia does not also process the same message as a guess. Portal allows
 only the requesting Discord user mention in these AI replies and keeps long response chunking by editing the first
 chunk, then sending overflow chunks as follow-ups.
-When a message mentions both Noona and Appa, Noona leads the public reply and Appa stays quiet unless the message is an
-Appa-only admin mention in an allowed Appa channel. Portal strips both bot mentions before sending the prompt through
-Sage, suppresses trivia for any Portal bot mention, and falls back to a fresh channel reply if Discord rejects editing
-the original `Thinking...` placeholder. Internal failure details stay in runtime diagnostics instead of being shown as
-raw `fetch failed` text in Discord.
+When an admin mentions both Noona and Appa in a configured Appa channel, Portal runs the conversation in order: Noona
+answers first, Appa reviews Noona's reply, and Appa then posts its own admin reply. If Noona has to post a safe
+fallback because Sage or Oracle failed, Appa still gets a turn with that context. Outside allowed Appa channels, Noona
+continues to lead dual mentions and Appa's direct listener stays quiet to prevent duplicate replies. Portal strips bot
+mentions before sending prompts through Sage, suppresses trivia for any Portal bot mention, and falls back to a fresh
+channel reply if Discord rejects editing the original `Thinking...` placeholder. Internal failure details stay in
+runtime diagnostics instead of being shown as raw `fetch failed` text in Discord.
 Portal also exposes an internal service-token guarded Noona smoke route at `/api/runtime/discord/smoke/noona`. It is
 restricted to the configured production smoke channel, posts a one-shot Appa nonce mention, and lets Noona consume that
 single bot-authored message while keeping the normal bot-ignore loop guard for every other message.

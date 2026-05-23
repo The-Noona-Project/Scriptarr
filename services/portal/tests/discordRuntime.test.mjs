@@ -25,8 +25,17 @@ class FakeDiscordClient extends EventEmitter {
     this.channels = {
       fetch: async () => ({
         send: async (payload) => {
-          this.sentChannelMessages.push(payload);
-          return payload;
+          const sent = {
+            id: `channel-message-${this.sentChannelMessages.length + 1}`,
+            ...payload,
+            edit: async (nextPayload) => {
+              this.sentChannelMessageEdits.push(nextPayload);
+              Object.assign(sent, nextPayload);
+              return sent;
+            }
+          };
+          this.sentChannelMessages.push(sent);
+          return sent;
         }
       })
     };
@@ -40,6 +49,7 @@ class FakeDiscordClient extends EventEmitter {
     };
     this.commandSets = [];
     this.sentChannelMessages = [];
+    this.sentChannelMessageEdits = [];
     this.sentDirectMessages = [];
   }
 
@@ -410,6 +420,120 @@ test("portal runtime asks Appa to review Noona public replies and posts serious 
     const state = runtime.getState();
     assert.equal(state.appa.lastReviewVerdict, "correct");
     assert.equal(state.appa.lastCorrectionError, null);
+  } finally {
+    await runtime.stop();
+  }
+});
+
+test("portal runtime lets admin dual mentions run Noona, Appa review, then Appa reply once", async () => {
+  const noonaClient = new FakeDiscordClient("noona-1");
+  const appaClient = new FakeDiscordClient("appa-1");
+  const order = [];
+  const appaPayloads = [];
+  const replyEdits = [];
+  const sage = {
+    async getDiscordSettings() {
+      return {
+        ok: true,
+        payload: {
+          guildId: "guild-1",
+          noonaChat: {
+            enabled: true,
+            memoryEnabled: true,
+            proposalMode: "conservative",
+            allowedChannelIds: ["public-only"]
+          },
+          appa: {
+            enabled: true,
+            reviewEnabled: true,
+            correctionMode: "serious",
+            adminMentionChannelIds: ["admin-channel"],
+            commands: {
+              status: {enabled: true, roleId: "role-appa"}
+            }
+          },
+          commands: {
+            chat: {enabled: true, roleId: "role-chat"}
+          }
+        }
+      };
+    },
+    async listFollowNotifications() {
+      return {ok: true, payload: {notifications: []}};
+    },
+    async noonaChat() {
+      order.push("noona");
+      return {ok: true, payload: {reply: "Noona can help with requests and reading."}};
+    },
+    async reviewNoonaReply() {
+      order.push("review");
+      return {
+        ok: true,
+        payload: {
+          shouldCorrect: false,
+          decision: {
+            verdict: "ok",
+            severity: "none"
+          }
+        }
+      };
+    },
+    async appaChat(payload) {
+      order.push("appa");
+      appaPayloads.push(payload);
+      return {ok: true, payload: {reply: "Appa can help with admin checks and ingest."}};
+    }
+  };
+
+  const clients = [noonaClient, appaClient];
+  const runtime = createPortalRuntime({
+    config: {
+      ...baseConfig,
+      appaDiscordToken: "appa-token",
+      appaDiscordClientId: "appa-client-id"
+    },
+    sage,
+    logger: createLogger(),
+    clientFactory: async () => clients.shift()
+  });
+
+  const message = {
+    id: "guild-message-dual-1",
+    guildId: "guild-1",
+    channelId: "admin-channel",
+    content: "<@noona-1> and <@appa-1> tell me what you guys can do",
+    author: {id: "user-1", username: "CaptainPax", bot: false},
+    member: {displayName: "CaptainPax", roles: {cache: new Set(["role-chat", "role-appa"])}},
+    mentions: {users: new Set(["noona-1", "appa-1"]), has: (id) => ["noona-1", "appa-1"].includes(id)},
+    channel: {id: "admin-channel", sendTyping: async () => {}},
+    reply: async (payload) => ({
+      id: "noona-reply-dual-1",
+      ...payload,
+      edit: async (nextPayload) => {
+        replyEdits.push(nextPayload);
+        return {id: "noona-reply-dual-1", ...nextPayload};
+      }
+    })
+  };
+
+  try {
+    await runtime.start();
+    noonaClient.emit("messageCreate", message);
+    appaClient.emit("messageCreate", message);
+    await waitFor(() => order.length === 3, {timeoutMs: 1000});
+
+    assert.deepEqual(order, ["noona", "review", "appa"]);
+    assert.equal(replyEdits[0].content, "<@user-1> Noona can help with requests and reading.");
+    assert.equal(appaPayloads.length, 1);
+    assert.equal(appaPayloads[0].source, "discord-noona-appa-dual-mention");
+    assert.equal(appaPayloads[0].message, "tell me what you guys can do");
+    assert.equal(appaPayloads[0].noona.ok, true);
+    assert.match(appaPayloads[0].noona.reply, /Noona can help/);
+    assert.equal(appaClient.sentChannelMessages.length, 1);
+    assert.equal(appaClient.sentChannelMessages[0].content, "<@user-1> Appa can help with admin checks and ingest.");
+    assert.equal(appaClient.sentChannelMessageEdits[0].content, "<@user-1> Appa can help with admin checks and ingest.");
+    const state = runtime.getState();
+    assert.equal(state.appa.lastMentionError, null);
   } finally {
     await runtime.stop();
   }

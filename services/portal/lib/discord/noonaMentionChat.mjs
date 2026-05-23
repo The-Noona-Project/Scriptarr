@@ -67,7 +67,9 @@ const buildUserPayload = (author = {}, member = {}) => ({
  *   logger?: {warn?: Function, error?: Function},
  *   onRuntimeEvent?: Function,
  *   onReviewCandidate?: Function,
+ *   onPeerMentionFollowup?: Function,
  *   getPeerBotUserIds?: () => string[],
+ *   isPeerMentionAllowed?: (input: {message: any, guildId: string, channelId: string, peerBotUserIds: string[]}) => boolean,
  *   allowBotAuthoredMessage?: (message: any) => boolean,
  *   preparePrompt?: (input: {prompt: string, message: any}) => string,
  *   aiQueue?: ReturnType<typeof createAiResponseQueue>
@@ -82,7 +84,9 @@ export const createNoonaMentionHandler = ({
   logger,
   onRuntimeEvent,
   onReviewCandidate,
+  onPeerMentionFollowup,
   getPeerBotUserIds,
+  isPeerMentionAllowed,
   allowBotAuthoredMessage,
   preparePrompt,
   aiQueue = defaultNoonaAiQueue
@@ -92,6 +96,7 @@ export const createNoonaMentionHandler = ({
   const guildId = resolveGuildId(message);
   const botUserId = resolveBotUserId(message, getBotUserId);
   const peerBotUserIds = normalizeBotUserIds(getPeerBotUserIds?.());
+  const peerBotMentioned = peerBotUserIds.some((peerBotUserId) => hasMention(message, peerBotUserId));
   const botAuthoredAllowed = message?.author?.bot && allowBotAuthoredMessage?.(message) === true;
 
   if (!guildId || (message?.author?.bot && !botAuthoredAllowed) || noonaChat.enabled !== true || !hasMention(message, botUserId)) {
@@ -105,7 +110,9 @@ export const createNoonaMentionHandler = ({
 
   const allowedChannelIds = normalizeArray(noonaChat.allowedChannelIds).map((entry) => normalizeString(entry)).filter(Boolean);
   const channelId = normalizeString(message?.channelId || message?.channel?.id);
-  if (allowedChannelIds.length && !allowedChannelIds.includes(channelId)) {
+  const noonaChannelAllowed = !allowedChannelIds.length || allowedChannelIds.includes(channelId);
+  const peerChannelAllowed = peerBotMentioned && isPeerMentionAllowed?.({message, guildId, channelId, peerBotUserIds}) === true;
+  if (!noonaChannelAllowed && !peerChannelAllowed) {
     return false;
   }
 
@@ -129,6 +136,62 @@ export const createNoonaMentionHandler = ({
     });
     return true;
   }
+
+  const buildCandidate = ({
+    reply,
+    replies,
+    response,
+    noonaOk,
+    reason = ""
+  }) => ({
+    message,
+    prompt,
+    reply,
+    replyMessageId: normalizeString(replies?.[0]?.id),
+    guildId,
+    channelId,
+    messageId: normalizeString(message?.id),
+    user: buildUserPayload(message?.author, message?.member),
+    oracle: response?.payload?.oracle || null,
+    noonaOk,
+    noonaErrorReason: reason
+  });
+
+  const runReview = async (candidate, {awaitReview = false} = {}) => {
+    if (typeof onReviewCandidate !== "function") {
+      return;
+    }
+    const review = Promise.resolve(onReviewCandidate(candidate)).catch((error) => {
+      logger?.warn?.("Portal Appa review callback failed.", {error});
+      onRuntimeEvent?.({
+        type: "appa-review",
+        at: new Date().toISOString(),
+        error: error instanceof Error ? error.message : String(error)
+      });
+    });
+    if (awaitReview) {
+      await review;
+    }
+  };
+
+  const runPeerFollowup = async (candidate) => {
+    if (!peerBotMentioned || typeof onPeerMentionFollowup !== "function") {
+      return;
+    }
+    try {
+      await onPeerMentionFollowup(candidate);
+    } catch (error) {
+      logger?.warn?.("Portal peer mention follow-up failed.", {error});
+      onRuntimeEvent?.({
+        type: "appa-chat-error",
+        at: new Date().toISOString(),
+        authorId: userId,
+        channelId,
+        reason: "noona-led-followup-failed",
+        message: "noona-led-followup-failed"
+      });
+    }
+  };
 
   let placeholder = null;
   try {
@@ -193,21 +256,17 @@ export const createNoonaMentionHandler = ({
       degraded: payload.oracle?.degraded === true,
       degradedReason: payload.oracle?.degraded === true ? "oracle.degraded" : ""
     });
-    if (response?.ok && typeof onReviewCandidate === "function") {
-      void Promise.resolve(onReviewCandidate({
-        message,
-        prompt,
-        reply,
-        replyMessageId: normalizeString(replies?.[0]?.id),
-        guildId,
-        channelId,
-        messageId: normalizeString(message?.id),
-        user: buildUserPayload(message?.author, message?.member),
-        oracle: payload.oracle || null
-      })).catch((error) => {
-        logger?.warn?.("Portal Appa review callback failed.", {error});
-      });
+    const candidate = buildCandidate({
+      reply,
+      replies,
+      response,
+      noonaOk: response?.ok === true,
+      reason: response?.ok ? "" : "sage-error"
+    });
+    if (response?.ok || peerBotMentioned) {
+      await runReview(candidate, {awaitReview: peerBotMentioned});
     }
+    await runPeerFollowup(candidate);
     return true;
   } catch (error) {
     if (isAiResponseQueueCancelError(error)) {
@@ -242,8 +301,24 @@ export const createNoonaMentionHandler = ({
           message: replies.placeholderEditError || ""
         });
       }
+      const candidate = buildCandidate({
+        reply: "Noona is having trouble reaching her brain right now. Try me again soon.",
+        replies,
+        response: null,
+        noonaOk: false,
+        reason
+      });
+      await runReview(candidate, {awaitReview: peerBotMentioned});
+      await runPeerFollowup(candidate);
     } catch (deliveryError) {
       logger?.warn?.("Portal Noona mention chat could not post a public failure reply.", {error: deliveryError});
+      await runPeerFollowup(buildCandidate({
+        reply: "Noona is having trouble reaching her brain right now. Try me again soon.",
+        replies: [],
+        response: null,
+        noonaOk: false,
+        reason
+      }));
     }
     return true;
   }

@@ -14,6 +14,7 @@ const resolveBotUserId = (message, getBotUserId) =>
   normalizeString(getBotUserId?.() || message?.client?.user?.id || "");
 
 const normalizeBotUserIds = (value) => normalizeArray(value).map((entry) => normalizeString(entry)).filter(Boolean);
+const normalizeObject = (value) => value && typeof value === "object" && !Array.isArray(value) ? value : {};
 
 const hasMention = (message, botUserId) => {
   if (!botUserId) {
@@ -58,6 +59,10 @@ const buildUserPayload = (author = {}, member = {}) => ({
  *   logger?: {warn?: Function},
  *   onRuntimeEvent?: Function,
  *   getPeerBotUserIds?: () => string[],
+ *   allowPeerBotMentions?: boolean,
+ *   replyOnAccessDenied?: boolean,
+ *   preparePrompt?: (input: {prompt: string, message: any}) => string,
+ *   buildExtraPayload?: (input: {prompt: string, message: any}) => Record<string, unknown>,
  *   aiQueue?: ReturnType<typeof createAiResponseQueue>
  * }} options
  * @returns {(message: any) => Promise<boolean>}
@@ -70,6 +75,10 @@ export const createAppaMentionHandler = ({
   logger,
   onRuntimeEvent,
   getPeerBotUserIds,
+  allowPeerBotMentions = false,
+  replyOnAccessDenied = true,
+  preparePrompt,
+  buildExtraPayload,
   aiQueue = defaultAppaAiQueue
 }) => async (message) => {
   const settings = getSettings?.() || {};
@@ -81,7 +90,7 @@ export const createAppaMentionHandler = ({
   if (!guildId || message?.author?.bot || appa.enabled !== true || !hasMention(message, botUserId)) {
     return false;
   }
-  if (peerBotUserIds.some((peerBotUserId) => hasMention(message, peerBotUserId))) {
+  if (!allowPeerBotMentions && peerBotUserIds.some((peerBotUserId) => hasMention(message, peerBotUserId))) {
     onRuntimeEvent?.({
       type: "appa-chat-rejected",
       at: new Date().toISOString(),
@@ -117,10 +126,6 @@ export const createAppaMentionHandler = ({
     return false;
   }
 
-  const prompt = stripMentions(message?.content, [botUserId, ...peerBotUserIds]);
-  if (!prompt) {
-    return false;
-  }
   const userId = normalizeString(message?.author?.id);
 
   const access = roleManager.checkAccess({
@@ -138,12 +143,21 @@ export const createAppaMentionHandler = ({
       channelId,
       message: access.message || ""
     });
-    await sendPublicAiReply(message, access.message || "Appa is for configured admins here.", {
-      userId,
-      fallback: "Appa is for configured admins here."
-    });
+    if (replyOnAccessDenied) {
+      await sendPublicAiReply(message, access.message || "Appa is for configured admins here.", {
+        userId,
+        fallback: "Appa is for configured admins here."
+      });
+    }
     return true;
   }
+
+  const strippedPrompt = stripMentions(message?.content, [botUserId, ...peerBotUserIds]);
+  const prompt = normalizeString(preparePrompt?.({prompt: strippedPrompt, message}) ?? strippedPrompt);
+  if (!prompt) {
+    return false;
+  }
+  const extraPayload = normalizeObject(buildExtraPayload?.({prompt, message}));
 
   let placeholder = null;
   try {
@@ -156,7 +170,8 @@ export const createAppaMentionHandler = ({
         channelId,
         messageId: normalizeString(message?.id),
         user: buildUserPayload(message?.author, message?.member),
-        proposalMode: "conservative"
+        proposalMode: "conservative",
+        ...extraPayload
       }, {signal});
     }, {
       onQueued: async ({ahead}) => {

@@ -144,6 +144,19 @@ const compactDiscordSettings = (settings) => settings ? {
   triviaEnabled: settings.trivia?.enabled === true
 } : null;
 
+const compactNoonaContext = (value) => {
+  const source = normalizeObject(value, null);
+  if (!source) {
+    return null;
+  }
+  return {
+    ok: source.ok === true,
+    errorReason: normalizeString(source.errorReason),
+    reply: redactExcerpt(source.reply, 900),
+    replyMessageId: normalizeString(source.replyMessageId)
+  };
+};
+
 const summarizeHealthCounts = (serviceHealth = {}) => {
   const entries = Object.entries(serviceHealth)
     .filter(([, value]) => value && typeof value === "object" && "ok" in value);
@@ -273,11 +286,16 @@ export const createAppaChatService = ({
     }
 
     const readContext = await buildAppaReadContext({config, serviceJson, triviaService, readPortalDiscordSettings, message});
+    const noonaContext = compactNoonaContext(payload.noona);
+    const appaReadContext = noonaContext ? {
+      ...(readContext || {}),
+      noona: noonaContext
+    } : readContext;
     if (shouldUseDeterministicStatusReply(message)) {
       return {
         ok: true,
-        reply: appaStatusReply(readContext || {}),
-        readContext,
+        reply: appaStatusReply(appaReadContext || {}),
+        readContext: appaReadContext,
         oracle: {
           disabled: false,
           degraded: false,
@@ -300,7 +318,7 @@ export const createAppaChatService = ({
             username: normalizeString(user.username || user.displayName || user.globalName, "Admin"),
             displayName: normalizeString(user.displayName || user.globalName || user.username)
           },
-          readContext
+          readContext: appaReadContext
         }
       },
       timeoutMs: DISCORD_AI_CHAT_TIMEOUT_MS
@@ -314,7 +332,7 @@ export const createAppaChatService = ({
     return {
       ok: true,
       reply: normalizeString(oraclePayload.reply, fallbackAppaReply(message)),
-      readContext,
+      readContext: appaReadContext,
       oracle: {
         disabled: oraclePayload.disabled === true,
         degraded: oracleDegraded
