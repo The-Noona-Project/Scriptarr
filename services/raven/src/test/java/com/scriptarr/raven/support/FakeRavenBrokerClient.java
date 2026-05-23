@@ -123,6 +123,7 @@ public final class FakeRavenBrokerClient implements RavenBrokerClient {
                 card.put("status", title.path("status").asText("active"));
                 card.put("latestChapter", title.path("latestChapter").asText("Unknown"));
                 card.put("coverUrl", title.path("coverUrl").asText(""));
+                card.put("sourceUrl", title.path("sourceUrl").asText(""));
                 card.put("chapterCount", title.path("chapterCount").asInt(0));
                 card.put("chaptersDownloaded", title.path("chaptersDownloaded").asInt(0));
                 card.put("ingestStatus", title.path("ingestStatus").asText("pending"));

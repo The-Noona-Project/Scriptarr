@@ -708,6 +708,9 @@ const createDependencyStub = ({
               author: title.author,
               tags: title.tags || [],
               aliases: title.aliases || [],
+              metadataProvider: title.metadataProvider || "",
+              metadataMatchedAt: title.metadataMatchedAt || "",
+              sourceUrl: title.sourceUrl || "",
               updatedAt: title.updatedAt || "2026-04-25T00:00:00.000Z"
             })).sort((left, right) => exactIds.length ? exactIds.indexOf(left.id) - exactIds.indexOf(right.id) : 0);
             const page = cardTitles.slice(cursor, cursor + pageSize);
@@ -2050,7 +2053,8 @@ test("sage signs in the first owner through the Discord callback and moderates r
   assert.equal(moonCardLibrary.titles[0].readerTarget.chapterId, ownerSmokeLibraryTitle.chapters[0].id);
   assert.equal(moonCardLibrary.titles[0].readerTarget.pageIndex, 8);
   assert.equal(moonCardLibrary.pageInfo.pageSize, 1);
-  assert.equal(dependencyStub.calls.libraryCard, 1);
+  assert.equal(dependencyStub.calls.library, 0);
+  assert.equal(dependencyStub.calls.libraryCard >= 1, true);
 
   const overview = await fetch(`${baseUrl}/api/moon-v3/admin/overview`, {
     headers: {
@@ -2102,7 +2106,7 @@ test("sage signs in the first owner through the Discord callback and moderates r
   assert.equal(systemStatus.summary.notProbed > 0, true);
   assert.equal(systemStatus.contentReset, undefined);
   assert.equal(
-    systemStatus.groups.find((group) => group.id === "raven").endpoints.find((endpoint) => endpoint.path === "/v1/library").probeStatus,
+    systemStatus.groups.find((group) => group.id === "raven").endpoints.find((endpoint) => endpoint.path === "/v1/library?view=card&pageSize=1").probeStatus,
     "pending"
   );
   const systemStatusRuntime = await fetch(`${baseUrl}/api/moon-v3/admin/system/status/runtime`, {

@@ -1472,6 +1472,7 @@ public final class LibraryService {
         card.put("coverAccent", firstNonBlank(title.coverAccent(), "#4f8f88"));
         card.put("coverUrl", firstNonBlank(title.coverUrl(), ""));
         card.put("coverThumbUrl", "");
+        card.put("sourceUrl", firstNonBlank(title.sourceUrl(), ""));
         card.put("summary", compactText(title.summary(), 280));
         card.put("releaseLabel", firstNonBlank(title.releaseLabel(), ""));
         card.put("chapterCount", Math.max(0, title.chapterCount()));

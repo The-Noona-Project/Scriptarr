@@ -463,7 +463,7 @@ const nextRoundAfter = (settings = {}) => {
  */
 export const createPortalTriviaService = ({config, vaultClient, serviceJson, readPortalDiscordSettings}) => {
   const loadLibrary = async () => {
-    const result = await serviceJson(config.ravenBaseUrl, "/v1/library", {timeoutMs: 5000});
+    const result = await serviceJson(config.ravenBaseUrl, "/v1/library?view=card&pageSize=100", {timeoutMs: 5000});
     if (!result.ok) {
       throw new Error(result.payload?.error || "Raven library is unavailable.");
     }

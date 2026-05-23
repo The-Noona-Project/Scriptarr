@@ -467,6 +467,7 @@ const toRavenTitleCard = (title = {}) => ({
   coverAccent: normalizeScalarString(title.coverAccent, "#4f8f88"),
   coverUrl: normalizeScalarString(title.coverUrl),
   coverThumbUrl: "",
+  sourceUrl: normalizeScalarString(title.sourceUrl),
   summary: truncateText(title.summary, 280),
   releaseLabel: normalizeScalarString(title.releaseLabel),
   chapterCount: Number.parseInt(String(title.chapterCount || 0), 10) || 0,
@@ -3490,7 +3491,7 @@ const createMysqlStore = (config) => {
       const cardColumns = `
         title_id, title, media_type, library_type_label, library_type_slug, status_name, latest_chapter,
         cover_accent, summary, release_label, chapter_count, chapters_downloaded, author_name,
-        tags_json, aliases_json, metadata_provider, metadata_matched_at, cover_url,
+        tags_json, aliases_json, metadata_provider, metadata_matched_at, source_url, cover_url,
         quality_status, clean_chapter_count, partial_chapter_count, missing_content_count, quality_summary,
         ingest_status, ingested_chapter_count, ingest_error, updated_at
       `;
@@ -3512,6 +3513,7 @@ const createMysqlStore = (config) => {
         aliases: parseJsonColumn(row.aliases_json, []),
         metadataProvider: row.metadata_provider,
         metadataMatchedAt: row.metadata_matched_at ? row.metadata_matched_at.toISOString() : null,
+        sourceUrl: row.source_url,
         coverUrl: row.cover_url,
         qualityStatus: row.quality_status,
         cleanChapterCount: row.clean_chapter_count,

@@ -562,7 +562,7 @@ const persistOracleSettings = async ({config, vaultClient, user, body, appendAdm
 };
 
 const loadLegacyLibrary = async (config) => {
-  const result = await serviceJson(config.ravenBaseUrl, "/v1/library");
+  const result = await serviceJson(config.ravenBaseUrl, "/v1/library?view=card&pageSize=100");
   if (!result.ok) {
     throw new Error(result.payload?.error || `Raven library request failed with status ${result.status}.`);
   }
@@ -709,7 +709,7 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
 
   const loadPublicApiGuardState = async () => {
     const [libraryResult, requests, taskResult] = await Promise.all([
-      serviceJson(config.ravenBaseUrl, "/v1/library"),
+      serviceJson(config.ravenBaseUrl, "/v1/library?view=card&pageSize=100"),
       vaultClient.listRequests(),
       serviceJson(config.ravenBaseUrl, "/v1/downloads/tasks")
     ]);
@@ -1952,8 +1952,10 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
     });
   });
 
-  systemTaskRuntime.start();
   app.locals.systemTaskRuntime = systemTaskRuntime;
+  if (process.env.NODE_ENV !== "test" || process.env.SCRIPTARR_ENABLE_TEST_SCHEDULER === "1") {
+    systemTaskRuntime.start();
+  }
 
   logger.info("Sage app initialized.", {
     publicBaseUrl: config.publicBaseUrl

@@ -798,7 +798,7 @@ export const registerMoonV3Routes = (app, {
   };
 
   const loadLibrary = async () => {
-    const payload = await fetchRavenJson("/v1/library");
+    const payload = await fetchRavenJson("/v1/library?view=card&pageSize=100");
     return normalizeArray(payload?.titles).map(toTitleSummary);
   };
 

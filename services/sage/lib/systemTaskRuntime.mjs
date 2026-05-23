@@ -366,7 +366,7 @@ export const createSystemTaskRuntime = ({
           readRequestWorkflowSettings
         });
       case "metadata-gap-scan": {
-        const result = await serviceJson(config.ravenBaseUrl, "/v1/library");
+        const result = await serviceJson(config.ravenBaseUrl, "/v1/library?view=card&pageSize=100");
         if (!result.ok) {
           throw new Error(result.payload?.error || "Raven library scan failed.");
         }

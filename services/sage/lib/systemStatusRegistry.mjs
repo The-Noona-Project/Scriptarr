@@ -74,7 +74,7 @@ export const buildEndpointRegistry = () => [
     label: "Raven",
     endpoints: [
       endpoint("raven", "GET", "/health", {auth: "public", description: "Downloader health."}),
-      endpoint("raven", "GET", "/v1/library", {auth: "service", description: "Imported title catalog."}),
+      endpoint("raven", "GET", "/v1/library?view=card&pageSize=1", {auth: "service", description: "Imported title catalog."}),
       endpoint("raven", "GET", "/v1/downloads/tasks", {auth: "service", description: "Live download queue."}),
       endpoint("raven", "POST", "/v1/downloads/queue", {auth: "service", description: "Queue a concrete download target."})
     ]

@@ -41,7 +41,7 @@ test("portal trivia starts sanitized rounds and awards XP for aliases", async ()
       }
     }),
     serviceJson: async (_baseUrl, path) => {
-      if (path === "/v1/library") {
+      if (path.startsWith("/v1/library")) {
         return {
           ok: true,
           status: 200,
@@ -100,7 +100,7 @@ test("portal trivia exposes active answers only through admin state", async () =
       }
     }),
     serviceJson: async (_baseUrl, path) => {
-      if (path === "/v1/library") {
+      if (path.startsWith("/v1/library")) {
         return {ok: true, status: 200, payload: {titles: [triviaReadyTitle()]}};
       }
       return {ok: true, status: 200, payload: {ok: true}};
@@ -135,7 +135,7 @@ test("portal trivia de-duplicates guesses by Discord message id", async () => {
       }
     }),
     serviceJson: async (_baseUrl, path) => {
-      if (path === "/v1/library") {
+      if (path.startsWith("/v1/library")) {
         return {ok: true, status: 200, payload: {titles: [triviaReadyTitle()]}};
       }
       return {ok: true, status: 200, payload: {ok: true}};
@@ -177,7 +177,7 @@ test("portal trivia accepts Jeopardy-style title and alias guesses", async () =>
       }
     }),
     serviceJson: async (_baseUrl, path) => {
-      if (path === "/v1/library") {
+      if (path.startsWith("/v1/library")) {
         return {ok: true, status: 200, payload: {titles: [triviaReadyTitle()]}};
       }
       return {ok: true, status: 200, payload: {ok: true}};
@@ -234,7 +234,7 @@ test("portal trivia uses Oracle only for close guesses when enabled", async () =
       }
     }),
     serviceJson: async (baseUrl, path, options = {}) => {
-      if (path === "/v1/library") {
+      if (path.startsWith("/v1/library")) {
         return {ok: true, status: 200, payload: {titles: [triviaReadyTitle()]}};
       }
       if (baseUrl === "http://oracle" && path === "/api/assist") {

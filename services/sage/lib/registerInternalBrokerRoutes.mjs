@@ -204,7 +204,7 @@ const toPortalLibraryResult = (config, title = {}) => {
 
 const loadPortalRequestGuardState = async ({config, vaultClient, serviceJson}) => {
   const [libraryResult, requests, taskResult] = await Promise.all([
-    safeServiceJson(serviceJson(config.ravenBaseUrl, "/v1/library")),
+    safeServiceJson(serviceJson(config.ravenBaseUrl, "/v1/library?view=card&pageSize=100")),
     vaultClient.listRequests(),
     safeServiceJson(serviceJson(config.ravenBaseUrl, "/v1/downloads/tasks"))
   ]);
@@ -563,7 +563,7 @@ const buildFollowNotifications = async ({config, vaultClient, serviceJson}) => {
   const [users, tasksResponse, libraryResponse] = await Promise.all([
     vaultClient.listUsers(),
     safeServiceJson(serviceJson(config.ravenBaseUrl, "/v1/downloads/tasks")),
-    safeServiceJson(serviceJson(config.ravenBaseUrl, "/v1/library"))
+    safeServiceJson(serviceJson(config.ravenBaseUrl, "/v1/library?view=card&pageSize=100"))
   ]);
 
   const buildLibraryLookup = (titles = []) => {
@@ -686,7 +686,7 @@ const buildReleaseNotifications = async ({config, vaultClient, serviceJson}) => 
 
   const [tasksResponse, libraryResponse, state] = await Promise.all([
     safeServiceJson(serviceJson(config.ravenBaseUrl, "/v1/downloads/tasks")),
-    safeServiceJson(serviceJson(config.ravenBaseUrl, "/v1/library")),
+    safeServiceJson(serviceJson(config.ravenBaseUrl, "/v1/library?view=card&pageSize=100")),
     readReleaseNotificationState(vaultClient)
   ]);
   return buildReleaseNotificationDigests({
@@ -751,7 +751,7 @@ const buildRequestNotifications = async ({config, vaultClient, serviceJson}) => 
     vaultClient.listUsers(),
     vaultClient.listRequests(),
     safeServiceJson(serviceJson(config.ravenBaseUrl, "/v1/downloads/tasks")),
-    safeServiceJson(serviceJson(config.ravenBaseUrl, "/v1/library"))
+    safeServiceJson(serviceJson(config.ravenBaseUrl, "/v1/library?view=card&pageSize=100"))
   ]);
 
   const usersByDiscordId = new Map(normalizeArray(users)
@@ -2005,13 +2005,17 @@ export const registerInternalBrokerRoutes = (app, {
   }));
 
   app.get("/api/internal/portal/library/search", withService(requireService, ["scriptarr-portal"], async (req, res) => {
-    const result = await serviceJson(config.ravenBaseUrl, "/v1/library");
+    const query = normalizeString(req.query.query);
+    const params = new URLSearchParams({view: "card", pageSize: "25"});
+    if (query) {
+      params.set("q", query);
+    }
+    const result = await serviceJson(config.ravenBaseUrl, `/v1/library?${params.toString()}`);
     if (!result.ok) {
       res.status(result.status).json(result.payload);
       return;
     }
 
-    const query = normalizeString(req.query.query);
     const results = normalizeArray(result.payload?.titles)
       .filter((title) => matchesLibraryQuery(title, query))
       .map((title) => toPortalLibraryResult(config, title));
