@@ -495,9 +495,9 @@ configured guild, or restrict it to known safe channel ids for a quieter rollout
 If an admin mentions both Noona and Appa in a configured Appa channel, Noona leads the public reply, Appa reviews it,
 and Appa then posts its own answer. In other channels, Noona leads dual mentions and Appa stays quiet to avoid duplicate
 bot replies. Status or presence prompts such as "are you online?", "are you connected?", and "are you there?" use
-Sage's bounded live status path instead of waiting on the AI provider. Portal also keeps an internal service-token
-guarded smoke route for operators that posts a one-shot Appa nonce mention in the configured smoke channel; this is for
-production verification only and does not disable the normal bot-message loop guard.
+Sage's bounded live status path instead of waiting on the AI provider or Vault-backed Noona memory. Portal also keeps
+an internal service-token guarded smoke route for operators that posts a one-shot Appa nonce mention in the configured
+smoke channel; this is for production verification only and does not disable the normal bot-message loop guard.
 
 Discord's Message Content intent must be enabled in the Discord developer portal for mention chat, trivia guesses, and
 legacy DM text fallback handling. Scriptarr requests the intent in code, but Discord will not deliver message content

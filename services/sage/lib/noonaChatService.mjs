@@ -135,6 +135,21 @@ const buildPortalRuntimeContext = async ({config, serviceJson}) => {
   }
 };
 
+const buildStatusReadContext = async ({config, serviceJson}) => {
+  const [serviceHealth, discordRuntime] = await Promise.all([
+    buildServiceHealthContext({config, serviceJson}).catch(() => null),
+    buildPortalRuntimeContext({config, serviceJson}).catch(() => null)
+  ]);
+  const context = {};
+  if (serviceHealth) {
+    context.serviceHealth = serviceHealth;
+  }
+  if (discordRuntime) {
+    context.discordRuntime = discordRuntime;
+  }
+  return Object.keys(context).length ? context : null;
+};
+
 const summarizeHealthCounts = (serviceHealth = {}) => {
   const entries = Object.entries(serviceHealth)
     .filter(([, value]) => value && typeof value === "object" && "ok" in value);
@@ -298,6 +313,23 @@ export const createNoonaChatService = ({
       return {ok: false, status: 400, error: "discord user id is required."};
     }
 
+    let memoryContext = {userFacts: [], serverFacts: [], counts: {users: 0, userFacts: 0, serverFacts: 0}};
+    if (shouldUseDeterministicStatusReply(message)) {
+      const readContext = await buildStatusReadContext({config, serviceJson});
+      return {
+        ok: true,
+        reply: noonaStatusReply(readContext || {}),
+        memory: memoryContext,
+        readContext,
+        oracle: {
+          disabled: false,
+          degraded: false,
+          skipped: true
+        },
+        deterministic: true
+      };
+    }
+
     await vaultClient.upsertDiscordUser?.({
       discordUserId,
       username: normalizeString(user.username || user.displayName || user.globalName, "Discord Reader"),
@@ -306,7 +338,6 @@ export const createNoonaChatService = ({
     }).catch(() => null);
 
     let memory = await readNoonaChatMemory(vaultClient);
-    let memoryContext = {userFacts: [], serverFacts: [], counts: {users: 0, userFacts: 0, serverFacts: 0}};
     if (payload.memoryEnabled !== false) {
       const memoryResult = applyNoonaMemoryCommand(memory, {message, user: {...user, discordUserId}});
       memory = memoryResult.memory;
@@ -354,20 +385,6 @@ export const createNoonaChatService = ({
       readPortalDiscordSettings,
       message
     });
-    if (shouldUseDeterministicStatusReply(message)) {
-      return {
-        ok: true,
-        reply: noonaStatusReply(readContext || {}),
-        memory: memoryContext,
-        readContext,
-        oracle: {
-          disabled: false,
-          degraded: false,
-          skipped: true
-        },
-        deterministic: true
-      };
-    }
     const oracle = await serviceJson(config.oracleBaseUrl, "/api/chat", {
       method: "POST",
       body: {

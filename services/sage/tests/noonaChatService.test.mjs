@@ -143,7 +143,7 @@ test("Noona chat sends curated memory and read context to Oracle without mutatin
 
 test("Noona chat answers online status prompts without waiting on Oracle", async () => {
   const calls = [];
-  const {service} = createService({calls});
+  const {service, vault} = createService({calls});
 
   const result = await service.handlePortalMention(mentionPayload("are you online?"));
 
@@ -154,6 +154,8 @@ test("Noona chat answers online status prompts without waiting on Oracle", async
   assert.equal(calls.some((call) => call.path === "/api/chat"), false);
   assert.equal(calls.some((call) => call.baseUrl === "http://portal.test" && call.path === "/api/commands"), true);
   assert.equal(result.readContext.discordRuntime.appa.registeredGuildCount, 6);
+  assert.equal(vault.users.length, 0);
+  assert.deepEqual(result.memory, {userFacts: [], serverFacts: [], counts: {users: 0, userFacts: 0, serverFacts: 0}});
 });
 
 test("Noona chat uses a shorter inner Oracle timeout for non-status AI replies", async () => {

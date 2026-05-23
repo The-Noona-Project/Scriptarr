@@ -88,6 +88,8 @@
   `portal.noonaChat.memory` settings payload, natural memory commands, secret rejection, conservative read-context
   loading, latest posted GitHub update digest context, public proposal filtering, Oracle fallback, and admin-safe
   memory review/clear payloads. Portal must not call Oracle or Vault directly for this flow.
+- Keep pure Noona presence/status prompts on the fast path: skip Discord user upsert and Vault-backed Noona memory,
+  gather only bounded live service and Portal runtime context, and return deterministic copy without calling Oracle.
 - The next Noona tone pass should use a repeatable fixture set instead of one-off prompt tweaks: casual greeting,
   "are you alive", update/how-to question, admin-ish status question, requester help, lore/catchphrase, and a degraded
   provider case. Keep public copy warm and direct while preserving secret rejection, internal-codename boundaries, and
