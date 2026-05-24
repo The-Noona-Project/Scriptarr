@@ -243,7 +243,7 @@ public final class LibraryIngestRunService {
                 if (!type.isBlank()) {
                     libraryTypes.add(type);
                 }
-                supersedeRun(job, "Superseded by admin restart of AVIF rebuilds.");
+                supersedeRunJobOnly(job, "Superseded by admin restart of AVIF rebuilds.");
                 supersededCount += 1;
             }
         }
@@ -1066,6 +1066,21 @@ public final class LibraryIngestRunService {
             STATUS_SUPERSEDED,
             firstNonBlank(message, "Superseded by a newer reader-page ingest format."),
             runSummaryFromTasks(loadTitleTasks(runId)),
+            true
+        );
+    }
+
+    private void supersedeRunJobOnly(Map<String, Object> job, String message) {
+        String runId = stringValue(job.get("jobId"));
+        activeRunIds.remove(runId);
+        if (runId.equals(currentRunId)) {
+            currentRunId = "";
+        }
+        updateJob(
+            job,
+            STATUS_SUPERSEDED,
+            firstNonBlank(message, "Superseded by a newer reader-page ingest run."),
+            normalizeMap(job.get("result")),
             true
         );
     }
