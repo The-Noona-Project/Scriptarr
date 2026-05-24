@@ -47,6 +47,7 @@ public final class LibraryIngestRunService {
     private static final int MAX_ETA_PERCENT = 99;
     private static final long MIN_ETA_ELAPSED_MILLIS = 30_000;
     private static final long MAX_ETA_MILLIS = 7L * 24L * 60L * 60L * 1000L;
+    private static final int PREPARATION_WORKER_COUNT = 4;
     private static final List<String> ALLOWED_TYPE_SLUGS = List.of(
         "manga",
         "manhwa",
@@ -65,7 +66,7 @@ public final class LibraryIngestRunService {
         thread.setDaemon(true);
         return thread;
     });
-    private final ExecutorService preparationWorker = Executors.newSingleThreadExecutor((runnable) -> {
+    private final ExecutorService preparationWorker = Executors.newFixedThreadPool(PREPARATION_WORKER_COUNT, (runnable) -> {
         Thread thread = new Thread(runnable, "raven-library-ingest-preparer");
         thread.setDaemon(true);
         return thread;
@@ -342,6 +343,11 @@ public final class LibraryIngestRunService {
                 return;
             }
 
+            logger.info(
+                "LIBRARY",
+                "Preparing durable AVIF title tasks.",
+                "runId=" + runId + " type=" + libraryTypeSlug + " titles=" + titles.size()
+            );
             String now = Instant.now().toString();
             Map<String, Object> payload = new LinkedHashMap<>(normalizeMap(job.get("payload")));
             payload.put("titleCount", titles.size());
@@ -360,6 +366,13 @@ public final class LibraryIngestRunService {
                     return;
                 }
                 putTitleTask(runId, buildTitleTask(runId, titles.get(index), requestedBy, index, now));
+                if ((index + 1) % 250 == 0) {
+                    logger.info(
+                        "LIBRARY",
+                        "Prepared AVIF title tasks.",
+                        "runId=" + runId + " prepared=" + (index + 1) + "/" + titles.size()
+                    );
+                }
             }
 
             job = requireRun(runId);
@@ -373,6 +386,11 @@ public final class LibraryIngestRunService {
                 "Queued AVIF rebuild for the fair ingest scheduler.",
                 runSummaryFromTasks(tasks),
                 false
+            );
+            logger.info(
+                "LIBRARY",
+                "Queued durable AVIF run for fair scheduler.",
+                "runId=" + runId + " type=" + libraryTypeSlug + " titles=" + tasks.size()
             );
             scheduleRunWorker();
         } catch (Exception error) {
