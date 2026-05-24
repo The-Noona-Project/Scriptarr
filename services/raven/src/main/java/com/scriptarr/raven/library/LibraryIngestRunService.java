@@ -48,6 +48,7 @@ public final class LibraryIngestRunService {
     private static final long MIN_ETA_ELAPSED_MILLIS = 30_000;
     private static final long MAX_ETA_MILLIS = 7L * 24L * 60L * 60L * 1000L;
     private static final int PREPARATION_WORKER_COUNT = 4;
+    private static final long SCHEDULER_STARTUP_STALE_MILLIS = 10L * 60L * 1000L;
     private static final List<String> ALLOWED_TYPE_SLUGS = List.of(
         "manga",
         "manhwa",
@@ -74,6 +75,7 @@ public final class LibraryIngestRunService {
     private final Set<String> activeRunIds = ConcurrentHashMap.newKeySet();
     private final Map<String, Map<String, Object>> cachedRunJobs = new ConcurrentHashMap<>();
     private volatile boolean schedulerRunning;
+    private volatile long schedulerStartedAtMillis;
     private volatile String currentRunId = "";
 
     /**
@@ -518,6 +520,7 @@ public final class LibraryIngestRunService {
         } finally {
             synchronized (this) {
                 schedulerRunning = false;
+                schedulerStartedAtMillis = 0;
                 currentRunId = "";
                 activeRunIds.clear();
             }
@@ -795,21 +798,29 @@ public final class LibraryIngestRunService {
     }
 
     private synchronized boolean scheduleRunWorker() {
-        if (schedulerRunning && currentRunId.isBlank()) {
+        if (schedulerRunning && currentRunId.isBlank() && schedulerStartupIsStale()) {
             schedulerRunning = false;
+            schedulerStartedAtMillis = 0;
         }
         if (worker.isShutdown() || schedulerRunning) {
             return false;
         }
         schedulerRunning = true;
+        schedulerStartedAtMillis = Instant.now().toEpochMilli();
         try {
             worker.execute(this::runSchedulerLoop);
             return true;
         } catch (RejectedExecutionException error) {
             schedulerRunning = false;
+            schedulerStartedAtMillis = 0;
             logger.warn("LIBRARY", "Raven library ingest-run worker could not accept a durable run.", error.getMessage());
             return false;
         }
+    }
+
+    private boolean schedulerStartupIsStale() {
+        long startedAt = schedulerStartedAtMillis;
+        return startedAt > 0 && Instant.now().toEpochMilli() - startedAt > SCHEDULER_STARTUP_STALE_MILLIS;
     }
 
     private List<Map<String, Object>> resetRunningTasksToQueued(String runId, List<Map<String, Object>> tasks) {
@@ -1202,8 +1213,10 @@ public final class LibraryIngestRunService {
         boolean workerActive = activeRunIds.contains(runId) && runId.equals(currentRunId);
         boolean terminal = isRunTerminal(job);
         boolean preparing = STATUS_PREPARING.equals(status);
+        boolean schedulerPreflight = schedulerRunning && currentRunId.isBlank();
         boolean schedulerStalled = schedulerRunning
             && currentRunId.isBlank()
+            && schedulerStartupIsStale()
             && !preparing
             && tasks.stream().anyMatch((task) -> !isTaskTerminal(task));
         boolean needsRecovery = (STATUS_RUNNING.equals(status) && !workerActive) || schedulerStalled;
@@ -1216,6 +1229,8 @@ public final class LibraryIngestRunService {
             schedulerState = "waiting";
         } else if (needsRecovery) {
             schedulerState = "needs-recovery";
+        } else if (schedulerPreflight && isDurableActive(job)) {
+            schedulerState = "waiting";
         } else if (isDurableActive(job)) {
             schedulerState = schedulerRunning ? "waiting" : "detached";
         } else {
@@ -1226,7 +1241,7 @@ public final class LibraryIngestRunService {
         runtime.put("workerActive", workerActive);
         runtime.put("needsRecovery", needsRecovery || ("detached".equals(schedulerState) && tasks.stream().anyMatch((task) -> !isTaskTerminal(task))));
         runtime.put("queuedPosition", positions.getOrDefault(runId, workerActive ? 0 : null));
-        runtime.put("blockedByRunId", !workerActive && schedulerRunning ? currentRunId : "");
+        runtime.put("blockedByRunId", !workerActive && schedulerRunning && !currentRunId.isBlank() ? currentRunId : "");
         runtime.put("lastProgressAt", lastProgressAt(job, tasks));
         runtime.put("checkedAt", Instant.now().toString());
         return runtime;
