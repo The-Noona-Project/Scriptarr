@@ -406,7 +406,8 @@ title-card projection plus Raven hardware state,
 requires a confirm button within five minutes, and then Sage asks Raven to create a durable `raven-library-ingest` run.
 The run rebuilds derived WebP pages from existing canonical CBZ archives without redownloading chapters or changing
 metadata. Appa DMs the confirming admin at 25%, 50%, 75%, and final completion or failure; missed milestones are not
-replayed once the run is already terminal.
+replayed once the run is already terminal. If Discord says the saved requester can no longer receive DMs, Portal marks
+that specific notification undeliverable instead of retrying it every poll.
 `/admin/users` is now the access-control workspace: a dense user directory, reusable permission-group editor, group
 assignment panel, and recent auth or access events in one page. Staff access is no longer a flat role toggle. Moon now
 evaluates unioned permission groups with route-family `read`, `write`, or `root` grants, while the bootstrap owner

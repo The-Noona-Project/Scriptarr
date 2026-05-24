@@ -53,6 +53,8 @@ mutating state. If there are no eligible titles, the preview does not expose a r
 expired or wrong-user confirms, and lets Raven continue through per-title failures without redownloading chapters or
 changing metadata. After the run starts, Appa DMs the admin who confirmed it at 25%, 50%, 75%, and once at final
 completion or failure. Those DMs are deduped by Sage notification ids so Portal restarts do not resend old milestones.
+If Discord reports that the saved requester can no longer receive DMs, Portal acknowledges that notification as
+undeliverable instead of retrying forever.
 
 Guild id, onboarding settings, release notification channel id, GitHub update channel id, DM superuser id, Noona
 mention-chat settings, Appa split/review settings, and per-command role gates are managed from Moon admin at

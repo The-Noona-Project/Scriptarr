@@ -14,6 +14,12 @@ const toCount = (value, fallback = 0) => {
   const parsed = Number.parseInt(String(value ?? ""), 10);
   return Number.isFinite(parsed) ? parsed : fallback;
 };
+const isPermanentDirectMessageFailure = (error) => {
+  const code = Number(error?.code || error?.rawError?.code || 0);
+  const message = String(error?.message || error?.rawError?.message || "");
+  return code === 50007
+    || /cannot send messages to this user|no mutual guilds/i.test(message);
+};
 const isGenericReleaseChapterLabel = (value) => {
   const normalized = normalizeString(value)
     .toLowerCase()
@@ -633,6 +639,12 @@ const deliverNotifications = async ({
         await acknowledge(notificationId);
       }
     } catch (error) {
+      if (kind === "ingest" && notificationId && isPermanentDirectMessageFailure(error)) {
+        logger?.warn?.("Portal ingest notifier skipped unreachable DM recipient.", {notificationId, error});
+        deliveredIds.add(notificationId);
+        await acknowledge(notificationId);
+        continue;
+      }
       logger?.error?.(`Portal ${kind} notifier delivery failed.`, {notificationId, error});
     }
   }

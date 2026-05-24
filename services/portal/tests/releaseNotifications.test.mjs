@@ -268,6 +268,59 @@ test("portal notifier sends ingest run DMs and acks after delivery", async () =>
   assert.deepEqual(acked, ["ingest:ingestrun_1:25"]);
 });
 
+test("portal notifier dead-letters ingest DMs Discord cannot deliver", async () => {
+  const warnings = [];
+  const acked = [];
+  const notifier = createFollowNotifier({
+    sage: {
+      async listIngestRunNotifications() {
+        return {
+          ok: true,
+          payload: {
+            notifications: acked.length ? [] : [{
+              id: "ingest:ingestrun_1:terminal",
+              runId: "ingestrun_1",
+              discordUserId: "admin-1",
+              terminal: true,
+              status: "completed",
+              libraryTypeLabel: "Manga",
+              totalTitles: 8,
+              completedTitles: 8,
+              failedTitles: 0
+            }]
+          }
+        };
+      },
+      async acknowledgeIngestRunNotification(id) {
+        acked.push(id);
+        return {ok: true};
+      }
+    },
+    discord: {
+      async sendDirectMessage() {
+        const error = new Error("Cannot send messages to this user due to having no mutual guilds");
+        error.code = 50007;
+        throw error;
+      },
+      async sendChannelMessage() {}
+    },
+    logger: {
+      warn(message) {
+        warnings.push(message);
+      },
+      error() {}
+    },
+    pollMs: 1000
+  });
+
+  notifier.start();
+  await waitFor(() => acked.length > 0);
+  notifier.stop();
+
+  assert.deepEqual(acked, ["ingest:ingestrun_1:terminal"]);
+  assert.match(warnings[0], /skipped unreachable DM recipient/);
+});
+
 test("portal release notifier sends every typed delivery before one ack", async () => {
   const sent = [];
   const acked = [];

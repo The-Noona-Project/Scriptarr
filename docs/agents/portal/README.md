@@ -98,7 +98,8 @@
   must be acknowledged before Sage/Raven work starts, and the confirmed run must go through Sage to Raven instead of
   calling Raven directly. Portal should also poll Sage's ingest-run notification queue, DM the confirming admin at
   25%, 50%, 75%, and terminal status, and acknowledge each stable `ingest:<runId>:...` id only after Discord accepts
-  the DM.
+  the DM. Treat Discord's permanent "cannot DM this user" response as undeliverable and acknowledge it so old runs do
+  not spin the notifier forever.
 - Admin dual mentions in configured Appa channels are Noona-led but not Noona-only: Noona replies, Appa review runs
   next, then Appa posts its own admin reply. Keep the direct Appa listener's co-mention suppression so the same Discord
   message cannot produce duplicate Appa responses from both clients.
