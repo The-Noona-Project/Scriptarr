@@ -33,6 +33,7 @@ import java.util.stream.Collectors;
 public final class LibraryIngestRunService {
     private static final String OWNER_SERVICE = "scriptarr-raven";
     private static final String RUN_JOB_KIND = "raven-library-ingest";
+    private static final String STATUS_PREPARING = "preparing";
     private static final String STATUS_QUEUED = "queued";
     private static final String STATUS_RUNNING = "running";
     private static final String STATUS_COMPLETED = "completed";
@@ -61,6 +62,11 @@ public final class LibraryIngestRunService {
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final ExecutorService worker = Executors.newSingleThreadExecutor((runnable) -> {
         Thread thread = new Thread(runnable, "raven-library-ingest-runner");
+        thread.setDaemon(true);
+        return thread;
+    });
+    private final ExecutorService preparationWorker = Executors.newSingleThreadExecutor((runnable) -> {
+        Thread thread = new Thread(runnable, "raven-library-ingest-preparer");
         thread.setDaemon(true);
         return thread;
     });
@@ -156,6 +162,15 @@ public final class LibraryIngestRunService {
         if (isRunTerminal(job)) {
             return status(normalizedRunId);
         }
+        if (STATUS_PREPARING.equals(stringValue(job.get("status")).toLowerCase(Locale.ROOT))) {
+            Map<String, Object> payload = normalizeMap(job.get("payload"));
+            scheduleRunPreparation(
+                normalizedRunId,
+                stringValue(payload.get("libraryTypeSlug")).toLowerCase(Locale.ROOT),
+                firstNonBlank(stringValue(job.get("requestedBy")), "scriptarr-admin")
+            );
+            return status(normalizedRunId);
+        }
         List<Map<String, Object>> tasks = resetRunningTasksToQueued(normalizedRunId, loadTitleTasks(normalizedRunId));
         if (tasks.stream().allMatch(this::isTaskTerminal)) {
             finalizeRunFromTasks(job, tasks);
@@ -234,7 +249,7 @@ public final class LibraryIngestRunService {
         }
         List<Map<String, Object>> runs = new ArrayList<>();
         for (String libraryType : libraryTypes.stream().sorted().toList()) {
-            runs.add(createRun(Map.of("libraryTypeSlug", libraryType, "requestedBy", requestedBy)));
+            runs.add(createPreparingRun(libraryType, requestedBy));
         }
         return Map.of(
             "supersededCount", supersededCount,
@@ -242,6 +257,141 @@ public final class LibraryIngestRunService {
             "runs", runs,
             "message", "Restarted durable AVIF ingest runs across " + runs.size() + " library type(s)."
         );
+    }
+
+    private Map<String, Object> createPreparingRun(String libraryTypeSlug, String requestedBy) {
+        String normalizedType = LibraryNaming.normalizeTypeSlug(libraryTypeSlug);
+        if (!ALLOWED_TYPE_SLUGS.contains(normalizedType)) {
+            return Map.of(
+                "libraryTypeSlug", normalizedType,
+                "status", STATUS_FAILED,
+                "message", "Unsupported library type."
+            );
+        }
+        Map<String, Object> activeRun = activeRunForType(normalizedType);
+        if (!activeRun.isEmpty()) {
+            Map<String, Object> existingStatus = runSummaryRow(activeRun, activeRunPositions(loadRunJobsForSummaries()));
+            existingStatus.put("reused", true);
+            existingStatus.put("message", "Raven already has an active library ingest run for " + normalizedType + ".");
+            return existingStatus;
+        }
+
+        String runId = "ingestrun_" + UUID.randomUUID().toString().replace("-", "");
+        String now = Instant.now().toString();
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("libraryTypeSlug", normalizedType);
+        payload.put("libraryTypeLabel", typeLabelForSlug(normalizedType));
+        payload.put("mode", INGEST_MODE);
+        payload.put("format", INGEST_FORMAT);
+        payload.put("titleCount", 0);
+        payload.put("preparing", true);
+
+        Map<String, Object> job = new LinkedHashMap<>();
+        job.put("jobId", runId);
+        job.put("kind", RUN_JOB_KIND);
+        job.put("ownerService", OWNER_SERVICE);
+        job.put("status", STATUS_PREPARING);
+        job.put("label", "Raven AVIF rebuild");
+        job.put("message", "Preparing title tasks for the fair AVIF scheduler.");
+        job.put("requestedBy", requestedBy);
+        job.put("payload", payload);
+        job.put("result", runSummary(0, 0, 0, List.of(), List.of()));
+        job.put("createdAt", now);
+        job.put("startedAt", null);
+        job.put("finishedAt", null);
+        job.put("updatedAt", now);
+        putJob(runId, job);
+        scheduleRunPreparation(runId, normalizedType, requestedBy);
+        return runSummaryRow(requireRun(runId), activeRunPositions(loadRunJobsForSummaries()));
+    }
+
+    private void scheduleRunPreparation(String runId, String libraryTypeSlug, String requestedBy) {
+        try {
+            preparationWorker.execute(() -> prepareRunTasks(runId, libraryTypeSlug, requestedBy));
+        } catch (RejectedExecutionException error) {
+            try {
+                updateJob(
+                    requireRun(runId),
+                    STATUS_FAILED,
+                    "Raven could not prepare title tasks for the AVIF rebuild.",
+                    runSummary(0, 0, 1, List.of(), List.of(runId)),
+                    true
+                );
+            } catch (Exception updateError) {
+                logger.warn("LIBRARY", "Raven could not persist failed AVIF run preparation state.", updateError.getMessage());
+            }
+            logger.warn("LIBRARY", "Raven AVIF run preparation worker rejected work.", error.getMessage());
+        }
+    }
+
+    private void prepareRunTasks(String runId, String libraryTypeSlug, String requestedBy) {
+        try {
+            Map<String, Object> job = requireRun(runId);
+            if (isRunTerminal(job)) {
+                return;
+            }
+            List<LibraryTitle> titles = titlesForType(libraryTypeSlug);
+            if (titles.isEmpty()) {
+                updateJob(
+                    job,
+                    STATUS_COMPLETED,
+                    "No ready titles were eligible for AVIF rebuild.",
+                    runSummary(0, 0, 0, List.of(), List.of()),
+                    true
+                );
+                return;
+            }
+
+            String now = Instant.now().toString();
+            Map<String, Object> payload = new LinkedHashMap<>(normalizeMap(job.get("payload")));
+            payload.put("titleCount", titles.size());
+            payload.put("preparing", false);
+            job = new LinkedHashMap<>(job);
+            job.put("payload", payload);
+            job.put("result", runSummary(titles.size(), 0, 0, List.of(), List.of()));
+            job.put("updatedAt", now);
+            putJob(runId, job);
+
+            for (int index = 0; index < titles.size(); index += 1) {
+                if (Thread.currentThread().isInterrupted()) {
+                    return;
+                }
+                if (index % 25 == 0 && isRunTerminal(requireRun(runId))) {
+                    return;
+                }
+                putTitleTask(runId, buildTitleTask(runId, titles.get(index), requestedBy, index, now));
+            }
+
+            job = requireRun(runId);
+            if (isRunTerminal(job)) {
+                return;
+            }
+            List<Map<String, Object>> tasks = loadTitleTasks(runId);
+            updateJob(
+                job,
+                STATUS_QUEUED,
+                "Queued AVIF rebuild for the fair ingest scheduler.",
+                runSummaryFromTasks(tasks),
+                false
+            );
+            scheduleRunWorker();
+        } catch (Exception error) {
+            logger.error("LIBRARY", "Raven could not prepare AVIF rebuild title tasks.", error);
+            try {
+                Map<String, Object> job = requireRun(runId);
+                if (!isRunTerminal(job)) {
+                    updateJob(
+                        job,
+                        STATUS_FAILED,
+                        firstNonBlank(rootMessage(error), "Raven could not prepare AVIF rebuild title tasks."),
+                        runSummaryFromTasks(loadTitleTasks(runId)),
+                        true
+                    );
+                }
+            } catch (Exception updateError) {
+                logger.warn("LIBRARY", "Raven could not persist failed AVIF preparation state.", updateError.getMessage());
+            }
+        }
     }
 
     /**
@@ -335,6 +485,7 @@ public final class LibraryIngestRunService {
     @PreDestroy
     public void shutdown() {
         worker.shutdownNow();
+        preparationWorker.shutdownNow();
     }
 
     private void runSchedulerLoop() {
@@ -455,12 +606,19 @@ public final class LibraryIngestRunService {
             if (runId.isBlank() || !isDurableActive(job) || isLegacyActiveRun(job)) {
                 continue;
             }
+            String status = stringValue(job.get("status")).toLowerCase(Locale.ROOT);
+            if (STATUS_PREPARING.equals(status)) {
+                continue;
+            }
             List<Map<String, Object>> tasks = loadTitleTasks(runId);
+            if (tasks.isEmpty()) {
+                continue;
+            }
             if (tasks.stream().allMatch(this::isTaskTerminal)) {
                 finalizeRunFromTasks(job, tasks);
                 continue;
             }
-            if (STATUS_RUNNING.equals(stringValue(job.get("status")).toLowerCase(Locale.ROOT)) && !activeRunIds.contains(runId)) {
+            if (STATUS_RUNNING.equals(status) && !activeRunIds.contains(runId)) {
                 updateJob(
                     job,
                     STATUS_QUEUED,
@@ -482,6 +640,9 @@ public final class LibraryIngestRunService {
         try {
             for (Map<String, Object> job : loadRunJobs()) {
                 if (!isDurableActive(job)) {
+                    continue;
+                }
+                if (STATUS_PREPARING.equals(stringValue(job.get("status")).toLowerCase(Locale.ROOT))) {
                     continue;
                 }
                 List<Map<String, Object>> tasks = loadTitleTasks(stringValue(job.get("jobId")));
@@ -562,10 +723,19 @@ public final class LibraryIngestRunService {
     private void reconcileRun(Map<String, Object> job) {
         String runId = stringValue(job.get("jobId"));
         String status = stringValue(job.get("status")).toLowerCase(Locale.ROOT);
-        if (runId.isBlank() || (!STATUS_QUEUED.equals(status) && !STATUS_RUNNING.equals(status))) {
+        if (runId.isBlank() || (!STATUS_PREPARING.equals(status) && !STATUS_QUEUED.equals(status) && !STATUS_RUNNING.equals(status))) {
             return;
         }
         if (activeRunIds.contains(runId)) {
+            return;
+        }
+        if (STATUS_PREPARING.equals(status)) {
+            Map<String, Object> payload = normalizeMap(job.get("payload"));
+            scheduleRunPreparation(
+                runId,
+                stringValue(payload.get("libraryTypeSlug")).toLowerCase(Locale.ROOT),
+                firstNonBlank(stringValue(job.get("requestedBy")), "scriptarr-admin")
+            );
             return;
         }
 
@@ -607,6 +777,9 @@ public final class LibraryIngestRunService {
     }
 
     private synchronized boolean scheduleRunWorker() {
+        if (schedulerRunning && currentRunId.isBlank()) {
+            schedulerRunning = false;
+        }
         if (worker.isShutdown() || schedulerRunning) {
             return false;
         }
@@ -676,7 +849,7 @@ public final class LibraryIngestRunService {
 
     private boolean isDurableActive(Map<String, Object> job) {
         String status = stringValue(job.get("status")).toLowerCase(Locale.ROOT);
-        return STATUS_QUEUED.equals(status) || STATUS_RUNNING.equals(status);
+        return STATUS_PREPARING.equals(status) || STATUS_QUEUED.equals(status) || STATUS_RUNNING.equals(status);
     }
 
     private boolean isRunTerminal(Map<String, Object> job) {
@@ -832,6 +1005,10 @@ public final class LibraryIngestRunService {
     }
 
     private boolean activeRunNeedsCanonicalRestart(Map<String, Object> job, List<LibraryTitle> currentTitles) {
+        String status = stringValue(job.get("status")).toLowerCase(Locale.ROOT);
+        if (STATUS_PREPARING.equals(status)) {
+            return false;
+        }
         Set<String> currentTitleIds = Optional.ofNullable(currentTitles).orElse(List.of()).stream()
             .map(LibraryTitle::id)
             .filter((titleId) -> titleId != null && !titleId.isBlank())
@@ -855,7 +1032,7 @@ public final class LibraryIngestRunService {
 
     private boolean isLegacyActiveRun(Map<String, Object> job) {
         String status = stringValue(job.get("status")).toLowerCase(Locale.ROOT);
-        if (!STATUS_QUEUED.equals(status) && !STATUS_RUNNING.equals(status)) {
+        if (!STATUS_PREPARING.equals(status) && !STATUS_QUEUED.equals(status) && !STATUS_RUNNING.equals(status)) {
             return false;
         }
         Map<String, Object> payload = normalizeMap(job.get("payload"));
@@ -905,7 +1082,7 @@ public final class LibraryIngestRunService {
                 || STATUS_SUPERSEDED.equals(status);
         }
         if ("active".equals(filter)) {
-            return STATUS_QUEUED.equals(status) || STATUS_RUNNING.equals(status);
+            return isDurableActive(job);
         }
         return filter.equals(status);
     }
@@ -954,6 +1131,7 @@ public final class LibraryIngestRunService {
     private String messageForRunStatus(String status) {
         String normalized = stringValue(status).toLowerCase(Locale.ROOT);
         return switch (normalized) {
+            case STATUS_PREPARING -> "Preparing title tasks for the fair AVIF scheduler.";
             case STATUS_QUEUED -> "Waiting for AVIF worker slot.";
             case STATUS_RUNNING -> "Running current title AVIF rebuild.";
             case STATUS_COMPLETED -> "AVIF rebuild completed.";
@@ -990,12 +1168,19 @@ public final class LibraryIngestRunService {
         String status = stringValue(job.get("status")).toLowerCase(Locale.ROOT);
         boolean workerActive = activeRunIds.contains(runId) && runId.equals(currentRunId);
         boolean terminal = isRunTerminal(job);
-        boolean needsRecovery = STATUS_RUNNING.equals(status) && !workerActive;
+        boolean preparing = STATUS_PREPARING.equals(status);
+        boolean schedulerStalled = schedulerRunning
+            && currentRunId.isBlank()
+            && !preparing
+            && tasks.stream().anyMatch((task) -> !isTaskTerminal(task));
+        boolean needsRecovery = (STATUS_RUNNING.equals(status) && !workerActive) || schedulerStalled;
         String schedulerState;
         if (terminal) {
             schedulerState = "terminal";
         } else if (workerActive) {
             schedulerState = "running";
+        } else if (preparing) {
+            schedulerState = "waiting";
         } else if (needsRecovery) {
             schedulerState = "needs-recovery";
         } else if (isDurableActive(job)) {

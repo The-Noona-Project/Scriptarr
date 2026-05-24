@@ -405,9 +405,10 @@ making the title readable. Its `Start / rebuild all` action restarts active type
 Raven ingest runs by library type for pending or failed titles, so large backlogs move through background workers instead
 of thousands of browser requests. Raven uses a fair single-lane AVIF scheduler for those type runs: one title converts at
 a time, then the scheduler rotates to the next active library type so OEL, manga, manhwa, and other backlogs can all
-make progress. The page also shows active and recent durable type-run summaries with state labels, current title, queue
-position, last progress, title counts, resume/cancel controls, and ETA when Raven has enough data, without loading every
-child title task into the browser.
+make progress. Restart-all may briefly show a run as preparing while Raven writes the durable title-task list in the
+background; after that, the run moves into the normal waiting/running fair-scheduler states. The page also shows active
+and recent durable type-run summaries with state labels, current title, queue position, last progress, title counts,
+resume/cancel controls, and ETA when Raven has enough data, without loading every child title task into the browser.
 Appa can also start a type-wide AVIF rebuild from Discord with
 `/ingest type:<manga|manhwa|manhua|webtoon|comic|oel>`. The command previews title count from Raven's compact
 title-card projection plus Raven hardware state,

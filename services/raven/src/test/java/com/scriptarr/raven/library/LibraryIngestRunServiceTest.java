@@ -192,6 +192,34 @@ class LibraryIngestRunServiceTest {
     }
 
     /**
+     * Verify restart-all returns bounded preparing runs immediately while title
+     * task creation continues in the background.
+     *
+     * @param tempDir temporary Raven data root
+     * @throws Exception when the fixture cannot be prepared
+     */
+    @Test
+    void restartActiveRunsPreparesTypeRunsAsynchronously(@TempDir Path tempDir) throws Exception {
+        FakeRavenBrokerClient brokerClient = new FakeRavenBrokerClient();
+        TestLogger logger = new TestLogger(tempDir);
+        LibraryService libraryService = libraryService(brokerClient, logger, new TestTranscoder());
+        recordTitle(libraryService, tempDir, "Restart Manga", "Manga", "001.png");
+        recordTitle(libraryService, tempDir, "Restart OEL", "OEL", "001.png");
+        LibraryIngestRunService runService = new LibraryIngestRunService(libraryService, brokerClient, logger);
+
+        Map<String, Object> result = runService.restartActiveRuns(Map.of("requestedBy", "owner-1"));
+        List<Map<String, Object>> runs = maps(result.get("runs"));
+
+        assertEquals(2, result.get("startedCount"));
+        assertEquals(2, runs.size());
+        assertTrue(runs.stream().noneMatch((run) -> run.containsKey("tasks")));
+        for (Map<String, Object> run : runs) {
+            assertEquals("completed", awaitStatus(runService, String.valueOf(run.get("runId")), "completed").get("status"));
+        }
+        runService.shutdown();
+    }
+
+    /**
      * Verify durable run summaries stay small and separate active runs from
      * recent terminal runs.
      *

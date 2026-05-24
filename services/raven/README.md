@@ -139,6 +139,9 @@ ETA when Raven has credible timing. `/v1/ingest` includes active and recent run 
 backlog. Type-wide rebuilds use one fair AVIF scheduler lane because title conversion is globally serialized: Raven
 processes one title for the current type, persists progress, then rotates to the next active type instead of marking
 multiple type runs as fake-running.
+The restart-all/admin flow creates lightweight preparing run summaries first, then materializes the per-title durable
+tasks in the background before handing them to the fair scheduler so the browser request does not wait on thousands of
+broker writes.
 If Raven restarts or loses its broker connection mid-run, startup recovery and duplicate same-type requests reattach the
 durable run, preserve already failed title tasks, and continue unfinished queued or stale-running tasks. Active legacy
 WebP-format runs are marked `superseded` before a new AVIF run is accepted for that type.
