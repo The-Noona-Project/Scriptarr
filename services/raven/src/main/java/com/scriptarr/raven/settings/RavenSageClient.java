@@ -25,9 +25,11 @@ import java.util.concurrent.TimeoutException;
  */
 @Component
 public class RavenSageClient implements RavenBrokerClient {
-    private final HttpClient httpClient = HttpClient.newBuilder()
-        .connectTimeout(Duration.ofSeconds(5))
-        .build();
+    private static final int MAX_ATTEMPTS = 3;
+    private final HttpClient httpClient;
+    private final Duration getTimeout;
+    private final Duration putTimeout;
+    private final Duration retryDelay;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Value("${SCRIPTARR_SAGE_BASE_URL:http://127.0.0.1:3004}")
@@ -35,6 +37,46 @@ public class RavenSageClient implements RavenBrokerClient {
 
     @Value("${SCRIPTARR_SERVICE_TOKEN:raven-dev-token}")
     private String serviceToken;
+
+    /**
+     * Create the default Raven-to-Sage broker client.
+     */
+    public RavenSageClient() {
+        this(
+            "http://127.0.0.1:3004",
+            "raven-dev-token",
+            HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(8)).build(),
+            Duration.ofSeconds(12),
+            Duration.ofSeconds(20),
+            Duration.ofMillis(250)
+        );
+    }
+
+    /**
+     * Create a Raven-to-Sage broker client with testable transport settings.
+     *
+     * @param sageBaseUrl Sage base URL
+     * @param serviceToken first-party service token
+     * @param httpClient HTTP transport
+     * @param getTimeout GET request timeout
+     * @param putTimeout mutation request timeout
+     * @param retryDelay base retry delay for transient IO failures
+     */
+    RavenSageClient(
+        String sageBaseUrl,
+        String serviceToken,
+        HttpClient httpClient,
+        Duration getTimeout,
+        Duration putTimeout,
+        Duration retryDelay
+    ) {
+        this.sageBaseUrl = sageBaseUrl;
+        this.serviceToken = serviceToken;
+        this.httpClient = httpClient;
+        this.getTimeout = getTimeout;
+        this.putTimeout = putTimeout;
+        this.retryDelay = retryDelay;
+    }
 
     @Override
     public JsonNode getSetting(String key) throws IOException, InterruptedException {
@@ -145,7 +187,7 @@ public class RavenSageClient implements RavenBrokerClient {
     }
 
     private JsonNode get(String path) throws IOException, InterruptedException {
-        Duration timeout = Duration.ofSeconds(5);
+        Duration timeout = getTimeout;
         HttpRequest request = HttpRequest.newBuilder()
             .uri(URI.create(trimBaseUrl() + path))
             .timeout(timeout)
@@ -158,7 +200,7 @@ public class RavenSageClient implements RavenBrokerClient {
     }
 
     private JsonNode put(String path, Map<String, Object> payload) throws IOException, InterruptedException {
-        Duration timeout = Duration.ofSeconds(10);
+        Duration timeout = putTimeout;
         HttpRequest request = HttpRequest.newBuilder()
             .uri(URI.create(trimBaseUrl() + path))
             .timeout(timeout)
@@ -171,7 +213,7 @@ public class RavenSageClient implements RavenBrokerClient {
     }
 
     private JsonNode patch(String path, Map<String, Object> payload) throws IOException, InterruptedException {
-        Duration timeout = Duration.ofSeconds(10);
+        Duration timeout = putTimeout;
         HttpRequest request = HttpRequest.newBuilder()
             .uri(URI.create(trimBaseUrl() + path))
             .timeout(timeout)
@@ -184,7 +226,7 @@ public class RavenSageClient implements RavenBrokerClient {
     }
 
     private JsonNode delete(String path) throws IOException, InterruptedException {
-        Duration timeout = Duration.ofSeconds(10);
+        Duration timeout = putTimeout;
         HttpRequest request = HttpRequest.newBuilder()
             .uri(URI.create(trimBaseUrl() + path))
             .timeout(timeout)
@@ -197,6 +239,22 @@ public class RavenSageClient implements RavenBrokerClient {
     }
 
     private HttpResponse<String> send(String path, HttpRequest request, Duration timeout) throws IOException, InterruptedException {
+        IOException lastError = null;
+        for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
+            try {
+                return sendOnce(path, request, timeout);
+            } catch (IOException error) {
+                lastError = error;
+                if (attempt >= MAX_ATTEMPTS) {
+                    throw error;
+                }
+                TimeUnit.MILLISECONDS.sleep(Math.max(1, retryDelay.toMillis()) * attempt);
+            }
+        }
+        throw lastError == null ? new IOException("Sage request failed for " + path + ".") : lastError;
+    }
+
+    private HttpResponse<String> sendOnce(String path, HttpRequest request, Duration timeout) throws IOException, InterruptedException {
         var future = httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString());
         try {
             return future.get(timeout.plusSeconds(1).toMillis(), TimeUnit.MILLISECONDS);

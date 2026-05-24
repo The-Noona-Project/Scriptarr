@@ -31,7 +31,9 @@
   should only accept Raven-visible CBZ files under import-staging or downloaded storage, then queue WebP ingest.
 - Library-type reingest runs live at `/v1/ingest/runs` for Sage/Appa. They rebuild only derived WebP pages from
   existing canonical CBZ archives, create durable per-title tasks, continue through individual title failures, and
-  return the existing run id when the same type already has a queued or running rebuild.
+  return the existing run id when the same type already has a queued or running rebuild. Startup recovery and duplicate
+  same-type requests must reattach detached queued/running runs, preserve already failed title tasks, and continue only
+  unfinished queued or stale-running tasks.
 - Keep `/v1/ingest` backlog and Appa preview/count paths lightweight. They should use compact title-card projections
   and must not pull full title records with chapter arrays just to count eligible library types.
 - Reader serving is WebP-first. A chapter is readable only after ingest writes stable `p000001.webp`-style page slugs,

@@ -13,6 +13,8 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
@@ -126,6 +128,96 @@ class LibraryIngestRunServiceTest {
         runService.shutdown();
     }
 
+    /**
+     * Verify a detached durable type run is resumed when Appa/Sage asks to
+     * start the same type again, while failed title tasks stay failed.
+     *
+     * @param tempDir temporary Raven data root
+     * @throws Exception when the fixture cannot be prepared
+     */
+    @Test
+    void duplicateRunRequestResumesDetachedRunAndSkipsFailedTasks(@TempDir Path tempDir) throws Exception {
+        FakeRavenBrokerClient brokerClient = new FakeRavenBrokerClient();
+        TestLogger logger = new TestLogger(tempDir);
+        LibraryService libraryService = libraryService(brokerClient, logger, new TestTranscoder());
+        LibraryTitle failedTitle = recordTitle(libraryService, tempDir, "Broken Title", "Manga", "notes.txt");
+        LibraryTitle queuedTitle = recordTitle(libraryService, tempDir, "Good Title", "Manga", "001.png");
+        String runId = "ingestrun_recover_same_type";
+        seedIngestRunJob(brokerClient, runId, "running", "manga", 2, 0, 1);
+        seedIngestRunTask(brokerClient, runId, failedTitle, "failed", 0);
+        seedIngestRunTask(brokerClient, runId, queuedTitle, "queued", 1);
+        LibraryIngestRunService runService = new LibraryIngestRunService(libraryService, brokerClient, logger);
+
+        Map<String, Object> reused = runService.createRun(Map.of("type", "manga"));
+        Map<String, Object> status = awaitStatus(runService, runId, "failed");
+
+        assertEquals(runId, reused.get("runId"));
+        assertEquals(true, reused.get("reused"));
+        assertEquals(2, map(status.get("result")).get("totalTitles"));
+        assertEquals(1, map(status.get("result")).get("completedTitles"));
+        assertEquals(1, map(status.get("result")).get("failedTitles"));
+        assertEquals(List.of(failedTitle.id()), map(status.get("result")).get("failedTitleIds"));
+        assertEquals("ready", libraryService.findTitleById(queuedTitle.id()).ingestStatus());
+        assertTrue(statuses(status).containsAll(List.of("completed", "failed")));
+        runService.shutdown();
+    }
+
+    /**
+     * Verify Raven startup recovery reattaches a queued type ingest run.
+     *
+     * @param tempDir temporary Raven data root
+     * @throws Exception when the fixture cannot be prepared
+     */
+    @Test
+    void startupRecoveryReschedulesDetachedQueuedRun(@TempDir Path tempDir) throws Exception {
+        FakeRavenBrokerClient brokerClient = new FakeRavenBrokerClient();
+        TestLogger logger = new TestLogger(tempDir);
+        LibraryService libraryService = libraryService(brokerClient, logger, new TestTranscoder());
+        LibraryTitle queuedTitle = recordTitle(libraryService, tempDir, "Good Title", "Manhwa", "001.png");
+        String runId = "ingestrun_startup_recover";
+        seedIngestRunJob(brokerClient, runId, "queued", "manhwa", 1, 0, 0);
+        seedIngestRunTask(brokerClient, runId, queuedTitle, "queued", 0);
+        LibraryIngestRunService runService = new LibraryIngestRunService(libraryService, brokerClient, logger);
+
+        runService.resumeInterruptedRuns();
+        Map<String, Object> status = awaitStatus(runService, runId, "completed");
+
+        assertEquals(1, map(status.get("result")).get("completedTitles"));
+        assertEquals("ready", libraryService.findTitleById(queuedTitle.id()).ingestStatus());
+        runService.shutdown();
+    }
+
+    /**
+     * Verify a detached running run with no remaining work is finalized so it
+     * does not block future runs for that library type.
+     *
+     * @param tempDir temporary Raven data root
+     * @throws Exception when the fixture cannot be prepared
+     */
+    @Test
+    void duplicateRunRequestFinalizesAllTerminalDetachedRun(@TempDir Path tempDir) throws Exception {
+        FakeRavenBrokerClient brokerClient = new FakeRavenBrokerClient();
+        TestLogger logger = new TestLogger(tempDir);
+        LibraryService libraryService = libraryService(brokerClient, logger, new TestTranscoder());
+        LibraryTitle failedTitle = recordTitle(libraryService, tempDir, "Broken Title", "Comic", "notes.txt");
+        LibraryTitle completedTitle = recordTitle(libraryService, tempDir, "Good Title", "Comic", "001.png");
+        String runId = "ingestrun_terminal_recover";
+        seedIngestRunJob(brokerClient, runId, "running", "comic", 2, 1, 1);
+        seedIngestRunTask(brokerClient, runId, failedTitle, "failed", 0);
+        seedIngestRunTask(brokerClient, runId, completedTitle, "completed", 1);
+        LibraryIngestRunService runService = new LibraryIngestRunService(libraryService, brokerClient, logger);
+
+        Map<String, Object> reused = runService.createRun(Map.of("type", "comic"));
+        Map<String, Object> status = runService.status(runId);
+
+        assertEquals(runId, reused.get("runId"));
+        assertEquals("failed", status.get("status"));
+        assertEquals(false, status.get("active"));
+        assertEquals(1, map(status.get("result")).get("completedTitles"));
+        assertEquals(1, map(status.get("result")).get("failedTitles"));
+        runService.shutdown();
+    }
+
     private static LibraryService libraryService(
         FakeRavenBrokerClient brokerClient,
         ScriptarrLogger logger,
@@ -188,6 +280,86 @@ class LibraryIngestRunServiceTest {
             zip.closeEntry();
         }
         return archivePath;
+    }
+
+    private static void seedIngestRunJob(
+        FakeRavenBrokerClient brokerClient,
+        String runId,
+        String status,
+        String typeSlug,
+        int totalTitles,
+        int completedTitles,
+        int failedTitles
+    ) {
+        String now = Instant.now().toString();
+        Map<String, Object> job = new LinkedHashMap<>();
+        job.put("jobId", runId);
+        job.put("kind", "raven-library-ingest");
+        job.put("ownerService", "scriptarr-raven");
+        job.put("status", status);
+        job.put("label", "Raven WebP rebuild");
+        job.put("requestedBy", "owner-1");
+        job.put(
+            "payload",
+            Map.of(
+                "libraryTypeSlug", typeSlug,
+                "libraryTypeLabel", LibraryNaming.normalizeTypeLabel(typeSlug),
+                "mode", "webp-force-rebuild",
+                "titleCount", totalTitles
+            )
+        );
+        job.put(
+            "result",
+            Map.of(
+                "totalTitles", totalTitles,
+                "completedTitles", completedTitles,
+                "failedTitles", failedTitles,
+                "remainingTitles", Math.max(0, totalTitles - completedTitles - failedTitles),
+                "completedTitleIds", List.of(),
+                "failedTitleIds", List.of()
+            )
+        );
+        job.put("createdAt", now);
+        job.put("startedAt", now);
+        job.put("updatedAt", now);
+        brokerClient.putJob(runId, job);
+    }
+
+    private static void seedIngestRunTask(
+        FakeRavenBrokerClient brokerClient,
+        String runId,
+        LibraryTitle title,
+        String status,
+        int sortOrder
+    ) {
+        String now = Instant.now().toString();
+        String taskId = runId + "_title_" + LibraryNaming.slugifySegment(title.id());
+        Map<String, Object> task = new LinkedHashMap<>();
+        task.put("taskId", taskId);
+        task.put("jobId", runId);
+        task.put("taskKey", title.id());
+        task.put("status", status);
+        task.put("label", title.title());
+        task.put("message", status.equals("queued") ? "Queued title WebP rebuild." : "Seeded terminal task.");
+        task.put("requestedBy", "owner-1");
+        task.put("sortOrder", sortOrder);
+        task.put("percent", status.equals("queued") ? 0 : 100);
+        task.put(
+            "payload",
+            Map.of(
+                "runId", runId,
+                "titleId", title.id(),
+                "titleName", title.title(),
+                "libraryTypeSlug", title.libraryTypeSlug(),
+                "libraryTypeLabel", title.libraryTypeLabel(),
+                "downloadRoot", title.downloadRoot(),
+                "mode", "webp-force-rebuild"
+            )
+        );
+        task.put("result", status.equals("failed") ? Map.of("titleId", title.id(), "error", "seeded failure") : Map.of("titleId", title.id()));
+        task.put("createdAt", now);
+        task.put("updatedAt", now);
+        brokerClient.putJobTask(runId, taskId, task);
     }
 
     private static byte[] pngPage(int shade) throws IOException {

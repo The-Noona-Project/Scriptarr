@@ -34,6 +34,7 @@ public final class LibraryIngestRunService {
     private static final String STATUS_RUNNING = "running";
     private static final String STATUS_COMPLETED = "completed";
     private static final String STATUS_FAILED = "failed";
+    private static final String STATUS_CANCELLED = "cancelled";
     private static final List<String> ALLOWED_TYPE_SLUGS = List.of(
         "manga",
         "manhwa",
@@ -83,6 +84,7 @@ public final class LibraryIngestRunService {
         String requestedBy = firstNonBlank(stringValue(request.get("requestedBy")), "scriptarr-admin");
         Map<String, Object> activeRun = activeRunForType(libraryTypeSlug);
         if (!activeRun.isEmpty()) {
+            reconcileRun(activeRun);
             Map<String, Object> existingStatus = status(stringValue(activeRun.get("jobId")));
             existingStatus.put("reused", true);
             existingStatus.put("message", "Raven already has an active library ingest run for " + libraryTypeSlug + ".");
@@ -156,10 +158,7 @@ public final class LibraryIngestRunService {
     public void resumeInterruptedRuns() {
         try {
             for (Map<String, Object> job : loadRunJobs()) {
-                String status = stringValue(job.get("status")).toLowerCase(Locale.ROOT);
-                if (STATUS_QUEUED.equals(status) || STATUS_RUNNING.equals(status)) {
-                    tryScheduleRunWorker(stringValue(job.get("jobId")));
-                }
+                reconcileRun(job);
             }
         } catch (IllegalStateException error) {
             logger.warn("LIBRARY", "Raven could not inspect durable library ingest runs during startup.", error.getMessage());
@@ -180,15 +179,21 @@ public final class LibraryIngestRunService {
         try {
             Map<String, Object> job = requireRun(runId);
             List<Map<String, Object>> tasks = loadTitleTasks(runId);
+            completedTitleIds.addAll(titleIdsWithStatus(tasks, STATUS_COMPLETED));
+            failedTitleIds.addAll(titleIdsWithStatus(tasks, STATUS_FAILED));
+            failedTitleIds.addAll(titleIdsWithStatus(tasks, STATUS_CANCELLED));
             updateJob(
                 job,
                 STATUS_RUNNING,
                 "Rebuilding WebP pages from existing canonical CBZ archives.",
-                runSummary(tasks.size(), 0, 0, List.of(), List.of()),
+                runSummary(tasks.size(), completedTitleIds.size(), failedTitleIds.size(), completedTitleIds, failedTitleIds),
                 false
             );
 
             for (Map<String, Object> task : tasks) {
+                if (isTaskTerminal(task)) {
+                    continue;
+                }
                 String titleId = stringValue(normalizeMap(task.get("payload")).get("titleId"));
                 Map<String, Object> runningTask = withTaskStatus(task, STATUS_RUNNING, "Rebuilding title WebP pages.", 5, Map.of());
                 putTitleTask(runId, runningTask);
@@ -256,6 +261,44 @@ public final class LibraryIngestRunService {
                 logger.warn("LIBRARY", "Raven could not persist failed library ingest run state.", updateError.getMessage());
             }
         }
+    }
+
+    private void reconcileRun(Map<String, Object> job) {
+        String runId = stringValue(job.get("jobId"));
+        String status = stringValue(job.get("status")).toLowerCase(Locale.ROOT);
+        if (runId.isBlank() || (!STATUS_QUEUED.equals(status) && !STATUS_RUNNING.equals(status))) {
+            return;
+        }
+        if (activeRunIds.contains(runId)) {
+            return;
+        }
+
+        List<Map<String, Object>> tasks = loadTitleTasks(runId);
+        if (tasks.stream().allMatch(this::isTaskTerminal)) {
+            finalizeRunFromTasks(job, tasks);
+            return;
+        }
+
+        logger.warn(
+            "LIBRARY",
+            "Raven recovered a detached library ingest run.",
+            "runId=" + runId + " status=" + status + " unfinishedTasks=" + tasks.stream().filter((task) -> !isTaskTerminal(task)).count()
+        );
+        tryScheduleRunWorker(runId);
+    }
+
+    private void finalizeRunFromTasks(Map<String, Object> job, List<Map<String, Object>> tasks) {
+        List<String> completedTitleIds = titleIdsWithStatus(tasks, STATUS_COMPLETED);
+        List<String> failedTitleIds = new ArrayList<>(titleIdsWithStatus(tasks, STATUS_FAILED));
+        failedTitleIds.addAll(titleIdsWithStatus(tasks, STATUS_CANCELLED));
+        boolean failed = !failedTitleIds.isEmpty();
+        updateJob(
+            job,
+            failed ? STATUS_FAILED : STATUS_COMPLETED,
+            failed ? "Raven WebP rebuild completed with failed title(s)." : "Raven WebP rebuild completed.",
+            runSummary(tasks.size(), completedTitleIds.size(), failedTitleIds.size(), completedTitleIds, failedTitleIds),
+            true
+        );
     }
 
     private boolean tryScheduleRunWorker(String runId) {
@@ -374,6 +417,27 @@ public final class LibraryIngestRunService {
         summary.put("completedTitleIds", List.copyOf(completedTitleIds));
         summary.put("failedTitleIds", List.copyOf(failedTitleIds));
         return summary;
+    }
+
+    private boolean isTaskTerminal(Map<String, Object> task) {
+        String status = stringValue(task.get("status")).toLowerCase(Locale.ROOT);
+        return STATUS_COMPLETED.equals(status) || STATUS_FAILED.equals(status) || STATUS_CANCELLED.equals(status);
+    }
+
+    private List<String> titleIdsWithStatus(List<Map<String, Object>> tasks, String expectedStatus) {
+        return tasks.stream()
+            .filter((task) -> expectedStatus.equals(stringValue(task.get("status")).toLowerCase(Locale.ROOT)))
+            .map(this::titleIdForTask)
+            .filter((titleId) -> !titleId.isBlank())
+            .distinct()
+            .toList();
+    }
+
+    private String titleIdForTask(Map<String, Object> task) {
+        return firstNonBlank(
+            stringValue(normalizeMap(task.get("payload")).get("titleId")),
+            stringValue(task.get("taskKey"))
+        );
     }
 
     private List<LibraryTitle> titlesForType(String libraryTypeSlug) {
