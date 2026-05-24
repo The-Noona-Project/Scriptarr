@@ -107,6 +107,8 @@ public final class FfmpegAvifTranscoder implements PageTranscoder {
             sourcePath.toString(),
             "-frames:v",
             "1",
+            "-vf",
+            "pad=max(256\\,ceil(iw/2)*2):max(256\\,ceil(ih/2)*2):0:0:color=white,format=yuv420p",
             "-c:v",
             "av1_nvenc",
             "-cq",
