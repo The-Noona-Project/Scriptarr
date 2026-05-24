@@ -360,6 +360,7 @@ const createDependencyStub = ({
     ingestTasks: 0,
     ingestOverview: 0,
     ingestRunCreate: 0,
+    ingestRunBodies: [],
     ingestRetry: 0,
     importLibrary: 0,
     downloadRetry: 0,
@@ -927,6 +928,7 @@ const createDependencyStub = ({
       calls.ingestRunCreate += 1;
       readRequestBody(request).then((buffer) => {
         const payload = JSON.parse(buffer.toString() || "{}");
+        calls.ingestRunBodies.push(payload);
         response.writeHead(202, {"Content-Type": "application/json"});
         response.end(JSON.stringify(ingestRunResult || {
           runId: "ingest-run-1",
@@ -2681,6 +2683,88 @@ test("sage brokers admin import and ingest workflows as separate Raven surfaces"
   assert.equal(retryResult.ingestStatus, "running");
   assert.equal(dependencyStub.calls.ingestRetry, 1);
   assert.equal(dependencyStub.calls.ingestOverview >= 2, true);
+
+  await closeServer(sageServer);
+  await closeServer(vaultServer);
+  await closeServer(dependencyStub.server);
+});
+
+test("sage starts durable type ingest runs for admin ingest retry all", async () => {
+  const {app: vaultApp} = await createVaultApp();
+  const vaultServer = vaultApp.listen(0);
+  const vaultPort = vaultServer.address().port;
+
+  const dependencyStub = await createDependencyStub({
+    ingestOverview: {
+      summary: {total: 4, ready: 1, failed: 1, pending: 2},
+      hardware: {profile: "nvidia-avif", state: "ready", encoder: "ffmpeg/av1_nvenc"},
+      titles: [{
+        id: "dan-da-dan",
+        title: "Dandadan",
+        libraryTypeSlug: "webtoon",
+        ingestStatus: "pending",
+        ingestedChapterCount: 0,
+        chapterCount: 166
+      }, {
+        id: "tower-of-god",
+        title: "Tower of God",
+        libraryTypeSlug: "webtoon",
+        ingestStatus: "failed",
+        ingestedChapterCount: 2,
+        chapterCount: 600
+      }, {
+        id: "solo-leveling",
+        title: "Solo Leveling",
+        libraryTypeSlug: "manhwa",
+        ingestStatus: "pending",
+        ingestedChapterCount: 0,
+        chapterCount: 200
+      }, {
+        id: "ready-title",
+        title: "Ready Title",
+        libraryTypeSlug: "manga",
+        ingestStatus: "ready",
+        ingestedChapterCount: 14,
+        chapterCount: 14
+      }]
+    }
+  });
+  dependencyStub.server.listen(0);
+  const dependencyPort = dependencyStub.server.address().port;
+
+  process.env.SCRIPTARR_VAULT_BASE_URL = `http://127.0.0.1:${vaultPort}`;
+  process.env.SCRIPTARR_WARDEN_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_PORTAL_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_ORACLE_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_RAVEN_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_PUBLIC_BASE_URL = "https://pax-kun.com";
+  process.env.SCRIPTARR_DISCORD_CLIENT_ID = "discord-client-id";
+  process.env.SCRIPTARR_DISCORD_CLIENT_SECRET = "discord-client-secret";
+
+  installDiscordFetchStub();
+
+  const {app: sageApp} = await createSageApp();
+  const sageServer = sageApp.listen(0);
+  const sagePort = sageServer.address().port;
+  const baseUrl = `http://127.0.0.1:${sagePort}`;
+  const ownerClaim = await signInViaDiscord(baseUrl);
+  const headers = {
+    "Authorization": `Bearer ${ownerClaim.token}`,
+    "Content-Type": "application/json"
+  };
+
+  const response = await fetch(`${baseUrl}/api/moon-v3/admin/ingest/retry-all`, {
+    method: "POST",
+    headers
+  });
+  const payload = await response.json();
+
+  assert.equal(response.status, 200);
+  assert.equal(payload.retryableTitleCount, 3);
+  assert.equal(payload.startedCount, 2);
+  assert.equal(payload.failedCount, 0);
+  assert.deepEqual(dependencyStub.calls.ingestRunBodies.map((body) => body.libraryTypeSlug).sort(), ["manhwa", "webtoon"]);
+  assert.equal(dependencyStub.calls.ingestRunCreate, 2);
 
   await closeServer(sageServer);
   await closeServer(vaultServer);

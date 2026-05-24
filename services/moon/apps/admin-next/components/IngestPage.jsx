@@ -57,6 +57,18 @@ export const IngestPage = ({user}) => {
     await refresh();
   };
 
+  const retryAll = async () => {
+    setBusyTitleId("__all__");
+    const result = await requestJson("/api/moon/v3/admin/ingest/retry-all", {method: "POST"});
+    notify({
+      message: result.ok ? result.payload?.message || "Ingest retry-all started." : result.payload?.error || "Moon could not retry all ingest work.",
+      tone: result.ok && Number(result.payload?.failedCount || 0) === 0 ? "good" : "bad",
+      category: "job"
+    });
+    setBusyTitleId("");
+    await refresh();
+  };
+
   if (loading) {
     return (
       <section className="admin-panel admin-state-panel">
@@ -80,6 +92,8 @@ export const IngestPage = ({user}) => {
   const summary = data?.summary || {};
   const hardware = summary.hardware || {};
   const titles = normalizeArray(data?.titles);
+  const retryableTitleCount = titles.filter((title) => normalizeString(title.ingestStatus, "pending").toLowerCase() !== "ready").length;
+  const retryAllBusy = busyTitleId === "__all__";
 
   return (
     <div className="queue-page">
@@ -111,6 +125,19 @@ export const IngestPage = ({user}) => {
             <div className="admin-kicker">Backlog</div>
             <h2>{titles.length} title{titles.length === 1 ? "" : "s"}</h2>
           </div>
+          <div className="admin-action-row">
+            {canWrite && retryableTitleCount ? (
+              <button
+                className="admin-button solid small"
+                type="button"
+                disabled={retryAllBusy}
+                onClick={retryAll}
+              >
+                {retryAllBusy ? "Retrying all" : "Retry all"}
+              </button>
+            ) : null}
+            <span className="admin-muted">{retryableTitleCount} retryable</span>
+          </div>
         </div>
         <AdminDenseTable
           rows={titles}
@@ -127,10 +154,10 @@ export const IngestPage = ({user}) => {
               <button
                 className="admin-button ghost small"
                 type="button"
-                disabled={busyTitleId === row.id}
+                disabled={Boolean(busyTitleId)}
                 onClick={() => retry(row.id)}
               >
-                Retry
+                {busyTitleId === row.id ? "Retrying" : "Retry"}
               </button>
             ) : null}
           ]}

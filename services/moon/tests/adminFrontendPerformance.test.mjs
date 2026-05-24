@@ -48,6 +48,14 @@ test("admin queue keeps a polling fallback and always reserves ETA copy", () => 
   assert.match(source, /"Auto-refresh active"/);
 });
 
+test("admin ingest exposes bulk retry through a same-origin route", () => {
+  const source = readMoonFile("apps/admin-next/components/IngestPage.jsx");
+
+  assert.match(source, /\/api\/moon\/v3\/admin\/ingest\/retry-all/);
+  assert.match(source, /Retry all/);
+  assert.match(source, /retryableTitleCount/);
+});
+
 test("system status keeps deep probes behind the explicit check action", () => {
   const source = readMoonFile("apps/admin-next/components/SystemStatusPage.jsx");
 

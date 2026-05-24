@@ -401,7 +401,8 @@ the Raven downloads mount, confirm title and chapter metadata, and Raven copies 
 `downloaded/<type>/<title-folder>` library tree before queueing ingest.
 `/admin/ingest` is the AVIF backlog and recovery surface. It shows Raven's per-title ingest status, hardware state,
 completion counts, and retry controls. Failed ingest keeps the CBZ in place and appears as retryable work instead of
-making the title readable.
+making the title readable. Its `Retry all` action starts or reuses durable Raven ingest runs by library type for pending
+or failed titles, so large backlogs move through background workers instead of thousands of browser requests.
 Appa can also start a type-wide AVIF rebuild from Discord with
 `/ingest type:<manga|manhwa|manhua|webtoon|comic|oel>`. The command previews title count from Raven's compact
 title-card projection plus Raven hardware state,

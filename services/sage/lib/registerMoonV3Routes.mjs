@@ -2251,6 +2251,66 @@ export const registerMoonV3Routes = (app, {
     res.json(await fetchRavenJson("/v1/ingest"));
   }));
 
+  app.post("/api/moon-v3/admin/ingest/retry-all", requireImportWrite(async (req, res) => {
+    const result = await serviceJson(config.ravenBaseUrl, "/v1/ingest");
+    if (!result.ok) {
+      res.status(result.status || 502).json({error: result.payload?.error || "Raven ingest backlog is unavailable."});
+      return;
+    }
+
+    const retryableTitles = normalizeArray(result.payload?.titles)
+      .filter((title) => normalizeString(title?.id) && normalizeString(title?.ingestStatus, "pending").toLowerCase() !== "ready");
+    const libraryTypes = [...new Set(retryableTitles
+      .map((title) => normalizeString(title?.libraryTypeSlug || title?.mediaType || title?.requestType).toLowerCase())
+      .filter(Boolean))]
+      .sort();
+
+    const requestedBy = normalizeString(req.user?.discordUserId || req.user?.username, "scriptarr-admin");
+    const results = [];
+    for (const libraryTypeSlug of libraryTypes) {
+      const response = await serviceJson(config.ravenBaseUrl, "/v1/ingest/runs", {
+        method: "POST",
+        body: {libraryTypeSlug, requestedBy}
+      });
+      results.push({
+        libraryTypeSlug,
+        ok: response.ok,
+        status: response.status,
+        runId: normalizeString(response.payload?.runId),
+        reused: response.payload?.reused === true,
+        error: response.ok ? "" : normalizeString(response.payload?.error, response.statusText)
+      });
+    }
+
+    const started = results.filter((entry) => entry.ok);
+    const failed = results.filter((entry) => !entry.ok);
+    const message = libraryTypes.length
+      ? `Started or reused ${started.length} AVIF ingest run${started.length === 1 ? "" : "s"} across ${libraryTypes.length} library type${libraryTypes.length === 1 ? "" : "s"}.`
+      : "No pending or failed ingest titles were waiting.";
+    await appendEvent({
+      ...buildUserActor(req.user, "admin"),
+      domain: "import",
+      eventType: "library-ingest-retry-all",
+      severity: failed.length ? "warning" : "info",
+      targetType: "library",
+      targetId: "ingest",
+      message: `${req.user.username} started AVIF ingest retry-all for ${started.length} library type${started.length === 1 ? "" : "s"}.`,
+      metadata: {
+        retryableTitleCount: retryableTitles.length,
+        libraryTypes,
+        startedCount: started.length,
+        failedCount: failed.length
+      }
+    });
+    res.json({
+      retryableTitleCount: retryableTitles.length,
+      startedCount: started.length,
+      failedCount: failed.length,
+      message: failed.length ? `${message} ${failed.length} type${failed.length === 1 ? "" : "s"} failed to start.` : message,
+      results
+    });
+  }));
+
   app.post("/api/moon-v3/admin/ingest/:titleId/retry", requireImportWrite(async (req, res) => {
     const result = await serviceJson(config.ravenBaseUrl, `/v1/ingest/${encodeURIComponent(req.params.titleId)}/retry`, {
       method: "POST",
