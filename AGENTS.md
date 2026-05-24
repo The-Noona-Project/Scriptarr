@@ -57,7 +57,8 @@ Read this before editing Scriptarr.
   - Sage: `services/sage`, auth, grants, Moon v3 routes, internal broker routes, admin workflows, and service
     orchestration.
   - Moon: `services/moon`, browser surfaces, same-origin proxies, admin Next pages under
-    `apps/admin-next/components`, user Next pages under `apps/user-next/components`, and public API/Swagger.
+    `apps/admin-next/components`, user Next pages under `apps/user-next/components`, reader Next pages under
+    `apps/reader-next/components`, and public API/Swagger.
   - Portal: `services/portal`, Discord commands, DMs, reactions, release posts, trivia, and Portal-to-Sage runtime.
   - Oracle: `services/oracle`, FastAPI AI chat/assist logic and LocalAI/OpenAI adapters.
   - Raven: `services/raven`, Java downloader, catalog promotion, `/downloadall`, media quality, naming, queue, and VPN.
@@ -150,6 +151,9 @@ Read this before editing Scriptarr.
   spam the requester.
 - Portal trivia should reconcile one active Sage-backed round clock. Reloads, repeated `/trivia start`, and settings
   refreshes must not duplicate clues, hints, timeout posts, or leaderboard windows.
+- Portal's owner-only Discord `downloadall` flow now supports `/downloadall resume runid:<id>` as an alias for
+  `/downloadall continue runid:<id>`. Keep the durable DM-only run flow and reaction-based continue/cancel prompts as
+  the primary path, with the raw `downloadall ...` DM text parser left as legacy best-effort fallback only.
 - Moon admin's `/admin/system/ai` is the browser-safe owner for Oracle, optional LocalAI, and Sage-governed AI
   proposals. Keep browser traffic behind Moon and Sage instead of adding direct browser calls to Oracle, Warden,
   OpenAI, or LocalAI.
