@@ -28,6 +28,7 @@ public final class FakeRavenBrokerClient implements RavenBrokerClient {
     private int listLibraryTitleCardsCalls;
     private boolean failNextJobTaskWrite;
     private boolean failNextJobTaskListAfterWriteFailure;
+    private int remainingJobListFailures;
     private int remainingJobTaskListFailures;
 
     /**
@@ -188,6 +189,13 @@ public final class FakeRavenBrokerClient implements RavenBrokerClient {
         failNextJobTaskListAfterWriteFailure = true;
     }
 
+    /**
+     * Simulate a transient durable job list failure.
+     */
+    public void failNextJobList() {
+        remainingJobListFailures += 1;
+    }
+
     @Override
     public JsonNode getLibraryTitle(String titleId) {
         if (!titles.containsKey(titleId)) {
@@ -238,6 +246,10 @@ public final class FakeRavenBrokerClient implements RavenBrokerClient {
 
     @Override
     public JsonNode listJobs(String ownerService, String kind, String status) {
+        if (remainingJobListFailures > 0) {
+            remainingJobListFailures -= 1;
+            throw new IllegalStateException("Simulated durable job list failure.");
+        }
         return objectMapper.valueToTree(jobs.values().stream().filter((job) -> {
             String jobOwner = job.path("ownerService").asText("");
             String jobKind = job.path("kind").asText("");

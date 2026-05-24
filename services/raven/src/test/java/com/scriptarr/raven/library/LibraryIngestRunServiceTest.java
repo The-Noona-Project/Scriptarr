@@ -175,6 +175,32 @@ class LibraryIngestRunServiceTest {
     }
 
     /**
+     * Verify admin summary reads degrade to cached recovered run rows instead
+     * of returning HTTP 500 when the broker has a transient job-list failure.
+     *
+     * @param tempDir temporary Raven data root
+     * @throws Exception when the fixture cannot be prepared
+     */
+    @Test
+    void runSummariesUseCachedRunsWhenBrokerListFails(@TempDir Path tempDir) throws Exception {
+        FakeRavenBrokerClient brokerClient = new FakeRavenBrokerClient();
+        TestLogger logger = new TestLogger(tempDir);
+        LibraryService libraryService = libraryService(brokerClient, logger, new TestTranscoder());
+        seedIngestRunJob(brokerClient, "ingestrun_cached_active", "running", "oel", 84, 12, 1);
+        LibraryIngestRunService runService = new LibraryIngestRunService(libraryService, brokerClient, logger);
+
+        assertEquals(1, runService.listRunSummaries("active").size());
+        brokerClient.failNextJobList();
+
+        List<Map<String, Object>> fallback = runService.listRunSummaries("active");
+
+        assertEquals(1, fallback.size());
+        assertEquals("ingestrun_cached_active", fallback.getFirst().get("runId"));
+        assertFalse(fallback.getFirst().containsKey("tasks"));
+        runService.shutdown();
+    }
+
+    /**
      * Verify old WebP-format type runs are superseded before Raven accepts a
      * new AVIF run for the same library type.
      *

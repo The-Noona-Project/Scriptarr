@@ -64,6 +64,7 @@ public final class LibraryIngestRunService {
         return thread;
     });
     private final Set<String> activeRunIds = ConcurrentHashMap.newKeySet();
+    private final Map<String, Map<String, Object>> cachedRunJobs = new ConcurrentHashMap<>();
 
     /**
      * Create the durable Raven library ingest-run service.
@@ -175,7 +176,11 @@ public final class LibraryIngestRunService {
      */
     public List<Map<String, Object>> listRunSummaries(String statusFilter) {
         String filter = firstNonBlank(statusFilter, "active").toLowerCase(Locale.ROOT);
-        List<Map<String, Object>> summaries = loadRunJobs().stream()
+        return summarizeRunJobs(loadRunJobsForSummaries(), filter);
+    }
+
+    private List<Map<String, Object>> summarizeRunJobs(List<Map<String, Object>> jobs, String filter) {
+        List<Map<String, Object>> summaries = jobs.stream()
             .filter((job) -> matchesSummaryFilter(job, filter))
             .map(this::runSummaryRow)
             .sorted((left, right) -> Long.compare(summaryTimestamp(right), summaryTimestamp(left)))
@@ -193,9 +198,10 @@ public final class LibraryIngestRunService {
      * @return grouped durable run summaries
      */
     public Map<String, Object> groupedRunSummaries() {
+        List<Map<String, Object>> jobs = loadRunJobsForSummaries();
         return Map.of(
-            "active", listRunSummaries("active"),
-            "recent", listRunSummaries("recent")
+            "active", summarizeRunJobs(jobs, "active"),
+            "recent", summarizeRunJobs(jobs, "recent")
         );
     }
 
@@ -698,10 +704,45 @@ public final class LibraryIngestRunService {
             }
             List<Map<String, Object>> jobs = new ArrayList<>();
             payload.forEach((node) -> jobs.add(jsonToMap(node)));
+            rememberRunJobs(jobs);
             return jobs;
         } catch (Exception error) {
             throw new IllegalStateException("Raven could not load durable library ingest runs.", error);
         }
+    }
+
+    private List<Map<String, Object>> loadRunJobsForSummaries() {
+        try {
+            return loadRunJobs();
+        } catch (IllegalStateException error) {
+            List<Map<String, Object>> fallback = cachedRunJobList();
+            if (!fallback.isEmpty()) {
+                logger.warn(
+                    "LIBRARY",
+                    "Raven could not refresh durable library ingest run summaries; using cached recovered runs.",
+                    rootMessage(error)
+                );
+                return fallback;
+            }
+            logger.warn("LIBRARY", "Raven could not refresh durable library ingest run summaries.", rootMessage(error));
+            return List.of();
+        }
+    }
+
+    private void rememberRunJobs(List<Map<String, Object>> jobs) {
+        cachedRunJobs.clear();
+        jobs.forEach(this::rememberRunJob);
+    }
+
+    private void rememberRunJob(Map<String, Object> job) {
+        String runId = stringValue(job.get("jobId"));
+        if (!runId.isBlank()) {
+            cachedRunJobs.put(runId, new LinkedHashMap<>(job));
+        }
+    }
+
+    private List<Map<String, Object>> cachedRunJobList() {
+        return new ArrayList<>(cachedRunJobs.values());
     }
 
     private List<Map<String, Object>> loadTitleTasks(String runId) {
@@ -724,6 +765,7 @@ public final class LibraryIngestRunService {
     private void putJob(String runId, Map<String, Object> payload) {
         try {
             brokerClient.putJob(runId, payload);
+            rememberRunJob(payload);
         } catch (Exception error) {
             throw new IllegalStateException("Raven could not persist the durable library ingest run.", error);
         }
@@ -805,6 +847,14 @@ public final class LibraryIngestRunService {
     private String sanitizeError(String value) {
         String normalized = Optional.ofNullable(value).orElse("Raven ingest failed.").replaceAll("[\\r\\n]+", " ").trim();
         return normalized.length() > 240 ? normalized.substring(0, 240) : normalized;
+    }
+
+    private String rootMessage(Throwable error) {
+        Throwable cursor = error;
+        while (cursor != null && cursor.getCause() != null) {
+            cursor = cursor.getCause();
+        }
+        return cursor == null ? "unknown" : sanitizeError(cursor.getMessage());
     }
 
     private String firstNonBlank(String... values) {
