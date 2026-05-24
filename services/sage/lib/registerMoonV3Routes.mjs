@@ -5788,9 +5788,10 @@ export const registerMoonV3Routes = (app, {
       ? adjacentChapterIds.nextChapterId
       : normalizeString(payload.nextChapterId) || (chapterIndex > -1 ? normalizeString(fullChapters[chapterIndex + 1]?.id) : "");
     const typeSlug = normalizeTypeSlug(fullTitle.libraryTypeSlug || fullTitle.mediaType);
-    const titleProgressId = normalizeString(payload.title?.id || fullTitle.id || titleId);
+    const resolvedTitleId = normalizeString(payload.title?.id || fullTitle.id || titleId);
+    const titleProgressId = resolvedTitleId;
     const progressEntry = normalizeArray(userInputs.progress).find((entry) => normalizeString(entry.mediaId) === titleProgressId);
-    const pageBase = buildReaderPageBase(titleId, resolvedChapterId);
+    const pageBase = buildReaderPageBase(resolvedTitleId, resolvedChapterId);
     const pageRevision = buildReaderPageRevision({
       title: fullTitle,
       chapter: enrichedChapter,
@@ -5815,10 +5816,10 @@ export const registerMoonV3Routes = (app, {
       nextChapterId: nextChapterId || null,
       progress: progressEntry || null,
       bookmarks: normalizeArray(bookmarks).filter((entry) =>
-        normalizeString(entry.titleId) === normalizeString(titleId)
+        [titleId, resolvedTitleId].some((candidate) => normalizeString(entry.titleId) === normalizeString(candidate))
         && stateChapterIds.has(normalizeString(entry.chapterId))
       ),
-      preferences: resolveReaderPreferences(storedPreferences, typeSlug, titleId)
+      preferences: resolveReaderPreferences(storedPreferences, typeSlug, resolvedTitleId)
     };
   };
 

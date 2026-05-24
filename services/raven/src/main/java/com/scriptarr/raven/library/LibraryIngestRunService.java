@@ -13,6 +13,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -22,6 +23,7 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.stream.Collectors;
 
 /**
  * Durable reader-page rebuild runs for Raven library types.
@@ -86,16 +88,20 @@ public final class LibraryIngestRunService {
         String libraryTypeSlug = resolveLibraryTypeSlug(request);
         String requestedBy = firstNonBlank(stringValue(request.get("requestedBy")), "scriptarr-admin");
         supersedeLegacyRuns(libraryTypeSlug);
+        List<LibraryTitle> titles = titlesForType(libraryTypeSlug);
         Map<String, Object> activeRun = activeRunForType(libraryTypeSlug);
         if (!activeRun.isEmpty()) {
-            reconcileRun(activeRun);
-            Map<String, Object> existingStatus = status(stringValue(activeRun.get("jobId")));
-            existingStatus.put("reused", true);
-            existingStatus.put("message", "Raven already has an active library ingest run for " + libraryTypeSlug + ".");
-            return existingStatus;
+            if (activeRunNeedsCanonicalRestart(activeRun, titles)) {
+                supersedeRun(activeRun, "Superseded after catalog duplicate merge changed the canonical title set.");
+            } else {
+                reconcileRun(activeRun);
+                Map<String, Object> existingStatus = status(stringValue(activeRun.get("jobId")));
+                existingStatus.put("reused", true);
+                existingStatus.put("message", "Raven already has an active library ingest run for " + libraryTypeSlug + ".");
+                return existingStatus;
+            }
         }
 
-        List<LibraryTitle> titles = titlesForType(libraryTypeSlug);
         String runId = "ingestrun_" + UUID.randomUUID().toString().replace("-", "");
         String now = Instant.now().toString();
         Map<String, Object> payload = new LinkedHashMap<>();
@@ -469,6 +475,19 @@ public final class LibraryIngestRunService {
             }
         }
         return Map.of();
+    }
+
+    private boolean activeRunNeedsCanonicalRestart(Map<String, Object> job, List<LibraryTitle> currentTitles) {
+        Set<String> currentTitleIds = Optional.ofNullable(currentTitles).orElse(List.of()).stream()
+            .map(LibraryTitle::id)
+            .filter((titleId) -> titleId != null && !titleId.isBlank())
+            .collect(Collectors.toCollection(LinkedHashSet::new));
+        List<Map<String, Object>> tasks = loadTitleTasks(stringValue(job.get("jobId")));
+        Set<String> taskTitleIds = tasks.stream()
+            .map(this::titleIdForTask)
+            .filter((titleId) -> !titleId.isBlank())
+            .collect(Collectors.toCollection(LinkedHashSet::new));
+        return taskTitleIds.size() != currentTitleIds.size() || !taskTitleIds.equals(currentTitleIds);
     }
 
     private void supersedeLegacyRuns(String libraryTypeSlug) {

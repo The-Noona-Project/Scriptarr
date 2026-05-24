@@ -133,12 +133,14 @@
   load additional chunks with the compact cursor API.
 - Catalogue list loading should use the shared user-list leaf primitives for Once UI `Skeleton` and `InfiniteScroll`,
   imported only through direct component paths inside `TitleListLoading.jsx`. Pair automatic loading with a manual
-  fallback button, de-dupe appended compact title rows by id, avoid inline Skeleton styles that force the Once layout
-  context, and keep Once UI JavaScript out of always-mounted shell, provider, navigation, and state-view files. Home may
-  reuse the leaf Skeleton primitive for shelf placeholders, but should stay bounded rather than pretending to have
-  infinite shelves.
+  fallback button, de-dupe appended compact title rows by id, and trust the server compact-card projection to collapse
+  catalog aliases before counts and pagination. Avoid inline Skeleton styles that force the Once layout context, and keep
+  Once UI JavaScript out of always-mounted shell, provider, navigation, and state-view files. Home may reuse the leaf
+  Skeleton primitive for shelf placeholders, but should stay bounded rather than pretending to have infinite shelves.
 - User cards have two routes by design: cover/art opens the best reader target from the server-merged `readerTarget`,
-  while title/copy opens `/title/:type/:titleId`. Avoid nested anchors and keep the split accessible.
+  while title/copy opens `/title/:type/:titleId`. If an old duplicate title id appears in saved progress or activity,
+  Sage/Vault should resolve it to the canonical title before Moon builds reader links. Avoid nested anchors and keep the
+  split accessible.
 - Card images should go through `CoverImage.jsx`, preferring `coverThumbUrl` then `coverUrl` and finally a styled
   initial fallback so intermittent upstream image failures do not show broken alt text in the UI.
 - For the next Moon speed pass, build a fresh timing table before editing. Watch document load, Next JS/CSS chunk size,

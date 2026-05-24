@@ -1749,6 +1749,17 @@ export const registerInternalBrokerRoutes = (app, {
     res.json(await vaultClient.listRavenTitleCards(req.query || {}));
   }));
 
+  app.get("/api/internal/vault/raven/title-duplicates", withService(requireService, ["scriptarr-raven", "scriptarr-warden"], async (req, res) => {
+    res.json(await vaultClient.previewRavenTitleDuplicates(req.query || {}));
+  }));
+
+  app.post("/api/internal/vault/raven/title-duplicates/merge", withService(requireService, ["scriptarr-raven", "scriptarr-warden"], async (req, res) => {
+    res.json(await vaultClient.mergeRavenTitleDuplicates({
+      ...(req.body || {}),
+      apply: req.body?.apply === true
+    }));
+  }));
+
   app.get("/api/internal/vault/raven/titles/:titleId", withService(requireService, ["scriptarr-raven"], async (req, res) => {
     const title = await vaultClient.getRavenTitle(req.params.titleId);
     if (!title) {

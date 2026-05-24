@@ -50,6 +50,7 @@ import java.util.zip.ZipFile;
 public final class LibraryService {
     private static final String DOWNLOADING_FOLDER_NAME = "downloading";
     private static final String DOWNLOADED_FOLDER_NAME = "downloaded";
+    private static final String IMPORT_STAGING_FOLDER_NAME = "import-staging";
     private static final String RESCAN_JOB_ID = "raven-library-rescan";
     private static final String RESCAN_TASK_ID = RESCAN_JOB_ID + "_scan";
     private static final TypeReference<List<LibraryTitle>> TITLE_LIST_TYPE = new TypeReference<>() {
@@ -405,7 +406,13 @@ public final class LibraryService {
         );
 
         LibraryTitle persisted = upsertTitle(nextTitle);
-        List<LibraryChapter> persistedChapters = replaceChapters(titleId, normalizedChapters);
+        String persistedTitleId = persisted != null && persisted.id() != null && !persisted.id().isBlank()
+            ? persisted.id()
+            : titleId;
+        List<LibraryChapter> chaptersToPersist = Objects.equals(persistedTitleId, titleId)
+            ? normalizedChapters
+            : rekeyChapters(persistedTitleId, enrichAndNormalizeChapters(persistedTitleId, persisted, chapters));
+        List<LibraryChapter> persistedChapters = replaceChapters(persistedTitleId, chaptersToPersist);
         return persisted == null
             ? nextTitle
             : new LibraryTitle(
@@ -978,7 +985,7 @@ public final class LibraryService {
 
     private void validateImportSource(Path sourcePath) {
         Path downloadsRoot = resolveDownloadsRoot();
-        Path importRoot = downloadsRoot.resolve("import-staging").toAbsolutePath().normalize();
+        Path importRoot = downloadsRoot.resolve(IMPORT_STAGING_FOLDER_NAME).toAbsolutePath().normalize();
         Path downloadedRoot = downloadsRoot.resolve(DOWNLOADED_FOLDER_NAME).toAbsolutePath().normalize();
         if (!Files.exists(sourcePath) || !Files.isRegularFile(sourcePath)) {
             throw new IllegalArgumentException("Import source CBZ does not exist.");
@@ -1169,7 +1176,10 @@ public final class LibraryService {
         try (var typeFolders = Files.list(downloadsRoot).filter(Files::isDirectory).sorted()) {
             for (Path typeFolder : typeFolders.toList()) {
                 String folderName = typeFolder.getFileName().toString();
-                if (DOWNLOADING_FOLDER_NAME.equalsIgnoreCase(folderName) || DOWNLOADED_FOLDER_NAME.equalsIgnoreCase(folderName) || "logs".equalsIgnoreCase(folderName)) {
+                if (DOWNLOADING_FOLDER_NAME.equalsIgnoreCase(folderName)
+                    || DOWNLOADED_FOLDER_NAME.equalsIgnoreCase(folderName)
+                    || IMPORT_STAGING_FOLDER_NAME.equalsIgnoreCase(folderName)
+                    || "logs".equalsIgnoreCase(folderName)) {
                     continue;
                 }
 
@@ -1196,7 +1206,7 @@ public final class LibraryService {
                 titleIdsByTypeSlugAndTitleSlug.putIfAbsent(key, titleId);
             }
         }
-        return new ScanCatalogContext(settingsService.getNamingSettings(), Map.copyOf(titleIdsByTypeSlugAndTitleSlug));
+        return new ScanCatalogContext(settingsService.getNamingSettings(), titleIdsByTypeSlugAndTitleSlug);
     }
 
     private void scanTitleFolder(Path folder, String rawType, Path workingRoot, ScanCatalogContext scanContext) {
@@ -1261,8 +1271,15 @@ public final class LibraryService {
                 List.copyOf(chapters),
                 existing != null ? existing.updatedAt() : null
             );
-            upsertTitle(title);
-            replaceChapters(titleId, chapters);
+            LibraryTitle persisted = upsertTitle(title);
+            String persistedTitleId = persisted != null && persisted.id() != null && !persisted.id().isBlank()
+                ? persisted.id()
+                : titleId;
+            List<LibraryChapter> chaptersToPersist = Objects.equals(persistedTitleId, titleId)
+                ? chapters
+                : rekeyChapters(persistedTitleId, chapters);
+            replaceChapters(persistedTitleId, chaptersToPersist);
+            scanContext.titleIdsByTypeSlugAndTitleSlug().putIfAbsent(scanTitleKey(typeSlug, titleName), persistedTitleId);
         } catch (Exception error) {
             logger.warn("LIBRARY", "Raven import scan could not index a title folder.", error.getMessage());
         }
@@ -1357,20 +1374,20 @@ public final class LibraryService {
             return "";
         }
 
-        String normalizedRoot = Optional.ofNullable(title.downloadRoot()).orElse("").trim();
-        if (!normalizedRoot.isBlank()) {
-            return "root:" + normalizedRoot;
+        String normalizedType = Optional.ofNullable(title.libraryTypeSlug()).orElse("").trim();
+        String normalizedTitle = LibraryNaming.slugifySegment(title.title());
+        if (!normalizedTitle.isBlank() && !normalizedType.isBlank()) {
+            return "title:" + normalizedType + ":" + normalizedTitle;
         }
 
         String normalizedSource = Optional.ofNullable(title.sourceUrl()).orElse("").trim();
-        String normalizedType = Optional.ofNullable(title.libraryTypeSlug()).orElse("").trim();
         if (!normalizedSource.isBlank() && !normalizedType.isBlank()) {
             return "source:" + normalizedType + ":" + normalizedSource;
         }
 
-        String normalizedTitle = LibraryNaming.slugifySegment(title.title());
-        if (!normalizedTitle.isBlank() && !normalizedType.isBlank()) {
-            return "title:" + normalizedType + ":" + normalizedTitle;
+        String normalizedRoot = Optional.ofNullable(title.downloadRoot()).orElse("").trim();
+        if (!normalizedRoot.isBlank()) {
+            return "root:" + normalizedRoot;
         }
 
         return "";
@@ -1711,6 +1728,33 @@ public final class LibraryService {
         return chapterByNumber.values().stream()
             .sorted(Comparator.comparing((LibraryChapter entry) -> chapterSortKey(entry.chapterNumber())).reversed())
             .toList();
+    }
+
+    private List<LibraryChapter> rekeyChapters(String titleId, List<LibraryChapter> chapters) {
+        return normalizeChapters(titleId, Optional.ofNullable(chapters).orElse(List.of()).stream()
+            .map((chapter) -> new LibraryChapter(
+                firstNonBlank(chapterId(titleId, chapter.chapterNumber()), chapter.id()),
+                chapter.label(),
+                chapter.chapterNumber(),
+                chapter.pageCount(),
+                chapter.releaseDate(),
+                chapter.available(),
+                chapter.archivePath(),
+                chapter.sourceUrl(),
+                chapter.qualityStatus(),
+                chapter.expectedPageCount(),
+                chapter.missingPageCount(),
+                chapter.missingPages(),
+                chapter.qualityNotes(),
+                chapter.ingestStatus(),
+                chapter.ingestRevision(),
+                chapter.ingestedPageCount(),
+                chapter.ingestedAt(),
+                chapter.ingestError(),
+                chapter.ingestManifestPath(),
+                chapter.updatedAt()
+            ))
+            .toList());
     }
 
     private List<LibraryChapter> enrichAndNormalizeChapters(String titleId, LibraryTitle existing, List<LibraryChapter> chapters) {

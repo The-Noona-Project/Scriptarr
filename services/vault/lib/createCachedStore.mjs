@@ -453,6 +453,26 @@ export const createCachedStore = (
     async listRavenTitleCards(filters = {}) {
       return readThrough(makeListKey("raven-title-cards", filters), () => baseStore.listRavenTitleCards(filters));
     },
+    async previewRavenTitleDuplicates(filters = {}) {
+      return baseStore.previewRavenTitleDuplicates(filters);
+    },
+    async mergeRavenTitleDuplicates(filters = {}) {
+      const result = await baseStore.mergeRavenTitleDuplicates(filters);
+      invalidatePrefix(
+        "reader-targets:",
+        "raven-title:",
+        "raven-title-summary:",
+        "raven-title-chapters:",
+        "raven-title-cards:",
+        "raven-metadata:",
+        "read-state:",
+        "progress:",
+        "setting:moon.following.",
+        "setting:moon.reader.bookmarks."
+      );
+      invalidate("raven-titles:list");
+      return result;
+    },
     async listReaderTargets(filters = {}) {
       return readThrough(makeListKey("reader-targets", filters), () => baseStore.listReaderTargets(filters));
     },
@@ -468,6 +488,9 @@ export const createCachedStore = (
     async upsertRavenTitle(payload) {
       const title = await baseStore.upsertRavenTitle(payload);
       writeEntry(`raven-title:${title.id}`, title);
+      if (payload?.id && payload.id !== title.id) {
+        invalidate(`raven-title:${payload.id}`);
+      }
       invalidatePrefix("raven-title-cards:", "raven-title-summary:", "raven-title-chapters:");
       invalidate("raven-titles:list");
       return title;

@@ -539,6 +539,25 @@ export const createVaultClient = (config) => {
       });
       return payload;
     },
+    async previewRavenTitleDuplicates(filters = {}) {
+      const params = new URLSearchParams();
+      for (const [key, value] of Object.entries(filters || {})) {
+        if (value != null && String(value).trim()) {
+          params.set(key, String(value));
+        }
+      }
+      const {payload} = await requestJson(baseUrl, headers, `/api/service/raven/title-duplicates${params.size ? `?${params.toString()}` : ""}`, {
+        context: "Failed to preview Raven duplicate titles from Vault"
+      });
+      return payload;
+    },
+    async mergeRavenTitleDuplicates(payload = {}) {
+      return (await requestJson(baseUrl, headers, "/api/service/raven/title-duplicates/merge", {
+        method: "POST",
+        body: payload,
+        context: "Failed to merge Raven duplicate titles in Vault"
+      })).payload;
+    },
     async listReaderTargets(discordUserId, titleIds = []) {
       const params = new URLSearchParams();
       for (const titleId of Array.isArray(titleIds) ? titleIds : []) {

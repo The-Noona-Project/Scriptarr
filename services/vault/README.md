@@ -34,7 +34,13 @@ reader bookmarks, Raven catalog rows, Raven tasks, and Raven-owned jobs are clea
 API keys, sessions, settings, secrets, and durable events remain intact.
 Vault also exposes the service-only `GET /api/service/raven/title-cards` projection for Moon shelves. It reads from
 `raven_titles` only, supports query, type, letter, cursor, page-size, sort, and exact `ids` filters, preserves exact-id
-ordering for activity hydration, and keeps chapter arrays plus Raven filesystem roots out of card payloads.
+ordering for activity hydration, and keeps chapter arrays plus Raven filesystem roots out of card payloads. The
+projection deduplicates by library type plus normalized title before counts, sorting, letters, and pagination so Moon
+does not show stale duplicate catalog rows while cleanup is rolling out.
+Vault stores `catalog_key` on Raven titles and a `raven_title_aliases` map for retired duplicate ids. Exact-id card
+lookups, title summaries, chapter pages, reader targets, and metadata-match reads resolve aliases to the canonical title.
+The service-only duplicate preview and merge endpoints are intended for Sage/Warden maintenance only; merges write an
+audit setting after moving chapters, metadata, read/progress state, follows, and bookmarks to the canonical title.
 
 It also stores the Raven VPN settings, Raven metadata provider configuration, Oracle provider state, Portal Discord
 workflow settings including release notification channel id, and Oracle secrets used by the rest of the stack. Moon

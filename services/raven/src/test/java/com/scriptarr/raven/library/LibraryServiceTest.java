@@ -774,6 +774,32 @@ class LibraryServiceTest {
             List.of(new LibraryChapter("newer-id-c22", "Chapter 22", "22", 37, null, true, "/downloads/downloaded/manga/Absolute_Duo/Absolute Duo c022 [Scriptarr].cbz", "https://weebcentral.com/chapters/absolute-duo-22", null)),
             null
         ));
+        brokerClient.setLibraryTitle(new LibraryTitle(
+            "alternate-root-id",
+            "Absolute Duo",
+            "manga",
+            "Manga",
+            "manga",
+            "active",
+            "22",
+            "#4a78d4",
+            "",
+            "",
+            23,
+            23,
+            "",
+            List.of(),
+            List.of(),
+            "",
+            null,
+            List.of(),
+            "",
+            "",
+            "/downloads/downloading/manga/Absolute_Duo_2",
+            "/downloads/downloaded/manga/Absolute_Duo_2",
+            List.of(new LibraryChapter("alternate-root-id-c22", "Chapter 22", "22", 37, null, true, "/downloads/downloaded/manga/Absolute_Duo_2/Absolute Duo c022 [Scriptarr].cbz", null, null)),
+            null
+        ));
 
         List<LibraryTitle> titles = service.listTitles();
 

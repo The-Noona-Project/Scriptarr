@@ -35,6 +35,8 @@
   same-type requests must reattach detached queued/running runs, preserve already failed title tasks, and continue only
   unfinished queued or stale-running tasks. Legacy WebP-format active runs should be marked `superseded` before the
   AVIF run starts.
+- If the canonical title set changes because Vault merged duplicate catalog rows, a same-type ingest request should
+  supersede the stale active run and queue a fresh AVIF rebuild over canonical title ids only.
 - Keep `/v1/ingest` backlog and Appa preview/count paths lightweight. They should use compact title-card projections
   and must not pull full title records with chapter arrays just to count eligible library types.
 - Reader serving is AVIF-first. A chapter is readable only after ingest writes stable `p000001.avif`-style page slugs,
@@ -74,6 +76,9 @@
   response; full title and reader routes remain the detail paths.
 - New Raven catalog entries should use opaque durable ids instead of title slugs. Treat title ids as opaque route
   parameters everywhere outside Raven's internals.
+- Before creating a Raven title id in download completion, manual import, startup scan, or ingest setup, resolve the
+  canonical catalog identity using library type plus normalized title. Keep the scan context updated as repaired folders
+  are persisted so one startup pass cannot create two rows for the same logical title.
 - Download tasks should only reach `100%` after file promotion, brokered catalog persistence, and AVIF ingest all
   succeed. When a persist or ingest step fails, fail the task loudly instead of leaving it running at `90%`.
 - Raven-originated task, catalog, and request-lifecycle changes that matter to Moon admin should now be forwarded

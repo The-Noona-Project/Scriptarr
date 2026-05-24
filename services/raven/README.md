@@ -24,6 +24,9 @@ Raven-visible CBZs from `import-staging` or existing downloaded storage, copies 
 `downloaded/<type-slug>/<title-folder>`, catalogs the title or chapter rows, and immediately queues AVIF ingest.
 Reader routes are AVIF-first: a chapter must have `ingestStatus: "ready"`, a current `avif-` ingest revision, a page
 count, and a manifest path before Moon can serve it.
+Before Raven creates or catalogs a title, it resolves the logical catalog identity of library type plus normalized title
+against Vault's compact title-card projection. Downloads, manual imports, startup rescans, and AVIF ingest setup should
+therefore reuse the canonical title id even when the same title appears under a different source or filesystem folder.
 The v1 AVIF encoder is FFmpeg `av1_nvenc`. Raven requires NVIDIA runtime access for AVIF ingest when
 `SCRIPTARR_RAVEN_AVIF_REQUIRE_NVIDIA=true`, `SCRIPTARR_RAVEN_INGEST_GPU_PROFILE=nvidia`, or
 `SCRIPTARR_RAVEN_INGEST_REQUIRE_NVIDIA=true`; missing hardware reports `hardware_missing` for admin attention without
@@ -105,6 +108,8 @@ Ingest failures keep the CBZ and publish retryable `Needs attention` work; clean
 files. On boot, Raven also rescans the existing `downloaded/<type>/...` tree to backfill missing catalog rows from
 already-finished archives. That startup scan uses compact title-card indexes and skips unchanged folders so a large
 library cannot force repeated full-title catalog reads while auth and admin bootstrap are trying to start.
+The scan keeps its in-memory catalog context current as it repairs folders, which prevents two folders discovered in the
+same pass from creating duplicate durable rows for the same logical title.
 
 Raven's global title-download concurrency is now controlled by the Sage-backed `raven.download.runtime` setting. The
 default remains two active title downloads, admins can choose `1` through `6` from Moon Settings, and Raven reloads the
@@ -130,6 +135,8 @@ per-title failures, and reuse the active queued or running run id when the same 
 If Raven restarts or loses its broker connection mid-run, startup recovery and duplicate same-type requests reattach the
 durable run, preserve already failed title tasks, and continue unfinished queued or stale-running tasks. Active legacy
 WebP-format runs are marked `superseded` before a new AVIF run is accepted for that type.
+When a duplicate merge changes the active type's canonical title set, the next same-type ingest request supersedes the
+stale run and starts a new one with one task per canonical title.
 Raven keeps `/v1/ingest` and Appa preview paths on compact title-card projections so backlog and count views do not
 hydrate full chapter arrays; full title payloads stay reserved for single-title, reader, and actual ingest work.
 For long-running WeebCentral series, Raven now follows the source page's HTMX full-chapter-list flow instead of only

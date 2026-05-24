@@ -90,7 +90,8 @@ Coding rules that avoid hidden drift:
   abort/close paths, and tests for stalled or disconnected callers.
 - For the unified `/library` catalogue, keep the URL as the source of truth for search/filter/view state and refresh
   only the results chunk. `/browse` remains a compatibility entrypoint. Server-side card payloads should include the
-  minimal `readerTarget` needed for art-click reader links.
+  minimal `readerTarget` needed for art-click reader links and should already be deduplicated by canonical catalog
+  identity before Moon paginates or appends rows.
 - Keep admin SSE shared through Moon's admin provider; page-local `EventSource` instances are a regression unless the
   route has a strong isolated reason.
 - Keep stale product language out of code and docs. Scriptarr is the product, Noona is only the Discord bot/persona,
@@ -207,7 +208,8 @@ Architecture invariants:
   only `1` through `6`, apply reloads live without cancelling active downloads, and keep per-title page download
   concurrency fixed.
 - Raven should only report `100%` after the promoted files persist into the brokered catalog, and startup recovery now
-  rescans finished `downloaded/<type>/...` content to heal missing library rows.
+  rescans finished `downloaded/<type>/...` content to heal missing library rows while reusing canonical title ids for
+  repeated library type plus normalized title matches.
 - Raven should skip completed titles during `/downloadall`, append only missing/new chapters for existing active
   titles, convert source-image damage into Missing Content quality fields instead of wedging a whole batch, and pause
   with an exact recovery action if a stale running title task cannot be cancelled into retryable work.

@@ -410,6 +410,18 @@ const normalizeTypeSlug = (value, fallback = "manga") => {
     .replace(/-+$/, "");
   return normalized || fallback;
 };
+const normalizeRavenCatalogSegment = (value) => normalizeScalarString(value)
+  .normalize("NFKD")
+  .replace(/[\u0300-\u036f]/g, "")
+  .toLowerCase()
+  .replace(/&/g, " and ")
+  .replace(/[^a-z0-9]+/g, "-")
+  .replace(/^-+|-+$/g, "");
+const ravenCatalogKeyFor = (title = {}) => {
+  const typeSlug = normalizeTypeSlug(title.libraryTypeSlug || title.library_type_slug || title.mediaType || title.media_type, "");
+  const titleSlug = normalizeRavenCatalogSegment(title.title);
+  return typeSlug && titleSlug ? `${typeSlug}:${titleSlug}` : "";
+};
 const normalizeCardLetter = (value) => {
   const normalized = normalizeScalarString(value).toUpperCase();
   return /^[A-Z]$/.test(normalized) ? normalized : normalized === "#" ? "#" : "";
@@ -487,6 +499,40 @@ const toRavenTitleCard = (title = {}) => ({
   ingestedChapterCount: Math.max(0, Number.parseInt(String(title.ingestedChapterCount || 0), 10) || 0),
   ingestError: truncateText(title.ingestError, 180)
 });
+const ravenCardScore = (card = {}) => {
+  const updatedAt = Date.parse(String(card.updatedAt || card.metadataMatchedAt || "")) || 0;
+  return [
+    card.ingestStatus === "ready" ? 100000000 : 0,
+    Math.max(0, Number.parseInt(String(card.ingestedChapterCount || 0), 10) || 0) * 100000,
+    normalizeScalarString(card.coverUrl) ? 10000 : 0,
+    normalizeScalarString(card.summary) ? 5000 : 0,
+    normalizeScalarString(card.metadataProvider) ? 2500 : 0,
+    normalizeScalarString(card.sourceUrl) ? 1000 : 0,
+    Math.max(0, Number.parseInt(String(card.chapterCount || 0), 10) || 0) * 10,
+    Math.floor(updatedAt / 1000)
+  ].reduce((sum, value) => sum + value, 0);
+};
+const preferRavenCard = (left, right) => {
+  if (!left) {
+    return right;
+  }
+  if (!right) {
+    return left;
+  }
+  const scoreDelta = ravenCardScore(right) - ravenCardScore(left);
+  if (scoreDelta !== 0) {
+    return scoreDelta > 0 ? right : left;
+  }
+  return normalizeScalarString(left.id).localeCompare(normalizeScalarString(right.id), "en", {numeric: true}) <= 0 ? left : right;
+};
+const dedupeRavenTitleCards = (cards = []) => {
+  const byKey = new Map();
+  for (const card of cards) {
+    const key = ravenCatalogKeyFor(card) || `id:${normalizeScalarString(card.id)}`;
+    byKey.set(key, preferRavenCard(byKey.get(key), card));
+  }
+  return Array.from(byKey.values());
+};
 const buildRavenTitleCardPage = (titles = [], query = {}) => {
   const q = normalizeScalarString(query.q || query.query).toLowerCase();
   const type = normalizeTypeSlug(query.type || "", "");
@@ -519,7 +565,8 @@ const buildRavenTitleCardPage = (titles = [], query = {}) => {
     }
     return true;
   });
-  cards.sort((left, right) => {
+  const dedupedCards = dedupeRavenTitleCards(cards);
+  dedupedCards.sort((left, right) => {
     if (exactIds.length) {
       return exactIds.indexOf(left.id) - exactIds.indexOf(right.id);
     }
@@ -541,18 +588,18 @@ const buildRavenTitleCardPage = (titles = [], query = {}) => {
   for (let index = 0; index < 26; index += 1) {
     byLetter[String.fromCharCode(65 + index)] = 0;
   }
-  for (const card of cards) {
+  for (const card of dedupedCards) {
     const resolvedLetter = resolveCardLetter(card.title);
     byLetter[resolvedLetter] = (byLetter[resolvedLetter] || 0) + 1;
     const resolvedType = normalizeTypeSlug(card.libraryTypeSlug || card.mediaType);
     byType[resolvedType] = (byType[resolvedType] || 0) + 1;
   }
-  const letterFiltered = letter ? cards.filter((card) => resolveCardLetter(card.title) === letter) : cards;
+  const letterFiltered = letter ? dedupedCards.filter((card) => resolveCardLetter(card.title) === letter) : dedupedCards;
   const page = letterFiltered.slice(cursor, cursor + pageSize);
   const nextOffset = cursor + page.length;
   return {
     titles: page,
-    counts: {total: cards.length, byLetter, byType},
+    counts: {total: dedupedCards.length, byLetter, byType},
     filters: {q, type, letter, ids: exactIds, pageSize, sort},
     pageInfo: {
       cursor: String(cursor),
@@ -750,6 +797,121 @@ const normalizeRavenTitle = (title, chapters = []) => {
     updatedAt: toIsoTimestamp(title.updatedAt || title.updated_at),
     chapters: normalizedChapters
   };
+};
+const ravenTitleScore = (title = {}) => ravenCardScore(toRavenTitleCard(title))
+  + (normalizeScalarString(title.downloadRoot) ? 500 : 0)
+  + (Array.isArray(title.chapters) ? title.chapters.length * 10 : 0);
+const preferRavenTitle = (left, right) => {
+  if (!left) {
+    return right;
+  }
+  if (!right) {
+    return left;
+  }
+  const delta = ravenTitleScore(right) - ravenTitleScore(left);
+  if (delta !== 0) {
+    return delta > 0 ? right : left;
+  }
+  return normalizeScalarString(left.id).localeCompare(normalizeScalarString(right.id), "en", {numeric: true}) <= 0 ? left : right;
+};
+const groupRavenDuplicateTitles = (titles = [], {type = ""} = {}) => {
+  const filterType = normalizeTypeSlug(type, "");
+  const groups = new Map();
+  for (const title of Array.isArray(titles) ? titles : []) {
+    const normalizedTitle = normalizeRavenTitle(title, title.chapters || []);
+    if (filterType && normalizeTypeSlug(normalizedTitle.libraryTypeSlug || normalizedTitle.mediaType) !== filterType) {
+      continue;
+    }
+    const key = ravenCatalogKeyFor(normalizedTitle);
+    if (!key) {
+      continue;
+    }
+    if (!groups.has(key)) {
+      groups.set(key, []);
+    }
+    groups.get(key).push(normalizedTitle);
+  }
+  return Array.from(groups.entries())
+    .filter(([, entries]) => entries.length > 1)
+    .map(([catalogKey, entries]) => {
+      const canonical = entries.reduce((best, entry) => preferRavenTitle(best, entry), null);
+      return {
+        catalogKey,
+        type: normalizeTypeSlug(canonical?.libraryTypeSlug || canonical?.mediaType, ""),
+        title: canonical?.title || entries[0]?.title || "",
+        canonicalId: canonical?.id || "",
+        duplicateIds: entries.map((entry) => entry.id).filter((id) => id !== canonical?.id),
+        count: entries.length,
+        chapterCounts: entries.map((entry) => ({id: entry.id, chapters: entry.chapters.length})),
+        titles: entries
+      };
+    })
+    .sort((left, right) => left.catalogKey.localeCompare(right.catalogKey, "en", {numeric: true}));
+};
+const chapterMergeKey = (chapter = {}) =>
+  normalizeRavenCatalogSegment(chapter.chapterNumber || chapter.label || chapter.id);
+const ravenChapterScore = (chapter = {}) => [
+  normalizeRavenIngestStatus(chapter.ingestStatus) === "ready" ? 100000 : 0,
+  normalizeScalarString(chapter.ingestManifestPath) ? 10000 : 0,
+  normalizeScalarString(chapter.archivePath) ? 5000 : 0,
+  normalizeScalarString(chapter.sourceUrl) ? 1000 : 0,
+  Math.max(0, Number.parseInt(String(chapter.ingestedPageCount || chapter.pageCount || 0), 10) || 0),
+  Date.parse(String(chapter.updatedAt || chapter.ingestedAt || "")) || 0
+].reduce((sum, value) => sum + value, 0);
+const preferRavenChapter = (left, right) => {
+  if (!left) {
+    return right;
+  }
+  if (!right) {
+    return left;
+  }
+  const delta = ravenChapterScore(right) - ravenChapterScore(left);
+  if (delta !== 0) {
+    return delta > 0 ? right : left;
+  }
+  return normalizeScalarString(left.id).localeCompare(normalizeScalarString(right.id), "en", {numeric: true}) <= 0 ? left : right;
+};
+const mergeRavenDuplicateTitleGroup = (titles = []) => {
+  const normalizedTitles = titles.map((title) => normalizeRavenTitle(title, title.chapters || []));
+  const canonical = normalizedTitles.reduce((best, entry) => preferRavenTitle(best, entry), null);
+  const canonicalId = canonical?.id || "";
+  const chapterByKey = new Map();
+  const chapterIdMap = new Map();
+  for (const title of normalizedTitles) {
+    for (const chapter of title.chapters || []) {
+      const key = chapterMergeKey(chapter);
+      if (!key) {
+        continue;
+      }
+      const existing = chapterByKey.get(key);
+      const preferred = preferRavenChapter(existing, chapter);
+      chapterByKey.set(key, preferred);
+    }
+  }
+  const mergedChapters = sortRavenChapters(Array.from(chapterByKey.values()).map((chapter) => normalizeRavenChapter(chapter)));
+  for (const title of normalizedTitles) {
+    for (const chapter of title.chapters || []) {
+      const preferred = chapterByKey.get(chapterMergeKey(chapter));
+      if (preferred && chapter.id && preferred.id && chapter.id !== preferred.id) {
+        chapterIdMap.set(chapter.id, preferred.id);
+      }
+    }
+  }
+  const mergedTitle = normalizeRavenTitle({
+    ...canonical,
+    id: canonicalId,
+    latestChapter: mergedChapters[0]?.chapterNumber || canonical?.latestChapter || "",
+    chapterCount: Math.max(canonical?.chapterCount || 0, mergedChapters.length),
+    chaptersDownloaded: Math.max(canonical?.chaptersDownloaded || 0, mergedChapters.length),
+    tags: Array.from(new Set(normalizedTitles.flatMap((title) => title.tags || []))),
+    aliases: Array.from(new Set(normalizedTitles.flatMap((title) => title.aliases || []))),
+    summary: normalizedTitles.map((title) => title.summary || "").sort((a, b) => b.length - a.length)[0] || "",
+    coverUrl: normalizedTitles.map((title) => title.coverUrl || "").find(Boolean) || "",
+    sourceUrl: normalizedTitles.map((title) => title.sourceUrl || "").find(Boolean) || "",
+    downloadRoot: normalizedTitles.map((title) => title.downloadRoot || "").find(Boolean) || "",
+    chapters: mergedChapters
+  }, mergedChapters);
+  return {canonicalId, title: mergedTitle, chapters: mergedChapters, chapterIdMap};
 };
 const TITLE_CHAPTER_PAGE_SIZE_DEFAULT = 40;
 const TITLE_CHAPTER_PAGE_SIZE_MAX = 100;
@@ -1045,6 +1207,7 @@ const createMemoryStore = (options = {}) => {
     chapterReadStates: new Map(),
     ravenTitles: new Map(),
     ravenChapters: new Map(),
+    ravenTitleAliases: new Map(),
     ravenDownloadTasks: new Map(),
     ravenMetadataMatches: new Map(),
     jobs: new Map(),
@@ -1105,6 +1268,32 @@ const createMemoryStore = (options = {}) => {
         state.sessions.delete(token);
       }
     }
+  };
+  const resolveMemoryRavenTitleId = (titleId) => {
+    const normalizedTitleId = normalizeString(titleId);
+    if (!normalizedTitleId) {
+      return "";
+    }
+    const canonicalId = state.ravenTitleAliases.get(normalizedTitleId);
+    return normalizeString(canonicalId, normalizedTitleId);
+  };
+  const findMemoryCanonicalTitleId = (title) => {
+    const key = ravenCatalogKeyFor(title);
+    if (!key) {
+      return normalizeString(title?.id);
+    }
+    let best = null;
+    for (const candidate of state.ravenTitles.values()) {
+      if (ravenCatalogKeyFor(candidate) !== key) {
+        continue;
+      }
+      if (!best) {
+        best = candidate;
+        continue;
+      }
+      best = preferRavenCard(toRavenTitleCard(best), toRavenTitleCard(candidate))?.id === candidate.id ? candidate : best;
+    }
+    return normalizeString(best?.id, normalizeString(title?.id));
   };
   const getMemoryTitleState = (discordUserId, mediaId) => state.titleReadStates.get(readStateKey(discordUserId, mediaId)) || null;
   const setMemoryTitleState = (payload) => {
@@ -1740,37 +1929,47 @@ const createMemoryStore = (options = {}) => {
     },
     async listRavenTitles() {
       return sortRavenTitles(Array.from(state.ravenTitles.values()).map((title) =>
-        normalizeRavenTitle(title, Array.from((state.ravenChapters.get(title.id) || new Map()).values()))
+        normalizeRavenTitle(title, Array.from((state.ravenChapters.get(resolveMemoryRavenTitleId(title.id)) || new Map()).values()))
       ));
     },
     async listRavenTitleCards(query = {}) {
-      return buildRavenTitleCardPage(Array.from(state.ravenTitles.values()), query);
+      const exactIds = normalizeCardIds(query.ids);
+      const resolvedExactIds = exactIds.length ? exactIds.map(resolveMemoryRavenTitleId) : [];
+      return buildRavenTitleCardPage(Array.from(state.ravenTitles.values()), {
+        ...query,
+        ids: resolvedExactIds.length ? resolvedExactIds : exactIds
+      });
     },
     async listReaderTargets({discordUserId = "", titleIds = []} = {}) {
       const normalizedUserId = normalizeString(discordUserId);
       const normalizedTitleIds = normalizeReaderTargetIds(titleIds);
+      const resolvedTitleIds = normalizedTitleIds.map(resolveMemoryRavenTitleId);
       const chaptersByTitle = new Map();
-      for (const titleId of normalizedTitleIds) {
+      for (const titleId of resolvedTitleIds) {
         chaptersByTitle.set(titleId, Array.from((state.ravenChapters.get(titleId) || new Map()).values()));
       }
-      return buildReaderTargets({
-        titleIds: normalizedTitleIds,
+      const resolvedTargets = buildReaderTargets({
+        titleIds: resolvedTitleIds,
         progress: Array.from(state.progress.values()).filter((entry) =>
-          normalizeString(entry.discordUserId) === normalizedUserId && normalizedTitleIds.includes(normalizeString(entry.mediaId))
-        ),
-        chapterReads: getMemoryChapterReads(normalizedUserId).filter((entry) => normalizedTitleIds.includes(normalizeString(entry.mediaId))),
+          normalizeString(entry.discordUserId) === normalizedUserId && resolvedTitleIds.includes(resolveMemoryRavenTitleId(entry.mediaId))
+        ).map((entry) => ({...entry, mediaId: resolveMemoryRavenTitleId(entry.mediaId)})),
+        chapterReads: getMemoryChapterReads(normalizedUserId)
+          .filter((entry) => resolvedTitleIds.includes(resolveMemoryRavenTitleId(entry.mediaId)))
+          .map((entry) => ({...entry, mediaId: resolveMemoryRavenTitleId(entry.mediaId)})),
         chaptersByTitle
       });
+      return Object.fromEntries(normalizedTitleIds.map((titleId, index) => [titleId, resolvedTargets[resolvedTitleIds[index]] || null]));
     },
     async getRavenTitle(titleId) {
-      const title = state.ravenTitles.get(titleId);
+      const resolvedTitleId = resolveMemoryRavenTitleId(titleId);
+      const title = state.ravenTitles.get(resolvedTitleId);
       if (!title) {
         return null;
       }
-      return normalizeRavenTitle(title, Array.from((state.ravenChapters.get(titleId) || new Map()).values()));
+      return normalizeRavenTitle(title, Array.from((state.ravenChapters.get(resolvedTitleId) || new Map()).values()));
     },
     async getRavenTitleSummary(titleId, {discordUserId = ""} = {}) {
-      const normalizedTitleId = normalizeString(titleId);
+      const normalizedTitleId = resolveMemoryRavenTitleId(titleId);
       const title = state.ravenTitles.get(normalizedTitleId);
       if (!title) {
         return null;
@@ -1785,7 +1984,7 @@ const createMemoryStore = (options = {}) => {
       });
     },
     async listRavenTitleChapters(titleId, query = {}) {
-      const normalizedTitleId = normalizeString(titleId);
+      const normalizedTitleId = resolveMemoryRavenTitleId(titleId);
       if (!state.ravenTitles.has(normalizedTitleId)) {
         return null;
       }
@@ -1798,20 +1997,121 @@ const createMemoryStore = (options = {}) => {
       });
     },
     async upsertRavenTitle(title) {
-      const existing = state.ravenTitles.get(title.id) || {};
-      state.ravenTitles.set(title.id, {
+      const requestedTitleId = normalizeString(title.id);
+      const canonicalTitleId = findMemoryCanonicalTitleId(title);
+      if (requestedTitleId && canonicalTitleId && requestedTitleId !== canonicalTitleId) {
+        state.ravenTitleAliases.set(requestedTitleId, canonicalTitleId);
+      }
+      const existing = state.ravenTitles.get(canonicalTitleId) || {};
+      state.ravenTitles.set(canonicalTitleId, {
         ...existing,
-        ...normalizeRavenTitle(title, existing.chapters || []),
+        ...normalizeRavenTitle({...title, id: canonicalTitleId}, existing.chapters || []),
         updatedAt: nowIso()
       });
-      return this.getRavenTitle(title.id);
+      return this.getRavenTitle(canonicalTitleId);
     },
     async replaceRavenChapters(titleId, chapters) {
-      state.ravenChapters.set(titleId, new Map(sortRavenChapters(chapters).map((chapter) => [chapter.id, {
+      const canonicalTitleId = resolveMemoryRavenTitleId(titleId);
+      state.ravenChapters.set(canonicalTitleId, new Map(sortRavenChapters(chapters).map((chapter) => [chapter.id, {
         ...normalizeRavenChapter(chapter),
         updatedAt: nowIso()
       }])));
-      return Array.from(state.ravenChapters.get(titleId).values());
+      return Array.from(state.ravenChapters.get(canonicalTitleId).values());
+    },
+    async previewRavenTitleDuplicates(filters = {}) {
+      const titles = Array.from(state.ravenTitles.values()).map((title) =>
+        normalizeRavenTitle(title, Array.from((state.ravenChapters.get(title.id) || new Map()).values()))
+      );
+      const groups = groupRavenDuplicateTitles(titles, filters).map(({titles: _titles, ...group}) => group);
+      return {
+        driver: "memory",
+        groups,
+        duplicateGroupCount: groups.length,
+        duplicateTitleCount: groups.reduce((sum, group) => sum + group.duplicateIds.length, 0)
+      };
+    },
+    async mergeRavenTitleDuplicates(filters = {}) {
+      const preview = await this.previewRavenTitleDuplicates(filters);
+      if (filters.dryRun !== false && filters.apply !== true) {
+        return {...preview, dryRun: true, mergedGroups: []};
+      }
+      const allTitles = Array.from(state.ravenTitles.values()).map((title) =>
+        normalizeRavenTitle(title, Array.from((state.ravenChapters.get(title.id) || new Map()).values()))
+      );
+      const grouped = groupRavenDuplicateTitles(allTitles, filters);
+      const mergedGroups = [];
+      for (const group of grouped) {
+        const merged = mergeRavenDuplicateTitleGroup(group.titles);
+        if (!merged.canonicalId) {
+          continue;
+        }
+        state.ravenTitles.set(merged.canonicalId, {
+          ...merged.title,
+          updatedAt: nowIso()
+        });
+        state.ravenChapters.set(merged.canonicalId, new Map(merged.chapters.map((chapter) => [chapter.id, {
+          ...chapter,
+          updatedAt: nowIso()
+        }])));
+        for (const duplicateId of group.duplicateIds) {
+          state.ravenTitleAliases.set(duplicateId, merged.canonicalId);
+          state.ravenTitles.delete(duplicateId);
+          state.ravenChapters.delete(duplicateId);
+          if (!state.ravenMetadataMatches.has(merged.canonicalId) && state.ravenMetadataMatches.has(duplicateId)) {
+            state.ravenMetadataMatches.set(merged.canonicalId, {
+              ...state.ravenMetadataMatches.get(duplicateId),
+              titleId: merged.canonicalId,
+              updatedAt: nowIso()
+            });
+          }
+          state.ravenMetadataMatches.delete(duplicateId);
+          for (const [key, progress] of Array.from(state.progress.entries())) {
+            if (progress.mediaId === duplicateId) {
+              state.progress.delete(key);
+              state.progress.set(readStateKey(progress.discordUserId, merged.canonicalId), {
+                ...progress,
+                mediaId: merged.canonicalId,
+                updatedAt: nowIso()
+              });
+            }
+          }
+          for (const [key, titleState] of Array.from(state.titleReadStates.entries())) {
+            if (titleState.mediaId === duplicateId) {
+              state.titleReadStates.delete(key);
+              state.titleReadStates.set(readStateKey(titleState.discordUserId, merged.canonicalId), {
+                ...titleState,
+                mediaId: merged.canonicalId,
+                updatedAt: nowIso()
+              });
+            }
+          }
+          for (const [key, chapterRead] of Array.from(state.chapterReadStates.entries())) {
+            if (chapterRead.mediaId === duplicateId) {
+              state.chapterReadStates.delete(key);
+              const chapterId = merged.chapterIdMap.get(chapterRead.chapterId) || chapterRead.chapterId;
+              setMemoryChapterRead({
+                ...chapterRead,
+                mediaId: merged.canonicalId,
+                chapterId,
+                updatedAt: nowIso()
+              });
+            }
+          }
+        }
+        mergedGroups.push({
+          catalogKey: group.catalogKey,
+          canonicalId: merged.canonicalId,
+          duplicateIds: group.duplicateIds,
+          chapterCount: merged.chapters.length
+        });
+      }
+      return {
+        driver: "memory",
+        dryRun: false,
+        mergedGroups,
+        mergedGroupCount: mergedGroups.length,
+        duplicateTitleCount: mergedGroups.reduce((sum, group) => sum + group.duplicateIds.length, 0)
+      };
     },
     async listRavenDownloadTasks() {
       return Array.from(state.ravenDownloadTasks.values()).sort((left, right) =>
@@ -1831,15 +2131,16 @@ const createMemoryStore = (options = {}) => {
       return {removed: existed ? 1 : 0};
     },
     async getRavenMetadataMatch(titleId) {
-      return state.ravenMetadataMatches.get(titleId) || null;
+      return state.ravenMetadataMatches.get(resolveMemoryRavenTitleId(titleId)) || null;
     },
     async setRavenMetadataMatch(titleId, value) {
+      const canonicalTitleId = resolveMemoryRavenTitleId(titleId);
       const entry = {
-        titleId,
+        titleId: canonicalTitleId,
         ...value,
         updatedAt: nowIso()
       };
-      state.ravenMetadataMatches.set(titleId, entry);
+      state.ravenMetadataMatches.set(canonicalTitleId, entry);
       return entry;
     },
     async listJobs(filters = {}) {
@@ -2074,6 +2375,7 @@ const createMysqlStore = (config) => {
         cover_url TEXT NULL,
         working_root TEXT NULL,
         download_root TEXT NULL,
+        catalog_key VARCHAR(255) NULL,
         quality_status VARCHAR(64) NOT NULL DEFAULT 'clean',
         clean_chapter_count INT NOT NULL DEFAULT 0,
         partial_chapter_count INT NOT NULL DEFAULT 0,
@@ -2083,6 +2385,17 @@ const createMysqlStore = (config) => {
         ingested_chapter_count INT NOT NULL DEFAULT 0,
         ingest_error TEXT NULL,
         updated_at DATETIME NOT NULL
+      )
+    `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS raven_title_aliases (
+        alias_title_id VARCHAR(191) PRIMARY KEY,
+        canonical_title_id VARCHAR(191) NOT NULL,
+        reason_text VARCHAR(128) NOT NULL,
+        metadata_json JSON NOT NULL,
+        created_at DATETIME NOT NULL,
+        updated_at DATETIME NOT NULL,
+        INDEX idx_raven_title_aliases_canonical (canonical_title_id)
       )
     `);
     await pool.query(`
@@ -2209,8 +2522,10 @@ const createMysqlStore = (config) => {
     await ignoreKnownAlterError("ALTER TABLE raven_titles ADD COLUMN ingest_status VARCHAR(64) NOT NULL DEFAULT 'pending'");
     await ignoreKnownAlterError("ALTER TABLE raven_titles ADD COLUMN ingested_chapter_count INT NOT NULL DEFAULT 0");
     await ignoreKnownAlterError("ALTER TABLE raven_titles ADD COLUMN ingest_error TEXT NULL");
+    await ignoreKnownAlterError("ALTER TABLE raven_titles ADD COLUMN catalog_key VARCHAR(255) NULL AFTER download_root");
     await ignoreKnownAlterError("ALTER TABLE raven_titles ADD INDEX idx_raven_titles_type_title (library_type_slug, title)");
     await ignoreKnownAlterError("ALTER TABLE raven_titles ADD INDEX idx_raven_titles_updated (updated_at)");
+    await ignoreKnownAlterError("ALTER TABLE raven_titles ADD INDEX idx_raven_titles_catalog_key (catalog_key)");
     await ignoreKnownAlterError("ALTER TABLE raven_chapters ADD COLUMN quality_status VARCHAR(64) NOT NULL DEFAULT 'clean'");
     await ignoreKnownAlterError("ALTER TABLE raven_chapters ADD COLUMN expected_page_count INT NOT NULL DEFAULT 0");
     await ignoreKnownAlterError("ALTER TABLE raven_chapters ADD COLUMN missing_page_count INT NOT NULL DEFAULT 0");
@@ -2225,6 +2540,23 @@ const createMysqlStore = (config) => {
     await ignoreKnownAlterError("ALTER TABLE raven_download_tasks ADD COLUMN provider_id VARCHAR(128) NULL AFTER title_url");
     await ignoreKnownAlterError("ALTER TABLE raven_download_tasks ADD COLUMN request_id BIGINT NULL AFTER provider_id");
     await ignoreKnownAlterError("ALTER TABLE raven_download_tasks ADD COLUMN details_json JSON NULL AFTER percent_value");
+    const [catalogRows] = await pool.query(`
+      SELECT title_id, title, media_type, library_type_slug
+      FROM raven_titles
+      WHERE catalog_key IS NULL OR catalog_key = ''
+      ORDER BY updated_at DESC, title_id ASC
+      LIMIT 500
+    `);
+    for (const row of catalogRows) {
+      const catalogKey = ravenCatalogKeyFor({
+        title: row.title,
+        mediaType: row.media_type,
+        libraryTypeSlug: row.library_type_slug
+      });
+      if (catalogKey) {
+        await pool.query("UPDATE raven_titles SET catalog_key = ? WHERE title_id = ?", [catalogKey, row.title_id]);
+      }
+    }
 
     const [requestRows] = await pool.query("SELECT * FROM requests ORDER BY created_at ASC, id ASC");
     await pool.query("DELETE FROM request_work_locks");
@@ -2488,6 +2820,90 @@ const createMysqlStore = (config) => {
     ingestError: row.ingest_error,
     updatedAt: row.updated_at ? row.updated_at.toISOString() : null
   }, chapters);
+  const queryWith = (connection) => connection || pool;
+  const resolveMysqlRavenTitleId = async (titleId, connection = null) => {
+    const normalizedTitleId = normalizeString(titleId);
+    if (!normalizedTitleId) {
+      return "";
+    }
+    let current = normalizedTitleId;
+    const seen = new Set();
+    for (let guard = 0; guard < 5; guard += 1) {
+      if (seen.has(current)) {
+        return current;
+      }
+      seen.add(current);
+      const [rows] = await queryWith(connection).query(
+        "SELECT canonical_title_id FROM raven_title_aliases WHERE alias_title_id = ? LIMIT 1",
+        [current]
+      );
+      const next = normalizeString(rows[0]?.canonical_title_id);
+      if (!next || next === current) {
+        return current;
+      }
+      current = next;
+    }
+    return current;
+  };
+  const rememberRavenTitleAlias = async (aliasTitleId, canonicalTitleId, reason = "catalog-dedupe", metadata = {}, connection = null) => {
+    const alias = normalizeString(aliasTitleId);
+    const canonical = normalizeString(canonicalTitleId);
+    if (!alias || !canonical || alias === canonical) {
+      return null;
+    }
+    await queryWith(connection).query(`
+      INSERT INTO raven_title_aliases (alias_title_id, canonical_title_id, reason_text, metadata_json, created_at, updated_at)
+      VALUES (?, ?, ?, ?, NOW(), NOW())
+      ON DUPLICATE KEY UPDATE
+        canonical_title_id = VALUES(canonical_title_id),
+        reason_text = VALUES(reason_text),
+        metadata_json = VALUES(metadata_json),
+        updated_at = NOW()
+    `, [alias, canonical, reason, JSON.stringify(metadata || {})]);
+    return {aliasTitleId: alias, canonicalTitleId: canonical, reason, metadata};
+  };
+  const findMysqlCanonicalRavenTitleId = async (title, connection = null) => {
+    const requestedTitleId = normalizeString(title?.id);
+    const catalogKey = ravenCatalogKeyFor(title);
+    if (!catalogKey) {
+      return requestedTitleId;
+    }
+    const [rows] = await queryWith(connection).query(`
+      SELECT title_id
+      FROM raven_titles
+      WHERE catalog_key = ?
+      ORDER BY
+        CASE WHEN title_id = ? THEN 0 ELSE 1 END,
+        ingested_chapter_count DESC,
+        CASE WHEN COALESCE(cover_url, '') <> '' THEN 0 ELSE 1 END,
+        CASE WHEN COALESCE(metadata_provider, '') <> '' THEN 0 ELSE 1 END,
+        chapter_count DESC,
+        updated_at DESC,
+        title_id ASC
+      LIMIT 1
+    `, [catalogKey, requestedTitleId]);
+    const matchedCatalogId = normalizeString(rows[0]?.title_id);
+    if (matchedCatalogId) {
+      return matchedCatalogId;
+    }
+    const typeSlug = catalogKey.includes(":") ? catalogKey.slice(0, catalogKey.indexOf(":")) : "";
+    const [fallbackRows] = await queryWith(connection).query(`
+      SELECT title_id
+      FROM raven_titles
+      WHERE LOWER(COALESCE(NULLIF(library_type_slug, ''), media_type)) = ?
+        AND LOWER(title) = LOWER(?)
+      ORDER BY
+        CASE WHEN title_id = ? THEN 0 ELSE 1 END,
+        ingested_chapter_count DESC,
+        CASE WHEN COALESCE(cover_url, '') <> '' THEN 0 ELSE 1 END,
+        CASE WHEN COALESCE(metadata_provider, '') <> '' THEN 0 ELSE 1 END,
+        chapter_count DESC,
+        updated_at DESC,
+        title_id ASC
+      LIMIT 1
+    `, [typeSlug, title.title || "", requestedTitleId]);
+    return normalizeString(fallbackRows[0]?.title_id, requestedTitleId);
+  };
   const toRequest = (row) => {
     const details = normalizeRequestDetails(parseJsonColumn(row.request_details_json, {}));
     const derived = applyRequestWorkIdentity({
@@ -3498,16 +3914,12 @@ const createMysqlStore = (config) => {
       return titleRows.map((row) => toRavenTitle(row, chaptersByTitle.get(row.title_id) || []));
     },
     async listRavenTitleCards(query = {}) {
-      const sort = normalizeCardSort(query.sort);
-      const orderBy = sort === "recent"
-        ? "updated_at DESC, title ASC, title_id ASC"
-        : "title ASC, title_id ASC";
       const q = normalizeScalarString(query.q || query.query).toLowerCase();
       const type = normalizeTypeSlug(query.type || "", "");
-      const letter = normalizeCardLetter(query.letter);
       const exactIds = normalizeCardIds(query.ids);
-      const pageSize = parseCardPageSize(query.pageSize);
-      const cursor = parseCardCursor(query.cursor);
+      const resolvedExactIds = exactIds.length
+        ? Array.from(new Set((await Promise.all(exactIds.map((id) => resolveMysqlRavenTitleId(id)))).filter(Boolean)))
+        : [];
       const whereClauses = [];
       const whereParams = [];
       const cardColumns = `
@@ -3572,9 +3984,9 @@ const createMysqlStore = (config) => {
         whereClauses.push("LOWER(COALESCE(NULLIF(library_type_slug, ''), media_type)) = ?");
         whereParams.push(type);
       }
-      if (exactIds.length) {
-        whereClauses.push(`title_id IN (${exactIds.map(() => "?").join(", ")})`);
-        whereParams.push(...exactIds);
+      if (resolvedExactIds.length) {
+        whereClauses.push(`title_id IN (${resolvedExactIds.map(() => "?").join(", ")})`);
+        whereParams.push(...resolvedExactIds);
       }
       if (q) {
         const pattern = `%${q}%`;
@@ -3592,68 +4004,15 @@ const createMysqlStore = (config) => {
       }
 
       const baseWhereSql = whereClauses.length ? `WHERE ${whereClauses.join(" AND ")}` : "";
-      const [countRows] = await pool.query(`
-        SELECT title, COALESCE(NULLIF(library_type_slug, ''), media_type) AS type_slug
-        FROM raven_titles
-        ${baseWhereSql}
-      `, whereParams);
-      const byLetter = {"#": 0};
-      const byType = {};
-      for (let index = 0; index < 26; index += 1) {
-        byLetter[String.fromCharCode(65 + index)] = 0;
-      }
-      for (const row of countRows) {
-        const resolvedLetter = resolveCardLetter(row.title);
-        byLetter[resolvedLetter] = (byLetter[resolvedLetter] || 0) + 1;
-        const resolvedType = normalizeTypeSlug(row.type_slug || "manga");
-        byType[resolvedType] = (byType[resolvedType] || 0) + 1;
-      }
-
-      const pageWhereClauses = [...whereClauses];
-      const pageWhereParams = [...whereParams];
-      const pageOrderParams = [];
-      const letterTotal = letter
-        ? countRows.filter((row) => resolveCardLetter(row.title) === letter).length
-        : countRows.length;
-      if (letter) {
-        if (letter === "#") {
-          pageWhereClauses.push("UPPER(LEFT(TRIM(title), 1)) NOT BETWEEN 'A' AND 'Z'");
-        } else {
-          pageWhereClauses.push("UPPER(LEFT(TRIM(title), 1)) = ?");
-          pageWhereParams.push(letter);
-        }
-      }
-      const pageWhereSql = pageWhereClauses.length ? `WHERE ${pageWhereClauses.join(" AND ")}` : "";
-      const resolvedOrderBy = exactIds.length
-        ? `CASE title_id ${exactIds.map(() => "WHEN ? THEN ?").join(" ")} ELSE ? END`
-        : orderBy;
-      if (exactIds.length) {
-        exactIds.forEach((id, index) => {
-          pageOrderParams.push(id, index);
-        });
-        pageOrderParams.push(exactIds.length);
-      }
       const [titleRows] = await pool.query(`
         SELECT ${cardColumns}
         FROM raven_titles
-        ${pageWhereSql}
-        ORDER BY ${resolvedOrderBy}
-        LIMIT ? OFFSET ?
-      `, [...pageWhereParams, ...pageOrderParams, pageSize, cursor]);
-      const titles = titleRows.map(toTitleCardRow);
-      const nextOffset = cursor + titles.length;
-      return {
-        titles,
-        counts: {total: countRows.length, byLetter, byType},
-        filters: {q, type, letter, ids: exactIds, pageSize, sort},
-        pageInfo: {
-          cursor: String(cursor),
-          nextCursor: nextOffset < letterTotal ? String(nextOffset) : "",
-          hasMore: nextOffset < letterTotal,
-          pageSize,
-          total: letterTotal
-        }
-      };
+        ${baseWhereSql}
+      `, whereParams);
+      return buildRavenTitleCardPage(titleRows.map(toTitleCardRow), {
+        ...query,
+        ids: resolvedExactIds.length ? resolvedExactIds : exactIds
+      });
     },
     async listReaderTargets({discordUserId = "", titleIds = []} = {}) {
       const normalizedUserId = normalizeString(discordUserId);
@@ -3661,19 +4020,24 @@ const createMysqlStore = (config) => {
       if (!normalizedUserId || !normalizedTitleIds.length) {
         return {};
       }
-      const titlePlaceholders = normalizedTitleIds.map(() => "?").join(", ");
+      const resolvedTitleIds = [];
+      for (const titleId of normalizedTitleIds) {
+        resolvedTitleIds.push(await resolveMysqlRavenTitleId(titleId));
+      }
+      const uniqueResolvedTitleIds = Array.from(new Set(resolvedTitleIds));
+      const titlePlaceholders = uniqueResolvedTitleIds.map(() => "?").join(", ");
       const [[progressRows], [chapterReadRows], [chapterRows]] = await Promise.all([
         pool.query(
           `SELECT * FROM media_progress WHERE discord_user_id = ? AND media_id IN (${titlePlaceholders})`,
-          [normalizedUserId, ...normalizedTitleIds]
+          [normalizedUserId, ...uniqueResolvedTitleIds]
         ),
         pool.query(
           `SELECT * FROM media_chapter_reads WHERE discord_user_id = ? AND media_id IN (${titlePlaceholders})`,
-          [normalizedUserId, ...normalizedTitleIds]
+          [normalizedUserId, ...uniqueResolvedTitleIds]
         ),
         pool.query(
           `SELECT * FROM raven_chapters WHERE title_id IN (${titlePlaceholders})`,
-          normalizedTitleIds
+          uniqueResolvedTitleIds
         )
       ]);
       const chaptersByTitle = new Map();
@@ -3683,8 +4047,8 @@ const createMysqlStore = (config) => {
         }
         chaptersByTitle.get(row.title_id).push(toRavenChapter(row));
       }
-      return buildReaderTargets({
-        titleIds: normalizedTitleIds,
+      const resolvedTargets = buildReaderTargets({
+        titleIds: uniqueResolvedTitleIds,
         progress: progressRows.map((row) => ({
           mediaId: row.media_id,
           discordUserId: row.discord_user_id,
@@ -3702,17 +4066,19 @@ const createMysqlStore = (config) => {
         })),
         chaptersByTitle
       });
+      return Object.fromEntries(normalizedTitleIds.map((titleId, index) => [titleId, resolvedTargets[resolvedTitleIds[index]] || null]));
     },
     async getRavenTitle(titleId) {
-      const [titleRows] = await pool.query("SELECT * FROM raven_titles WHERE title_id = ? LIMIT 1", [titleId]);
+      const resolvedTitleId = await resolveMysqlRavenTitleId(titleId);
+      const [titleRows] = await pool.query("SELECT * FROM raven_titles WHERE title_id = ? LIMIT 1", [resolvedTitleId]);
       if (!titleRows[0]) {
         return null;
       }
-      const [chapterRows] = await pool.query("SELECT * FROM raven_chapters WHERE title_id = ?", [titleId]);
+      const [chapterRows] = await pool.query("SELECT * FROM raven_chapters WHERE title_id = ?", [resolvedTitleId]);
       return toRavenTitle(titleRows[0], chapterRows.map(toRavenChapter));
     },
     async getRavenTitleSummary(titleId, {discordUserId = ""} = {}) {
-      const normalizedTitleId = normalizeString(titleId);
+      const normalizedTitleId = await resolveMysqlRavenTitleId(titleId);
       const normalizedUserId = normalizeString(discordUserId);
       const [titleRows] = await pool.query("SELECT * FROM raven_titles WHERE title_id = ? LIMIT 1", [normalizedTitleId]);
       if (!titleRows[0]) {
@@ -3760,7 +4126,7 @@ const createMysqlStore = (config) => {
       });
     },
     async listRavenTitleChapters(titleId, query = {}) {
-      const normalizedTitleId = normalizeString(titleId);
+      const normalizedTitleId = await resolveMysqlRavenTitleId(titleId);
       const normalizedUserId = normalizeString(query.discordUserId);
       const [titleRows] = await pool.query("SELECT title_id FROM raven_titles WHERE title_id = ? LIMIT 1", [normalizedTitleId]);
       if (!titleRows[0]) {
@@ -3790,15 +4156,55 @@ const createMysqlStore = (config) => {
       });
     },
     async upsertRavenTitle(title) {
+      const requestedTitleId = normalizeString(title.id);
+      const catalogKey = ravenCatalogKeyFor(title);
+      const canonicalTitleId = await findMysqlCanonicalRavenTitleId(title);
+      if (requestedTitleId && canonicalTitleId && requestedTitleId !== canonicalTitleId) {
+        await rememberRavenTitleAlias(requestedTitleId, canonicalTitleId, "catalog-key-upsert", {catalogKey});
+      }
+      let normalizedTitle = {
+        ...title,
+        id: canonicalTitleId || requestedTitleId
+      };
+      if (requestedTitleId && canonicalTitleId && requestedTitleId !== canonicalTitleId) {
+        const [existingRows] = await pool.query("SELECT * FROM raven_titles WHERE title_id = ? LIMIT 1", [canonicalTitleId]);
+        if (existingRows[0]) {
+          const existingTitle = toRavenTitle(existingRows[0], []);
+          normalizedTitle = {
+            ...normalizedTitle,
+            title: normalizeScalarString(existingTitle.title, normalizedTitle.title),
+            mediaType: normalizeScalarString(existingTitle.mediaType, normalizedTitle.mediaType),
+            libraryTypeLabel: normalizeScalarString(existingTitle.libraryTypeLabel, normalizedTitle.libraryTypeLabel),
+            libraryTypeSlug: normalizeScalarString(existingTitle.libraryTypeSlug, normalizedTitle.libraryTypeSlug),
+            status: normalizeScalarString(existingTitle.status, normalizedTitle.status),
+            latestChapter: normalizeScalarString(normalizedTitle.latestChapter, existingTitle.latestChapter),
+            coverAccent: normalizeScalarString(existingTitle.coverAccent, normalizedTitle.coverAccent),
+            summary: normalizeScalarString(existingTitle.summary, normalizedTitle.summary),
+            releaseLabel: normalizeScalarString(existingTitle.releaseLabel, normalizedTitle.releaseLabel),
+            chapterCount: Math.max(Number(existingTitle.chapterCount || 0), Number(normalizedTitle.chapterCount || 0)),
+            chaptersDownloaded: Math.max(Number(existingTitle.chaptersDownloaded || 0), Number(normalizedTitle.chaptersDownloaded || 0)),
+            author: normalizeScalarString(existingTitle.author, normalizedTitle.author),
+            tags: Array.from(new Set([...(existingTitle.tags || []), ...(normalizedTitle.tags || [])])),
+            aliases: Array.from(new Set([...(existingTitle.aliases || []), ...(normalizedTitle.aliases || [])])),
+            relations: Array.isArray(existingTitle.relations) && existingTitle.relations.length ? existingTitle.relations : normalizedTitle.relations,
+            metadataProvider: normalizeScalarString(existingTitle.metadataProvider, normalizedTitle.metadataProvider),
+            metadataMatchedAt: normalizeScalarString(existingTitle.metadataMatchedAt, normalizedTitle.metadataMatchedAt),
+            sourceUrl: normalizeScalarString(existingTitle.sourceUrl, normalizedTitle.sourceUrl),
+            coverUrl: normalizeScalarString(existingTitle.coverUrl, normalizedTitle.coverUrl),
+            workingRoot: normalizeScalarString(existingTitle.workingRoot, normalizedTitle.workingRoot),
+            downloadRoot: normalizeScalarString(existingTitle.downloadRoot, normalizedTitle.downloadRoot)
+          };
+        }
+      }
       await pool.query(`
         INSERT INTO raven_titles (
           title_id, title, media_type, library_type_label, library_type_slug, status_name, latest_chapter, cover_accent, summary, release_label,
           chapter_count, chapters_downloaded, author_name, tags_json, aliases_json, relations_json,
-          metadata_provider, metadata_matched_at, source_url, cover_url, working_root, download_root,
+          metadata_provider, metadata_matched_at, source_url, cover_url, working_root, download_root, catalog_key,
           quality_status, clean_chapter_count, partial_chapter_count, missing_content_count, quality_summary,
           ingest_status, ingested_chapter_count, ingest_error, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
         ON DUPLICATE KEY UPDATE
           title = VALUES(title),
           media_type = VALUES(media_type),
@@ -3821,6 +4227,7 @@ const createMysqlStore = (config) => {
           cover_url = VALUES(cover_url),
           working_root = VALUES(working_root),
           download_root = VALUES(download_root),
+          catalog_key = VALUES(catalog_key),
           quality_status = VALUES(quality_status),
           clean_chapter_count = VALUES(clean_chapter_count),
           partial_chapter_count = VALUES(partial_chapter_count),
@@ -3831,42 +4238,44 @@ const createMysqlStore = (config) => {
           ingest_error = VALUES(ingest_error),
           updated_at = NOW()
       `, [
-        title.id,
-        title.title,
-        title.mediaType || "manga",
-        title.libraryTypeLabel || title.mediaType || "manga",
-        title.libraryTypeSlug || title.mediaType || "manga",
-        title.status || "active",
-        title.latestChapter || "",
-        title.coverAccent || "#4f8f88",
-        title.summary || "",
-        title.releaseLabel || "",
-        Number.parseInt(String(title.chapterCount || 0), 10) || 0,
-        Number.parseInt(String(title.chaptersDownloaded || 0), 10) || 0,
-        title.author || "",
-        JSON.stringify(Array.isArray(title.tags) ? title.tags : []),
-        JSON.stringify(Array.isArray(title.aliases) ? title.aliases : []),
-        JSON.stringify(Array.isArray(title.relations) ? title.relations : []),
-        title.metadataProvider || null,
-        toMysqlDateTime(title.metadataMatchedAt),
-        title.sourceUrl || null,
-        title.coverUrl || null,
-        title.workingRoot || null,
-        title.downloadRoot || null,
-        normalizeRavenQualityStatus(title.qualityStatus),
-        Number.parseInt(String(title.cleanChapterCount || 0), 10) || 0,
-        Number.parseInt(String(title.partialChapterCount || 0), 10) || 0,
-        Number.parseInt(String(title.missingContentCount || 0), 10) || 0,
-        title.qualitySummary || null,
-        normalizeRavenIngestStatus(title.ingestStatus),
-        Number.parseInt(String(title.ingestedChapterCount || 0), 10) || 0,
-        title.ingestError || null
+        normalizedTitle.id,
+        normalizedTitle.title,
+        normalizedTitle.mediaType || "manga",
+        normalizedTitle.libraryTypeLabel || normalizedTitle.mediaType || "manga",
+        normalizedTitle.libraryTypeSlug || normalizedTitle.mediaType || "manga",
+        normalizedTitle.status || "active",
+        normalizedTitle.latestChapter || "",
+        normalizedTitle.coverAccent || "#4f8f88",
+        normalizedTitle.summary || "",
+        normalizedTitle.releaseLabel || "",
+        Number.parseInt(String(normalizedTitle.chapterCount || 0), 10) || 0,
+        Number.parseInt(String(normalizedTitle.chaptersDownloaded || 0), 10) || 0,
+        normalizedTitle.author || "",
+        JSON.stringify(Array.isArray(normalizedTitle.tags) ? normalizedTitle.tags : []),
+        JSON.stringify(Array.isArray(normalizedTitle.aliases) ? normalizedTitle.aliases : []),
+        JSON.stringify(Array.isArray(normalizedTitle.relations) ? normalizedTitle.relations : []),
+        normalizedTitle.metadataProvider || null,
+        toMysqlDateTime(normalizedTitle.metadataMatchedAt),
+        normalizedTitle.sourceUrl || null,
+        normalizedTitle.coverUrl || null,
+        normalizedTitle.workingRoot || null,
+        normalizedTitle.downloadRoot || null,
+        catalogKey || null,
+        normalizeRavenQualityStatus(normalizedTitle.qualityStatus),
+        Number.parseInt(String(normalizedTitle.cleanChapterCount || 0), 10) || 0,
+        Number.parseInt(String(normalizedTitle.partialChapterCount || 0), 10) || 0,
+        Number.parseInt(String(normalizedTitle.missingContentCount || 0), 10) || 0,
+        normalizedTitle.qualitySummary || null,
+        normalizeRavenIngestStatus(normalizedTitle.ingestStatus),
+        Number.parseInt(String(normalizedTitle.ingestedChapterCount || 0), 10) || 0,
+        normalizedTitle.ingestError || null
       ]);
-      return this.getRavenTitle(title.id);
+      return this.getRavenTitle(normalizedTitle.id);
     },
     async replaceRavenChapters(titleId, chapters) {
       return withTransaction(async (connection) => {
-        await connection.query("DELETE FROM raven_chapters WHERE title_id = ?", [titleId]);
+        const canonicalTitleId = await resolveMysqlRavenTitleId(titleId, connection);
+        await connection.query("DELETE FROM raven_chapters WHERE title_id = ?", [canonicalTitleId]);
         for (const chapter of sortRavenChapters(Array.isArray(chapters) ? chapters : [])) {
           const normalizedChapter = normalizeRavenChapter(chapter);
           await connection.query(`
@@ -3877,7 +4286,7 @@ const createMysqlStore = (config) => {
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
           `, [
-            titleId,
+            canonicalTitleId,
             normalizedChapter.id,
             normalizedChapter.label || normalizedChapter.id,
             normalizedChapter.chapterNumber || null,
@@ -3899,9 +4308,243 @@ const createMysqlStore = (config) => {
             normalizedChapter.ingestManifestPath || null
           ]);
         }
-        const [rows] = await connection.query("SELECT * FROM raven_chapters WHERE title_id = ?", [titleId]);
+        const [rows] = await connection.query("SELECT * FROM raven_chapters WHERE title_id = ?", [canonicalTitleId]);
         return rows.map(toRavenChapter);
       });
+    },
+    async previewRavenTitleDuplicates(filters = {}) {
+      const titles = await this.listRavenTitles();
+      const groups = groupRavenDuplicateTitles(titles, filters).map(({titles: _titles, ...group}) => group);
+      return {
+        driver: "mysql",
+        groups,
+        duplicateGroupCount: groups.length,
+        duplicateTitleCount: groups.reduce((sum, group) => sum + group.duplicateIds.length, 0)
+      };
+    },
+    async mergeRavenTitleDuplicates(filters = {}) {
+      const preview = await this.previewRavenTitleDuplicates(filters);
+      if (filters.dryRun !== false && filters.apply !== true) {
+        return {...preview, dryRun: true, mergedGroups: []};
+      }
+      const allTitles = await this.listRavenTitles();
+      const grouped = groupRavenDuplicateTitles(allTitles, filters);
+      const result = await withTransaction(async (connection) => {
+        const mergedGroups = [];
+        const replaceUserScopedTitleIds = (value, duplicateId, canonicalId) => {
+          if (Array.isArray(value)) {
+            const seen = new Set();
+            const next = [];
+            for (const item of value.map((entry) => replaceUserScopedTitleIds(entry, duplicateId, canonicalId))) {
+              const key = JSON.stringify(item);
+              if (!seen.has(key)) {
+                seen.add(key);
+                next.push(item);
+              }
+            }
+            return next;
+          }
+          if (!value || typeof value !== "object") {
+            return value;
+          }
+          const next = {...value};
+          for (const key of ["titleId", "mediaId"]) {
+            if (normalizeScalarString(next[key]) === duplicateId) {
+              next[key] = canonicalId;
+            }
+          }
+          return next;
+        };
+        for (const group of grouped) {
+          const merged = mergeRavenDuplicateTitleGroup(group.titles);
+          if (!merged.canonicalId) {
+            continue;
+          }
+          const catalogKey = ravenCatalogKeyFor(merged.title);
+          await connection.query(`
+            UPDATE raven_titles
+            SET title = ?, media_type = ?, library_type_label = ?, library_type_slug = ?, status_name = ?,
+              latest_chapter = ?, cover_accent = ?, summary = ?, release_label = ?, chapter_count = ?,
+              chapters_downloaded = ?, author_name = ?, tags_json = ?, aliases_json = ?, relations_json = ?,
+              metadata_provider = ?, metadata_matched_at = ?, source_url = ?, cover_url = ?, working_root = ?,
+              download_root = ?, catalog_key = ?, quality_status = ?, clean_chapter_count = ?, partial_chapter_count = ?,
+              missing_content_count = ?, quality_summary = ?, ingest_status = ?, ingested_chapter_count = ?,
+              ingest_error = ?, updated_at = NOW()
+            WHERE title_id = ?
+          `, [
+            merged.title.title,
+            merged.title.mediaType || "manga",
+            merged.title.libraryTypeLabel || merged.title.mediaType || "manga",
+            merged.title.libraryTypeSlug || merged.title.mediaType || "manga",
+            merged.title.status || "active",
+            merged.title.latestChapter || "",
+            merged.title.coverAccent || "#4f8f88",
+            merged.title.summary || "",
+            merged.title.releaseLabel || "",
+            Number.parseInt(String(merged.title.chapterCount || 0), 10) || 0,
+            Number.parseInt(String(merged.title.chaptersDownloaded || 0), 10) || 0,
+            merged.title.author || "",
+            JSON.stringify(Array.isArray(merged.title.tags) ? merged.title.tags : []),
+            JSON.stringify(Array.isArray(merged.title.aliases) ? merged.title.aliases : []),
+            JSON.stringify(Array.isArray(merged.title.relations) ? merged.title.relations : []),
+            merged.title.metadataProvider || null,
+            toMysqlDateTime(merged.title.metadataMatchedAt),
+            merged.title.sourceUrl || null,
+            merged.title.coverUrl || null,
+            merged.title.workingRoot || null,
+            merged.title.downloadRoot || null,
+            catalogKey || null,
+            normalizeRavenQualityStatus(merged.title.qualityStatus),
+            Number.parseInt(String(merged.title.cleanChapterCount || 0), 10) || 0,
+            Number.parseInt(String(merged.title.partialChapterCount || 0), 10) || 0,
+            Number.parseInt(String(merged.title.missingContentCount || 0), 10) || 0,
+            merged.title.qualitySummary || null,
+            normalizeRavenIngestStatus(merged.title.ingestStatus),
+            Number.parseInt(String(merged.title.ingestedChapterCount || 0), 10) || 0,
+            merged.title.ingestError || null,
+            merged.canonicalId
+          ]);
+          await connection.query("DELETE FROM raven_chapters WHERE title_id = ?", [merged.canonicalId]);
+          for (const chapter of merged.chapters) {
+            const normalizedChapter = normalizeRavenChapter(chapter);
+            await connection.query(`
+              INSERT INTO raven_chapters (
+                title_id, chapter_id, label_name, chapter_number, page_count, release_date, is_available, archive_path, source_url,
+                quality_status, expected_page_count, missing_page_count, missing_pages_json, quality_notes_json,
+                ingest_status, ingest_revision, ingested_page_count, ingested_at, ingest_error, ingest_manifest_path, updated_at
+              )
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+            `, [
+              merged.canonicalId,
+              normalizedChapter.id,
+              normalizedChapter.label || normalizedChapter.id,
+              normalizedChapter.chapterNumber || null,
+              Number.parseInt(String(normalizedChapter.pageCount || 0), 10) || 0,
+              normalizedChapter.releaseDate || null,
+              normalizedChapter.available === false ? 0 : 1,
+              normalizedChapter.archivePath || null,
+              normalizedChapter.sourceUrl || null,
+              normalizeRavenQualityStatus(normalizedChapter.qualityStatus),
+              Number.parseInt(String(normalizedChapter.expectedPageCount || 0), 10) || 0,
+              Number.parseInt(String(normalizedChapter.missingPageCount || 0), 10) || 0,
+              JSON.stringify(normalizedChapter.missingPages),
+              JSON.stringify(normalizedChapter.qualityNotes),
+              normalizeRavenIngestStatus(normalizedChapter.ingestStatus),
+              normalizedChapter.ingestRevision || null,
+              Number.parseInt(String(normalizedChapter.ingestedPageCount || 0), 10) || 0,
+              toMysqlDateTime(normalizedChapter.ingestedAt),
+              normalizedChapter.ingestError || null,
+              normalizedChapter.ingestManifestPath || null
+            ]);
+          }
+          for (const duplicateId of group.duplicateIds) {
+            await rememberRavenTitleAlias(duplicateId, merged.canonicalId, "duplicate-merge", {catalogKey}, connection);
+            const [progressRows] = await connection.query("SELECT * FROM media_progress WHERE media_id = ?", [duplicateId]);
+            for (const row of progressRows) {
+              await connection.query(`
+                INSERT INTO media_progress (media_id, discord_user_id, chapter_label, position_ratio, bookmark_json, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON DUPLICATE KEY UPDATE
+                  chapter_label = VALUES(chapter_label),
+                  position_ratio = VALUES(position_ratio),
+                  bookmark_json = VALUES(bookmark_json),
+                  updated_at = GREATEST(updated_at, VALUES(updated_at))
+              `, [
+                merged.canonicalId,
+                row.discord_user_id,
+                row.chapter_label,
+                row.position_ratio,
+                row.bookmark_json,
+                row.updated_at
+              ]);
+            }
+            await connection.query("DELETE FROM media_progress WHERE media_id = ?", [duplicateId]);
+            const [titleStateRows] = await connection.query("SELECT * FROM media_title_state WHERE media_id = ?", [duplicateId]);
+            for (const row of titleStateRows) {
+              await connection.query(`
+                INSERT INTO media_title_state (media_id, discord_user_id, started_at, completed_at, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON DUPLICATE KEY UPDATE
+                  started_at = COALESCE(started_at, VALUES(started_at)),
+                  completed_at = COALESCE(completed_at, VALUES(completed_at)),
+                  updated_at = GREATEST(updated_at, VALUES(updated_at))
+              `, [
+                merged.canonicalId,
+                row.discord_user_id,
+                row.started_at,
+                row.completed_at,
+                row.updated_at
+              ]);
+            }
+            await connection.query("DELETE FROM media_title_state WHERE media_id = ?", [duplicateId]);
+            const [chapterReadRows] = await connection.query("SELECT * FROM media_chapter_reads WHERE media_id = ?", [duplicateId]);
+            for (const row of chapterReadRows) {
+              const nextChapterId = merged.chapterIdMap.get(row.chapter_id) || row.chapter_id;
+              await connection.query(`
+                INSERT INTO media_chapter_reads (media_id, chapter_id, discord_user_id, read_at, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON DUPLICATE KEY UPDATE
+                  read_at = LEAST(media_chapter_reads.read_at, VALUES(read_at)),
+                  updated_at = GREATEST(media_chapter_reads.updated_at, VALUES(updated_at))
+              `, [merged.canonicalId, nextChapterId, row.discord_user_id, row.read_at, row.updated_at]);
+            }
+            await connection.query("DELETE FROM media_chapter_reads WHERE media_id = ?", [duplicateId]);
+            const [metadataRows] = await connection.query("SELECT * FROM raven_metadata_matches WHERE title_id = ? LIMIT 1", [duplicateId]);
+            const [canonicalMetadataRows] = await connection.query("SELECT * FROM raven_metadata_matches WHERE title_id = ? LIMIT 1", [merged.canonicalId]);
+            if (metadataRows[0] && !canonicalMetadataRows[0]) {
+              await connection.query(`
+                INSERT INTO raven_metadata_matches (title_id, provider_id, provider_series_id, details_json, updated_at)
+                VALUES (?, ?, ?, ?, NOW())
+                ON DUPLICATE KEY UPDATE
+                  provider_id = VALUES(provider_id),
+                  provider_series_id = VALUES(provider_series_id),
+                  details_json = VALUES(details_json),
+                  updated_at = NOW()
+              `, [merged.canonicalId, metadataRows[0].provider_id, metadataRows[0].provider_series_id, JSON.stringify(parseJsonColumn(metadataRows[0].details_json, {}))]);
+            }
+            await connection.query("DELETE FROM raven_metadata_matches WHERE title_id = ?", [duplicateId]);
+            const [settingRows] = await connection.query(`
+              SELECT setting_key, setting_value FROM settings
+              WHERE setting_key LIKE 'moon.following.%' OR setting_key LIKE 'moon.reader.bookmarks.%'
+            `);
+            for (const row of settingRows) {
+              const current = parseJsonColumn(row.setting_value, null);
+              const next = replaceUserScopedTitleIds(current, duplicateId, merged.canonicalId);
+              if (JSON.stringify(current) !== JSON.stringify(next)) {
+                await connection.query("UPDATE settings SET setting_value = ?, updated_at = NOW() WHERE setting_key = ?", [
+                  JSON.stringify(next),
+                  row.setting_key
+                ]);
+              }
+            }
+            await connection.query("DELETE FROM raven_titles WHERE title_id = ?", [duplicateId]);
+          }
+          mergedGroups.push({
+            catalogKey: group.catalogKey,
+            canonicalId: merged.canonicalId,
+            duplicateIds: group.duplicateIds,
+            chapterCount: merged.chapters.length
+          });
+        }
+        const audit = {
+          mergedAt: nowIso(),
+          filters,
+          mergedGroups
+        };
+        await connection.query(`
+          INSERT INTO settings (setting_key, setting_value, updated_at)
+          VALUES ('raven.titleDuplicateMergeAudit', ?, NOW())
+          ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value), updated_at = NOW()
+        `, [JSON.stringify(audit)]);
+        return {
+          driver: "mysql",
+          dryRun: false,
+          mergedGroups,
+          mergedGroupCount: mergedGroups.length,
+          duplicateTitleCount: mergedGroups.reduce((sum, group) => sum + group.duplicateIds.length, 0)
+        };
+      });
+      return result;
     },
     async listRavenDownloadTasks() {
       const [rows] = await pool.query("SELECT * FROM raven_download_tasks ORDER BY queued_at DESC");
@@ -3981,7 +4624,8 @@ const createMysqlStore = (config) => {
       return {removed: Number(result.affectedRows || 0)};
     },
     async getRavenMetadataMatch(titleId) {
-      const [rows] = await pool.query("SELECT * FROM raven_metadata_matches WHERE title_id = ? LIMIT 1", [titleId]);
+      const canonicalTitleId = await resolveMysqlRavenTitleId(titleId);
+      const [rows] = await pool.query("SELECT * FROM raven_metadata_matches WHERE title_id = ? LIMIT 1", [canonicalTitleId]);
       const row = rows[0];
       return row
         ? {
@@ -3994,6 +4638,7 @@ const createMysqlStore = (config) => {
         : null;
     },
     async setRavenMetadataMatch(titleId, value) {
+      const canonicalTitleId = await resolveMysqlRavenTitleId(titleId);
       await pool.query(`
         INSERT INTO raven_metadata_matches (title_id, provider_id, provider_series_id, details_json, updated_at)
         VALUES (?, ?, ?, ?, NOW())
@@ -4003,12 +4648,12 @@ const createMysqlStore = (config) => {
           details_json = VALUES(details_json),
           updated_at = NOW()
       `, [
-        titleId,
+        canonicalTitleId,
         value.provider || "",
         value.providerSeriesId || "",
         JSON.stringify(value.details || {})
       ]);
-      return this.getRavenMetadataMatch(titleId);
+      return this.getRavenMetadataMatch(canonicalTitleId);
     },
     async listJobs(filters = {}) {
       const params = [];

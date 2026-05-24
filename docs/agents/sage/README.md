@@ -218,6 +218,8 @@
 - Moon's user library card route should broker Raven's compact card view and paginate/filter in Sage so browsers never
   need full chapter arrays for `/browse`, `/library`, or shelf cards. Pass `q`, `type`, `letter`, `cursor`,
   `pageSize`, `sort`, and optional exact `ids` through Raven instead of sorting/slicing a full catalog in Sage.
+- Sage exposes service-only duplicate preview/merge routes for Raven catalog maintenance. Keep them behind internal
+  service tokens and let Vault own the transaction, aliases, and audit data.
 - Service-originated async changes from Raven, Portal, or Warden should append immutable summary events through Sage's
   internal broker routes after the authoritative mutation succeeds so `/admin/users`, `/admin/requests`, and
   `/admin/system/events` all reflect the same truth.

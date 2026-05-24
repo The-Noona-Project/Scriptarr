@@ -552,6 +552,18 @@ export const createVaultApp = async ({
     res.json(await store.listRavenTitleCards(req.query || {}));
   });
 
+  app.get("/api/service/raven/title-duplicates", async (req, res) => {
+    res.json(await store.previewRavenTitleDuplicates(req.query || {}));
+  });
+
+  app.post("/api/service/raven/title-duplicates/merge", requireJson, async (req, res) => {
+    res.json(await store.mergeRavenTitleDuplicates({
+      ...(req.body || {}),
+      apply: req.body?.apply === true,
+      dryRun: req.body?.apply !== true
+    }));
+  });
+
   app.get("/api/service/reader-targets/:discordUserId", async (req, res) => {
     res.json(await store.listReaderTargets({
       discordUserId: req.params.discordUserId,
@@ -593,9 +605,9 @@ export const createVaultApp = async ({
       id: req.params.titleId
     });
     if (chapters) {
-      await store.replaceRavenChapters(req.params.titleId, chapters);
+      await store.replaceRavenChapters(title.id || req.params.titleId, chapters);
     }
-    res.json(await store.getRavenTitle(req.params.titleId) || title);
+    res.json(await store.getRavenTitle(title.id || req.params.titleId) || title);
   });
 
   app.put("/api/service/raven/titles/:titleId/chapters", requireJson, async (req, res) => {

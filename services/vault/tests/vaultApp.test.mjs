@@ -631,6 +631,24 @@ test("vault exposes compact Raven title cards without chapter payloads", async (
       ingestManifestPath: "/downloads/ingested/manga/dan-da-dan/dan-da-dan-c2/manifest.json"
     }]
   });
+  const duplicateDandadan = await fetch(`${baseUrl}/api/service/raven/titles/dan-da-dan-copy`, {
+    method: "PUT",
+    headers,
+    body: JSON.stringify({
+      id: "dan-da-dan-copy",
+      title: "Dandadan",
+      mediaType: "manga",
+      libraryTypeLabel: "Manga",
+      libraryTypeSlug: "manga",
+      status: "active",
+      latestChapter: "2",
+      chapterCount: 2,
+      chaptersDownloaded: 2,
+      workingRoot: "/downloads/downloading/manga/Dandadan_Copy",
+      downloadRoot: "/downloads/downloaded/manga/Dandadan_Copy"
+    })
+  }).then((response) => response.json());
+  assert.equal(duplicateDandadan.id, "dan-da-dan");
   await upsertTitle({id: "blue-box", title: "Blue Box", tags: ["sports"], aliases: []});
   await upsertTitle({
     id: "solo-leveling",
@@ -670,9 +688,12 @@ test("vault exposes compact Raven title cards without chapter payloads", async (
   const exactIdPage = await fetch(`${baseUrl}/api/service/raven/title-cards?ids=solo-leveling,dan-da-dan&pageSize=10`, {headers}).then((response) => response.json());
   assert.deepEqual(exactIdPage.titles.map((title) => title.id), ["solo-leveling", "dan-da-dan"]);
   assert.equal(exactIdPage.titles.some((title) => Object.hasOwn(title, "chapters")), false);
+  const aliasIdPage = await fetch(`${baseUrl}/api/service/raven/title-cards?ids=dan-da-dan-copy&pageSize=10`, {headers}).then((response) => response.json());
+  assert.deepEqual(aliasIdPage.titles.map((title) => title.id), ["dan-da-dan"]);
 
   const fullTitles = await fetch(`${baseUrl}/api/service/raven/titles`, {headers}).then((response) => response.json());
   assert.equal(fullTitles.find((title) => title.id === "dan-da-dan").chapters.length, 2);
+  assert.equal(fullTitles.filter((title) => title.title === "Dandadan").length, 1);
 
   const initialTargets = await fetch(`${baseUrl}/api/service/reader-targets/reader-1?titleId=dan-da-dan&titleId=solo-leveling`, {headers}).then((response) => response.json());
   assert.equal(initialTargets["dan-da-dan"].kind, "first");
@@ -700,6 +721,8 @@ test("vault exposes compact Raven title cards without chapter payloads", async (
   assert.equal(titleSummary.title.userState.unreadAvailableCount, 1);
   assert.equal(titleSummary.primaryChapter.id, "dan-da-dan-c2");
   assert.equal(titleSummary.latestChapter.id, "dan-da-dan-c2");
+  const aliasSummary = await fetch(`${baseUrl}/api/service/raven/titles/dan-da-dan-copy/summary?discordUserId=reader-1`, {headers}).then((response) => response.json());
+  assert.equal(aliasSummary.title.id, "dan-da-dan");
 
   const chapterPageOne = await fetch(`${baseUrl}/api/service/raven/titles/dan-da-dan/chapters?discordUserId=reader-1&pageSize=1&sort=number-asc`, {headers}).then((response) => response.json());
   assert.deepEqual(chapterPageOne.chapters.map((chapter) => chapter.id), ["dan-da-dan-c1"]);

@@ -124,7 +124,9 @@ and admin activity now comes from one shared durable event log instead of page-l
 Raven now only marks download work complete after the promoted files also persist into the brokered catalog, and it
 rescans the existing `downloaded/<type>/...` tree on boot so already-finished archives can repopulate Moon's library
 without forcing a re-download. Startup recovery uses compact title-card indexes and skips unchanged folders so large
-libraries do not flood Vault with repeated full-catalog reads during login/bootstrap.
+libraries do not flood Vault with repeated full-catalog reads during login/bootstrap. Raven and Vault also share a
+logical catalog identity of library type plus normalized title, so downloads, imports, rescans, and ingest setup reuse
+the existing canonical title instead of creating a new visible row.
 Raven's WeebCentral chapter scraper now follows the live source's HTMX full-chapter-list flow for long-running
 series, which is required for titles such as Tomb Raider King that hide older chapters behind a show-all request.
 
@@ -412,6 +414,8 @@ that specific notification undeliverable instead of retrying it every poll. If R
 Sage/Vault broker during a type-wide rebuild, Raven reattaches the durable run, keeps already failed title tasks failed,
 and continues queued or stale-running title tasks instead of starting a duplicate run. Legacy WebP-format type runs are
 marked `superseded` before the AVIF run starts.
+If a catalog duplicate merge changes the canonical title set for an active type run, Raven supersedes that stale run and
+starts a fresh run against canonical titles only.
 `/admin/users` is now the access-control workspace: a dense user directory, reusable permission-group editor, group
 assignment panel, and recent auth or access events in one page. Staff access is no longer a flat role toggle. Moon now
 evaluates unioned permission groups with route-family `read`, `write`, or `root` grants, while the bootstrap owner
@@ -572,6 +576,8 @@ reads, so large libraries do not send chapter arrays or Raven filesystem roots t
 by Moon as derived WebP files under the Moon cover-cache storage folder. The
 Tasks page has an `Optimize cover images` action that scans Sage-approved cover URLs, converts missing or stale cache
 entries, and is safe to rerun.
+Vault deduplicates compact title cards before counts, letter totals, sorting, and pagination, and old duplicate title
+ids resolve through catalog aliases so stale title or reader links land on the canonical title instead of 404ing.
 Portal also sends requester DMs when a moderated request is approved, denied, or finishes downloading, and dedupes
 those notifications by request id plus decision state so retries and restarts do not spam Discord.
 If a release channel id is configured in `/admin/discord`, Portal also posts completed downloads to that channel with
@@ -668,6 +674,9 @@ is readable; the catalog row must carry a current `avif-` ingest revision. Faile
 only removes staged or derived ingest files during cleanup.
 Vault now also stores a durable request work key derived from the concrete download target when one exists, or from the
 metadata identity when no download match exists yet, and active duplicate work keys are rejected.
+Vault also stores Raven catalog keys and title aliases. Maintenance operators can preview and merge safe duplicate
+title groups through the service-only Sage/Vault route; the merge keeps the richest title data, chapter rows, reader
+state, follows/bookmarks, and an audit mapping before retiring duplicate rows.
 Vault now also stores reusable permission groups, user-group assignments, and immutable durable events. Deleting a user
 from `/admin/users` clears local access plus active sessions, but preserves their requests, follows, bookmarks,
 progress, and audit history. If that Discord user signs in again later, Scriptarr recreates them on the current
