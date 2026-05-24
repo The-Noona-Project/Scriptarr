@@ -120,12 +120,12 @@ Sage forwards as a clean 409 so Moon can refresh before the moderator retries.
 `/api/moon-v3/admin/calendar` now returns chapter release entries plus completed-title markers, preserving undated
 completed counts so Moon can surface finished catalog titles that do not have reliable chapter dates.
 Sage also brokers the separated Raven library import and ingest surfaces. `/api/moon-v3/admin/import` is for manual CBZ
-intake and forwards accepted import payloads to Raven `/v1/imports`; `/api/moon-v3/admin/ingest` reports the WebP
+intake and forwards accepted import payloads to Raven `/v1/imports`; `/api/moon-v3/admin/ingest` reports the AVIF
 backlog and retries Raven `/v1/ingest/:titleId/retry`. Queue recovery routes detect `raven-ingest` tasks and retry
 ingest from the existing CBZ instead of rerouting through download retry.
 Sage also exposes Portal-only service-token routes for Appa's `/ingest` command:
 `/api/internal/portal/library/ingest/preview` reads Raven's type-scoped compact card count and hardware state without mutation, and
-`/api/internal/portal/library/ingest/runs` starts Raven's durable WebP-only rebuild job through `/v1/ingest/runs`.
+`/api/internal/portal/library/ingest/runs` starts Raven's durable AVIF rebuild job through `/v1/ingest/runs`.
 Portal disables the confirm button when preview reports zero eligible titles and acknowledges confirm interactions
 before the run request so Discord does not expire slow Sage/Raven starts. Sage also exposes
 `/api/internal/portal/notifications/ingest-runs` plus per-notification ack routes so Portal can DM the confirming

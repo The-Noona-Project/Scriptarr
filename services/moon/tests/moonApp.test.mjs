@@ -317,11 +317,11 @@ const createSageStub = ({requests = [], streamProbe = null, delays = {}} = {}) =
 
   if (requestUrl.pathname === "/api/moon-v3/user/reader/title/dan-da-dan/chapter/chapter-1/page/0") {
     response.writeHead(200, {
-      "Content-Type": "image/svg+xml",
+      "Content-Type": "image/avif",
       "Cache-Control": "private, max-age=604800",
       "ETag": "\"reader-page-rev-1\""
     });
-    response.end("<svg xmlns=\"http://www.w3.org/2000/svg\"><text>reader-page</text></svg>");
+    response.end("reader-page-avif-bytes");
     return;
   }
 
@@ -997,18 +997,19 @@ test("moon serves branded split entry documents, typed routes, PWA assets, and M
 
   const pageResponse = await fetch(`${baseUrl}/api/moon/v3/user/reader/title/dan-da-dan/chapter/chapter-1/page/0?rev=rev-1`);
   assert.equal(pageResponse.status, 200);
-  assert.match(pageResponse.headers.get("content-type") || "", /image\/svg\+xml/);
+  assert.match(pageResponse.headers.get("content-type") || "", /image\/avif/);
   assert.match(pageResponse.headers.get("cache-control") || "", /max-age=604800/);
   assert.equal(pageResponse.headers.get("etag"), "\"reader-page-rev-1\"");
   assert.equal(pageResponse.headers.get("x-scriptarr-reader-cache"), "miss");
-  assert.match(await pageResponse.text(), /reader-page/);
+  assert.match(await pageResponse.text(), /reader-page-avif/);
 
   await new Promise((resolve) => setTimeout(resolve, 75));
   const cachedPageResponse = await fetch(`${baseUrl}/api/moon/v3/user/reader/title/dan-da-dan/chapter/chapter-1/page/0?rev=rev-1`);
   assert.equal(cachedPageResponse.status, 200);
   assert.equal(cachedPageResponse.headers.get("x-scriptarr-reader-cache"), "hit");
+  assert.match(cachedPageResponse.headers.get("content-type") || "", /image\/avif/);
   assert.match(cachedPageResponse.headers.get("cache-control") || "", /max-age=604800/);
-  assert.match(await cachedPageResponse.text(), /reader-page/);
+  assert.match(await cachedPageResponse.text(), /reader-page-avif/);
 
   const pageStatusResponse = await fetch(`${baseUrl}/api/moon/v3/user/reader/title/dan-da-dan/chapter/chapter-1/page/0/status?rev=rev-1`);
   assert.equal(pageStatusResponse.status, 200);

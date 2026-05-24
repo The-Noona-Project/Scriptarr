@@ -20,7 +20,7 @@ FROM eclipse-temurin:24-jre
 WORKDIR /app
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends curl openvpn iproute2 unzip webp \
+  && apt-get install -y --no-install-recommends curl ffmpeg openvpn iproute2 unzip \
   && rm -rf /var/lib/apt/lists/*
 
 ENV SERVER_PORT=8080

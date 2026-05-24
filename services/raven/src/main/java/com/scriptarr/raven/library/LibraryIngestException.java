@@ -1,7 +1,7 @@
 package com.scriptarr.raven.library;
 
 /**
- * Typed failure from the WebP ingest pipeline.
+ * Typed failure from the derived reader-page ingest pipeline.
  */
 public final class LibraryIngestException extends RuntimeException {
     private final String failureCode;

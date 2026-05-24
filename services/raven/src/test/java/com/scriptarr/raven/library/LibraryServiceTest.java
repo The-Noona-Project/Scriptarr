@@ -187,13 +187,13 @@ class LibraryServiceTest {
 
     /**
      * Verify manual imports copy staged CBZ files into canonical downloaded
-     * storage and publish reader-ready WebP ingest output.
+     * storage and publish reader-ready AVIF ingest output.
      *
      * @param tempDir temporary test directory
      * @throws Exception when the import fixture cannot be prepared
      */
     @Test
-    void importLibraryCopiesStagedCbzAndRunsWebpIngest(@TempDir Path tempDir) throws Exception {
+    void importLibraryCopiesStagedCbzAndRunsAvifIngest(@TempDir Path tempDir) throws Exception {
         FakeRavenBrokerClient brokerClient = new FakeRavenBrokerClient();
         ScriptarrLogger logger = mock(ScriptarrLogger.class);
         when(logger.getDownloadsRoot()).thenReturn(tempDir);
@@ -229,7 +229,7 @@ class LibraryServiceTest {
         assertTrue(chapter.archivePath().contains(tempDir.resolve("downloaded").resolve("manga").resolve("Manual_Title").toString()));
         assertTrue(Files.exists(Path.of(chapter.archivePath())));
         assertTrue(Files.exists(Path.of(chapter.ingestManifestPath())));
-        assertTrue(Files.exists(Path.of(chapter.ingestManifestPath()).getParent().resolve("p000001.webp")));
+        assertTrue(Files.exists(Path.of(chapter.ingestManifestPath()).getParent().resolve("p000001.avif")));
         assertArrayEquals(pngPage(10), service.renderReaderPage(title.id(), chapter.id(), 0).bytes());
     }
 
@@ -377,9 +377,9 @@ class LibraryServiceTest {
 
         assertEquals(0, service.readerArchiveIndexCacheSize());
         assertArrayEquals(pngPage(2), secondPage.bytes());
-        assertEquals("image/webp", secondPage.mediaType());
+        assertEquals("image/avif", secondPage.mediaType());
         assertArrayEquals(pngPage(3), thirdPage.bytes());
-        assertEquals("image/webp", thirdPage.mediaType());
+        assertEquals("image/avif", thirdPage.mediaType());
         assertEquals(0, service.readerArchiveIndexCacheSize());
     }
 
@@ -464,6 +464,57 @@ class LibraryServiceTest {
         assertNotNull(manifest);
         assertEquals("kenja-id-c94", manifest.chapters().getFirst().id());
         assertEquals("kenja-id-c79", manifest.chapters().get(1).id());
+    }
+
+    /**
+     * Verify old ready rows from the previous derived-page format do not keep
+     * chapters readable after the AVIF migration.
+     */
+    @Test
+    void readerManifestSkipsLegacyNonAvifReadyChapters() {
+        FakeRavenBrokerClient brokerClient = new FakeRavenBrokerClient();
+        ScriptarrLogger logger = mock(ScriptarrLogger.class);
+        LibraryService service = new LibraryService(brokerClient, new RavenSettingsService(brokerClient, logger, List.of()), logger);
+
+        brokerClient.setLibraryTitle(new LibraryTitle(
+            "legacy-id",
+            "Legacy Format",
+            "manga",
+            "Manga",
+            "manga",
+            "active",
+            "1",
+            "#de6d3a",
+            "",
+            "",
+            1,
+            1,
+            "",
+            List.of(),
+            List.of(),
+            "",
+            null,
+            List.of(),
+            "",
+            "",
+            "/downloads/downloading/manga/Legacy_Format",
+            "/downloads/downloaded/manga/Legacy_Format",
+            List.of(readyChapterWithRevision(
+                "legacy-id-c1",
+                "Chapter 1",
+                "1",
+                12,
+                Instant.parse("2026-04-18T08:00:00Z").toString(),
+                "/downloads/downloaded/manga/Legacy_Format/ch1.cbz",
+                "webp-test-revision"
+            )),
+            null
+        ));
+
+        ReaderManifest manifest = service.readerManifest("legacy-id");
+
+        assertNotNull(manifest);
+        assertTrue(manifest.chapters().isEmpty());
     }
 
     /**
@@ -763,6 +814,10 @@ class LibraryServiceTest {
     }
 
     private LibraryChapter readyChapter(String id, String label, String chapterNumber, int pageCount, String releaseDate, String archivePath) {
+        return readyChapterWithRevision(id, label, chapterNumber, pageCount, releaseDate, archivePath, "avif-test-revision");
+    }
+
+    private LibraryChapter readyChapterWithRevision(String id, String label, String chapterNumber, int pageCount, String releaseDate, String archivePath, String revision) {
         return new LibraryChapter(
             id,
             label,
@@ -778,7 +833,7 @@ class LibraryServiceTest {
             List.of(),
             List.of(),
             "ready",
-            "test-revision",
+            revision,
             pageCount,
             releaseDate,
             "",

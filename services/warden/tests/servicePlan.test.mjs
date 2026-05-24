@@ -14,7 +14,8 @@ test("service plan exposes the fixed Scriptarr network and selfhost mysql by def
       SCRIPTARR_MYSQL_PASSWORD: "secret",
       SUPERUSER_ID: "owner-1",
       SCRIPTARR_APPA_DISCORD_TOKEN: "appa-token",
-      SCRIPTARR_APPA_DISCORD_CLIENT_ID: "appa-client-id"
+      SCRIPTARR_APPA_DISCORD_CLIENT_ID: "appa-client-id",
+      SCRIPTARR_GPU_HINT: "cpu"
     }
   });
 
@@ -28,6 +29,8 @@ test("service plan exposes the fixed Scriptarr network and selfhost mysql by def
   assert.equal(plan.services.find((service) => service.name === "scriptarr-vault").env.SUPERUSER_ID, "owner-1");
   assert.equal(plan.services.find((service) => service.name === "scriptarr-raven").env.SCRIPTARR_RAVEN_LOG_DIR, "/app/logs");
   assert.equal(plan.services.find((service) => service.name === "scriptarr-raven").env.SCRIPTARR_SAGE_BASE_URL, "http://scriptarr-sage:3004");
+  assert.equal(plan.services.find((service) => service.name === "scriptarr-raven").env.SCRIPTARR_RAVEN_DERIVED_IMAGE_FORMAT, "avif");
+  assert.equal(plan.services.find((service) => service.name === "scriptarr-raven").env.SCRIPTARR_RAVEN_AVIF_REQUIRE_NVIDIA, "true");
   assert.deepEqual(plan.services.find((service) => service.name === "scriptarr-raven").extraArgs, ["--cap-add", "NET_ADMIN", "--device", "/dev/net/tun"]);
   assert.equal(plan.services.find((service) => service.name === "scriptarr-portal").env.SCRIPTARR_SAGE_BASE_URL, "http://scriptarr-sage:3004");
   assert.equal(plan.services.find((service) => service.name === "scriptarr-sage").env.SCRIPTARR_APPA_DISCORD_TOKEN, "appa-token");
@@ -40,6 +43,7 @@ test("service plan exposes the fixed Scriptarr network and selfhost mysql by def
   assert.equal(oracle.env.SCRIPTARR_SAGE_BASE_URL, "http://scriptarr-sage:3004");
   assert.equal(oracle.env.SCRIPTARR_LOCALAI_EMBEDDED, "true");
   assert.equal(oracle.env.SCRIPTARR_LOCALAI_BASE_URL, "http://127.0.0.1:8080/v1");
+  assert.equal(oracle.env.SCRIPTARR_ORACLE_LOCALAI_GPU_PROFILE, "cpu");
   assert.equal(oracle.env.SCRIPTARR_LOCALAI_DEFAULT_MODEL.includes("Hermes-3-Llama-3.1-8B-Q4_K_S.gguf"), true);
   assert.equal(oracle.mounts.some((mount) => mount.containerPath === "/models"), true);
   assert.equal(oracle.mounts.some((mount) => mount.containerPath === "/data"), true);
@@ -75,16 +79,10 @@ test("service plan gives embedded Oracle LocalAI NVIDIA runtime args when hinted
   });
 
   const oracle = plan.services.find((service) => service.name === "scriptarr-oracle");
-  assert.deepEqual(oracle.extraArgs, [
-    "--runtime", "nvidia",
-    "--gpus", "all",
-    "--device", "/dev/nvidia0",
-    "--device", "/dev/nvidiactl",
-    "--device", "/dev/nvidia-uvm",
-    "--device", "/dev/nvidia-uvm-tools"
-  ]);
+  assert.deepEqual(oracle.extraArgs, ["--runtime", "nvidia", "--gpus", "all"]);
   assert.equal(oracle.env.NVIDIA_VISIBLE_DEVICES, "all");
   assert.equal(oracle.env.NVIDIA_DRIVER_CAPABILITIES, "compute,utility");
+  assert.equal(oracle.env.SCRIPTARR_ORACLE_LOCALAI_GPU_PROFILE, "nvidia");
   assert.equal(oracle.env.SCRIPTARR_LOCALAI_BASE_URL, "http://127.0.0.1:8080/v1");
 });
 
@@ -103,16 +101,36 @@ test("service plan gives Raven ingest NVIDIA runtime args when hinted", () => {
     "--cap-add", "NET_ADMIN",
     "--device", "/dev/net/tun",
     "--runtime", "nvidia",
-    "--gpus", "all",
-    "--device", "/dev/nvidia0",
-    "--device", "/dev/nvidiactl",
-    "--device", "/dev/nvidia-uvm",
-    "--device", "/dev/nvidia-uvm-tools"
+    "--gpus", "all"
   ]);
   assert.equal(raven.env.SCRIPTARR_RAVEN_INGEST_GPU_PROFILE, "nvidia");
   assert.equal(raven.env.SCRIPTARR_RAVEN_INGEST_REQUIRE_NVIDIA, "true");
   assert.equal(raven.env.NVIDIA_VISIBLE_DEVICES, "all");
   assert.equal(raven.env.NVIDIA_DRIVER_CAPABILITIES, "compute,utility");
+});
+
+test("service plan gives Oracle and Raven NVIDIA runtime args when Docker exposes the NVIDIA runtime", () => {
+  const plan = resolveServicePlan({
+    env: {
+      SCRIPTARR_MYSQL_URL: "SELFHOST",
+      SCRIPTARR_MYSQL_USER: "scriptarr",
+      SCRIPTARR_MYSQL_PASSWORD: "secret",
+      SCRIPTARR_DOCKER_INFO_RUNTIMES_JSON: JSON.stringify({
+        runc: {path: "runc"},
+        nvidia: {path: "/usr/bin/nvidia-container-runtime"}
+      })
+    }
+  });
+
+  const oracle = plan.services.find((service) => service.name === "scriptarr-oracle");
+  const raven = plan.services.find((service) => service.name === "scriptarr-raven");
+  assert.equal(oracle.extraArgs.includes("--gpus"), true);
+  assert.equal(raven.extraArgs.includes("--gpus"), true);
+  assert.equal(oracle.env.NVIDIA_VISIBLE_DEVICES, "all");
+  assert.equal(oracle.env.SCRIPTARR_ORACLE_LOCALAI_GPU_PROFILE, "nvidia");
+  assert.equal(raven.env.NVIDIA_VISIBLE_DEVICES, "all");
+  assert.equal(raven.env.SCRIPTARR_RAVEN_DERIVED_IMAGE_FORMAT, "avif");
+  assert.equal(raven.env.SCRIPTARR_RAVEN_AVIF_REQUIRE_NVIDIA, "true");
 });
 
 test("service plan can explicitly disable Raven VPN runtime devices", () => {
@@ -121,6 +139,7 @@ test("service plan can explicitly disable Raven VPN runtime devices", () => {
       SCRIPTARR_MYSQL_URL: "SELFHOST",
       SCRIPTARR_MYSQL_USER: "scriptarr",
       SCRIPTARR_MYSQL_PASSWORD: "secret",
+      SCRIPTARR_GPU_HINT: "cpu",
       SCRIPTARR_RAVEN_VPN_RUNTIME_DISABLED: "true"
     }
   });
@@ -134,6 +153,7 @@ test("service plan can override Raven VPN tun device path", () => {
       SCRIPTARR_MYSQL_URL: "SELFHOST",
       SCRIPTARR_MYSQL_USER: "scriptarr",
       SCRIPTARR_MYSQL_PASSWORD: "secret",
+      SCRIPTARR_GPU_HINT: "cpu",
       SCRIPTARR_RAVEN_TUN_DEVICE: "/custom/tun"
     }
   });

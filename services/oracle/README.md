@@ -52,6 +52,8 @@ storage, no remove action is active, and the runtime can pass a real `scriptarr-
 slow warmup leave Oracle and the broader Scriptarr stack healthy while `/admin/system/ai` shows the startup phase and
 last gate reason. If Oracle starts before Sage/Vault settings are available, later health, status, model-list, or chat
 requests retry the embedded startup once the saved settings show Oracle enabled for LocalAI.
+When Warden gives Oracle NVIDIA runtime access, embedded LocalAI rejects a stale cached CPU-only backend and prepares a
+GPU-capable backend so generation does not silently stay on the CPU path after a container recreate.
 
 The service keeps the existing env names for Sage, OpenAI, and LocalAI so Warden, Moon, Sage, and Portal do not need
 to change how they configure or call Oracle.

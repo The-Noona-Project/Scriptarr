@@ -194,7 +194,7 @@ const createVaultRouteFailureProxy = ({targetBaseUrl, shouldFail}) => {
 const readyIngestChapter = (chapter) => ({
   ...chapter,
   ingestStatus: chapter.ingestStatus || "ready",
-  ingestRevision: chapter.ingestRevision || `${chapter.id || "chapter"}-webp`,
+  ingestRevision: chapter.ingestRevision || `avif-${chapter.id || "chapter"}`,
   ingestedPageCount: chapter.ingestedPageCount ?? chapter.pageCount ?? 0,
   ingestedAt: chapter.ingestedAt || "2026-04-22T00:00:00.000Z",
   ingestManifestPath: chapter.ingestManifestPath || `/downloads/ingested/test/${chapter.id || "chapter"}/manifest.json`
@@ -363,7 +363,8 @@ const createDependencyStub = ({
     ingestRetry: 0,
     importLibrary: 0,
     downloadRetry: 0,
-    readerPageAborted: 0
+    readerPageAborted: 0,
+    readerPageAccepts: []
   };
   let currentLibraryTitles = [...libraryTitles];
   let currentDownloadTasks = [...downloadTasks];
@@ -411,7 +412,7 @@ const createDependencyStub = ({
         service: "scriptarr-warden-health",
         dockerSocketAvailable: true,
         ingest: {
-          hardware: ingestOverview?.summary?.hardware || {profile: "cpu-webp", state: "ready", encoder: "cwebp/libwebp"}
+          hardware: ingestOverview?.summary?.hardware || {profile: "nvidia-avif", state: "ready", encoder: "ffmpeg/av1_nvenc"}
         }
       }));
       return;
@@ -859,6 +860,7 @@ const createDependencyStub = ({
     }
 
     if (request.url?.startsWith("/v1/reader/") && request.url.includes("/page/")) {
+      calls.readerPageAccepts.push(request.headers.accept || "");
       if (readerPageFetchFails) {
         request.socket.destroy();
         return;
@@ -870,10 +872,10 @@ const createDependencyStub = ({
         return;
       }
       response.writeHead(200, {
-        "Content-Type": "image/svg+xml",
+        "Content-Type": "image/avif",
         "ETag": "\"raven-reader-page\""
       });
-      response.end("<svg xmlns=\"http://www.w3.org/2000/svg\"><text>reader-page</text></svg>");
+      response.end("reader-page-avif-bytes");
       return;
     }
 
@@ -904,9 +906,9 @@ const createDependencyStub = ({
           pending: Math.max(0, currentLibraryTitles.length - readyCount)
         },
         hardware: {
-          profile: "cpu-webp",
+          profile: "nvidia-avif",
           state: "ready",
-          encoder: "cwebp/libwebp"
+          encoder: "ffmpeg/av1_nvenc"
         },
         titles: currentLibraryTitles.map((title) => ({
           id: title.id,
@@ -2611,7 +2613,7 @@ test("sage brokers admin import and ingest workflows as separate Raven surfaces"
     }],
     ingestOverview: {
       summary: {total: 1, ready: 1, failed: 0, pending: 0},
-      hardware: {profile: "cpu-webp", state: "ready", encoder: "cwebp/libwebp"},
+      hardware: {profile: "nvidia-avif", state: "ready", encoder: "ffmpeg/av1_nvenc"},
       titles: [{
         id: "dan-da-dan",
         title: "Dandadan",
@@ -3286,8 +3288,10 @@ test("sage round-trips Moon branding and exposes typed Moon reader payloads", as
   });
   assert.equal(readerPageResponse.status, 200);
   assert.match(readerPageResponse.headers.get("cache-control") || "", /max-age=604800/);
+  assert.match(readerPageResponse.headers.get("content-type") || "", /image\/avif/);
   assert.equal(readerPageResponse.headers.get("etag"), "\"raven-reader-page\"");
-  assert.match(await readerPageResponse.text(), /reader-page/);
+  assert.match(await readerPageResponse.text(), /reader-page-avif/);
+  assert.match(dependencyStub.calls.readerPageAccepts.at(-1) || "", /image\/avif/);
 
   const readerPageProbeResponse = await fetch(`${baseUrl}/api/moon-v3/user/reader/title/dan-da-dan/chapter/dandadan-c166/page/1/status`, {
     headers: {
@@ -5654,9 +5658,9 @@ test("sage brokers Portal library ingest preview and run creation through Raven"
         failed: 1,
         pending: 1,
         hardware: {
-          profile: "gpu-webp",
+          profile: "nvidia-avif",
           state: "ready",
-          encoder: "cwebp/libwebp"
+          encoder: "ffmpeg/av1_nvenc"
         }
       },
       runs: [
@@ -5724,7 +5728,7 @@ test("sage brokers Portal library ingest preview and run creation through Raven"
     assert.equal(preview.libraryTypeSlug, "webtoon");
     assert.equal(preview.libraryTypeLabel, "Webtoon");
     assert.equal(preview.titleCount, 2);
-    assert.equal(preview.hardware.profile, "gpu-webp");
+    assert.equal(preview.hardware.profile, "nvidia-avif");
     assert.equal(preview.activeRun, null);
     assert.equal(dependencyStub.calls.library, 0);
     assert.equal(dependencyStub.calls.ingestOverview, 0);

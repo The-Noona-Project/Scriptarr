@@ -46,7 +46,7 @@ Service ownership:
 - Vault owns durable records and is the only first-party service allowed to talk to MySQL.
 - Portal owns Discord gateway events, slash commands, DMs, reactions, trivia runtime, and notification delivery, but
   persists and decides state through Sage.
-- Raven owns source scraping, downloader queues, `/downloadall`, library file promotion, manual CBZ import, WebP ingest,
+- Raven owns source scraping, downloader queues, `/downloadall`, library file promotion, manual CBZ import, AVIF ingest,
   media quality, naming, and VPN protection.
 - Oracle owns AI chat/assist responses only; it may advise, but it must not execute Scriptarr mutations directly.
 - Warden owns container plans, Docker lifecycle, updates, health checks, and production service convergence.
@@ -198,10 +198,10 @@ Architecture invariants:
 - Raven now exposes merged metadata-provider and download-provider tags as one canonical tag set for library and
   moderation surfaces, while keeping source attribution internally for debugging.
 - Raven stores in-flight downloads under `downloading/<type>/...`, keeps canonical CBZs under `downloaded/<type>/...`,
-  and publishes derived WebP reader pages under `ingested/<type>/<titleId>/<chapterId>/...`.
-- `/admin/import` is manual CBZ intake. `/admin/ingest` is WebP backlog, hardware state, and retry control. Do not
+  and publishes derived AVIF reader pages under `ingested/<type>/<titleId>/<chapterId>/...`.
+- `/admin/import` is manual CBZ intake. `/admin/ingest` is AVIF backlog, hardware state, and retry control. Do not
   collapse those workflows into one route.
-- Reader availability is WebP-first. New downloads and manual imports must pass ingest before a chapter is readable;
+- Reader availability is AVIF-first. New downloads and manual imports must pass ingest before a chapter is readable;
   failed ingest keeps the CBZ and should appear as retryable Needs attention work.
 - Raven title-download concurrency is brokered through `raven.download.runtime`. Default to two active titles, allow
   only `1` through `6`, apply reloads live without cancelling active downloads, and keep per-title page download

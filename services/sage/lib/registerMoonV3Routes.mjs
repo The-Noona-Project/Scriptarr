@@ -277,6 +277,13 @@ const normalizeIngestStatus = (value, fallback = "pending") => {
   const normalized = normalizeString(value, fallback).toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
   return ["ready", "running", "pending", "failed", "missing"].includes(normalized) ? normalized : fallback;
 };
+const READER_DERIVED_REVISION_PREFIX = "avif-";
+const hasCurrentReaderRevision = (chapter = {}) =>
+  normalizeString(chapter.ingestRevision).toLowerCase().startsWith(READER_DERIVED_REVISION_PREFIX);
+const isReadableChapter = (chapter = {}) =>
+  chapter.available !== false
+  && normalizeIngestStatus(chapter.ingestStatus) === "ready"
+  && hasCurrentReaderRevision(chapter);
 
 const toTitleSummary = (title = {}) => ({
   id: normalizeString(title.id),
@@ -317,7 +324,7 @@ const toChapterSummary = (chapter = {}) => ({
   available: chapter.available !== false,
   archivePath: normalizeString(chapter.archivePath),
   sourceUrl: normalizeString(chapter.sourceUrl),
-  ingestStatus: normalizeIngestStatus(chapter.ingestStatus),
+  ingestStatus: normalizeIngestStatus(chapter.ingestStatus) === "ready" && !hasCurrentReaderRevision(chapter) ? "pending" : normalizeIngestStatus(chapter.ingestStatus),
   ingestRevision: normalizeString(chapter.ingestRevision),
   ingestedPageCount: Number.parseInt(String(chapter.ingestedPageCount || 0), 10) || 0,
   ingestedAt: parseIso(chapter.ingestedAt),
@@ -371,7 +378,7 @@ const resolveEquivalentReaderChapterId = (chapters = [], requestedChapterId = ""
   }
   const readableChapters = normalizeArray(chapters)
     .map(toChapterSummary)
-    .filter((entry) => entry.available !== false && normalizeIngestStatus(entry.ingestStatus) === "ready" && normalizeString(entry.id));
+    .filter((entry) => isReadableChapter(entry) && normalizeString(entry.id));
   const exact = readableChapters.find((entry) => normalizeString(entry.id) === currentId);
   if (exact?.id) {
     return exact.id;
@@ -400,7 +407,7 @@ const resolveReaderAdjacentChapterIds = (chapters = [], chapterId = "") => {
   const currentId = normalizeString(chapterId);
   const readableChapters = normalizeArray(chapters)
     .map(toChapterSummary)
-    .filter((entry) => entry.available !== false && normalizeIngestStatus(entry.ingestStatus) === "ready" && normalizeString(entry.id))
+    .filter((entry) => isReadableChapter(entry) && normalizeString(entry.id))
     .sort(compareReaderChaptersByNumber);
   const chapterIndex = readableChapters.findIndex((entry) => normalizeString(entry.id) === currentId);
   if (chapterIndex < 0) {
@@ -492,7 +499,7 @@ const toUserChapterRow = (chapter = {}) => ({
   qualityStatus: normalizeString(chapter.qualityStatus, "clean"),
   expectedPageCount: Number.parseInt(String(chapter.expectedPageCount || 0), 10) || 0,
   missingPageCount: Number.parseInt(String(chapter.missingPageCount || 0), 10) || 0,
-  ingestStatus: normalizeIngestStatus(chapter.ingestStatus),
+  ingestStatus: normalizeIngestStatus(chapter.ingestStatus) === "ready" && !hasCurrentReaderRevision(chapter) ? "pending" : normalizeIngestStatus(chapter.ingestStatus),
   ingestRevision: normalizeString(chapter.ingestRevision),
   ingestedPageCount: Number.parseInt(String(chapter.ingestedPageCount || 0), 10) || 0,
   ingestedAt: parseIso(chapter.ingestedAt),
@@ -2262,7 +2269,7 @@ export const registerMoonV3Routes = (app, {
       severity: "info",
       targetType: "title",
       targetId: normalizeString(req.params.titleId),
-      message: `${req.user.username} retried WebP ingest for ${normalizeString(result.payload?.title, "a title")}.`,
+      message: `${req.user.username} retried AVIF ingest for ${normalizeString(result.payload?.title, "a title")}.`,
       metadata: {
         titleId: normalizeString(req.params.titleId),
         ingestStatus: normalizeString(result.payload?.ingestStatus)
@@ -5027,7 +5034,7 @@ export const registerMoonV3Routes = (app, {
       return;
     }
     const availableChapterIds = normalizeArray(titleState.title.chapters)
-      .filter((chapter) => chapter.available !== false && normalizeIngestStatus(chapter.ingestStatus) === "ready")
+      .filter((chapter) => isReadableChapter(chapter))
       .map((chapter) => normalizeString(chapter.id))
       .filter(Boolean);
     await vaultClient.markTitleRead({
@@ -5093,7 +5100,7 @@ export const registerMoonV3Routes = (app, {
     const readIds = new Set(normalizeArray(title.userState?.readChapterIds).map((entry) => normalizeString(entry)));
     readIds.add(normalizeString(chapter.id));
     const availableCount = normalizeArray(title.chapters)
-      .filter((entry) => entry.available !== false && normalizeIngestStatus(entry.ingestStatus) === "ready")
+      .filter((entry) => isReadableChapter(entry))
       .length;
     const completedAt = readIds.size >= availableCount && availableCount > 0 ? new Date().toISOString() : null;
     await vaultClient.markChapterRead({
@@ -5175,7 +5182,7 @@ export const registerMoonV3Routes = (app, {
     }
 
     const availableCount = chapters
-      .filter((entry) => entry.available !== false && normalizeIngestStatus(entry.ingestStatus) === "ready")
+      .filter((entry) => isReadableChapter(entry))
       .length;
     const selectedReadIds = new Set(normalizeArray(title.userState?.readChapterIds).map((entry) => normalizeString(entry)));
     const now = new Date().toISOString();
@@ -6005,7 +6012,7 @@ export const registerMoonV3Routes = (app, {
       response = await fetch(
         `${config.ravenBaseUrl}/v1/reader/${encodeURIComponent(req.params.titleId)}/${encodeURIComponent(req.params.chapterId)}/page/${encodeURIComponent(req.params.pageIndex)}`,
         {
-          headers: {"Accept": "image/svg+xml"},
+          headers: {"Accept": "image/avif,image/webp,image/png,image/jpeg,image/svg+xml,*/*;q=0.2"},
           signal: controller.signal
         }
       );

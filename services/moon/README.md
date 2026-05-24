@@ -150,7 +150,7 @@ per-type naming profiles for manga, manhwa, manhua, webtoon, comic, and OEL so a
 page formats without digging through the broader settings surface.
 `/admin/import` is the manual CBZ intake page. It sends title metadata, library type, existing-title selection, and
 Raven-visible source paths to Sage, which asks Raven to copy approved CBZ files into canonical downloaded storage.
-`/admin/ingest` is separate from import and shows the WebP conversion backlog, completion stats, hardware status, and
+`/admin/ingest` is separate from import and shows the AVIF conversion backlog, completion stats, hardware status, and
 retry buttons for titles whose CBZs are not yet reader-ready.
 `/admin/calendar` now renders a month or agenda view backed by Raven chapter release dates captured from source
 scrapes and metadata enrichment instead of only showing a flat task-style table. Completed titles get one dated

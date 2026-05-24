@@ -89,14 +89,14 @@ public final class LibraryService {
 
     /**
      * Create a library service with an in-process transcoder for direct unit
-     * construction. Spring uses the injectable constructor and real cwebp bean.
+     * construction. Spring uses the injectable constructor and real AVIF bean.
      *
      * @param brokerClient Sage-backed broker client
      * @param settingsService Sage-backed Raven settings service
      * @param logger shared Raven logger
      */
     public LibraryService(RavenBrokerClient brokerClient, RavenSettingsService settingsService, ScriptarrLogger logger) {
-        this(brokerClient, settingsService, logger, new LibraryIngestService(settingsService, logger, new PassthroughWebpTranscoder()));
+        this(brokerClient, settingsService, logger, new LibraryIngestService(settingsService, logger, new PassthroughPageTranscoder()));
     }
 
     /**
@@ -475,7 +475,7 @@ public final class LibraryService {
 
     /**
      * Import Raven-visible CBZ files into the canonical downloaded library and
-     * immediately run WebP ingest before the title becomes readable.
+     * immediately run derived-page ingest before the title becomes readable.
      *
      * @param body admin import payload
      * @return import and ingest result payload
@@ -536,7 +536,7 @@ public final class LibraryService {
     }
 
     /**
-     * Run or retry WebP ingest for every chapter in a title.
+     * Run or retry AVIF ingest for every chapter in a title.
      *
      * @param titleId title id
      * @param requestedBy actor requesting ingest
@@ -552,7 +552,7 @@ public final class LibraryService {
             throw new LibraryIngestException("no_chapters", "Title has no chapters to ingest.");
         }
         String taskId = ingestTaskId(title.id());
-        persistIngestTask(taskId, title, "running", "Converting CBZ chapters into WebP pages.", 5, requestedBy, "");
+        persistIngestTask(taskId, title, "running", "Converting CBZ chapters into AVIF pages.", 5, requestedBy, "");
         List<LibraryChapter> updatedChapters = new ArrayList<>();
         int total = chapters.size();
         int completed = 0;
@@ -587,7 +587,7 @@ public final class LibraryService {
                 persistIngestTask(taskId, title, "running", "Ingested " + completed + " of " + total + " chapter(s).", percent, requestedBy, "");
             }
             LibraryTitle refreshed = replaceTitleWithChapters(title, chapters);
-            persistIngestTask(taskId, refreshed, "completed", "WebP ingest completed.", 100, requestedBy, "");
+            persistIngestTask(taskId, refreshed, "completed", "AVIF ingest completed.", 100, requestedBy, "");
             return refreshed;
         } catch (LibraryIngestException error) {
             LibraryChapter failedChapter = updatedChapters.isEmpty() ? chapters.get(0) : updatedChapters.get(updatedChapters.size() - 1);
@@ -644,7 +644,7 @@ public final class LibraryService {
     }
 
     /**
-     * Return Raven's WebP ingest hardware status.
+     * Return Raven's reader-page ingest hardware status.
      *
      * @return hardware status payload
      */
@@ -1779,6 +1779,7 @@ public final class LibraryService {
         return chapter != null
             && chapter.available()
             && "ready".equals(Optional.ofNullable(chapter.ingestStatus()).orElse("").trim().toLowerCase(Locale.ROOT))
+            && Optional.ofNullable(chapter.ingestRevision()).orElse("").trim().toLowerCase(Locale.ROOT).startsWith(ingestService.readerPageRevisionPrefix())
             && chapter.ingestedPageCount() > 0
             && chapter.ingestManifestPath() != null
             && !chapter.ingestManifestPath().isBlank();
@@ -1803,7 +1804,7 @@ public final class LibraryService {
 
     private ReaderPageReadResult resolveReaderPageRead(ReaderChapterPayload payload, int pageIndex) {
         LibraryChapter chapter = payload.chapter();
-        String mediaType = "image/webp";
+        String mediaType = ingestService.readerPageMediaType();
 
         try {
             byte[] bytes = ingestService.readIngestedPage(chapter, pageIndex);
@@ -1816,7 +1817,7 @@ public final class LibraryService {
                 new ReaderPageProbe(true, 200, pageIndex, contentTypeFamily(mediaType), bytes.length, true, "", "ingested")
             );
         } catch (Exception error) {
-            logger.warn("LIBRARY", "Failed to read ingested WebP page.", error.getMessage());
+            logger.warn("LIBRARY", "Failed to read ingested reader page.", error.getMessage());
             return failedReaderPageRead(pageIndex, mediaType, "unknown", "ingested");
         }
     }
@@ -1895,7 +1896,7 @@ public final class LibraryService {
     }
 
     private String resolvePageMediaType(LibraryTitle title, LibraryChapter chapter, int pageIndex) {
-        return "image/webp";
+        return ingestService.readerPageMediaType();
     }
 
     private void markReaderPageIssue(ReaderChapterPayload payload, int pageIndex, String failureCode) {
@@ -2255,6 +2256,9 @@ public final class LibraryService {
         if (normalized.endsWith(".webp")) {
             return "image/webp";
         }
+        if (normalized.endsWith(".avif")) {
+            return "image/avif";
+        }
         if (normalized.endsWith(".gif")) {
             return "image/gif";
         }
@@ -2334,7 +2338,32 @@ public final class LibraryService {
         }
     }
 
-    private static final class PassthroughWebpTranscoder implements WebpTranscoder {
+    private static final class PassthroughPageTranscoder implements PageTranscoder {
+        @Override
+        public String format() {
+            return "avif";
+        }
+
+        @Override
+        public String fileExtension() {
+            return ".avif";
+        }
+
+        @Override
+        public String mediaType() {
+            return "image/avif";
+        }
+
+        @Override
+        public String encoderName() {
+            return "test/passthrough-avif";
+        }
+
+        @Override
+        public PageTranscoder.Readiness readiness() {
+            return PageTranscoder.Readiness.ok();
+        }
+
         @Override
         public void transcode(byte[] inputBytes, String sourceMediaType, Path outputPath, int quality) throws IOException {
             Files.createDirectories(outputPath.getParent());

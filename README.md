@@ -98,9 +98,9 @@ events keep only redacted slow/retry summaries.
 Moon admin calendar is now backed by Raven chapter release dates captured from provider scrapes plus metadata
 enrichment, and completed catalog titles get a dated completion marker when chapter dates are missing so finished
 series are not silently dropped from the calendar.
-Raven keeps CBZ chapters canonical under `downloaded/<type>/...` and now requires a WebP ingest pass into
+Raven keeps CBZ chapters canonical under `downloaded/<type>/...` and now requires an AVIF ingest pass into
 `ingested/<type>/<titleId>/<chapterId>/` before reader pages become available. Moon admin keeps manual CBZ import at
-`/admin/import` and WebP ingest backlog or retries at `/admin/ingest`; `/admin/library` links directly to both tools
+`/admin/import` and AVIF ingest backlog or retries at `/admin/ingest`; `/admin/library` links directly to both tools
 and can retry ingest for titles that are not reader-ready.
 Moon admin also exposes `/admin/system/api` for trusted automation settings, system-level API keys with assigned
 permission groups, personal-key audit, and same-origin Swagger or OpenAPI links. Signed-in readers can create their
@@ -201,7 +201,7 @@ For end-to-end Docker verification, use:
   form as a legacy best-effort fallback, but that path also creates a durable run.
 - Appa `/ingest type:<manga|manhwa|manhua|webtoon|comic|oel>` previews the selected library type, shows title count
   and Raven hardware state, then requires a five-minute confirm button before Sage starts Raven's durable
-  `raven-library-ingest` WebP-only rebuild from existing canonical CBZ archives. Empty previews do not expose a run
+  `raven-library-ingest` AVIF rebuild from existing canonical CBZ archives. Empty previews do not expose a run
   button, and confirm clicks are acknowledged before the slower Sage/Raven work starts.
 - The bulk flow only queues titles with one confident metadata match and reports already-active, completed,
   already-current, adult-content, no-metadata, ambiguous-metadata, invalid-source, appended, and failed outcomes back
@@ -268,8 +268,9 @@ For end-to-end Docker verification, use:
 - Oracle starts disabled and OpenAI-first. When LocalAI is selected, Oracle now runs an embedded OpenAI-compatible
   LocalAI runtime inside the `scriptarr-oracle` container instead of relying on a standalone sidecar.
 - Warden still plans the Oracle container mounts and GPU flags. NVIDIA installs should give `scriptarr-oracle`
-  `--runtime nvidia --gpus all`, explicit `/dev/nvidia*` device bindings, and compute/utility driver capabilities,
-  while CPU-only hosts should keep AI degraded without making the stack unhealthy.
+  `--runtime nvidia --gpus all`, NVIDIA compute/utility driver capabilities, and optional explicit `/dev/nvidia*`
+  device bindings only on hosts that require and expose those paths, while CPU-only hosts should keep AI degraded
+  without making the stack unhealthy.
 - Embedded LocalAI prepares its cache with no model preload. Moon admin can ask Oracle to ensure the selected GGUF
   model; Oracle writes the model YAML, downloads it once into the persistent `localai/models` folder, starts LocalAI
   for that explicit lifecycle action, and reports ready only after a tiny OpenAI-compatible generation probe succeeds.
@@ -297,7 +298,7 @@ For end-to-end Docker verification, use:
   VPN remains enabled.
 - Raven should only report download completion after promote plus catalog persistence succeed, and it now rescans the
   `downloaded/<type>/...` tree on boot to recover missing catalog records from finished files.
-- Raven should run WebP ingest after manual CBZ import or normal download promotion. CBZs stay canonical in
+- Raven should run AVIF ingest after manual CBZ import or normal download promotion. CBZs stay canonical in
   `downloaded/<type>/...`, derived pages live in `ingested/<type>/<titleId>/<chapterId>/`, and chapters are not readable
   until ingest status is `ready`.
 - Moon admin's live queue keeps ETA on active downloads only, shows recovery actions for failed or stale Raven title

@@ -17,8 +17,10 @@
 - LocalAI is manual in 3.0: no first-boot model pull, install, or start.
 - Embedded LocalAI now lives inside Oracle. Warden must mount persistent `localai/models` and `localai/data` into the
   Oracle container and pass the correct hardware flags for the selected profile, especially NVIDIA
-  `--runtime nvidia --gpus all` plus explicit `/dev/nvidia*` device bindings on hosts where Docker's GPU request does
-  not expose `/dev/nvidia0` by itself.
+  `--runtime nvidia --gpus all`. Explicit `/dev/nvidia*` device bindings are opt-in with
+  `SCRIPTARR_NVIDIA_DEVICE_BINDINGS=true` for hosts where Docker's GPU request does not expose `/dev/nvidia0` by
+  itself. If Warden cannot see `nvidia-smi` from inside its own container, it should still
+  detect Docker's configured NVIDIA runtime from Docker runtime metadata before falling back to CPU planning.
 - LocalAI install, start, remove, and readiness actions are Oracle-owned embedded runtime jobs brokered through Sage.
   Warden should not recreate the standalone `scriptarr-localai` sidecar path by default.
 - If the next AI startup pass auto-starts embedded LocalAI after Oracle restarts, keep that implementation in Oracle.
@@ -40,9 +42,9 @@
   honoring explicit `SCRIPTARR_VAULT_AUTH_TIMEOUT_MS` or legacy `SCRIPTARR_AUTH_VAULT_TIMEOUT_MS` overrides.
 - Warden should launch Raven with the VPN runtime device/capability contract (`NET_ADMIN` and `/dev/net/tun`) when not
   explicitly disabled, and drift detection should recreate Raven when those flags disappear.
-- Warden should pass Raven ingest NVIDIA runtime env and args when `SCRIPTARR_RAVEN_INGEST_GPU_PROFILE=nvidia` or the
-  shared GPU hint asks for NVIDIA. Missing GPU should be reported by Raven ingest as `hardware_missing`, not as a full
-  stack health failure.
+- Warden should pass Raven ingest NVIDIA runtime env and args for AVIF when `SCRIPTARR_RAVEN_INGEST_GPU_PROFILE=nvidia`,
+  `SCRIPTARR_RAVEN_AVIF_REQUIRE_NVIDIA=true`, or the shared GPU hint asks for NVIDIA. Missing GPU should be reported by
+  Raven ingest as `hardware_missing`, not as a full stack health failure.
 - Warden should mount Moon's derived cover-cache folder at `/app/cover-cache` and set
   `SCRIPTARR_MOON_COVER_CACHE_DIR` for the Moon container. The cache is rebuildable and separate from Vault/Raven
   authoritative catalog state.

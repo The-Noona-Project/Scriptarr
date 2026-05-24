@@ -11,7 +11,7 @@ export const portalCommandCatalog = Object.freeze([
   {name: "subscribe", label: "/subscribe", description: "Follow a library title for Discord notifications.", scope: "Guild slash command", mode: "slash", roleManaged: true, registrationScope: "guild", splitOwner: "noona"},
   {name: "trivia", label: "/trivia", description: "Play and manage Scriptarr title trivia.", scope: "Guild slash command", mode: "slash", roleManaged: true, registrationScope: "guild", splitOwner: "both"},
   {name: "discord", label: "/discord", description: "Appa-owned Discord channel diagnostics.", scope: "Guild slash command", mode: "slash", roleManaged: true, registrationScope: "guild", splitOwner: "appa"},
-  {name: "ingest", label: "/ingest", description: "Appa-owned WebP ingest preview and run command.", scope: "Guild slash command", mode: "slash", roleManaged: true, registrationScope: "guild", splitOwner: "appa"},
+  {name: "ingest", label: "/ingest", description: "Appa-owned AVIF ingest preview and run command.", scope: "Guild slash command", mode: "slash", roleManaged: true, registrationScope: "guild", splitOwner: "appa"},
   {
     name: "downloadall",
     label: "/downloadall",

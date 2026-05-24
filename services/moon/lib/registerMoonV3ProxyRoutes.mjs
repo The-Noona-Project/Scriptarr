@@ -12,7 +12,7 @@ const COVER_CACHE_CONTENT_TYPES = new Set(["image/jpeg", "image/png", "image/web
 const READER_PAGE_CACHE_MAX_BYTES = 32 * 1024 * 1024;
 const READER_PAGE_CACHE_MAX_TOTAL_BYTES = 1024 * 1024 * 1024;
 const READER_PAGE_CACHE_PRUNE_TARGET_BYTES = Math.round(READER_PAGE_CACHE_MAX_TOTAL_BYTES * 0.85);
-const READER_PAGE_CACHE_CONTENT_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif", "image/svg+xml"]);
+const READER_PAGE_CACHE_CONTENT_TYPES = new Set(["image/avif", "image/jpeg", "image/png", "image/webp", "image/gif", "image/svg+xml"]);
 const HOP_BY_HOP_HEADERS = new Set([
   "connection",
   "keep-alive",

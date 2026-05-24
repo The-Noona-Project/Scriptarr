@@ -237,7 +237,7 @@ export const resolveServicePlan = ({env = process.env, containerNamePrefix = ""}
   const ravenIngestGpuProfile = resolveLocalAiProfile({
     env: {
       ...env,
-      SCRIPTARR_GPU_HINT: normalizeString(env.SCRIPTARR_RAVEN_INGEST_GPU_PROFILE || env.SCRIPTARR_GPU_HINT || "cpu")
+      SCRIPTARR_GPU_HINT: normalizeString(env.SCRIPTARR_RAVEN_INGEST_GPU_PROFILE || env.SCRIPTARR_GPU_HINT)
     }
   });
   const ravenGpuEnv = ravenIngestGpuProfile.key === "nvidia"
@@ -354,6 +354,8 @@ export const resolveServicePlan = ({env = process.env, containerNamePrefix = ""}
       SCRIPTARR_SERVICE_TOKEN: serviceTokens["scriptarr-raven"],
       SCRIPTARR_RAVEN_DATA_ROOT: "/downloads",
       SCRIPTARR_RAVEN_LOG_DIR: "/app/logs",
+      SCRIPTARR_RAVEN_DERIVED_IMAGE_FORMAT: "avif",
+      SCRIPTARR_RAVEN_AVIF_REQUIRE_NVIDIA: "true",
       ...ravenGpuEnv
     },
     mounts: resolveFolderMounts(storageLayout, "scriptarr-raven", ["downloads", "logs"]),
@@ -407,6 +409,7 @@ export const resolveServicePlan = ({env = process.env, containerNamePrefix = ""}
       SCRIPTARR_LOCALAI_BACKEND_ASSETS_PATH: "/data/backend_data",
       SCRIPTARR_LOCALAI_GENERATED_CONTENT_PATH: "/data/generated",
       SCRIPTARR_LOCALAI_UPLOAD_PATH: "/data/upload",
+      SCRIPTARR_ORACLE_LOCALAI_GPU_PROFILE: oracleLocalAiProfile.key,
       SCRIPTARR_LOCALAI_GPU_LAYERS: env.SCRIPTARR_LOCALAI_GPU_LAYERS || "auto",
       SCRIPTARR_LOCALAI_DEFAULT_MODEL: env.SCRIPTARR_LOCALAI_DEFAULT_MODEL
         || "huggingface://bartowski/Hermes-3-Llama-3.1-8B-GGUF/Hermes-3-Llama-3.1-8B-Q4_K_S.gguf",

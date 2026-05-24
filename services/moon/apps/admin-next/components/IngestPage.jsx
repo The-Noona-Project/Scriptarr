@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * @file Raven WebP ingest backlog page for Moon admin.
+ * @file Raven reader-page ingest backlog page for Moon admin.
  */
 
 import {useState} from "react";
@@ -25,7 +25,7 @@ const statusTone = (status) => {
 };
 
 /**
- * Render the WebP ingest backlog and retry controls.
+ * Render the reader-page ingest backlog and retry controls.
  *
  * @param {{user: any}} props
  * @returns {import("react").ReactNode}
@@ -62,7 +62,7 @@ export const IngestPage = ({user}) => {
       <section className="admin-panel admin-state-panel">
         <div className="admin-kicker">Import</div>
         <h2>Loading ingest</h2>
-        <p>Moon is reading Raven WebP ingest state.</p>
+        <p>Moon is reading Raven reader-page ingest state.</p>
       </section>
     );
   }
@@ -87,7 +87,7 @@ export const IngestPage = ({user}) => {
         <div className="admin-section-heading">
           <div>
             <div className="admin-kicker">Import</div>
-            <h2>WebP ingest</h2>
+            <h2>AVIF ingest</h2>
           </div>
           <AdminStatusBadge tone={live.state === "live" ? "good" : "warning"}>
             {refreshing ? "Refreshing quietly" : live.state === "live" ? "Live" : "Degraded"}

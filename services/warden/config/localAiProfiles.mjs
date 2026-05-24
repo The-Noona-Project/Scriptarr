@@ -2,7 +2,15 @@
  * @file Scriptarr Warden module: services/warden/config/localAiProfiles.mjs.
  */
 import os from "node:os";
+import fs from "node:fs";
 import {execFileSync} from "node:child_process";
+
+const NVIDIA_DEVICE_PATHS = Object.freeze([
+  "/dev/nvidia0",
+  "/dev/nvidiactl",
+  "/dev/nvidia-uvm",
+  "/dev/nvidia-uvm-tools"
+]);
 
 const PROFILE_MAP = Object.freeze({
   cpu: {
@@ -15,14 +23,7 @@ const PROFILE_MAP = Object.freeze({
     key: "nvidia",
     image: "localai/localai:latest-aio-gpu-nvidia-cuda-12",
     reason: "Detected an NVIDIA GPU; using the LocalAI AIO CUDA 12 image.",
-    runtimeArgs: [
-      "--runtime", "nvidia",
-      "--gpus", "all",
-      "--device", "/dev/nvidia0",
-      "--device", "/dev/nvidiactl",
-      "--device", "/dev/nvidia-uvm",
-      "--device", "/dev/nvidia-uvm-tools"
-    ]
+    runtimeArgs: ["--runtime", "nvidia", "--gpus", "all"]
   },
   intel: {
     key: "intel",
@@ -39,6 +40,27 @@ const PROFILE_MAP = Object.freeze({
 });
 
 const normalizeString = (value) => String(value ?? "").trim().toLowerCase();
+
+const wantsExplicitNvidiaDevices = (env = process.env) => ["1", "true", "yes", "on"].includes(normalizeString(env.SCRIPTARR_NVIDIA_DEVICE_BINDINGS));
+
+const resolveNvidiaDeviceArgs = (env = process.env) => {
+  if (!wantsExplicitNvidiaDevices(env)) {
+    return [];
+  }
+  const rawPaths = String(env.SCRIPTARR_NVIDIA_DEVICE_PATHS || "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  const paths = rawPaths.length ? rawPaths : NVIDIA_DEVICE_PATHS;
+  return paths
+    .filter((path) => fs.existsSync(path))
+    .flatMap((path) => ["--device", path]);
+};
+
+const withNvidiaRuntimeArgs = (profile, env) => ({
+  ...profile,
+  runtimeArgs: [...profile.runtimeArgs, ...resolveNvidiaDeviceArgs(env)]
+});
 
 const runProbe = (command, args) => {
   try {
@@ -72,6 +94,20 @@ const detectNvidia = () => {
     .filter(Boolean);
 };
 
+const detectDockerNvidiaRuntime = (env = process.env) => {
+  const explicit = normalizeString(env.SCRIPTARR_DOCKER_INFO_RUNTIMES_JSON);
+  const output = explicit || runProbe("docker", ["info", "--format", "{{json .Runtimes}}"]);
+  if (!output) {
+    return [];
+  }
+  try {
+    const runtimes = JSON.parse(output);
+    return runtimes && Object.hasOwn(runtimes, "nvidia") ? ["docker-runtime:nvidia"] : [];
+  } catch {
+    return normalizeString(output).includes("nvidia") ? ["docker-runtime:nvidia"] : [];
+  }
+};
+
 const detectIntel = () => {
   const output = runProbe("sycl-ls", []);
   return normalizeString(output).includes("intel") ? ["intel"] : [];
@@ -102,7 +138,7 @@ const detectAmd = () => {
 export const resolveLocalAiProfile = ({env = process.env, platform = process.platform} = {}) => {
   const explicit = normalizeString(env.SCRIPTARR_GPU_HINT);
   if (explicit && PROFILE_MAP[explicit]) {
-    const profile = PROFILE_MAP[explicit];
+    const profile = explicit === "nvidia" ? withNvidiaRuntimeArgs(PROFILE_MAP[explicit], env) : PROFILE_MAP[explicit];
     return {
       ...profile,
       detectedVendor: explicit,
@@ -115,11 +151,22 @@ export const resolveLocalAiProfile = ({env = process.env, platform = process.pla
   }
 
   const details = [];
+  const dockerNvidia = detectDockerNvidiaRuntime(env);
+  if (dockerNvidia.length > 0) {
+    details.push(...dockerNvidia);
+    return {
+      ...withNvidiaRuntimeArgs(PROFILE_MAP.nvidia, env),
+      detectedVendor: "nvidia",
+      detectedDetails: details,
+      host: {platform, arch: os.arch()}
+    };
+  }
+
   const nvidia = detectNvidia();
   if (nvidia.length > 0) {
     details.push(...nvidia.map((name) => `nvidia:${name}`));
     return {
-      ...PROFILE_MAP.nvidia,
+      ...withNvidiaRuntimeArgs(PROFILE_MAP.nvidia, env),
       detectedVendor: "nvidia",
       detectedDetails: details,
       host: {platform, arch: os.arch()}
@@ -153,7 +200,7 @@ export const resolveLocalAiProfile = ({env = process.env, platform = process.pla
     details.push(...names.map((name) => `windows:${name}`));
     if (names.some((name) => name.includes("nvidia"))) {
       return {
-        ...PROFILE_MAP.nvidia,
+        ...withNvidiaRuntimeArgs(PROFILE_MAP.nvidia, env),
         detectedVendor: "nvidia",
         detectedDetails: details,
         host: {platform, arch: os.arch()}

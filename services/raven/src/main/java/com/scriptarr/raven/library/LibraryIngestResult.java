@@ -3,7 +3,7 @@ package com.scriptarr.raven.library;
 import java.util.List;
 
 /**
- * Result of converting one CBZ chapter into reader-ready WebP pages.
+ * Result of converting one CBZ chapter into reader-ready derived pages.
  */
 public record LibraryIngestResult(
     String status,

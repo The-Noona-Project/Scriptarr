@@ -417,6 +417,64 @@ def test_ensure_backend_timeout_terminates_subprocess(monkeypatch, tmp_path):
     assert process.killed is False
 
 
+def test_embedded_localai_rejects_cached_cpu_backend_when_nvidia_is_visible(monkeypatch, tmp_path):
+    class Logger:
+        def warning(self, *args, **kwargs):
+            return None
+
+    config = replace(
+        build_embedded_config(),
+        local_ai_backends_path=str(tmp_path / "backends")
+    )
+    cpu_backend = Path(config.local_ai_backends_path) / "cpu-llama-cpp" / "llama-cpp-avx2"
+    cpu_backend.parent.mkdir(parents=True)
+    cpu_backend.write_text("cpu backend", encoding="utf-8")
+    manager = EmbeddedLocalAiManager(config=config, logger=Logger())
+
+    monkeypatch.setattr(embedded_localai_module, "_has_nvidia_device", lambda: True)
+
+    assert manager.backend_present() is False
+
+
+def test_embedded_localai_rejects_cached_cpu_backend_when_nvidia_profile_is_planned(monkeypatch, tmp_path):
+    class Logger:
+        def warning(self, *args, **kwargs):
+            return None
+
+    config = replace(
+        build_embedded_config(),
+        local_ai_backends_path=str(tmp_path / "backends")
+    )
+    cpu_backend = Path(config.local_ai_backends_path) / "cpu-llama-cpp" / "llama-cpp-avx2"
+    cpu_backend.parent.mkdir(parents=True)
+    cpu_backend.write_text("cpu backend", encoding="utf-8")
+    manager = EmbeddedLocalAiManager(config=config, logger=Logger())
+
+    monkeypatch.setattr(embedded_localai_module, "_has_nvidia_device", lambda: False)
+    monkeypatch.setenv("SCRIPTARR_ORACLE_LOCALAI_GPU_PROFILE", "nvidia")
+
+    assert manager.backend_present() is False
+
+
+def test_embedded_localai_accepts_gpu_backend_when_nvidia_is_visible(monkeypatch, tmp_path):
+    class Logger:
+        def warning(self, *args, **kwargs):
+            return None
+
+    config = replace(
+        build_embedded_config(),
+        local_ai_backends_path=str(tmp_path / "backends")
+    )
+    gpu_backend = Path(config.local_ai_backends_path) / "cuda-llama-cpp" / "llama-cpp"
+    gpu_backend.parent.mkdir(parents=True)
+    gpu_backend.write_text("gpu backend", encoding="utf-8")
+    manager = EmbeddedLocalAiManager(config=config, logger=Logger())
+
+    monkeypatch.setattr(embedded_localai_module, "_has_nvidia_device", lambda: True)
+
+    assert manager.backend_present() is True
+
+
 def test_download_job_history_prunes_old_finished_jobs_and_keeps_current():
     class Logger:
         def warning(self, *args, **kwargs):

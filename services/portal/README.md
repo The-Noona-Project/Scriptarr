@@ -46,7 +46,7 @@ already-current, appended, adult-content, no-metadata, ambiguous-metadata, inval
 DM summary. For `nsfw:false`, Raven only queues titles whose WeebCentral detail page explicitly says
 `Adult Content: No`; adult or unverified titles are skipped.
 
-Appa also owns `/ingest type:<manga|manhwa|manhua|webtoon|comic|oel>` for admin WebP rebuilds from existing
+Appa also owns `/ingest type:<manga|manhwa|manhua|webtoon|comic|oel>` for admin AVIF rebuilds from existing
 canonical CBZ archives. The slash command previews the type, title count, hardware state, and any active run without
 mutating state. If there are no eligible titles, the preview does not expose a runnable confirm button. Otherwise a
 5-minute confirm button immediately acknowledges Discord before it starts Sage's brokered Raven ingest run, rejects

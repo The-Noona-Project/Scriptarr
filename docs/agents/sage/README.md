@@ -60,13 +60,13 @@
 - `/api/moon-v3/admin/activity/queue` now feeds Moon's live queue board. Keep that payload grouped into `running`,
   `queued`, and `needsAttention` sections, and keep the cancel, retry, remove, priority, and move routes as Moon-safe
   wrappers around Raven task-control operations.
-- Sage owns the Moon-safe split between manual import and WebP ingest: `/api/moon-v3/admin/import` forwards CBZ import
+- Sage owns the Moon-safe split between manual import and AVIF ingest: `/api/moon-v3/admin/import` forwards CBZ import
   payloads to Raven `/v1/imports`, while `/api/moon-v3/admin/ingest` reads the ingest backlog and retries
   `/v1/ingest/:titleId/retry`.
 - Sage owns Appa's Portal ingest broker too. Keep `/api/internal/portal/library/ingest/preview` read-only and
   service-token protected, and make the preview use Raven's compact title-card counts plus hardware status instead of
   full `/v1/ingest` backlog payloads. Keep `/api/internal/portal/library/ingest/runs` as the only Portal path to
-  Raven's `/v1/ingest/runs` durable WebP rebuild API. Portal should disable empty previews and acknowledge confirm
+  Raven's `/v1/ingest/runs` durable AVIF rebuild API. Portal should disable empty previews and acknowledge confirm
   interactions before calling this route. Expose `/api/internal/portal/notifications/ingest-runs` and ack routes from
   durable `scriptarr-raven` `raven-library-ingest` jobs, using stable milestone ids and the bounded
   `portal.ingestRunNotifications` setting.
@@ -207,7 +207,7 @@
   support-bot closers should stay pending and retry later instead of reaching Portal. Return reason-coded validation
   failures so operators can tell degraded providers, missing sections, raw metadata, internal codenames, generic
   closers, and headline/emoji copy apart.
-- Sage should expose acked ingest-run notification queues for Portal from Raven durable WebP rebuild jobs. Emit active
+- Sage should expose acked ingest-run notification queues for Portal from Raven durable AVIF rebuild jobs. Emit active
   25/50/75 milestones when crossed, skip missed milestones once a run is terminal, always emit one terminal
   completion/failure notification, and only mark them acknowledged after Portal confirms the requester DM.
 - Sage should expose acked downloadall notification queues for Portal from Raven durable run jobs. Use stable

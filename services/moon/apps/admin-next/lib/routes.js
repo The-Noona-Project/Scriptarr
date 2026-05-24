@@ -27,7 +27,7 @@ export const adminRoutes = [
   {id: "library", path: "/admin/library", title: "Library", description: "Tracked manga, webtoons, and comics with metadata and download status.", navLabel: "Library", group: "Manage", domain: "library", ported: true},
   {id: "add", path: "/admin/add", title: "Add Title", description: "Search sources and queue new titles into Raven.", navLabel: "Add Title", group: "Manage", domain: "add", ported: true},
   {id: "import", path: "/admin/import", title: "Import Library", description: "Stage existing CBZ files into a Scriptarr library.", navLabel: "Import", group: "Manage", domain: "import", ported: true},
-  {id: "ingest", path: "/admin/ingest", title: "Ingest", description: "Convert canonical CBZ chapters into reader-ready WebP pages.", navLabel: "Ingest", group: "Manage", domain: "import", ported: true},
+  {id: "ingest", path: "/admin/ingest", title: "Ingest", description: "Convert canonical CBZ chapters into reader-ready AVIF pages.", navLabel: "Ingest", group: "Manage", domain: "import", ported: true},
   {id: "calendar", path: "/admin/calendar", title: "Calendar", description: "Upcoming chapter releases and recent library drops.", navLabel: "Calendar", group: "Monitor", domain: "calendar", ported: true},
   {id: "activity-queue", path: "/admin/activity/queue", title: "Queue", description: "Current Raven download work in flight.", navLabel: "Queue", group: "Activity", domain: "activity", ported: true},
   {id: "activity-history", path: "/admin/activity/history", title: "History", description: "Completed and failed Raven task history.", navLabel: "History", group: "Activity", domain: "activity", ported: true},

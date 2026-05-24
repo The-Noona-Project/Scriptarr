@@ -291,7 +291,7 @@ public class DownloaderService {
                 if (isIngestTask(task)) {
                     if ("queued".equals(task.get("status")) || "running".equals(task.get("status"))) {
                         task.put("status", "failed");
-                        task.put("message", "Raven restarted during ingest. Retry WebP ingest from the admin queue.");
+                        task.put("message", "Raven restarted during ingest. Retry reader-page ingest from the admin queue.");
                         task.put("percent", Math.max(0, Math.min(99, toInt(task.get("percent")))));
                     }
                     tasks.put(taskId, task);
@@ -1103,7 +1103,7 @@ public class DownloaderService {
             }
             title = persistSelectedMetadata(title, request);
             throwIfCancelled(taskId);
-            update(taskId, "running", "Converting downloaded CBZ files into reader-ready WebP pages.", 98);
+            update(taskId, "running", "Converting downloaded CBZ files into reader-ready AVIF pages.", 98);
             title = libraryService.ingestTitle(title.id(), request.requestedBy());
             if (title != null) {
                 Map<String, Object> task = tasks.get(taskId);

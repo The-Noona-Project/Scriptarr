@@ -17,16 +17,17 @@ Completed downloads now use Raven's managed storage layout under the existing `/
 
 - `/downloads/downloading/<type-slug>/<title-folder>`
 - `/downloads/downloaded/<type-slug>/<title-folder>` for canonical CBZ archives
-- `/downloads/ingested/<type-slug>/<titleId>/<chapterId>` for derived WebP reader pages and `manifest.json`
+- `/downloads/ingested/<type-slug>/<titleId>/<chapterId>` for derived AVIF reader pages and `manifest.json`
 
 Manual library import and normal downloads converge on the same canonical CBZ layout. `/v1/imports` accepts
 Raven-visible CBZs from `import-staging` or existing downloaded storage, copies approved archives into
-`downloaded/<type-slug>/<title-folder>`, catalogs the title or chapter rows, and immediately queues WebP ingest.
-Reader routes are WebP-first: a chapter must have `ingestStatus: "ready"`, a page count, an ingest revision, and a
-manifest path before Moon can serve it.
-The v1 encoder is the official `cwebp/libwebp` binary at quality `92`. NVIDIA runtime access is probed when
-`SCRIPTARR_RAVEN_INGEST_GPU_PROFILE=nvidia` or `SCRIPTARR_RAVEN_INGEST_REQUIRE_NVIDIA=true`; missing hardware reports
-`hardware_missing` for admin attention without making Raven's whole health fail.
+`downloaded/<type-slug>/<title-folder>`, catalogs the title or chapter rows, and immediately queues AVIF ingest.
+Reader routes are AVIF-first: a chapter must have `ingestStatus: "ready"`, a current `avif-` ingest revision, a page
+count, and a manifest path before Moon can serve it.
+The v1 AVIF encoder is FFmpeg `av1_nvenc`. Raven requires NVIDIA runtime access for AVIF ingest when
+`SCRIPTARR_RAVEN_AVIF_REQUIRE_NVIDIA=true`, `SCRIPTARR_RAVEN_INGEST_GPU_PROFILE=nvidia`, or
+`SCRIPTARR_RAVEN_INGEST_REQUIRE_NVIDIA=true`; missing hardware reports `hardware_missing` for admin attention without
+making Raven's whole health fail.
 
 Raven stores dynamic library type labels and slugs from the source when available, uses opaque durable title ids for
 new catalog entries, and keeps route shapes stable for Moon. The current metadata set includes MangaDex, AniList,
@@ -98,7 +99,7 @@ targets, review chapter coverage, and queue a staged replacement download withou
 Replacement downloads stage into a fresh working and downloaded root, then only swap the live files after the
 replacement succeeds.
 
-Download completion now waits for file promotion, brokered catalog persistence, and WebP ingest before a task can reach
+Download completion now waits for file promotion, brokered catalog persistence, and AVIF ingest before a task can reach
 `100%`. If catalog persistence or ingest fails, Raven marks the task failed instead of leaving it stuck at `90%`.
 Ingest failures keep the CBZ and publish retryable `Needs attention` work; cleanup removes only staged or derived ingest
 files. On boot, Raven also rescans the existing `downloaded/<type>/...` tree to backfill missing catalog rows from
@@ -119,15 +120,16 @@ the incomplete managed `downloading/<type>` working folder.
 When an upstream page image returns `404`, Raven now skips same-URL image retries, refreshes the chapter page list on
 the next chapter attempt, and leaves a clearer source-image failure if the refreshed source still points at missing
 images.
-Reader page serving now reads the ingested WebP folder instead of extracting CBZ pages on demand. The ingest pipeline
-extracts ordered archive pages, writes stable page slugs such as `p000001.webp` at quality `92`, stores a per-chapter
-manifest, and serves `image/webp` through the existing Moon/Sage reader routes. Raven also exposes a redacted page probe
+Reader page serving now reads the ingested AVIF folder instead of extracting CBZ pages on demand. The ingest pipeline
+extracts ordered archive pages, writes stable page slugs such as `p000001.avif`, stores a per-chapter manifest, and
+serves `image/avif` through the existing Moon/Sage reader routes. Raven also exposes a redacted page probe
 for Moon and keeps Missing Content quality fields available for damaged source detection.
 Raven also accepts `POST /v1/ingest/runs` for Appa/Sage-owned library-type reingest jobs. These jobs rebuild only the
-derived WebP reader pages from existing canonical CBZ archives, create one durable task per ready title, continue after
+derived AVIF reader pages from existing canonical CBZ archives, create one durable task per ready title, continue after
 per-title failures, and reuse the active queued or running run id when the same library type is already being rebuilt.
 If Raven restarts or loses its broker connection mid-run, startup recovery and duplicate same-type requests reattach the
-durable run, preserve already failed title tasks, and continue unfinished queued or stale-running tasks.
+durable run, preserve already failed title tasks, and continue unfinished queued or stale-running tasks. Active legacy
+WebP-format runs are marked `superseded` before a new AVIF run is accepted for that type.
 Raven keeps `/v1/ingest` and Appa preview paths on compact title-card projections so backlog and count views do not
 hydrate full chapter arrays; full title payloads stay reserved for single-title, reader, and actual ingest work.
 For long-running WeebCentral series, Raven now follows the source page's HTMX full-chapter-list flow instead of only

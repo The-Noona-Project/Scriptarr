@@ -29,35 +29,35 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
 /**
- * Converts canonical CBZ chapters into reader-ready WebP page folders.
+ * Converts canonical CBZ chapters into reader-ready AVIF page folders.
  */
 @Service
 public final class LibraryIngestService {
     static final String INGESTED_FOLDER_NAME = "ingested";
     static final String INGEST_STAGING_FOLDER_NAME = ".ingest-staging";
-    private static final int WEBP_QUALITY = 92;
+    private static final int AVIF_QUALITY = 50;
     private static final int NVIDIA_PROBE_TIMEOUT_SECONDS = 3;
 
     private final RavenSettingsService settingsService;
     private final ScriptarrLogger logger;
-    private final WebpTranscoder transcoder;
+    private final PageTranscoder transcoder;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     /**
-     * Create the shared WebP ingest service.
+     * Create the shared derived-page ingest service.
      *
      * @param settingsService Raven settings service
      * @param logger Raven logger and data-root owner
-     * @param transcoder WebP transcoder implementation
+     * @param transcoder page transcoder implementation
      */
-    public LibraryIngestService(RavenSettingsService settingsService, ScriptarrLogger logger, WebpTranscoder transcoder) {
+    public LibraryIngestService(RavenSettingsService settingsService, ScriptarrLogger logger, PageTranscoder transcoder) {
         this.settingsService = settingsService;
         this.logger = logger;
         this.transcoder = transcoder;
     }
 
     /**
-     * Convert a single canonical CBZ chapter into WebP pages and atomically
+     * Convert a single canonical CBZ chapter into AVIF pages and atomically
      * publish them under the ingested storage root.
      *
      * @param title library title owning the chapter
@@ -107,11 +107,11 @@ public final class LibraryIngestService {
     }
 
     /**
-     * Read one ingested WebP page.
+     * Read one ingested reader page.
      *
      * @param chapter chapter with a ready manifest path
      * @param pageIndex zero-based page index
-     * @return WebP page bytes or {@code null} when missing
+     * @return page bytes or {@code null} when missing
      * @throws IOException when page bytes cannot be read
      */
     public byte[] readIngestedPage(LibraryChapter chapter, int pageIndex) throws IOException {
@@ -130,12 +130,34 @@ public final class LibraryIngestService {
     public Map<String, Object> hardwareStatus() {
         boolean required = requiresNvidiaRuntime();
         boolean present = !required || hasNvidiaRuntime();
+        PageTranscoder.Readiness encoder = present ? transcoder.readiness() : new PageTranscoder.Readiness(false, "hardware_missing", "NVIDIA runtime access is not available for Raven ingest.");
         Map<String, Object> status = new LinkedHashMap<>();
-        status.put("profile", required ? "nvidia" : "cpu-webp");
+        status.put("profile", required ? "nvidia-avif" : "avif");
         status.put("required", required);
-        status.put("state", present ? "ready" : "hardware_missing");
-        status.put("encoder", "cwebp/libwebp");
+        status.put("state", present && encoder.ready() ? "ready" : present ? encoder.code() : "hardware_missing");
+        status.put("encoder", transcoder.encoderName());
+        status.put("format", transcoder.format());
+        status.put("mediaType", transcoder.mediaType());
+        status.put("message", present ? encoder.message() : "NVIDIA runtime access is not available for Raven ingest.");
         return Map.copyOf(status);
+    }
+
+    /**
+     * Return the media type served for ingested reader pages.
+     *
+     * @return reader page media type
+     */
+    public String readerPageMediaType() {
+        return transcoder.mediaType();
+    }
+
+    /**
+     * Return the current revision prefix used by reader-page ingest output.
+     *
+     * @return ingest revision prefix
+     */
+    public String readerPageRevisionPrefix() {
+        return transcoder.format() + "-";
     }
 
     private List<PageManifestEntry> transcodeArchivePages(LibraryTitle title, Path archivePath, Path stageRoot)
@@ -156,10 +178,10 @@ public final class LibraryIngestService {
                 .toList();
             for (int index = 0; index < entries.size(); index++) {
                 ZipEntry entry = entries.get(index);
-                String slug = String.format(Locale.ROOT, "p%06d.webp", index + 1);
+                String slug = String.format(Locale.ROOT, "p%06d%s", index + 1, transcoder.fileExtension());
                 Path outputPath = stageRoot.resolve(slug);
                 try (InputStream stream = zipFile.getInputStream(entry)) {
-                    transcoder.transcode(stream.readAllBytes(), mediaTypeForArchiveEntry(entry.getName()), outputPath, WEBP_QUALITY);
+                    transcoder.transcode(stream.readAllBytes(), mediaTypeForArchiveEntry(entry.getName()), outputPath, AVIF_QUALITY);
                 }
                 pages.add(new PageManifestEntry(index, slug, Files.size(outputPath)));
             }
@@ -182,15 +204,17 @@ public final class LibraryIngestService {
         manifest.put("chapterId", chapter.id());
         manifest.put("libraryTypeSlug", title.libraryTypeSlug());
         manifest.put("sourceArchivePath", archivePath.toString());
-        manifest.put("encoder", "cwebp/libwebp");
-        manifest.put("quality", WEBP_QUALITY);
+        manifest.put("encoder", transcoder.encoderName());
+        manifest.put("format", transcoder.format());
+        manifest.put("mediaType", transcoder.mediaType());
+        manifest.put("quality", AVIF_QUALITY);
         manifest.put("revision", revision);
         manifest.put("ingestedAt", ingestedAt);
         manifest.put("pageCount", pages.size());
         manifest.put("pages", pages.stream().map((page) -> Map.of(
             "index", page.index(),
             "slug", page.slug(),
-            "mediaType", "image/webp",
+            "mediaType", transcoder.mediaType(),
             "sizeBytes", page.sizeBytes()
         )).toList());
         objectMapper.writerWithDefaultPrettyPrinter().writeValue(manifestPath.toFile(), manifest);
@@ -220,7 +244,7 @@ public final class LibraryIngestService {
         if (chapterRoot == null) {
             return null;
         }
-        return chapterRoot.resolve(String.format(Locale.ROOT, "p%06d.webp", pageIndex + 1));
+        return chapterRoot.resolve(String.format(Locale.ROOT, "p%06d%s", pageIndex + 1, transcoder.fileExtension()));
     }
 
     private Path resolveArchivePath(LibraryChapter chapter) {
@@ -241,12 +265,18 @@ public final class LibraryIngestService {
 
     private void assertHardwareReady() {
         Map<String, Object> status = hardwareStatus();
-        if ("hardware_missing".equals(status.get("state"))) {
-            throw new LibraryIngestException("hardware_missing", "NVIDIA runtime access is not available for Raven ingest.");
+        if (!"ready".equals(status.get("state"))) {
+            String code = firstNonBlank(String.valueOf(status.get("state")), "encoder_unavailable");
+            String message = firstNonBlank(String.valueOf(status.get("message")), "Raven AVIF encoder is not available.");
+            throw new LibraryIngestException(code, message);
         }
     }
 
     private boolean requiresNvidiaRuntime() {
+        String avifRequire = Optional.ofNullable(System.getenv("SCRIPTARR_RAVEN_AVIF_REQUIRE_NVIDIA")).orElse("");
+        if (List.of("1", "true", "yes", "on").contains(avifRequire.trim().toLowerCase(Locale.ROOT))) {
+            return true;
+        }
         String require = Optional.ofNullable(System.getenv("SCRIPTARR_RAVEN_INGEST_REQUIRE_NVIDIA")).orElse("");
         if (List.of("1", "true", "yes", "on").contains(require.trim().toLowerCase(Locale.ROOT))) {
             return true;
@@ -282,8 +312,10 @@ public final class LibraryIngestService {
         digest.update(Long.toString(Files.size(archivePath)).getBytes(java.nio.charset.StandardCharsets.UTF_8));
         digest.update(Long.toString(Files.getLastModifiedTime(archivePath).toMillis()).getBytes(java.nio.charset.StandardCharsets.UTF_8));
         digest.update(Integer.toString(pageCount).getBytes(java.nio.charset.StandardCharsets.UTF_8));
-        digest.update(Integer.toString(WEBP_QUALITY).getBytes(java.nio.charset.StandardCharsets.UTF_8));
-        return HexFormat.of().formatHex(digest.digest()).substring(0, 16);
+        digest.update(transcoder.format().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        digest.update(transcoder.encoderName().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        digest.update(Integer.toString(AVIF_QUALITY).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        return transcoder.format() + "-" + HexFormat.of().formatHex(digest.digest()).substring(0, 16);
     }
 
     private boolean isImageEntry(String name) {
@@ -292,7 +324,8 @@ public final class LibraryIngestService {
             || normalized.endsWith(".jpeg")
             || normalized.endsWith(".png")
             || normalized.endsWith(".gif")
-            || normalized.endsWith(".webp");
+            || normalized.endsWith(".webp")
+            || normalized.endsWith(".avif");
     }
 
     private String mediaTypeForArchiveEntry(String name) {
@@ -302,6 +335,9 @@ public final class LibraryIngestService {
         }
         if (normalized.endsWith(".webp")) {
             return "image/webp";
+        }
+        if (normalized.endsWith(".avif")) {
+            return "image/avif";
         }
         if (normalized.endsWith(".gif")) {
             return "image/gif";

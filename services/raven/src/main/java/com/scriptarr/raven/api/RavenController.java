@@ -54,7 +54,7 @@ public class RavenController {
      * @param vpnService VPN status service
      * @param settingsService Raven settings service
      * @param libraryService library projection service
-     * @param ingestRunService durable WebP rebuild run service
+     * @param ingestRunService durable reader-page rebuild run service
      */
     public RavenController(
         MetadataService metadataService,
@@ -195,7 +195,7 @@ public class RavenController {
     }
 
     /**
-     * List WebP ingest backlog, failures, and hardware readiness.
+     * List reader-page ingest backlog, failures, and hardware readiness.
      *
      * @return ingest admin payload
      */
@@ -215,7 +215,7 @@ public class RavenController {
     }
 
     /**
-     * Start a durable WebP-only rebuild from existing canonical CBZ archives
+     * Start a durable AVIF rebuild from existing canonical CBZ archives
      * for one library type slug.
      *
      * @param body run payload with libraryTypeSlug/type and requestedBy
@@ -233,7 +233,7 @@ public class RavenController {
     }
 
     /**
-     * Retry WebP ingest for an existing title.
+     * Retry AVIF ingest for an existing title.
      *
      * @param titleId title id to retry
      * @param body retry payload
@@ -257,7 +257,7 @@ public class RavenController {
     }
 
     /**
-     * Import Raven-visible CBZ files into a library and queue WebP ingest.
+     * Import Raven-visible CBZ files into a library and queue AVIF ingest.
      *
      * @param body import payload
      * @return imported title or validation error

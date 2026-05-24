@@ -79,14 +79,21 @@ runtime as unsupported and enabled VPN downloads fail closed.
 
 ## Raven Ingest Runtime
 
-Raven WebP ingest uses the official `cwebp/libwebp` encoder by default. If `SCRIPTARR_RAVEN_INGEST_GPU_PROFILE=nvidia`
-or the shared GPU hint is set to `nvidia`, Warden gives Raven the same NVIDIA runtime args and env style used for
-Oracle GPU planning. A missing NVIDIA runtime should surface through Raven ingest hardware state as `hardware_missing`
-instead of making the whole managed stack unhealthy.
+Raven AVIF ingest uses FFmpeg `av1_nvenc` and is planned as an NVIDIA workload by default. Explicit env still wins:
+`SCRIPTARR_RAVEN_INGEST_GPU_PROFILE=nvidia`, `SCRIPTARR_GPU_HINT=nvidia`, or
+`SCRIPTARR_RAVEN_AVIF_REQUIRE_NVIDIA=true` make Warden give Raven the same NVIDIA runtime args, `--gpus all`, and env
+style used for Oracle GPU planning. Explicit `/dev/nvidia*` device binds are opt-in with
+`SCRIPTARR_NVIDIA_DEVICE_BINDINGS=true` for hosts that need them. When Warden cannot run `nvidia-smi` from inside its own
+container, it also checks Docker's runtime metadata so hosts with the NVIDIA Docker runtime are still detected. A
+missing NVIDIA runtime should surface through Raven ingest hardware state as `hardware_missing` instead of making the
+whole managed stack unhealthy.
 
 ## LocalAI
 
 Oracle embeds the LocalAI runtime in the `scriptarr-oracle` image. Warden mounts the persistent `localai/models` and
 `localai/data` folders into Oracle, passes profile-specific runtime flags such as NVIDIA `--gpus all`, and recreates
-Oracle when Docker inspect shows the requested GPU device binding is missing. Install, start, remove, and generation
-probe jobs are Oracle-owned and brokered through Sage.
+Oracle when Docker inspect shows the requested GPU runtime or device request is missing. Explicit `/dev/nvidia*` device
+bindings are opt-in with `SCRIPTARR_NVIDIA_DEVICE_BINDINGS=true` for hosts that require and expose those paths. Install,
+start, remove, and generation probe jobs are Oracle-owned and brokered through Sage. If Oracle lands on an NVIDIA host
+with an old CPU-only LocalAI backend cached under `/data/backends`, Oracle rejects that backend and prepares a
+GPU-capable runtime instead.

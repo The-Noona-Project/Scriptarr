@@ -214,9 +214,9 @@ real generation check before marking LocalAI ready.
 
 Warden plans the `scriptarr-oracle` container instead of a `scriptarr-localai` sidecar. It mounts persistent
 `localai/models` and `localai/data` folders into Oracle and passes hardware flags for the selected profile. NVIDIA
-hosts should run Oracle with `--runtime nvidia --gpus all`, explicit `/dev/nvidia*` device bindings,
-`NVIDIA_VISIBLE_DEVICES=all`, and compute/utility driver capabilities; CPU-only hosts can still use LocalAI, but
-generation may be slow.
+hosts should run Oracle with `--runtime nvidia --gpus all`, `NVIDIA_VISIBLE_DEVICES=all`, and compute/utility driver
+capabilities. Explicit `/dev/nvidia*` device bindings are optional and should only be enabled on hosts that require and
+expose those paths to Docker. CPU-only hosts can still use LocalAI, but generation may be slow.
 
 If GPU-specific startup is unavailable, the rest of Scriptarr should stay healthy while AI features remain disabled or
 temporarily unavailable.
@@ -279,7 +279,7 @@ chat even if an admin enabled them on the AI page.
 - review Raven download providers, with WeebCentral first by default and MangaDex available as a second normal source
 - set Raven's active title-download limit from `/admin/settings`; the value defaults to `2`, accepts `1` through `6`,
   applies live when Raven can reload it, and otherwise persists for the next Raven restart
-- import existing CBZ files into a library from `/admin/import`, then track the required WebP ingest pass from
+- import existing CBZ files into a library from `/admin/import`, then track the required AVIF ingest pass from
   `/admin/ingest`
 - manage Moon branding from `/admin/settings`, including site name and a PNG, JPEG, or WebP logo that Scriptarr stores
   as WebP variants for user/admin chrome and install metadata
@@ -397,19 +397,20 @@ chips, and a safe replacement queue action that stages the replacement download 
 `/admin/import` is reserved for manual library intake. Admins point Raven at CBZ files that are already visible under
 the Raven downloads mount, confirm title and chapter metadata, and Raven copies the accepted archives into the canonical
 `downloaded/<type>/<title-folder>` library tree before queueing ingest.
-`/admin/ingest` is the WebP backlog and recovery surface. It shows Raven's per-title ingest status, hardware state,
+`/admin/ingest` is the AVIF backlog and recovery surface. It shows Raven's per-title ingest status, hardware state,
 completion counts, and retry controls. Failed ingest keeps the CBZ in place and appears as retryable work instead of
 making the title readable.
-Appa can also start a type-wide WebP-only rebuild from Discord with
+Appa can also start a type-wide AVIF rebuild from Discord with
 `/ingest type:<manga|manhwa|manhua|webtoon|comic|oel>`. The command previews title count from Raven's compact
 title-card projection plus Raven hardware state,
 requires a confirm button within five minutes, and then Sage asks Raven to create a durable `raven-library-ingest` run.
-The run rebuilds derived WebP pages from existing canonical CBZ archives without redownloading chapters or changing
+The run rebuilds derived AVIF pages from existing canonical CBZ archives without redownloading chapters or changing
 metadata. Appa DMs the confirming admin at 25%, 50%, 75%, and final completion or failure; missed milestones are not
 replayed once the run is already terminal. If Discord says the saved requester can no longer receive DMs, Portal marks
 that specific notification undeliverable instead of retrying it every poll. If Raven restarts or temporarily loses the
 Sage/Vault broker during a type-wide rebuild, Raven reattaches the durable run, keeps already failed title tasks failed,
-and continues queued or stale-running title tasks instead of starting a duplicate run.
+and continues queued or stale-running title tasks instead of starting a duplicate run. Legacy WebP-format type runs are
+marked `superseded` before the AVIF run starts.
 `/admin/users` is now the access-control workspace: a dense user directory, reusable permission-group editor, group
 assignment panel, and recent auth or access events in one page. Staff access is no longer a flat role toggle. Moon now
 evaluates unioned permission groups with route-family `read`, `write`, or `root` grants, while the bootstrap owner
@@ -648,11 +649,11 @@ Warden's own container mounts are:
 - `warden/logs -> /var/log/scriptarr`
 - `warden/runtime -> /var/lib/scriptarr`
 
-Raven's download tree now keeps CBZ archives canonical and WebP reader pages derived under `raven/downloads/`:
+Raven's download tree now keeps CBZ archives canonical and AVIF reader pages derived under `raven/downloads/`:
 
 - `downloading/<type-slug>/<title-folder>/...` for active or incomplete work
 - `downloaded/<type-slug>/<title-folder>/...` for completed promoted CBZ library content
-- `ingested/<type-slug>/<titleId>/<chapterId>/...` for reader-ready WebP page folders and `manifest.json`
+- `ingested/<type-slug>/<titleId>/<chapterId>/...` for reader-ready AVIF page folders and `manifest.json`
 
 Raven also supports internal chapter and page naming templates through the brokered `raven.naming` setting. This pass
 keeps title-folder naming unchanged so rescans remain compatible with the current library model.
@@ -661,8 +662,9 @@ for manga, manhwa, manhua, webtoon, comic, and OEL downloads. The saved formats 
 archive rescans so Moon, Raven, and the on-disk layout stay aligned.
 Request records now persist the original search query, selected metadata snapshot, selected download snapshot, and any
 linked Raven job or task ids so Moon admin can moderate or retry the exact saved target later.
-Reader availability is WebP-first. Normal downloads and manual CBZ imports must finish Raven ingest before the chapter
-is readable; failed ingest keeps the CBZ for retry and only removes staged or derived ingest files during cleanup.
+Reader availability is AVIF-first. Normal downloads and manual CBZ imports must finish Raven ingest before the chapter
+is readable; the catalog row must carry a current `avif-` ingest revision. Failed ingest keeps the CBZ for retry and
+only removes staged or derived ingest files during cleanup.
 Vault now also stores a durable request work key derived from the concrete download target when one exists, or from the
 metadata identity when no download match exists yet, and active duplicate work keys are rejected.
 Vault now also stores reusable permission groups, user-group assignments, and immutable durable events. Deleting a user

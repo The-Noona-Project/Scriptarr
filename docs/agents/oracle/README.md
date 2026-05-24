@@ -20,6 +20,8 @@
   starts with no preloaded model, and downloads the selected GGUF once into persistent storage.
 - Embedded LocalAI should not be considered usable until a real generation probe returns the expected readiness text.
   A healthy process, `/readyz`, or any random non-empty completion is not enough.
+- When NVIDIA devices are visible in the Oracle container, do not accept a stale cached CPU-only LocalAI backend as
+  installed. Reject CPU/AVX backend cache folders so the startup coordinator prepares a GPU-capable runtime instead.
 - Oracle has an embedded LocalAI startup coordinator. After cache preparation, it may auto-start LocalAI in the
   background only when Oracle is enabled, provider is `localai`, the selected model is already installed, no remove
   action is active, and the real generation probe succeeds. Keep `/health` healthy while warmup or gate failures are

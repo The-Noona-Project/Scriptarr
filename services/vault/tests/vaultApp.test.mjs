@@ -589,7 +589,7 @@ test("vault exposes compact Raven title cards without chapter payloads", async (
         available: true,
         archivePath: `/downloads/downloaded/manga/${title.id}/Chapter_1.cbz`,
         ingestStatus: "ready",
-        ingestRevision: "test-revision",
+        ingestRevision: "avif-test-revision",
         ingestedPageCount: 12,
         ingestedAt: "2026-04-24T00:00:00.000Z",
         ingestManifestPath: `/downloads/ingested/manga/${title.id}/${title.id}-c1/manifest.json`
@@ -613,7 +613,7 @@ test("vault exposes compact Raven title cards without chapter payloads", async (
       available: true,
       archivePath: "/downloads/downloaded/manga/dan-da-dan/Chapter_1.cbz",
       ingestStatus: "ready",
-      ingestRevision: "test-revision",
+      ingestRevision: "avif-test-revision",
       ingestedPageCount: 12,
       ingestedAt: "2026-04-24T00:00:00.000Z",
       ingestManifestPath: "/downloads/ingested/manga/dan-da-dan/dan-da-dan-c1/manifest.json"
@@ -625,7 +625,7 @@ test("vault exposes compact Raven title cards without chapter payloads", async (
       available: true,
       archivePath: "/downloads/downloaded/manga/dan-da-dan/Chapter_2.cbz",
       ingestStatus: "ready",
-      ingestRevision: "test-revision",
+      ingestRevision: "avif-test-revision",
       ingestedPageCount: 10,
       ingestedAt: "2026-04-24T00:00:00.000Z",
       ingestManifestPath: "/downloads/ingested/manga/dan-da-dan/dan-da-dan-c2/manifest.json"
@@ -735,6 +735,34 @@ test("vault exposes compact Raven title cards without chapter payloads", async (
   assert.equal(progressTargets["solo-leveling"].kind, "continue");
   assert.equal(progressTargets["solo-leveling"].chapterId, "solo-leveling-c1");
   assert.equal(progressTargets["solo-leveling"].pageIndex, 4);
+
+  await upsertTitle({
+    id: "legacy-webp-title",
+    title: "Legacy WebP Title",
+    ingestStatus: "ready",
+    ingestedChapterCount: 1,
+    chapters: [{
+      id: "legacy-webp-title-c1",
+      label: "Chapter 1",
+      chapterNumber: "1",
+      pageCount: 10,
+      available: true,
+      archivePath: "/downloads/downloaded/manga/legacy-webp-title/Chapter_1.cbz",
+      ingestStatus: "ready",
+      ingestRevision: "webp-old-revision",
+      ingestedPageCount: 10,
+      ingestedAt: "2026-04-24T00:00:00.000Z",
+      ingestManifestPath: "/downloads/ingested/manga/legacy-webp-title/legacy-webp-title-c1/manifest.json"
+    }]
+  });
+  const staleCard = await fetch(`${baseUrl}/api/service/raven/title-cards?ids=legacy-webp-title`, {headers}).then((response) => response.json());
+  assert.equal(staleCard.titles[0].ingestStatus, "pending");
+  assert.equal(staleCard.titles[0].ingestedChapterCount, 0);
+  const staleTargets = await fetch(`${baseUrl}/api/service/reader-targets/reader-1?titleId=legacy-webp-title`, {headers}).then((response) => response.json());
+  assert.equal(staleTargets["legacy-webp-title"], null);
+  const staleSummary = await fetch(`${baseUrl}/api/service/raven/titles/legacy-webp-title/summary?discordUserId=reader-1`, {headers}).then((response) => response.json());
+  assert.equal(staleSummary.title.userState.totalAvailableChapters, 0);
+  assert.equal(staleSummary.primaryChapter, null);
 
   server.close();
 });

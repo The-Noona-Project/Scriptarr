@@ -110,10 +110,15 @@ def _has_nvidia_device() -> bool:
     return Path("/dev/nvidia0").exists()
 
 
+def _expects_nvidia_runtime() -> bool:
+    profile = _normalize_string(os.getenv("SCRIPTARR_ORACLE_LOCALAI_GPU_PROFILE") or os.getenv("SCRIPTARR_GPU_HINT")).lower()
+    return profile == "nvidia"
+
+
 def _resolve_gpu_layers(value: str) -> int:
     text = _normalize_string(value).lower()
     if not text or text == "auto":
-        return 32 if _has_nvidia_device() else 0
+        return 32 if _has_nvidia_device() or _expects_nvidia_runtime() else 0
     try:
         return max(0, int(text))
     except ValueError:
@@ -404,9 +409,17 @@ class EmbeddedLocalAiManager:
             backends_path / backend,
             backends_path / f"{backend}.run"
         ]
-        return any(candidate.exists() for candidate in candidates) or any(
-            backend in path.name for path in backends_path.rglob("*")
-        )
+        matches = [candidate for candidate in candidates if candidate.exists()]
+        matches.extend(path for path in backends_path.rglob("*") if backend in path.name)
+        if not matches:
+            return False
+        if _has_nvidia_device() or _expects_nvidia_runtime():
+            names = [str(path).lower() for path in matches]
+            gpu_match = any("cuda" in name or "nvidia" in name or "gpu" in name for name in names)
+            cpu_only_match = any("cpu-" in name or "avx" in name for name in names)
+            if cpu_only_match and not gpu_match:
+                return False
+        return True
 
     async def ensure_backend(self) -> dict[str, Any]:
         backend = _normalize_string(self.config.local_ai_backend, "llama-cpp")
@@ -871,6 +884,9 @@ class EmbeddedLocalAiManager:
 
     async def status(self) -> dict[str, Any]:
         model = self.model_status(self.config.local_ai_default_model_url)
+        nvidia_expected = _expects_nvidia_runtime()
+        nvidia_visible = _has_nvidia_device()
+        profile_key = "nvidia" if nvidia_expected or nvidia_visible else "cpu"
         probe = self.generation_status() if self.enabled and model["downloaded"] and self.running() else {
             "ready": False,
             "status": "not_ready",
@@ -887,11 +903,11 @@ class EmbeddedLocalAiManager:
             "lastError": self.last_error,
             "updatedAt": self.updated_at,
             "configuredImage": "embedded-oracle-localai",
-            "configuredProfile": {"key": "nvidia" if _has_nvidia_device() else "cpu", "image": "embedded-oracle-localai"},
+            "configuredProfile": {"key": profile_key, "image": "embedded-oracle-localai"},
             "detectedProfile": {
-                "key": "nvidia" if _has_nvidia_device() else "cpu",
-                "detectedVendor": "nvidia" if _has_nvidia_device() else "cpu",
-                "detectedDetails": ["nvidia-visible"] if _has_nvidia_device() else []
+                "key": "nvidia" if nvidia_visible else "cpu",
+                "detectedVendor": "nvidia" if nvidia_visible else "cpu",
+                "detectedDetails": ["nvidia-visible"] if nvidia_visible else []
             },
             "profiles": [
                 {"key": "nvidia", "image": "embedded-oracle-localai", "reason": "Embedded Oracle LocalAI with NVIDIA runtime."},

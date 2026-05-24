@@ -563,8 +563,14 @@ const buildRavenTitleCardPage = (titles = [], query = {}) => {
     }
   };
 };
+const RAVEN_READER_REVISION_PREFIX = "avif-";
+const hasCurrentReaderRevision = (chapter) => normalizeScalarString(chapter?.ingestRevision).toLowerCase().startsWith(RAVEN_READER_REVISION_PREFIX);
+const isCurrentReaderChapter = (chapter) =>
+  chapter?.available !== false
+  && normalizeRavenIngestStatus(chapter?.ingestStatus) === "ready"
+  && hasCurrentReaderRevision(chapter);
 const sortReaderTargetChapters = (chapters = []) => [...(Array.isArray(chapters) ? chapters : [])]
-  .filter((chapter) => chapter?.available !== false && normalizeRavenIngestStatus(chapter?.ingestStatus) === "ready")
+  .filter(isCurrentReaderChapter)
   .sort((left, right) => {
     const leftNumber = Number.parseFloat(String(left?.chapterNumber || ""));
     const rightNumber = Number.parseFloat(String(right?.chapterNumber || ""));
@@ -655,28 +661,32 @@ const normalizeRavenIngestStatus = (value, fallback = "pending") => {
   const normalized = normalizeScalarString(value, fallback).toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
   return ["ready", "running", "pending", "failed", "missing"].includes(normalized) ? normalized : fallback;
 };
-const normalizeRavenChapter = (chapter = {}) => ({
-  id: chapter.id,
-  label: chapter.label,
-  chapterNumber: chapter.chapterNumber,
-  pageCount: Number.parseInt(String(chapter.pageCount || 0), 10) || 0,
-  releaseDate: chapter.releaseDate || null,
-  available: chapter.available !== false,
-  archivePath: chapter.archivePath || "",
-  sourceUrl: chapter.sourceUrl || "",
-  qualityStatus: normalizeRavenQualityStatus(chapter.qualityStatus),
-  expectedPageCount: Math.max(0, Number.parseInt(String(chapter.expectedPageCount || chapter.pageCount || 0), 10) || 0),
-  missingPageCount: Math.max(0, Number.parseInt(String(chapter.missingPageCount || 0), 10) || 0),
-  missingPages: normalizeIntegerArray(chapter.missingPages),
-  qualityNotes: normalizeStringArray(chapter.qualityNotes),
-  ingestStatus: normalizeRavenIngestStatus(chapter.ingestStatus),
-  ingestRevision: normalizeScalarString(chapter.ingestRevision),
-  ingestedPageCount: Math.max(0, Number.parseInt(String(chapter.ingestedPageCount || 0), 10) || 0),
-  ingestedAt: toIsoTimestamp(chapter.ingestedAt || chapter.ingested_at),
-  ingestError: normalizeScalarString(chapter.ingestError),
-  ingestManifestPath: normalizeScalarString(chapter.ingestManifestPath),
-  updatedAt: toIsoTimestamp(chapter.updatedAt || chapter.updated_at)
-});
+const normalizeRavenChapter = (chapter = {}) => {
+  const ingestRevision = normalizeScalarString(chapter.ingestRevision);
+  const ingestStatus = normalizeRavenIngestStatus(chapter.ingestStatus);
+  return {
+    id: chapter.id,
+    label: chapter.label,
+    chapterNumber: chapter.chapterNumber,
+    pageCount: Number.parseInt(String(chapter.pageCount || 0), 10) || 0,
+    releaseDate: chapter.releaseDate || null,
+    available: chapter.available !== false,
+    archivePath: chapter.archivePath || "",
+    sourceUrl: chapter.sourceUrl || "",
+    qualityStatus: normalizeRavenQualityStatus(chapter.qualityStatus),
+    expectedPageCount: Math.max(0, Number.parseInt(String(chapter.expectedPageCount || chapter.pageCount || 0), 10) || 0),
+    missingPageCount: Math.max(0, Number.parseInt(String(chapter.missingPageCount || 0), 10) || 0),
+    missingPages: normalizeIntegerArray(chapter.missingPages),
+    qualityNotes: normalizeStringArray(chapter.qualityNotes),
+    ingestStatus: ingestStatus === "ready" && !ingestRevision.toLowerCase().startsWith(RAVEN_READER_REVISION_PREFIX) ? "pending" : ingestStatus,
+    ingestRevision,
+    ingestedPageCount: Math.max(0, Number.parseInt(String(chapter.ingestedPageCount || 0), 10) || 0),
+    ingestedAt: toIsoTimestamp(chapter.ingestedAt || chapter.ingested_at),
+    ingestError: normalizeScalarString(chapter.ingestError),
+    ingestManifestPath: normalizeScalarString(chapter.ingestManifestPath),
+    updatedAt: toIsoTimestamp(chapter.updatedAt || chapter.updated_at)
+  };
+};
 const summarizeRavenIngestStatus = (chapters = []) => {
   const rows = Array.isArray(chapters) ? chapters.map(normalizeRavenChapter) : [];
   if (!rows.length) {
@@ -695,40 +705,52 @@ const summarizeRavenIngestStatus = (chapters = []) => {
   }
   return {status: "pending", readyCount, error: ""};
 };
-const normalizeRavenTitle = (title, chapters = []) => ({
-  id: title.id,
-  title: title.title,
-  mediaType: title.mediaType || "manga",
-  libraryTypeLabel: title.libraryTypeLabel || title.mediaType || "manga",
-  libraryTypeSlug: title.libraryTypeSlug || title.mediaType || "manga",
-  status: title.status || "active",
-  latestChapter: title.latestChapter || "",
-  coverAccent: title.coverAccent || "#4f8f88",
-  summary: title.summary || "",
-  releaseLabel: title.releaseLabel || "",
-  chapterCount: Number.parseInt(String(title.chapterCount || 0), 10) || 0,
-  chaptersDownloaded: Number.parseInt(String(title.chaptersDownloaded || 0), 10) || 0,
-  author: title.author || "",
-  tags: Array.isArray(title.tags) ? title.tags : [],
-  aliases: Array.isArray(title.aliases) ? title.aliases : [],
-  metadataProvider: title.metadataProvider || "",
-  metadataMatchedAt: toIsoTimestamp(title.metadataMatchedAt),
-  relations: Array.isArray(title.relations) ? title.relations : [],
-  sourceUrl: title.sourceUrl || "",
-  coverUrl: title.coverUrl || "",
-  workingRoot: title.workingRoot || "",
-  downloadRoot: title.downloadRoot || "",
-  qualityStatus: normalizeRavenQualityStatus(title.qualityStatus),
-  cleanChapterCount: Math.max(0, Number.parseInt(String(title.cleanChapterCount || 0), 10) || 0),
-  partialChapterCount: Math.max(0, Number.parseInt(String(title.partialChapterCount || 0), 10) || 0),
-  missingContentCount: Math.max(0, Number.parseInt(String(title.missingContentCount || 0), 10) || 0),
-  qualitySummary: title.qualitySummary || "",
-  ingestStatus: normalizeRavenIngestStatus(title.ingestStatus, summarizeRavenIngestStatus(chapters).status),
-  ingestedChapterCount: Math.max(0, Number.parseInt(String(title.ingestedChapterCount ?? summarizeRavenIngestStatus(chapters).readyCount), 10) || 0),
-  ingestError: normalizeScalarString(title.ingestError, summarizeRavenIngestStatus(chapters).error),
-  updatedAt: toIsoTimestamp(title.updatedAt || title.updated_at),
-  chapters: sortRavenChapters(chapters.map(normalizeRavenChapter))
-});
+const normalizeRavenTitle = (title, chapters = []) => {
+  const normalizedChapters = sortRavenChapters(chapters.map(normalizeRavenChapter));
+  const ingestSummary = summarizeRavenIngestStatus(normalizedChapters);
+  const requestedIngestStatus = normalizeRavenIngestStatus(title.ingestStatus, ingestSummary.status);
+  const ingestStatus = requestedIngestStatus === "ready" && ingestSummary.status !== "ready"
+    ? ingestSummary.status
+    : requestedIngestStatus;
+  const requestedReadyCount = Math.max(0, Number.parseInt(String(title.ingestedChapterCount ?? ingestSummary.readyCount), 10) || 0);
+  const ingestedChapterCount = ingestStatus === "ready"
+    ? Math.max(0, requestedReadyCount)
+    : Math.min(requestedReadyCount, ingestSummary.readyCount);
+  return {
+    id: title.id,
+    title: title.title,
+    mediaType: title.mediaType || "manga",
+    libraryTypeLabel: title.libraryTypeLabel || title.mediaType || "manga",
+    libraryTypeSlug: title.libraryTypeSlug || title.mediaType || "manga",
+    status: title.status || "active",
+    latestChapter: title.latestChapter || "",
+    coverAccent: title.coverAccent || "#4f8f88",
+    summary: title.summary || "",
+    releaseLabel: title.releaseLabel || "",
+    chapterCount: Number.parseInt(String(title.chapterCount || 0), 10) || 0,
+    chaptersDownloaded: Number.parseInt(String(title.chaptersDownloaded || 0), 10) || 0,
+    author: title.author || "",
+    tags: Array.isArray(title.tags) ? title.tags : [],
+    aliases: Array.isArray(title.aliases) ? title.aliases : [],
+    metadataProvider: title.metadataProvider || "",
+    metadataMatchedAt: toIsoTimestamp(title.metadataMatchedAt),
+    relations: Array.isArray(title.relations) ? title.relations : [],
+    sourceUrl: title.sourceUrl || "",
+    coverUrl: title.coverUrl || "",
+    workingRoot: title.workingRoot || "",
+    downloadRoot: title.downloadRoot || "",
+    qualityStatus: normalizeRavenQualityStatus(title.qualityStatus),
+    cleanChapterCount: Math.max(0, Number.parseInt(String(title.cleanChapterCount || 0), 10) || 0),
+    partialChapterCount: Math.max(0, Number.parseInt(String(title.partialChapterCount || 0), 10) || 0),
+    missingContentCount: Math.max(0, Number.parseInt(String(title.missingContentCount || 0), 10) || 0),
+    qualitySummary: title.qualitySummary || "",
+    ingestStatus,
+    ingestedChapterCount,
+    ingestError: normalizeScalarString(title.ingestError, ingestSummary.error),
+    updatedAt: toIsoTimestamp(title.updatedAt || title.updated_at),
+    chapters: normalizedChapters
+  };
+};
 const TITLE_CHAPTER_PAGE_SIZE_DEFAULT = 40;
 const TITLE_CHAPTER_PAGE_SIZE_MAX = 100;
 const parseTitleChapterPageSize = (value) => Math.min(
@@ -884,7 +906,7 @@ const buildRavenTitleSummaryPayload = ({title = null, chapters = [], progress = 
   }
   const decoratedChapters = decorateChaptersWithReadState(chapters, chapterReads);
   const availableChapters = sortTitleChapterRows(
-    decoratedChapters.filter((chapter) => chapter.available !== false),
+    decoratedChapters.filter(isCurrentReaderChapter),
     "number-asc"
   );
   const latestChapter = sortTitleChapterRows(availableChapters, "newest")[0] || null;
@@ -3489,13 +3511,32 @@ const createMysqlStore = (config) => {
       const whereClauses = [];
       const whereParams = [];
       const cardColumns = `
-        title_id, title, media_type, library_type_label, library_type_slug, status_name, latest_chapter,
+        raven_titles.title_id, title, media_type, library_type_label, library_type_slug, status_name, latest_chapter,
         cover_accent, summary, release_label, chapter_count, chapters_downloaded, author_name,
         tags_json, aliases_json, metadata_provider, metadata_matched_at, source_url, cover_url,
         quality_status, clean_chapter_count, partial_chapter_count, missing_content_count, quality_summary,
-        ingest_status, ingested_chapter_count, ingest_error, updated_at
+        ingest_status, ingested_chapter_count, ingest_error, updated_at,
+        (SELECT COUNT(*) FROM raven_chapters rc WHERE rc.title_id = raven_titles.title_id) AS current_chapter_rows,
+        (SELECT COUNT(*) FROM raven_chapters rc WHERE rc.title_id = raven_titles.title_id AND rc.ingest_status = 'ready' AND LOWER(COALESCE(rc.ingest_revision, '')) LIKE '${RAVEN_READER_REVISION_PREFIX}%') AS current_ready_chapter_count,
+        (SELECT COUNT(*) FROM raven_chapters rc WHERE rc.title_id = raven_titles.title_id AND rc.ingest_status = 'failed') AS current_failed_chapter_count,
+        (SELECT COUNT(*) FROM raven_chapters rc WHERE rc.title_id = raven_titles.title_id AND rc.ingest_status = 'running') AS current_running_chapter_count,
+        (SELECT rc.ingest_error FROM raven_chapters rc WHERE rc.title_id = raven_titles.title_id AND rc.ingest_status = 'failed' AND COALESCE(rc.ingest_error, '') <> '' ORDER BY rc.updated_at DESC LIMIT 1) AS current_ingest_error
       `;
-      const toTitleCardRow = (row) => toRavenTitleCard({
+      const toTitleCardRow = (row) => {
+        const currentChapterRows = Number.parseInt(String(row.current_chapter_rows || 0), 10) || 0;
+        const currentReadyChapters = Number.parseInt(String(row.current_ready_chapter_count || 0), 10) || 0;
+        const currentFailedChapters = Number.parseInt(String(row.current_failed_chapter_count || 0), 10) || 0;
+        const currentRunningChapters = Number.parseInt(String(row.current_running_chapter_count || 0), 10) || 0;
+        const derivedIngestStatus = currentChapterRows > 0
+          ? currentFailedChapters > 0
+            ? "failed"
+            : currentRunningChapters > 0
+              ? "running"
+              : currentReadyChapters >= currentChapterRows
+                ? "ready"
+                : "pending"
+          : row.ingest_status;
+        return toRavenTitleCard({
         id: row.title_id,
         title: row.title,
         mediaType: row.media_type,
@@ -3520,11 +3561,12 @@ const createMysqlStore = (config) => {
         partialChapterCount: row.partial_chapter_count,
         missingContentCount: row.missing_content_count,
         qualitySummary: row.quality_summary,
-        ingestStatus: row.ingest_status,
-        ingestedChapterCount: row.ingested_chapter_count,
-        ingestError: row.ingest_error,
+        ingestStatus: derivedIngestStatus,
+        ingestedChapterCount: currentChapterRows > 0 ? currentReadyChapters : row.ingested_chapter_count,
+        ingestError: currentChapterRows > 0 ? row.current_ingest_error || row.ingest_error : row.ingest_error,
         updatedAt: row.updated_at ? row.updated_at.toISOString() : null
-      });
+        });
+      };
 
       if (type) {
         whereClauses.push("LOWER(COALESCE(NULLIF(library_type_slug, ''), media_type)) = ?");

@@ -26,7 +26,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Unit coverage for Raven's durable library WebP rebuild runs.
+ * Unit coverage for Raven's durable library AVIF rebuild runs.
  */
 class LibraryIngestRunServiceTest {
     /**
@@ -69,7 +69,7 @@ class LibraryIngestRunServiceTest {
 
     /**
      * Verify the durable run fails overall when any title fails, but later
-     * titles still continue and publish their WebP output.
+     * titles still continue and publish their AVIF output.
      *
      * @param tempDir temporary Raven data root
      * @throws Exception when the fixture cannot be prepared
@@ -125,6 +125,36 @@ class LibraryIngestRunServiceTest {
         assertEquals(true, reused.get("reused"));
         transcoder.release.countDown();
         assertEquals("completed", awaitStatus(runService, String.valueOf(created.get("runId")), "completed").get("status"));
+        runService.shutdown();
+    }
+
+    /**
+     * Verify old WebP-format type runs are superseded before Raven accepts a
+     * new AVIF run for the same library type.
+     *
+     * @param tempDir temporary Raven data root
+     * @throws Exception when the fixture cannot be prepared
+     */
+    @Test
+    void createRunSupersedesLegacyWebpRunForSameType(@TempDir Path tempDir) throws Exception {
+        FakeRavenBrokerClient brokerClient = new FakeRavenBrokerClient();
+        TestLogger logger = new TestLogger(tempDir);
+        LibraryService libraryService = libraryService(brokerClient, logger, new TestTranscoder());
+        LibraryTitle title = recordTitle(libraryService, tempDir, "Legacy Waiting Title", "OEL", "001.png");
+        String legacyRunId = "ingestrun_legacy_webp";
+        seedLegacyWebpRunJob(brokerClient, legacyRunId, "running", "oel");
+        seedIngestRunTask(brokerClient, legacyRunId, title, "queued", 0);
+        LibraryIngestRunService runService = new LibraryIngestRunService(libraryService, brokerClient, logger);
+
+        Map<String, Object> created = runService.createRun(Map.of("libraryTypeSlug", "oel"));
+        Map<String, Object> completed = awaitStatus(runService, String.valueOf(created.get("runId")), "completed");
+        Map<String, Object> legacy = runService.status(legacyRunId);
+
+        assertEquals("completed", completed.get("status"));
+        assertEquals("superseded", legacy.get("status"));
+        assertEquals(List.of("superseded"), statuses(legacy));
+        assertEquals("avif", map(completed.get("filters")).get("format"));
+        assertEquals("avif-force-rebuild", map(completed.get("filters")).get("mode"));
         runService.shutdown();
     }
 
@@ -221,7 +251,7 @@ class LibraryIngestRunServiceTest {
     private static LibraryService libraryService(
         FakeRavenBrokerClient brokerClient,
         ScriptarrLogger logger,
-        WebpTranscoder transcoder
+        PageTranscoder transcoder
     ) {
         RavenSettingsService settingsService = new RavenSettingsService(brokerClient, logger, List.of());
         return new LibraryService(
@@ -297,14 +327,15 @@ class LibraryIngestRunServiceTest {
         job.put("kind", "raven-library-ingest");
         job.put("ownerService", "scriptarr-raven");
         job.put("status", status);
-        job.put("label", "Raven WebP rebuild");
+        job.put("label", "Raven AVIF rebuild");
         job.put("requestedBy", "owner-1");
         job.put(
             "payload",
             Map.of(
                 "libraryTypeSlug", typeSlug,
                 "libraryTypeLabel", LibraryNaming.normalizeTypeLabel(typeSlug),
-                "mode", "webp-force-rebuild",
+                "mode", "avif-force-rebuild",
+                "format", "avif",
                 "titleCount", totalTitles
             )
         );
@@ -319,6 +350,37 @@ class LibraryIngestRunServiceTest {
                 "failedTitleIds", List.of()
             )
         );
+        job.put("createdAt", now);
+        job.put("startedAt", now);
+        job.put("updatedAt", now);
+        brokerClient.putJob(runId, job);
+    }
+
+    private static void seedLegacyWebpRunJob(
+        FakeRavenBrokerClient brokerClient,
+        String runId,
+        String status,
+        String typeSlug
+    ) {
+        String now = Instant.now().toString();
+        Map<String, Object> job = new LinkedHashMap<>();
+        job.put("jobId", runId);
+        job.put("kind", "raven-library-ingest");
+        job.put("ownerService", "scriptarr-raven");
+        job.put("status", status);
+        job.put("label", "Raven WebP rebuild");
+        job.put("message", "Queued WebP rebuild from existing canonical CBZ archives.");
+        job.put("requestedBy", "owner-1");
+        job.put(
+            "payload",
+            Map.of(
+                "libraryTypeSlug", typeSlug,
+                "libraryTypeLabel", LibraryNaming.normalizeTypeLabel(typeSlug),
+                "mode", "webp-force-rebuild",
+                "titleCount", 1
+            )
+        );
+        job.put("result", Map.of("totalTitles", 1, "completedTitles", 0, "failedTitles", 0, "remainingTitles", 1));
         job.put("createdAt", now);
         job.put("startedAt", now);
         job.put("updatedAt", now);
@@ -340,7 +402,7 @@ class LibraryIngestRunServiceTest {
         task.put("taskKey", title.id());
         task.put("status", status);
         task.put("label", title.title());
-        task.put("message", status.equals("queued") ? "Queued title WebP rebuild." : "Seeded terminal task.");
+        task.put("message", status.equals("queued") ? "Queued title AVIF rebuild." : "Seeded terminal task.");
         task.put("requestedBy", "owner-1");
         task.put("sortOrder", sortOrder);
         task.put("percent", status.equals("queued") ? 0 : 100);
@@ -353,7 +415,8 @@ class LibraryIngestRunServiceTest {
                 "libraryTypeSlug", title.libraryTypeSlug(),
                 "libraryTypeLabel", title.libraryTypeLabel(),
                 "downloadRoot", title.downloadRoot(),
-                "mode", "webp-force-rebuild"
+                "mode", "avif-force-rebuild",
+                "format", "avif"
             )
         );
         task.put("result", status.equals("failed") ? Map.of("titleId", title.id(), "error", "seeded failure") : Map.of("titleId", title.id()));
@@ -413,7 +476,32 @@ class LibraryIngestRunServiceTest {
         }
     }
 
-    private static class TestTranscoder implements WebpTranscoder {
+    private static class TestTranscoder implements PageTranscoder {
+        @Override
+        public String format() {
+            return "avif";
+        }
+
+        @Override
+        public String fileExtension() {
+            return ".avif";
+        }
+
+        @Override
+        public String mediaType() {
+            return "image/avif";
+        }
+
+        @Override
+        public String encoderName() {
+            return "test/passthrough-avif";
+        }
+
+        @Override
+        public Readiness readiness() {
+            return Readiness.ok();
+        }
+
         @Override
         public void transcode(byte[] inputBytes, String sourceMediaType, Path outputPath, int quality)
             throws IOException, InterruptedException {
