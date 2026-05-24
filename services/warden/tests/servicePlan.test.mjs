@@ -106,7 +106,22 @@ test("service plan gives Raven ingest NVIDIA runtime args when hinted", () => {
   assert.equal(raven.env.SCRIPTARR_RAVEN_INGEST_GPU_PROFILE, "nvidia");
   assert.equal(raven.env.SCRIPTARR_RAVEN_INGEST_REQUIRE_NVIDIA, "true");
   assert.equal(raven.env.NVIDIA_VISIBLE_DEVICES, "all");
-  assert.equal(raven.env.NVIDIA_DRIVER_CAPABILITIES, "compute,utility");
+  assert.equal(raven.env.NVIDIA_DRIVER_CAPABILITIES, "compute,utility,video");
+});
+
+test("service plan preserves Raven NVENC video capability when NVIDIA caps are overridden", () => {
+  const plan = resolveServicePlan({
+    env: {
+      SCRIPTARR_MYSQL_URL: "SELFHOST",
+      SCRIPTARR_MYSQL_USER: "scriptarr",
+      SCRIPTARR_MYSQL_PASSWORD: "secret",
+      SCRIPTARR_RAVEN_INGEST_GPU_PROFILE: "nvidia",
+      NVIDIA_DRIVER_CAPABILITIES: "compute,utility"
+    }
+  });
+
+  const raven = plan.services.find((service) => service.name === "scriptarr-raven");
+  assert.equal(raven.env.NVIDIA_DRIVER_CAPABILITIES, "compute,utility,video");
 });
 
 test("service plan gives Oracle and Raven NVIDIA runtime args when Docker exposes the NVIDIA runtime", () => {

@@ -405,7 +405,8 @@ Appa can also start a type-wide AVIF rebuild from Discord with
 title-card projection plus Raven hardware state,
 requires a confirm button within five minutes, and then Sage asks Raven to create a durable `raven-library-ingest` run.
 The run rebuilds derived AVIF pages from existing canonical CBZ archives without redownloading chapters or changing
-metadata. Appa DMs the confirming admin at 25%, 50%, 75%, and final completion or failure; missed milestones are not
+metadata. Raven's NVIDIA runtime needs the `video` driver capability so FFmpeg `av1_nvenc` can load the host encode
+library. Appa DMs the confirming admin at 25%, 50%, 75%, and final completion or failure; missed milestones are not
 replayed once the run is already terminal. If Discord says the saved requester can no longer receive DMs, Portal marks
 that specific notification undeliverable instead of retrying it every poll. If Raven restarts or temporarily loses the
 Sage/Vault broker during a type-wide rebuild, Raven reattaches the durable run, keeps already failed title tasks failed,

@@ -24,6 +24,29 @@ import {buildScriptarrStorageLayout, resolveScriptarrDataRoot} from "../filesyst
 
 const normalizeString = (value) => String(value ?? "").trim();
 
+/**
+ * Ensure an NVIDIA driver capability list includes the capabilities a service
+ * needs in addition to any operator-provided defaults.
+ *
+ * @param {string} value
+ * @param {string[]} required
+ * @returns {string}
+ */
+const withRequiredNvidiaCapabilities = (value, required = []) => {
+  const seen = new Set();
+  return [...String(value || "").split(","), ...required]
+    .map((entry) => entry.trim().toLowerCase())
+    .filter(Boolean)
+    .filter((entry) => {
+      if (seen.has(entry)) {
+        return false;
+      }
+      seen.add(entry);
+      return true;
+    })
+    .join(",");
+};
+
 const DEFAULT_HTTP_HEALTH_CHECK = Object.freeze({
   interval: "15s",
   timeout: "5s",
@@ -245,7 +268,10 @@ export const resolveServicePlan = ({env = process.env, containerNamePrefix = ""}
       SCRIPTARR_RAVEN_INGEST_GPU_PROFILE: "nvidia",
       SCRIPTARR_RAVEN_INGEST_REQUIRE_NVIDIA: "true",
       NVIDIA_VISIBLE_DEVICES: env.NVIDIA_VISIBLE_DEVICES || "all",
-      NVIDIA_DRIVER_CAPABILITIES: env.NVIDIA_DRIVER_CAPABILITIES || "compute,utility"
+      NVIDIA_DRIVER_CAPABILITIES: withRequiredNvidiaCapabilities(
+        env.SCRIPTARR_RAVEN_NVIDIA_DRIVER_CAPABILITIES || env.NVIDIA_DRIVER_CAPABILITIES || "compute,utility",
+        ["compute", "utility", "video"]
+      )
     }
     : {
       SCRIPTARR_RAVEN_INGEST_GPU_PROFILE: ravenIngestGpuProfile.key

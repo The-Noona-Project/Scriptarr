@@ -44,7 +44,8 @@
   explicitly disabled, and drift detection should recreate Raven when those flags disappear.
 - Warden should pass Raven ingest NVIDIA runtime env and args for AVIF when `SCRIPTARR_RAVEN_INGEST_GPU_PROFILE=nvidia`,
   `SCRIPTARR_RAVEN_AVIF_REQUIRE_NVIDIA=true`, or the shared GPU hint asks for NVIDIA. Missing GPU should be reported by
-  Raven ingest as `hardware_missing`, not as a full stack health failure.
+  Raven ingest as `hardware_missing`, not as a full stack health failure. Raven's NVIDIA driver capabilities must include
+  `video` so FFmpeg `av1_nvenc` can load `libnvidia-encode.so.1`.
 - Warden should mount Moon's derived cover-cache folder at `/app/cover-cache` and set
   `SCRIPTARR_MOON_COVER_CACHE_DIR` for the Moon container. The cache is rebuildable and separate from Vault/Raven
   authoritative catalog state.

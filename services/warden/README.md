@@ -82,7 +82,8 @@ runtime as unsupported and enabled VPN downloads fail closed.
 Raven AVIF ingest uses FFmpeg `av1_nvenc` and is planned as an NVIDIA workload by default. Explicit env still wins:
 `SCRIPTARR_RAVEN_INGEST_GPU_PROFILE=nvidia`, `SCRIPTARR_GPU_HINT=nvidia`, or
 `SCRIPTARR_RAVEN_AVIF_REQUIRE_NVIDIA=true` make Warden give Raven the same NVIDIA runtime args, `--gpus all`, and env
-style used for Oracle GPU planning. Explicit `/dev/nvidia*` device binds are opt-in with
+style used for Oracle GPU planning. Raven also receives the NVIDIA `video` driver capability because FFmpeg NVENC needs
+`libnvidia-encode.so.1` in addition to compute/utility access. Explicit `/dev/nvidia*` device binds are opt-in with
 `SCRIPTARR_NVIDIA_DEVICE_BINDINGS=true` for hosts that need them. When Warden cannot run `nvidia-smi` from inside its own
 container, it also checks Docker's runtime metadata so hosts with the NVIDIA Docker runtime are still detected. A
 missing NVIDIA runtime should surface through Raven ingest hardware state as `hardware_missing` instead of making the
