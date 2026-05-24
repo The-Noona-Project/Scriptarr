@@ -12,7 +12,7 @@ import {useAdminToast} from "./AdminToasts.jsx";
 import {IngestRunsPanel} from "./IngestRunsPanel.jsx";
 
 const normalizeArray = (value) => Array.isArray(value) ? value : [];
-const ACTIVE_QUEUE_POLL_INTERVAL_MS = 10_000;
+const ACTIVE_QUEUE_POLL_INTERVAL_MS = 5_000;
 const IDLE_QUEUE_POLL_INTERVAL_MS = 30_000;
 
 /**
@@ -257,6 +257,7 @@ export const QueuePage = ({user}) => {
   });
   const [flash, setFlash] = useState(null);
   const [editorDirty, setEditorDirty] = useState(false);
+  const [busyRunId, setBusyRunId] = useState("");
   const {notify} = useAdminToast();
   const live = useAdminEventStaleness({
     domains: ["activity"],
@@ -269,12 +270,16 @@ export const QueuePage = ({user}) => {
     canWrite: hasAdminGrant(user, "activity", "write"),
     canRoot: hasAdminGrant(user, "activity", "root")
   };
+  const canImportWrite = hasAdminGrant(user, "import", "write");
   const payload = data || {};
   const stats = payload.stats || {};
+  const activeIngestRuns = normalizeArray(payload.ingestRuns)
+    .filter((run) => ["running", "waiting", "detached", "needs-recovery"].includes(normalizeString(run.runtime?.schedulerState, normalizeString(run.status)).toLowerCase()));
   const hasQueueWork = Boolean(
     Number(stats.runningCount || 0)
     || Number(stats.queuedCount || 0)
     || Number(stats.needsAttentionCount || 0)
+    || activeIngestRuns.length
   );
 
   useEffect(() => {
@@ -327,6 +332,29 @@ export const QueuePage = ({user}) => {
       tone: result.ok ? "good" : "bad",
       category: "job"
     });
+    await refresh();
+  };
+
+  const handleRunAction = async (action, run) => {
+    const runId = normalizeString(run.runId);
+    if (!runId) {
+      return;
+    }
+    setBusyRunId(runId);
+    const result = await requestJson(`/api/moon/v3/admin/ingest/runs/${encodeURIComponent(runId)}/${action}`, {method: "POST"});
+    const message = result.ok
+      ? `${action === "cancel" ? "Cancelled" : "Resumed"} AVIF run.`
+      : result.payload?.error || `Unable to ${action} AVIF run.`;
+    setFlash({
+      tone: result.ok ? "good" : "bad",
+      text: message
+    });
+    notify({
+      message,
+      tone: result.ok ? "good" : "bad",
+      category: "job"
+    });
+    setBusyRunId("");
     await refresh();
   };
 
@@ -433,6 +461,10 @@ export const QueuePage = ({user}) => {
         kicker="Library ingest"
         includeRecent={false}
         empty="No durable AVIF ingest runs are active right now."
+        canWrite={canImportWrite}
+        busyRunId={busyRunId}
+        onResume={(run) => handleRunAction("resume", run)}
+        onCancel={(run) => handleRunAction("cancel", run)}
       />
       <QueueSection
         title="Running"

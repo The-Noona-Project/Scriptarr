@@ -35,6 +35,10 @@
   same-type requests must reattach detached queued/running runs, preserve already failed title tasks, and continue only
   unfinished queued or stale-running tasks. Legacy WebP-format active runs should be marked `superseded` before the
   AVIF run starts.
+- Keep type-wide AVIF rebuilds on the fair single-lane scheduler. Only the currently leased run/task should be marked
+  `running`; other unfinished active runs should remain queued or waiting with a bounded queue position. Summaries may
+  expose scheduler state, current title text, last progress, and ETA, but never full child task arrays or storage paths.
+  Resume, cancel, and restart-active controls should change durable run state without creating duplicate active runs.
 - If the canonical title set changes because Vault merged duplicate catalog rows, a same-type ingest request should
   supersede the stale active run and queue a fresh AVIF rebuild over canonical title ids only.
 - Keep `/v1/ingest` backlog and Appa preview/count paths lightweight. They should use compact title-card projections

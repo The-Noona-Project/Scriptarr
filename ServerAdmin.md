@@ -401,10 +401,13 @@ the Raven downloads mount, confirm title and chapter metadata, and Raven copies 
 `downloaded/<type>/<title-folder>` library tree before queueing ingest.
 `/admin/ingest` is the AVIF backlog and recovery surface. It shows Raven's per-title ingest status, hardware state,
 completion counts, and retry controls. Failed ingest keeps the CBZ in place and appears as retryable work instead of
-making the title readable. Its `Retry all` action starts or reuses durable Raven ingest runs by library type for pending
-or failed titles, so large backlogs move through background workers instead of thousands of browser requests. The page
-also shows active and recent durable type-run summaries with title counts, progress, and ETA when Raven has enough data,
-without loading every child title task into the browser.
+making the title readable. Its `Start / rebuild all` action restarts active type rebuilds and starts or reuses durable
+Raven ingest runs by library type for pending or failed titles, so large backlogs move through background workers instead
+of thousands of browser requests. Raven uses a fair single-lane AVIF scheduler for those type runs: one title converts at
+a time, then the scheduler rotates to the next active library type so OEL, manga, manhwa, and other backlogs can all
+make progress. The page also shows active and recent durable type-run summaries with state labels, current title, queue
+position, last progress, title counts, resume/cancel controls, and ETA when Raven has enough data, without loading every
+child title task into the browser.
 Appa can also start a type-wide AVIF rebuild from Discord with
 `/ingest type:<manga|manhwa|manhua|webtoon|comic|oel>`. The command previews title count from Raven's compact
 title-card projection plus Raven hardware state,
@@ -415,8 +418,9 @@ library. Appa DMs the confirming admin at 25%, 50%, 75%, and final completion or
 replayed once the run is already terminal. If Discord says the saved requester can no longer receive DMs, Portal marks
 that specific notification undeliverable instead of retrying it every poll. If Raven restarts or temporarily loses the
 Sage/Vault broker during a type-wide rebuild, Raven reattaches the durable run, keeps already failed title tasks failed,
-and continues queued or stale-running title tasks instead of starting a duplicate run. Legacy WebP-format type runs are
-marked `superseded` before the AVIF run starts.
+resets stale running tasks, and continues unfinished title tasks instead of starting a duplicate run. Waiting runs are
+not fake-running; admin pages show them as waiting for the AVIF worker slot until the fair scheduler rotates to them.
+Legacy WebP-format type runs are marked `superseded` before the AVIF run starts.
 If a catalog duplicate merge changes the canonical title set for an active type run, Raven supersedes that stale run and
 starts a fresh run against canonical titles only.
 `/admin/users` is now the access-control workspace: a dense user directory, reusable permission-group editor, group
@@ -446,7 +450,9 @@ retry, retry-all, cancel, priority changes, and queued-task move up/down actions
 Section bulk buttons can cancel all queued work, cancel all running work for `activity.root` admins, retry all
 recovery items, or remove all removable recovery items.
 Type-wide AVIF rebuilds appear in a separate library-run panel on the queue page; they are not counted as normal Raven
-title tasks and do not use the title-task retry/remove controls.
+title tasks and do not use the title-task retry/remove controls. The panel mirrors the ingest page states: Running
+current title, Waiting for worker slot, Needs recovery, Cancelling, or terminal, with resume and cancel controls where
+the run can accept them.
 Queued cards intentionally do not show ETA values. Running cards reserve ETA space immediately, show `measuring` while
 Raven gathers enough progress data, then show the active ETA from Sage. Download cards can also show live transfer
 speed when Raven has credible telemetry. `Needs attention` cards can remove failed or stale queued tasks while deleting

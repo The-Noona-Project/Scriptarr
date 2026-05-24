@@ -228,6 +228,25 @@ public class RavenController {
     }
 
     /**
+     * Load a durable AVIF rebuild run with child title-task details. This is
+     * intended for internal diagnostics; Moon admin list views use the bounded
+     * summary endpoint above.
+     *
+     * @param runId durable run id
+     * @return durable run payload
+     */
+    @GetMapping("/v1/ingest/runs/{runId}")
+    public ResponseEntity<?> ingestRunStatus(@PathVariable("runId") String runId) {
+        try {
+            return ResponseEntity.ok(ingestRunService.status(runId));
+        } catch (IllegalArgumentException error) {
+            return ResponseEntity.badRequest().body(Map.of("error", error.getMessage()));
+        } catch (IllegalStateException error) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("error", error.getMessage()));
+        }
+    }
+
+    /**
      * Start a durable AVIF rebuild from existing canonical CBZ archives
      * for one library type slug.
      *
@@ -242,6 +261,69 @@ public class RavenController {
             return ResponseEntity.badRequest().body(Map.of("error", error.getMessage()));
         } catch (IllegalStateException error) {
             return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("error", error.getMessage()));
+        }
+    }
+
+    /**
+     * Supersede active AVIF rebuild runs and start fresh fair-scheduler runs
+     * across every type that has pending or failed reader-page work.
+     *
+     * @param body optional restart payload
+     * @return restart summary
+     */
+    @PostMapping("/v1/ingest/runs/restart-active")
+    public ResponseEntity<?> restartActiveIngestRuns(@RequestBody(required = false) Map<String, Object> body) {
+        try {
+            return ResponseEntity.accepted().body(ingestRunService.restartActiveRuns(body));
+        } catch (IllegalArgumentException error) {
+            return ResponseEntity.badRequest().body(Map.of("error", error.getMessage()));
+        } catch (IllegalStateException error) {
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("error", error.getMessage()));
+        }
+    }
+
+    /**
+     * Resume a queued, waiting, or detached durable AVIF rebuild run.
+     *
+     * @param runId durable run id
+     * @return refreshed run payload
+     */
+    @PostMapping("/v1/ingest/runs/{runId}/resume")
+    public ResponseEntity<?> resumeIngestRun(@PathVariable("runId") String runId) {
+        try {
+            return ResponseEntity.accepted().body(ingestRunService.resumeRun(runId));
+        } catch (IllegalArgumentException error) {
+            return ResponseEntity.badRequest().body(Map.of("error", error.getMessage()));
+        } catch (IllegalStateException error) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("error", error.getMessage()));
+        }
+    }
+
+    /**
+     * Continue alias for operators used to downloadall wording.
+     *
+     * @param runId durable run id
+     * @return refreshed run payload
+     */
+    @PostMapping("/v1/ingest/runs/{runId}/continue")
+    public ResponseEntity<?> continueIngestRun(@PathVariable("runId") String runId) {
+        return resumeIngestRun(runId);
+    }
+
+    /**
+     * Cancel a queued, waiting, or running durable AVIF rebuild run.
+     *
+     * @param runId durable run id
+     * @return refreshed run payload
+     */
+    @PostMapping("/v1/ingest/runs/{runId}/cancel")
+    public ResponseEntity<?> cancelIngestRun(@PathVariable("runId") String runId) {
+        try {
+            return ResponseEntity.ok(ingestRunService.cancelRun(runId));
+        } catch (IllegalArgumentException error) {
+            return ResponseEntity.badRequest().body(Map.of("error", error.getMessage()));
+        } catch (IllegalStateException error) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("error", error.getMessage()));
         }
     }
 

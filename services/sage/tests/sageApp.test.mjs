@@ -308,7 +308,7 @@ const defaultIntakePayload = Object.freeze({
  * Create a small dependency stub for Sage's Raven, Warden, Portal, and Oracle
  * calls so the Moon v3 broker routes can be tested in isolation.
  *
- * @param {{libraryTitles?: Array<Record<string, unknown>>, libraryDelayMs?: number, downloadTasks?: Array<Record<string, unknown>>, downloadTasksStatus?: number, ingestTasks?: Array<Record<string, unknown>>, ingestOverview?: Record<string, unknown>, ingestRunSummaries?: Record<string, Array<Record<string, unknown>>>, ingestRunResult?: Record<string, unknown>, importResult?: Record<string, unknown>, downloadRuntimeReloadStatus?: number, syncLinkedRequestOnQueue?: boolean, readerChapterTransientMisses?: Record<string, number>, readerMissingChaptersAsHtml?: boolean, readerPageFetchFails?: boolean, readerPageHangs?: boolean, publicSearchResultCount?: number}} [options]
+ * @param {{libraryTitles?: Array<Record<string, unknown>>, libraryDelayMs?: number, downloadTasks?: Array<Record<string, unknown>>, downloadTasksStatus?: number, ingestTasks?: Array<Record<string, unknown>>, ingestOverview?: Record<string, unknown>, ingestRunSummaries?: Record<string, Array<Record<string, unknown>>>, ingestRunResult?: Record<string, unknown>, ingestRunRestartResult?: Record<string, unknown>, importResult?: Record<string, unknown>, downloadRuntimeReloadStatus?: number, syncLinkedRequestOnQueue?: boolean, readerChapterTransientMisses?: Record<string, number>, readerMissingChaptersAsHtml?: boolean, readerPageFetchFails?: boolean, readerPageHangs?: boolean, publicSearchResultCount?: number}} [options]
  * @returns {Promise<{server: http.Server, calls: Record<string, number>}>}
  */
 const createDependencyStub = ({
@@ -320,6 +320,7 @@ const createDependencyStub = ({
   ingestOverview = null,
   ingestRunSummaries = {},
   ingestRunResult = null,
+  ingestRunRestartResult = null,
   importResult = null,
   downloadRuntimeReloadStatus = 200,
   syncLinkedRequestOnQueue = false,
@@ -362,6 +363,8 @@ const createDependencyStub = ({
     ingestOverview: 0,
     ingestRunSummaries: 0,
     ingestRunCreate: 0,
+    ingestRunRestart: 0,
+    ingestRunActions: [],
     ingestRunBodies: [],
     ingestRetry: 0,
     importLibrary: 0,
@@ -936,6 +939,55 @@ const createDependencyStub = ({
       const status = url.searchParams.get("status") || "active";
       response.writeHead(200, {"Content-Type": "application/json"});
       response.end(JSON.stringify(ingestRunSummaries[status] || []));
+      return;
+    }
+
+    if (request.url === "/v1/ingest/runs/restart-active" && request.method === "POST") {
+      calls.ingestRunRestart += 1;
+      readRequestBody(request).then((buffer) => {
+        const payload = JSON.parse(buffer.toString() || "{}");
+        calls.ingestRunBodies.push(payload);
+        response.writeHead(202, {"Content-Type": "application/json"});
+        response.end(JSON.stringify(ingestRunRestartResult || {
+          supersededCount: 1,
+          startedCount: 2,
+          runs: [{
+            runId: "ingestrun_restart_webtoon",
+            status: "queued",
+            libraryTypeSlug: "webtoon",
+            libraryTypeLabel: "Webtoon",
+            counts: {totalTitles: 2, completedTitles: 0, failedTitles: 0, remainingTitles: 2},
+            runtime: {schedulerState: "waiting", workerActive: false, needsRecovery: false, queuedPosition: 1}
+          }, {
+            runId: "ingestrun_restart_manhwa",
+            status: "queued",
+            libraryTypeSlug: "manhwa",
+            libraryTypeLabel: "Manhwa",
+            counts: {totalTitles: 1, completedTitles: 0, failedTitles: 0, remainingTitles: 1},
+            runtime: {schedulerState: "waiting", workerActive: false, needsRecovery: false, queuedPosition: 2}
+          }],
+          message: "Restarted durable AVIF ingest runs across 2 library type(s)."
+        }));
+      }).catch((error) => {
+        response.writeHead(500, {"Content-Type": "application/json"});
+        response.end(JSON.stringify({error: error instanceof Error ? error.message : String(error)}));
+      });
+      return;
+    }
+
+    if (request.url?.match(/^\/v1\/ingest\/runs\/[^/]+\/(resume|cancel)$/) && request.method === "POST") {
+      const [, runId, action] = request.url.match(/^\/v1\/ingest\/runs\/([^/]+)\/(resume|cancel)$/);
+      calls.ingestRunActions.push({runId: decodeURIComponent(runId), action});
+      response.writeHead(action === "cancel" ? 200 : 202, {"Content-Type": "application/json"});
+      response.end(JSON.stringify({
+        runId: decodeURIComponent(runId),
+        status: action === "cancel" ? "cancelled" : "queued",
+        libraryTypeSlug: "oel",
+        libraryTypeLabel: "OEL",
+        counts: {totalTitles: 4, completedTitles: 1, failedTitles: 0, remainingTitles: 3},
+        runtime: {schedulerState: action === "cancel" ? "terminal" : "waiting", workerActive: false, needsRecovery: false, queuedPosition: 1},
+        current: {taskId: "task-1", titleId: "title-1", titleName: "Age Matters", status: "queued"}
+      }));
       return;
     }
 
@@ -2643,6 +2695,21 @@ test("sage brokers admin import and ingest workflows as separate Raven surfaces"
           counts: {totalTitles: 4, completedTitles: 1, failedTitles: 0, remainingTitles: 3},
           percent: 25,
           etaMinutes: 12,
+          runtime: {
+            schedulerState: "running",
+            workerActive: true,
+            needsRecovery: false,
+            queuedPosition: 0,
+            lastProgressAt: "2026-05-24T08:00:00.000Z"
+          },
+          current: {
+            taskId: "task-1",
+            titleId: "dan-da-dan",
+            titleName: "Dandadan",
+            status: "running"
+          },
+          tasks: [{taskId: "should-not-leak"}],
+          completedTitleIds: ["old-id"],
           updatedAt: "2026-05-24T08:00:00.000Z"
         }],
         recent: []
@@ -2706,6 +2773,10 @@ test("sage brokers admin import and ingest workflows as separate Raven surfaces"
   assert.equal(ingestPage.summary.ready, 1);
   assert.equal(ingestPage.runs.active[0].runId, "ingestrun_active");
   assert.equal(ingestPage.runs.active[0].counts.totalTitles, 4);
+  assert.equal(ingestPage.runs.active[0].runtime.schedulerState, "running");
+  assert.equal(ingestPage.runs.active[0].runtime.workerActive, true);
+  assert.equal(ingestPage.runs.active[0].current.titleName, "Dandadan");
+  assert.equal(ingestPage.runs.active[0].actions.cancel, true);
   assert.equal(ingestPage.runs.active[0].completedTitleIds, undefined);
   assert.equal(ingestPage.runs.active[0].tasks, undefined);
 
@@ -2798,8 +2869,10 @@ test("sage starts durable type ingest runs for admin ingest retry all", async ()
   assert.equal(payload.retryableTitleCount, 3);
   assert.equal(payload.startedCount, 2);
   assert.equal(payload.failedCount, 0);
-  assert.deepEqual(dependencyStub.calls.ingestRunBodies.map((body) => body.libraryTypeSlug).sort(), ["manhwa", "webtoon"]);
-  assert.equal(dependencyStub.calls.ingestRunCreate, 2);
+  assert.equal(payload.supersededCount, 1);
+  assert.equal(payload.runs[0].runtime.schedulerState, "waiting");
+  assert.equal(dependencyStub.calls.ingestRunRestart, 1);
+  assert.equal(dependencyStub.calls.ingestRunCreate, 0);
 
   await closeServer(sageServer);
   await closeServer(vaultServer);
@@ -2845,6 +2918,8 @@ test("sage routes queue retries for ingest tasks without using download removal"
         mode: "avif-force-rebuild",
         counts: {totalTitles: 13, completedTitles: 5, failedTitles: 0, remainingTitles: 8},
         percent: 38,
+        runtime: {schedulerState: "waiting", workerActive: false, needsRecovery: false, queuedPosition: 2, blockedByRunId: "ingestrun_running"},
+        current: {taskId: "task-queue", titleId: "age-matters", titleName: "Age Matters", status: "queued"},
         updatedAt: "2026-05-24T08:15:00.000Z"
       }]
     }
@@ -2876,9 +2951,30 @@ test("sage routes queue retries for ingest tasks without using download removal"
   const queuePayload = await fetch(`${baseUrl}/api/moon-v3/admin/activity/queue`, {headers}).then((response) => response.json());
   assert.equal(queuePayload.ingestRuns[0].runId, "ingestrun_queue_visible");
   assert.equal(queuePayload.ingestRuns[0].counts.totalTitles, 13);
+  assert.equal(queuePayload.ingestRuns[0].runtime.schedulerState, "waiting");
+  assert.equal(queuePayload.ingestRuns[0].runtime.queuedPosition, 2);
+  assert.equal(queuePayload.ingestRuns[0].current.titleName, "Age Matters");
+  assert.equal(queuePayload.ingestRuns[0].tasks, undefined);
   assert.equal(queuePayload.stats.ingestRunCount, 1);
   assert.equal(queuePayload.running.length, 0);
   assert.equal(queuePayload.needsAttention.length, 2);
+
+  const resumeRun = await fetch(`${baseUrl}/api/moon-v3/admin/ingest/runs/ingestrun_queue_visible/resume`, {
+    method: "POST",
+    headers
+  });
+  const resumePayload = await resumeRun.json();
+  assert.equal(resumeRun.status, 202);
+  assert.equal(resumePayload.runtime.schedulerState, "waiting");
+
+  const cancelRun = await fetch(`${baseUrl}/api/moon-v3/admin/ingest/runs/ingestrun_queue_visible/cancel`, {
+    method: "POST",
+    headers
+  });
+  const cancelPayload = await cancelRun.json();
+  assert.equal(cancelRun.status, 200);
+  assert.equal(cancelPayload.status, "cancelled");
+  assert.deepEqual(dependencyStub.calls.ingestRunActions.map((entry) => entry.action), ["resume", "cancel"]);
 
   const ingestRetry = await fetch(`${baseUrl}/api/moon-v3/admin/activity/queue/raven-ingest-manual-title/retry`, {
     method: "POST",

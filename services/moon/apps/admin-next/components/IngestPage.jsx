@@ -13,7 +13,7 @@ import {AdminActionBanner, AdminDenseTable, AdminStatusBadge} from "./AdminUi.js
 import {IngestRunsPanel} from "./IngestRunsPanel.jsx";
 
 const normalizeArray = (value) => Array.isArray(value) ? value : [];
-const ACTIVE_INGEST_POLL_INTERVAL_MS = 10_000;
+const ACTIVE_INGEST_POLL_INTERVAL_MS = 5_000;
 const IDLE_INGEST_POLL_INTERVAL_MS = 30_000;
 
 const statusTone = (status) => {
@@ -71,8 +71,26 @@ export const IngestPage = ({user}) => {
     setBusyTitleId("__all__");
     const result = await requestJson("/api/moon/v3/admin/ingest/retry-all", {method: "POST"});
     notify({
-      message: result.ok ? result.payload?.message || "Ingest retry-all started." : result.payload?.error || "Moon could not retry all ingest work.",
+      message: result.ok ? result.payload?.message || "AVIF rebuilds started." : result.payload?.error || "Moon could not start AVIF rebuilds.",
       tone: result.ok && Number(result.payload?.failedCount || 0) === 0 ? "good" : "bad",
+      category: "job"
+    });
+    setBusyTitleId("");
+    await refresh();
+  };
+
+  const runAction = async (action, run) => {
+    const runId = normalizeString(run.runId);
+    if (!runId) {
+      return;
+    }
+    setBusyTitleId(`${action}:${runId}`);
+    const result = await requestJson(`/api/moon/v3/admin/ingest/runs/${encodeURIComponent(runId)}/${action}`, {method: "POST"});
+    notify({
+      message: result.ok
+        ? `${action === "cancel" ? "Cancelled" : "Resumed"} AVIF run.`
+        : result.payload?.error || `Moon could not ${action} that AVIF run.`,
+      tone: result.ok ? "good" : "bad",
       category: "job"
     });
     setBusyTitleId("");
@@ -139,6 +157,10 @@ export const IngestPage = ({user}) => {
         title="AVIF runs"
         kicker="Library ingest"
         empty="No durable AVIF ingest runs are active right now."
+        canWrite={canWrite}
+        busyRunId={busyTitleId.includes(":") ? busyTitleId.split(":").pop() : ""}
+        onResume={(run) => runAction("resume", run)}
+        onCancel={(run) => runAction("cancel", run)}
       />
 
       <section className="admin-panel">
@@ -155,7 +177,7 @@ export const IngestPage = ({user}) => {
                 disabled={retryAllBusy}
                 onClick={retryAll}
               >
-                {retryAllBusy ? "Retrying all" : "Retry all"}
+                {retryAllBusy ? "Starting rebuild" : "Start / rebuild all"}
               </button>
             ) : null}
             <span className="admin-muted">{retryableTitleCount} retryable</span>

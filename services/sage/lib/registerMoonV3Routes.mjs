@@ -1311,12 +1311,20 @@ export const registerMoonV3Routes = (app, {
     || normalizeString(task.details?.recoveryAction) === "retry-ingest";
 
   const normalizeIngestRunSummary = (run = {}) => {
-    const counts = normalizeObject(run.counts, {}) || {};
+    const counts = normalizeObject(run.counts, normalizeObject(run.result, {}) || {}) || {};
     const totalTitles = Number.parseInt(String(counts.totalTitles ?? run.totalTitles ?? 0), 10) || 0;
     const completedTitles = Number.parseInt(String(counts.completedTitles ?? run.completedTitles ?? 0), 10) || 0;
     const failedTitles = Number.parseInt(String(counts.failedTitles ?? run.failedTitles ?? 0), 10) || 0;
     const remainingTitles = Number.parseInt(String(counts.remainingTitles ?? run.remainingTitles ?? Math.max(0, totalTitles - completedTitles - failedTitles)), 10) || 0;
     const percent = Math.max(0, Math.min(100, Number.parseInt(String(run.percent ?? (totalTitles > 0 ? Math.floor(((completedTitles + failedTitles) / totalTitles) * 100) : 0)), 10) || 0));
+    const runtime = normalizeObject(run.runtime, {}) || {};
+    const current = normalizeObject(run.current, {}) || {};
+    const schedulerState = normalizeString(runtime.schedulerState, normalizeString(run.status, "queued")).toLowerCase();
+    const queuedPosition = runtime.queuedPosition == null
+      ? null
+      : Math.max(0, Number.parseInt(String(runtime.queuedPosition), 10) || 0);
+    const canControl = ["queued", "running"].includes(normalizeString(run.status, "queued").toLowerCase())
+      || ["waiting", "detached", "needs-recovery", "running"].includes(schedulerState);
     return {
       runId: normalizeString(run.runId),
       status: normalizeString(run.status, "queued"),
@@ -1335,6 +1343,26 @@ export const registerMoonV3Routes = (app, {
       },
       percent,
       etaMinutes: run.etaMinutes == null ? null : Number.parseInt(String(run.etaMinutes), 10) || null,
+      runtime: {
+        schedulerState,
+        workerActive: runtime.workerActive === true,
+        needsRecovery: runtime.needsRecovery === true,
+        queuedPosition,
+        blockedByRunId: normalizeString(runtime.blockedByRunId),
+        lastProgressAt: parseIso(runtime.lastProgressAt),
+        checkedAt: parseIso(runtime.checkedAt)
+      },
+      current: {
+        taskId: normalizeString(current.taskId),
+        titleId: normalizeString(current.titleId),
+        titleName: normalizeString(current.titleName),
+        status: normalizeString(current.status)
+      },
+      actions: {
+        resume: canControl && ["waiting", "detached", "needs-recovery"].includes(schedulerState),
+        cancel: canControl && !["terminal", "completed", "failed", "cancelled", "superseded"].includes(schedulerState),
+        restartActive: true
+      },
       createdAt: parseIso(run.createdAt),
       startedAt: parseIso(run.startedAt),
       finishedAt: parseIso(run.finishedAt),
@@ -2316,63 +2344,91 @@ export const registerMoonV3Routes = (app, {
   }));
 
   app.post("/api/moon-v3/admin/ingest/retry-all", requireImportWrite(async (req, res) => {
-    const result = await serviceJson(config.ravenBaseUrl, "/v1/ingest");
-    if (!result.ok) {
-      res.status(result.status || 502).json({error: result.payload?.error || "Raven ingest backlog is unavailable."});
+    const overview = await serviceJson(config.ravenBaseUrl, "/v1/ingest");
+    if (!overview.ok) {
+      res.status(overview.status || 502).json({error: overview.payload?.error || "Raven ingest backlog is unavailable."});
       return;
     }
-
-    const retryableTitles = normalizeArray(result.payload?.titles)
+    const retryableTitles = normalizeArray(overview.payload?.titles)
       .filter((title) => normalizeString(title?.id) && normalizeString(title?.ingestStatus, "pending").toLowerCase() !== "ready");
-    const libraryTypes = [...new Set(retryableTitles
-      .map((title) => normalizeString(title?.libraryTypeSlug || title?.mediaType || title?.requestType).toLowerCase())
-      .filter(Boolean))]
-      .sort();
-
     const requestedBy = normalizeString(req.user?.discordUserId || req.user?.username, "scriptarr-admin");
-    const results = [];
-    for (const libraryTypeSlug of libraryTypes) {
-      const response = await serviceJson(config.ravenBaseUrl, "/v1/ingest/runs", {
-        method: "POST",
-        body: {libraryTypeSlug, requestedBy}
-      });
-      results.push({
-        libraryTypeSlug,
-        ok: response.ok,
-        status: response.status,
-        runId: normalizeString(response.payload?.runId),
-        reused: response.payload?.reused === true,
-        error: response.ok ? "" : normalizeString(response.payload?.error, response.statusText)
-      });
+    const result = await serviceJson(config.ravenBaseUrl, "/v1/ingest/runs/restart-active", {
+      method: "POST",
+      body: {requestedBy}
+    });
+    if (!result.ok) {
+      res.status(result.status || 502).json({error: result.payload?.error || "Raven could not start AVIF rebuilds."});
+      return;
     }
-
-    const started = results.filter((entry) => entry.ok);
-    const failed = results.filter((entry) => !entry.ok);
-    const message = libraryTypes.length
-      ? `Started or reused ${started.length} AVIF ingest run${started.length === 1 ? "" : "s"} across ${libraryTypes.length} library type${libraryTypes.length === 1 ? "" : "s"}.`
-      : "No pending or failed ingest titles were waiting.";
+    const runs = normalizeIngestRunList(result.payload?.runs);
+    const startedCount = Number.parseInt(String(result.payload?.startedCount ?? runs.length ?? 0), 10) || 0;
+    const supersededCount = Number.parseInt(String(result.payload?.supersededCount ?? 0), 10) || 0;
+    const failedCount = Number.parseInt(String(result.payload?.failedCount ?? 0), 10) || 0;
+    const message = normalizeString(
+      result.payload?.message,
+      startedCount
+        ? `Started ${startedCount} fair AVIF rebuild run${startedCount === 1 ? "" : "s"}.`
+        : "No pending or failed ingest titles were waiting."
+    );
     await appendEvent({
       ...buildUserActor(req.user, "admin"),
       domain: "import",
-      eventType: "library-ingest-retry-all",
-      severity: failed.length ? "warning" : "info",
+      eventType: "library-ingest-rebuild-all",
+      severity: failedCount ? "warning" : "info",
       targetType: "library",
       targetId: "ingest",
-      message: `${req.user.username} started AVIF ingest retry-all for ${started.length} library type${started.length === 1 ? "" : "s"}.`,
+      message: `${req.user.username} started fair AVIF rebuilds for ${startedCount} library type${startedCount === 1 ? "" : "s"}.`,
       metadata: {
         retryableTitleCount: retryableTitles.length,
-        libraryTypes,
-        startedCount: started.length,
-        failedCount: failed.length
+        startedCount,
+        supersededCount,
+        failedCount
       }
     });
     res.json({
       retryableTitleCount: retryableTitles.length,
-      startedCount: started.length,
-      failedCount: failed.length,
-      message: failed.length ? `${message} ${failed.length} type${failed.length === 1 ? "" : "s"} failed to start.` : message,
-      results
+      startedCount,
+      supersededCount,
+      failedCount,
+      message: failedCount ? `${message} ${failedCount} type${failedCount === 1 ? "" : "s"} failed to start.` : message,
+      runs
     });
+  }));
+
+  app.post("/api/moon-v3/admin/ingest/runs/restart-active", requireImportWrite(async (req, res) => {
+    const result = await serviceJson(config.ravenBaseUrl, "/v1/ingest/runs/restart-active", {
+      method: "POST",
+      body: {requestedBy: normalizeString(req.user?.discordUserId || req.user?.username, "scriptarr-admin")}
+    });
+    if (!result.ok) {
+      res.status(result.status || 502).json({error: result.payload?.error || "Raven could not restart AVIF runs."});
+      return;
+    }
+    res.status(202).json({
+      ...result.payload,
+      runs: normalizeIngestRunList(result.payload?.runs)
+    });
+  }));
+
+  const proxyIngestRunAction = async (req, res, action) => {
+    const runId = normalizeString(req.params.runId);
+    const result = await serviceJson(config.ravenBaseUrl, `/v1/ingest/runs/${encodeURIComponent(runId)}/${action}`, {
+      method: "POST",
+      body: {requestedBy: normalizeString(req.user?.discordUserId || req.user?.username, "scriptarr-admin")}
+    });
+    if (!result.ok) {
+      res.status(result.status || 502).json({error: result.payload?.error || `Raven could not ${action} that AVIF run.`});
+      return;
+    }
+    res.status(action === "cancel" ? 200 : 202).json(normalizeIngestRunSummary(result.payload));
+  };
+
+  app.post("/api/moon-v3/admin/ingest/runs/:runId/resume", requireImportWrite(async (req, res) => {
+    await proxyIngestRunAction(req, res, "resume");
+  }));
+
+  app.post("/api/moon-v3/admin/ingest/runs/:runId/cancel", requireImportWrite(async (req, res) => {
+    await proxyIngestRunAction(req, res, "cancel");
   }));
 
   app.post("/api/moon-v3/admin/ingest/:titleId/retry", requireImportWrite(async (req, res) => {

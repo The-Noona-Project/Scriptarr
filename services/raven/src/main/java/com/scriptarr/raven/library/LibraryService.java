@@ -611,6 +611,21 @@ public final class LibraryService {
             LibraryTitle refreshed = replaceTitleWithChapters(title, chapters);
             persistIngestTask(taskId, refreshed, "failed", sanitizeError(error.getMessage()), Math.max(10, completed * 100 / total), requestedBy, error.failureCode());
             throw error;
+        } catch (RuntimeException error) {
+            LibraryChapter failedChapter = updatedChapters.isEmpty() ? chapters.get(0) : updatedChapters.get(updatedChapters.size() - 1);
+            String message = sanitizeError(firstNonBlank(error.getMessage(), "Unexpected AVIF ingest failure."));
+            chapters = mergeChapterUpdate(chapters, withIngestState(
+                failedChapter,
+                "failed",
+                message,
+                failedChapter.ingestRevision(),
+                failedChapter.ingestedPageCount(),
+                failedChapter.ingestedAt(),
+                failedChapter.ingestManifestPath()
+            ));
+            LibraryTitle refreshed = replaceTitleWithChapters(title, chapters);
+            persistIngestTask(taskId, refreshed, "failed", message, Math.max(10, completed * 100 / total), requestedBy, "unexpected_error");
+            throw error;
         }
     }
 

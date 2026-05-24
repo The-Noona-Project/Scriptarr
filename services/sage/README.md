@@ -121,11 +121,15 @@ Sage forwards as a clean 409 so Moon can refresh before the moderator retries.
 completed counts so Moon can surface finished catalog titles that do not have reliable chapter dates.
 Sage also brokers the separated Raven library import and ingest surfaces. `/api/moon-v3/admin/import` is for manual CBZ
 intake and forwards accepted import payloads to Raven `/v1/imports`; `/api/moon-v3/admin/ingest` reports the AVIF
-backlog, retries Raven `/v1/ingest/:titleId/retry`, and exposes `/api/moon-v3/admin/ingest/retry-all` to start or reuse
-durable Raven type-ingest runs for every library type with pending or failed titles. Queue recovery routes detect
+backlog, retries Raven `/v1/ingest/:titleId/retry`, and exposes `/api/moon-v3/admin/ingest/retry-all` to restart active
+type rebuilds and start or reuse durable Raven type-ingest runs for every library type with pending or failed titles.
+Queue recovery routes detect
 `raven-ingest` tasks and retry ingest from the existing CBZ instead of rerouting through download retry. Sage now passes
 Raven's bounded durable ingest-run summaries through the ingest and queue payloads separately from live title tasks, so
-Moon can show active type-wide AVIF rebuilds without hydrating thousands of child job tasks.
+Moon can show active type-wide AVIF rebuilds without hydrating thousands of child job tasks. Those summaries include
+only safe scheduler state, current-title text, queue position, timing, progress, and allowed run actions; raw paths,
+child task arrays, title-id lists, and exception text stay out of Moon payloads. Sage also proxies Moon-safe resume,
+cancel, and restart-active run actions to Raven.
 Sage also exposes Portal-only service-token routes for Appa's `/ingest` command:
 `/api/internal/portal/library/ingest/preview` reads Raven's type-scoped compact card count and hardware state without mutation, and
 `/api/internal/portal/library/ingest/runs` starts Raven's durable AVIF rebuild job through `/v1/ingest/runs`.

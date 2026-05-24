@@ -134,10 +134,16 @@ Raven also accepts `POST /v1/ingest/runs` for Appa/Sage-owned library-type reing
 derived AVIF reader pages from existing canonical CBZ archives, create one durable task per ready title, continue after
 per-title failures, and reuse the active queued or running run id when the same library type is already being rebuilt.
 `GET /v1/ingest/runs` returns bounded active, recent, or all run summaries for admin surfaces without returning every
-child title task, and `/v1/ingest` includes active and recent run summaries alongside the per-title backlog.
+child title task, including the scheduler state, current title, queue position, last progress time, and conservative
+ETA when Raven has credible timing. `/v1/ingest` includes active and recent run summaries alongside the per-title
+backlog. Type-wide rebuilds use one fair AVIF scheduler lane because title conversion is globally serialized: Raven
+processes one title for the current type, persists progress, then rotates to the next active type instead of marking
+multiple type runs as fake-running.
 If Raven restarts or loses its broker connection mid-run, startup recovery and duplicate same-type requests reattach the
 durable run, preserve already failed title tasks, and continue unfinished queued or stale-running tasks. Active legacy
 WebP-format runs are marked `superseded` before a new AVIF run is accepted for that type.
+Admins can resume, cancel, or restart active type runs through Raven's run-control endpoints, which Sage exposes through
+Moon-safe admin routes.
 When a duplicate merge changes the active type's canonical title set, the next same-type ingest request supersedes the
 stale run and starts a new one with one task per canonical title.
 Raven keeps `/v1/ingest` and Appa preview paths on compact title-card projections so backlog and count views do not

@@ -29,6 +29,58 @@ const statusTone = (status) => {
   return "warning";
 };
 
+const schedulerState = (run) => normalizeString(run?.runtime?.schedulerState, normalizeString(run?.status, "queued")).toLowerCase();
+
+const schedulerCopy = (run) => {
+  const state = schedulerState(run);
+  if (state === "running") {
+    return "Running current title";
+  }
+  if (state === "waiting") {
+    const position = Number(run?.runtime?.queuedPosition || 0) || 0;
+    return position > 0 ? `Waiting for worker slot ${position}` : "Waiting for worker slot";
+  }
+  if (state === "needs-recovery") {
+    return "Needs recovery";
+  }
+  if (state === "detached") {
+    return "Waiting to resume";
+  }
+  if (state === "cancelling") {
+    return "Cancelling";
+  }
+  return normalizeString(run?.status, "queued");
+};
+
+const schedulerTone = (run) => {
+  const state = schedulerState(run);
+  if (state === "running") {
+    return "good";
+  }
+  if (state === "needs-recovery" || state === "detached") {
+    return "bad";
+  }
+  return statusTone(run?.status);
+};
+
+const etaCopy = (run) => {
+  const eta = formatEta(run?.etaMinutes);
+  if (eta) {
+    return eta;
+  }
+  const state = schedulerState(run);
+  if (state === "running") {
+    return "measuring";
+  }
+  if (state === "waiting") {
+    return "waiting";
+  }
+  if (state === "needs-recovery") {
+    return "needs recovery";
+  }
+  return "";
+};
+
 const runCounts = (run) => {
   const counts = run?.counts || {};
   return {
@@ -64,7 +116,11 @@ const RunProgress = ({run}) => {
  *   title?: string,
  *   kicker?: string,
  *   includeRecent?: boolean,
- *   empty?: string
+ *   empty?: string,
+ *   canWrite?: boolean,
+ *   busyRunId?: string,
+ *   onResume?: (run: Record<string, any>) => Promise<void>,
+ *   onCancel?: (run: Record<string, any>) => Promise<void>
  * }} props
  * @returns {import("react").ReactNode}
  */
@@ -73,7 +129,11 @@ export const IngestRunsPanel = ({
   title = "AVIF runs",
   kicker = "Library ingest",
   includeRecent = true,
-  empty = "No durable AVIF ingest runs are active right now."
+  empty = "No durable AVIF ingest runs are active right now.",
+  canWrite = false,
+  busyRunId = "",
+  onResume,
+  onCancel
 }) => {
   const rows = normalizeRunRows(runs, {includeRecent});
 
@@ -98,11 +158,38 @@ export const IngestRunsPanel = ({
             </div>
           )},
           {key: "status", label: "Status", render: (row) => (
-            <AdminStatusBadge tone={statusTone(row.status)}>{normalizeString(row.status, "queued")}</AdminStatusBadge>
+            <div>
+              <AdminStatusBadge tone={schedulerTone(row)}>{schedulerCopy(row)}</AdminStatusBadge>
+              {normalizeString(row.message) ? <p className="admin-muted">{normalizeString(row.message)}</p> : null}
+            </div>
+          )},
+          {key: "current", label: "Current", render: (row) => (
+            normalizeString(row.current?.titleName)
+              ? <span>{normalizeString(row.current.titleName)}</span>
+              : <span className="admin-muted">{schedulerState(row) === "waiting" ? "waiting" : "none"}</span>
           )},
           {key: "progress", label: "Progress", render: (row) => <RunProgress run={row} />},
-          {key: "eta", label: "ETA", render: (row) => formatEta(row.etaMinutes) || (normalizeString(row.status).toLowerCase() === "running" ? "measuring" : "")},
-          {key: "updated", label: "Updated", render: (row) => formatDate(row.updatedAt || row.startedAt || row.createdAt)}
+          {key: "eta", label: "ETA", render: (row) => etaCopy(row)},
+          {key: "updated", label: "Updated", render: (row) => formatDate(row.runtime?.lastProgressAt || row.updatedAt || row.startedAt || row.createdAt)},
+          {key: "actions", label: "", render: (row) => {
+            const busy = busyRunId === normalizeString(row.runId);
+            const canResume = canWrite && row.actions?.resume === true && typeof onResume === "function";
+            const canCancel = canWrite && row.actions?.cancel === true && typeof onCancel === "function";
+            return canResume || canCancel ? (
+              <div className="admin-action-row">
+                {canResume ? (
+                  <button className="admin-button ghost small" type="button" disabled={busy} onClick={() => onResume(row)}>
+                    {busy ? "Working" : "Resume"}
+                  </button>
+                ) : null}
+                {canCancel ? (
+                  <button className="admin-button ghost danger small" type="button" disabled={busy} onClick={() => onCancel(row)}>
+                    {busy ? "Working" : "Cancel"}
+                  </button>
+                ) : null}
+              </div>
+            ) : null;
+          }}
         ]}
       />
     </section>

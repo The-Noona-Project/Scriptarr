@@ -41,12 +41,13 @@ test("admin event staleness is backed by one shared provider stream", () => {
 test("admin queue keeps a polling fallback and always reserves ETA copy", () => {
   const source = readMoonFile("apps/admin-next/components/QueuePage.jsx");
 
-  assert.match(source, /ACTIVE_QUEUE_POLL_INTERVAL_MS = 10_000/);
+  assert.match(source, /ACTIVE_QUEUE_POLL_INTERVAL_MS = 5_000/);
   assert.match(source, /IDLE_QUEUE_POLL_INTERVAL_MS = 30_000/);
   assert.match(source, /window\.setInterval\(\s*\(\) => void refresh\(\)/);
   assert.match(source, /formatEta\(task\.etaMinutes\) \|\| "measuring"/);
   assert.match(source, /<IngestRunsPanel/);
   assert.match(source, /payload\.ingestRuns/);
+  assert.match(source, /canImportWrite/);
   assert.match(source, /"Auto-refresh active"/);
 });
 
@@ -54,10 +55,11 @@ test("admin ingest exposes bulk retry through a same-origin route", () => {
   const source = readMoonFile("apps/admin-next/components/IngestPage.jsx");
 
   assert.match(source, /\/api\/moon\/v3\/admin\/ingest\/retry-all/);
-  assert.match(source, /ACTIVE_INGEST_POLL_INTERVAL_MS = 10_000/);
+  assert.match(source, /ACTIVE_INGEST_POLL_INTERVAL_MS = 5_000/);
   assert.match(source, /window\.setInterval\(\s*\(\) => void refresh\(\)/);
   assert.match(source, /<IngestRunsPanel/);
-  assert.match(source, /Retry all/);
+  assert.match(source, /Start \/ rebuild all/);
+  assert.match(source, /\/api\/moon\/v3\/admin\/ingest\/runs\/\$\{encodeURIComponent\(runId\)\}\/\$\{action\}/);
   assert.match(source, /retryableTitleCount/);
 });
 

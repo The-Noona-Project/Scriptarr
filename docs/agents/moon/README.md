@@ -262,7 +262,10 @@
   instead of trying to hand-reconcile every raw event in the browser.
 - Keep durable AVIF type runs separate from Raven title-task cards. `/admin/activity/queue` may show active type-run
   summaries in a dedicated panel, and `/admin/ingest` should show active or recent type-run summaries above backlog
-  rows, but type runs must not receive title-task retry, remove, priority, or cancel controls.
+  rows, but type runs must not receive title-task retry, remove, or priority controls. They may show Raven's dedicated
+  resume/cancel run controls, fair-scheduler labels such as Running current title or Waiting for worker slot, current
+  title text, queue position, last progress, and credible ETA. Poll every few seconds while durable type runs are
+  active; idle pages can fall back to the slower refresh cadence.
 - Keep `Needs attention` recovery-only. Do not let unrelated admin or system events such as service restarts leak into
   that section.
 - Preserve the interaction lock around queue controls so SSE refreshes do not collapse the priority select or destroy

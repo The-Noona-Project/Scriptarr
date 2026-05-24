@@ -151,10 +151,13 @@ page formats without digging through the broader settings surface.
 `/admin/import` is the manual CBZ intake page. It sends title metadata, library type, existing-title selection, and
 Raven-visible source paths to Sage, which asks Raven to copy approved CBZ files into canonical downloaded storage.
 `/admin/ingest` is separate from import and shows the AVIF conversion backlog, completion stats, hardware status, and
-retry buttons for titles whose CBZs are not yet reader-ready. The backlog header also exposes `Retry all`, which starts
-or reuses durable AVIF rebuild runs for every library type with pending or failed titles instead of firing one browser
-request per title. The page also shows active and recent durable type-run summaries so admins can see queued or running
-whole-library rebuilds without loading every child title task.
+retry buttons for titles whose CBZs are not yet reader-ready. The backlog header also exposes `Start / rebuild all`,
+which asks Sage and Raven to restart active rebuilds and create or reuse durable AVIF runs for every library type with
+pending or failed titles instead of firing one browser request per title. The page also shows active and recent durable
+type-run summaries so admins can see Running current title, Waiting for worker slot, Needs recovery, Cancelling, and
+terminal whole-library rebuilds without loading every child title task. Active runs refresh every few seconds and show
+current title, title progress, queue position, last progress, conservative ETA, and resume or cancel controls when Raven
+allows the action.
 `/admin/calendar` now renders a month or agenda view backed by Raven chapter release dates captured from source
 scrapes and metadata enrichment instead of only showing a flat task-style table. Completed titles get one dated
 completion marker when chapter dates are incomplete, while fully undated completed titles remain visible in the
@@ -168,7 +171,8 @@ failed or stale queued tasks with their incomplete working folders. The active s
 comes from the configured Raven title-download limit. Section bulk controls can cancel all queued work, cancel all
 running work for root admins, retry all recovery items, or remove all removable recovery items. Durable AVIF type runs
 are displayed in their own panel below the queue metrics so `Queued` can remain the title-task count while background
-library rebuilds are still visible.
+library rebuilds are still visible. That panel uses the same fair-scheduler state labels as `/admin/ingest` and polls
+every few seconds while a type-wide rebuild is active.
 
 Fresh installs intentionally show empty library states until Raven has real imported titles to surface, and the admin
 program now ships in a dark-only theme by default.
