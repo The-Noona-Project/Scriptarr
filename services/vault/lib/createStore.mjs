@@ -848,6 +848,18 @@ const groupRavenDuplicateTitles = (titles = [], {type = ""} = {}) => {
     })
     .sort((left, right) => left.catalogKey.localeCompare(right.catalogKey, "en", {numeric: true}));
 };
+const parseRavenDuplicateGroupLimit = (value) => {
+  const parsed = Number.parseInt(String(value || 0), 10) || 0;
+  return parsed > 0 ? Math.min(parsed, 500) : 0;
+};
+const filterRavenDuplicateTitleGroups = (groups = [], filters = {}) => {
+  const catalogKey = normalizeScalarString(filters.catalogKey || filters.key);
+  const limit = parseRavenDuplicateGroupLimit(filters.limit);
+  const filtered = catalogKey
+    ? groups.filter((group) => group.catalogKey === catalogKey)
+    : groups;
+  return limit ? filtered.slice(0, limit) : filtered;
+};
 const chapterMergeKey = (chapter = {}) =>
   normalizeRavenCatalogSegment(chapter.chapterNumber || chapter.label || chapter.id);
 const ravenChapterScore = (chapter = {}) => [
@@ -2022,7 +2034,8 @@ const createMemoryStore = (options = {}) => {
       const titles = Array.from(state.ravenTitles.values()).map((title) =>
         normalizeRavenTitle(title, Array.from((state.ravenChapters.get(title.id) || new Map()).values()))
       );
-      const groups = groupRavenDuplicateTitles(titles, filters).map(({titles: _titles, ...group}) => group);
+      const groups = filterRavenDuplicateTitleGroups(groupRavenDuplicateTitles(titles, filters), filters)
+        .map(({titles: _titles, ...group}) => group);
       return {
         driver: "memory",
         groups,
@@ -2038,7 +2051,7 @@ const createMemoryStore = (options = {}) => {
       const allTitles = Array.from(state.ravenTitles.values()).map((title) =>
         normalizeRavenTitle(title, Array.from((state.ravenChapters.get(title.id) || new Map()).values()))
       );
-      const grouped = groupRavenDuplicateTitles(allTitles, filters);
+      const grouped = filterRavenDuplicateTitleGroups(groupRavenDuplicateTitles(allTitles, filters), filters);
       const mergedGroups = [];
       for (const group of grouped) {
         const merged = mergeRavenDuplicateTitleGroup(group.titles);
@@ -2903,6 +2916,78 @@ const createMysqlStore = (config) => {
       LIMIT 1
     `, [typeSlug, title.title || "", requestedTitleId]);
     return normalizeString(fallbackRows[0]?.title_id, requestedTitleId);
+  };
+  const listMysqlRavenDuplicateTitleCandidates = async (filters = {}) => {
+    const type = normalizeTypeSlug(filters.type || "", "");
+    const whereClauses = [];
+    const whereParams = [];
+    if (type) {
+      whereClauses.push("LOWER(COALESCE(NULLIF(library_type_slug, ''), media_type)) = ?");
+      whereParams.push(type);
+    }
+    const whereSql = whereClauses.length ? `WHERE ${whereClauses.join(" AND ")}` : "";
+    const [rows] = await pool.query(`
+      SELECT *
+      FROM raven_titles
+      ${whereSql}
+      ORDER BY title ASC, title_id ASC
+    `, whereParams);
+    return rows.map((row) => toRavenTitle(row, []));
+  };
+  const loadMysqlRavenTitlesWithChapters = async (titleIds = []) => {
+    const normalizedIds = Array.from(new Set(titleIds.map((id) => normalizeString(id)).filter(Boolean)));
+    if (!normalizedIds.length) {
+      return [];
+    }
+    const placeholders = normalizedIds.map(() => "?").join(", ");
+    const [titleRows] = await pool.query(`
+      SELECT *
+      FROM raven_titles
+      WHERE title_id IN (${placeholders})
+      ORDER BY title ASC, title_id ASC
+    `, normalizedIds);
+    const [chapterRows] = await pool.query(`
+      SELECT *
+      FROM raven_chapters
+      WHERE title_id IN (${placeholders})
+    `, normalizedIds);
+    const chaptersByTitle = new Map();
+    for (const row of chapterRows) {
+      if (!chaptersByTitle.has(row.title_id)) {
+        chaptersByTitle.set(row.title_id, []);
+      }
+      chaptersByTitle.get(row.title_id).push(toRavenChapter(row));
+    }
+    return titleRows.map((row) => toRavenTitle(row, chaptersByTitle.get(row.title_id) || []));
+  };
+  const addMysqlRavenDuplicateChapterCounts = async (groups = []) => {
+    const ids = Array.from(new Set(groups.flatMap((group) => [
+      group.canonicalId,
+      ...(Array.isArray(group.duplicateIds) ? group.duplicateIds : [])
+    ]).map((id) => normalizeString(id)).filter(Boolean)));
+    if (!ids.length) {
+      return groups;
+    }
+    const placeholders = ids.map(() => "?").join(", ");
+    const [rows] = await pool.query(`
+      SELECT title_id, COUNT(*) AS chapter_count
+      FROM raven_chapters
+      WHERE title_id IN (${placeholders})
+      GROUP BY title_id
+    `, ids);
+    const countByTitle = new Map(rows.map((row) => [
+      normalizeString(row.title_id),
+      Number.parseInt(String(row.chapter_count || 0), 10) || 0
+    ]));
+    return groups.map((group) => ({
+      ...group,
+      chapterCounts: Array.isArray(group.chapterCounts)
+        ? group.chapterCounts.map((entry) => ({
+          ...entry,
+          chapters: countByTitle.get(normalizeString(entry.id)) ?? entry.chapters
+        }))
+        : group.chapterCounts
+    }));
   };
   const toRequest = (row) => {
     const details = normalizeRequestDetails(parseJsonColumn(row.request_details_json, {}));
@@ -4313,8 +4398,11 @@ const createMysqlStore = (config) => {
       });
     },
     async previewRavenTitleDuplicates(filters = {}) {
-      const titles = await this.listRavenTitles();
-      const groups = groupRavenDuplicateTitles(titles, filters).map(({titles: _titles, ...group}) => group);
+      const titles = await listMysqlRavenDuplicateTitleCandidates(filters);
+      const groups = await addMysqlRavenDuplicateChapterCounts(
+        filterRavenDuplicateTitleGroups(groupRavenDuplicateTitles(titles, filters), filters)
+          .map(({titles: _titles, ...group}) => group)
+      );
       return {
         driver: "mysql",
         groups,
@@ -4327,8 +4415,12 @@ const createMysqlStore = (config) => {
       if (filters.dryRun !== false && filters.apply !== true) {
         return {...preview, dryRun: true, mergedGroups: []};
       }
-      const allTitles = await this.listRavenTitles();
-      const grouped = groupRavenDuplicateTitles(allTitles, filters);
+      const titleIds = preview.groups.flatMap((group) => [
+        group.canonicalId,
+        ...(Array.isArray(group.duplicateIds) ? group.duplicateIds : [])
+      ]);
+      const allTitles = await loadMysqlRavenTitlesWithChapters(titleIds);
+      const grouped = filterRavenDuplicateTitleGroups(groupRavenDuplicateTitles(allTitles, filters), filters);
       const result = await withTransaction(async (connection) => {
         const mergedGroups = [];
         const replaceUserScopedTitleIds = (value, duplicateId, canonicalId) => {

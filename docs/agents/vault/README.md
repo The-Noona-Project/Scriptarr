@@ -59,7 +59,8 @@
   lookup, title summary, chapter page, reader target, metadata-match, and catalog write paths.
 - Keep duplicate preview/merge maintenance service-only. Merge must write alias mappings and an audit result after
   preserving best title metadata, chapters, metadata matches, quality/ingest state, reader progress, read state,
-  follows, and bookmarks on the canonical title.
+  follows, and bookmarks on the canonical title. For large libraries, keep preview title-row-only and use bounded
+  `limit` batches so a maintenance pass does not hydrate every chapter in the catalog before it can respond.
 - Vault also owns the title-page split projections used by Sage. `/api/service/raven/titles/:titleId/summary` returns
   title metadata, user read/progress counts, primary/latest chapter hints, and no `title.chapters` payload.
   `/api/service/raven/titles/:titleId/chapters` returns paged chapter rows with read state plus server-side

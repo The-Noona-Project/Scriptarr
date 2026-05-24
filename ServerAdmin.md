@@ -676,7 +676,8 @@ Vault now also stores a durable request work key derived from the concrete downl
 metadata identity when no download match exists yet, and active duplicate work keys are rejected.
 Vault also stores Raven catalog keys and title aliases. Maintenance operators can preview and merge safe duplicate
 title groups through the service-only Sage/Vault route; the merge keeps the richest title data, chapter rows, reader
-state, follows/bookmarks, and an audit mapping before retiring duplicate rows.
+state, follows/bookmarks, and an audit mapping before retiring duplicate rows. On large libraries, run duplicate
+cleanup in bounded batches so Vault previews title rows first and hydrates chapter rows only for groups being merged.
 Vault now also stores reusable permission groups, user-group assignments, and immutable durable events. Deleting a user
 from `/admin/users` clears local access plus active sessions, but preserves their requests, follows, bookmarks,
 progress, and audit history. If that Discord user signs in again later, Scriptarr recreates them on the current
