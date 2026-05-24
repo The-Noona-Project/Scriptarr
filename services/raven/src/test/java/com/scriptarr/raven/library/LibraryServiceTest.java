@@ -1,5 +1,6 @@
 package com.scriptarr.raven.library;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.scriptarr.raven.downloader.TitleDetails;
 import com.scriptarr.raven.settings.RavenSettingsService;
 import com.scriptarr.raven.support.FakeRavenBrokerClient;
@@ -11,6 +12,7 @@ import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.lang.reflect.Modifier;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
@@ -32,6 +34,20 @@ import static org.mockito.Mockito.when;
  * Unit tests for Raven's durable library projection behavior.
  */
 class LibraryServiceTest {
+    /**
+     * A full startup rescan can take minutes on a large catalog when the
+     * broker is cold, so it must not hold the same monitor that title ingest
+     * uses for AVIF work.
+     *
+     * @throws Exception when the method reflection lookup fails
+     */
+    @Test
+    void rescanDownloadedFilesDoesNotBlockIngestMonitor() throws Exception {
+        int modifiers = LibraryService.class.getDeclaredMethod("rescanDownloadedFiles").getModifiers();
+
+        assertFalse(Modifier.isSynchronized(modifiers));
+    }
+
     /**
      * Verify completed downloads persist opaque ids and dynamic type fields.
      *
@@ -330,6 +346,43 @@ class LibraryServiceTest {
         title = service.ingestTitle(title.id(), "test");
 
         assertArrayEquals(pngPage(2), service.renderReaderPage(title.id(), title.chapters().getFirst().id(), 1).bytes());
+    }
+
+    /**
+     * Verify AVIF ingest task snapshots keep a stable start timestamp so Moon
+     * can estimate active queue ETA while chapters are still being rebuilt.
+     *
+     * @param tempDir temporary test directory
+     * @throws Exception when the archive fixture cannot be prepared
+     */
+    @Test
+    void ingestTitlePersistsStartedAtForEta(@TempDir Path tempDir) throws Exception {
+        FakeRavenBrokerClient brokerClient = new FakeRavenBrokerClient();
+        ScriptarrLogger logger = mock(ScriptarrLogger.class);
+        when(logger.getDownloadsRoot()).thenReturn(tempDir);
+        LibraryService service = new LibraryService(brokerClient, new RavenSettingsService(brokerClient, logger, List.of()), logger);
+
+        Path titleFolder = tempDir.resolve("downloaded").resolve("oel").resolve("Age_Matters");
+        Files.createDirectories(titleFolder);
+        Path archive = writeArchive(titleFolder.resolve("Age Matters c001.cbz"));
+        LibraryTitle title = service.recordDownloadedTitle(
+            "Age Matters",
+            "OEL",
+            "https://weebcentral.com/series/age-matters",
+            "",
+            null,
+            List.of(new LibraryChapter("", "Chapter 1", "1", 1, null, true, archive.toString(), "", null)),
+            titleFolder,
+            titleFolder
+        );
+
+        service.ingestTitle(title.id(), "test");
+
+        JsonNode task = brokerClient.listDownloadTasks().get(0);
+        assertEquals("AVIF ingest completed.", task.path("message").asText());
+        assertFalse(task.path("startedAt").asText("").isBlank());
+        assertFalse(task.path("updatedAt").asText("").isBlank());
+        assertEquals(task.path("startedAt").asText(), task.path("details").path("startedAt").asText());
     }
 
     /**

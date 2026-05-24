@@ -117,11 +117,12 @@ value live through `/v1/downloads/runtime/reload` without cancelling already-run
 starts until enough active work finishes. Page fetches inside a title still use their existing fixed two-worker
 concurrency, preserve archive ordering, skip already-written files on retry, and collapse duplicate restorable tasks
 for the same logical request during recovery.
-Raven task snapshots now also preserve a real `startedAt` for active attempts and, when a chapter download yields
-credible timing data, a live `downloadSpeedBytesPerSecond` value that Moon can show on running queue cards. Recovery
-or needs-attention views should still stay limited to Raven title-task state instead of pulling in unrelated service
-events. Failed or stale queued tasks can be removed from recovery, which clears the persisted task and deletes only
-the incomplete managed `downloading/<type>` working folder.
+Raven task snapshots now also preserve a real `startedAt` for active download and AVIF-ingest attempts so Moon can show
+queue ETA once Sage has enough progress data. When a chapter download yields credible timing data, Raven also records a
+live `downloadSpeedBytesPerSecond` value that Moon can show on running queue cards. Recovery or needs-attention views
+should still stay limited to Raven title-task state instead of pulling in unrelated service events. Failed or stale
+queued tasks can be removed from recovery, which clears the persisted task and deletes only the incomplete managed
+`downloading/<type>` working folder.
 When an upstream page image returns `404`, Raven now skips same-URL image retries, refreshes the chapter page list on
 the next chapter attempt, and leaves a clearer source-image failure if the refreshed source still points at missing
 images.

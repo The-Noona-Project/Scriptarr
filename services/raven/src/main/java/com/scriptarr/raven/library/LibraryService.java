@@ -67,6 +67,7 @@ public final class LibraryService {
     private final ExecutorService startupCatalogScanExecutor = Executors.newSingleThreadExecutor(new StartupScanThreadFactory());
     private final Map<String, ReaderArchiveIndex> readerArchiveIndexes = new ConcurrentHashMap<>();
     private final Map<String, PageValidationResult> readerPageValidations = new ConcurrentHashMap<>();
+    private final Map<String, String> ingestTaskStartedAt = new ConcurrentHashMap<>();
 
     /**
      * Create the shared Raven library service.
@@ -888,7 +889,7 @@ public final class LibraryService {
      * Rescan the downloads root and backfill any discovered CBZ files into
      * Raven's durable title and chapter catalog.
      */
-    public synchronized void rescanDownloadedFiles() {
+    public void rescanDownloadedFiles() {
         Instant startedAt = Instant.now();
         persistRescanJob("running", "Scanning Raven downloads for imported titles.", startedAt, null, Map.of());
         Path downloadsRoot = logger.getDownloadsRoot();
@@ -1120,6 +1121,12 @@ public final class LibraryService {
         String failureCode
     ) {
         try {
+            String normalizedStatus = firstNonBlank(status, "queued").toLowerCase(Locale.ROOT);
+            String observedAt = Instant.now().toString();
+            String startedAt = ingestTaskStartedAt.computeIfAbsent(taskId, (_key) -> observedAt);
+            if (!"running".equals(normalizedStatus) && !ingestTaskStartedAt.containsKey(taskId)) {
+                startedAt = observedAt;
+            }
             Map<String, Object> task = new LinkedHashMap<>();
             task.put("taskId", taskId);
             task.put("titleId", title.id());
@@ -1132,15 +1139,21 @@ public final class LibraryService {
             task.put("status", status);
             task.put("message", message);
             task.put("percent", Math.max(0, Math.min(100, percent)));
-            task.put("queuedAt", Instant.now().toString());
+            task.put("queuedAt", startedAt);
+            task.put("startedAt", startedAt);
+            task.put("updatedAt", observedAt);
             Map<String, Object> details = new LinkedHashMap<>();
             details.put("kind", "library-ingest");
             details.put("libraryTypeLabel", firstNonBlank(title.libraryTypeLabel(), "Manga"));
             details.put("libraryTypeSlug", firstNonBlank(title.libraryTypeSlug(), "manga"));
             details.put("failureCode", firstNonBlank(failureCode, ""));
             details.put("recoveryAction", "retry-ingest");
+            details.put("startedAt", startedAt);
             task.put("details", details);
             brokerClient.putDownloadTask(taskId, task);
+            if ("completed".equals(normalizedStatus) || "failed".equals(normalizedStatus) || "cancelled".equals(normalizedStatus)) {
+                ingestTaskStartedAt.remove(taskId);
+            }
         } catch (Exception error) {
             logger.warn("LIBRARY", "Failed to persist Raven ingest task.", error.getMessage());
         }

@@ -87,13 +87,15 @@
   duplicate restorable tasks so Moon queue views only see one logical download. Keep this recovery after Spring's ready
   event, use compact title-card indexes before loading individual existing titles, skip unchanged folders, and keep
   Sage broker calls explicitly timeout-bound so a large catalog or slow broker write cannot hold Raven below healthy or
-  starve auth/bootstrap traffic.
+  starve auth/bootstrap traffic. The long startup rescan must not hold the same `LibraryService` monitor used by
+  per-title AVIF ingest; fresh or recovered ingest runs need to write progress while the rescan is still walking the
+  catalog.
 - Raven title-download concurrency is brokered through `raven.download.runtime`. Keep the default at two active titles,
   allow only `1` through `6`, reload it live without cancelling running downloads, and preserve priority ordering plus
   queued-task move up/down behavior for work that has not started yet. Per-title page download concurrency stays fixed.
 - Preserve real task telemetry for Moon admin. Active title tasks should carry a true `startedAt` when the attempt
-  begins, and Raven should only expose `downloadSpeedBytesPerSecond` when it can measure a credible live rate from the
-  current work instead of inventing one.
+  begins, including AVIF ingest retries, and Raven should only expose `downloadSpeedBytesPerSecond` when it can measure
+  a credible live rate from the current work instead of inventing one.
 - Keep queue recovery semantics tight. Failed or stale title tasks can feed Moon's `Needs attention` surface, but
   unrelated operational or service events should never be reclassified as Raven queue recovery items. Removing a failed
   or stale queued task may delete only its incomplete managed `downloading/<type>` working folder, never promoted

@@ -437,14 +437,16 @@ source is selected. `/admin/wanted/missing-chapters` redirects to this canonical
 dated chapter entries when available and get one title-level completion marker when Raven only has title or chapter
 update timestamps. Titles with no usable date are counted as undated completed instead of being dropped.
 `/admin/activity/queue` is now a live queue board. It groups Raven work into `Running`, `Queued`, and recovery-only
-`Needs attention`, subscribes to the shared admin SSE stream so it refreshes without a manual page reload, and
-exposes card-level controls for retry, retry-all, cancel, priority changes, and queued-task move up/down actions.
+`Needs attention`, subscribes to the shared admin SSE stream, and keeps a polling fallback active so Raven progress
+refreshes without a manual page reload even when the event stream is degraded. It exposes card-level controls for
+retry, retry-all, cancel, priority changes, and queued-task move up/down actions.
 Section bulk buttons can cancel all queued work, cancel all running work for `activity.root` admins, retry all
 recovery items, or remove all removable recovery items.
-Queued cards intentionally do not show ETA values. Running cards show live transfer speed and active ETA only when
-Raven and Sage have credible progress data, and `Needs attention` cards can remove failed or stale queued tasks while
-deleting only the incomplete managed working folder. Service update and restart jobs stay out of `Needs attention`;
-track them under System, Updates, and Events instead.
+Queued cards intentionally do not show ETA values. Running cards reserve ETA space immediately, show `measuring` while
+Raven gathers enough progress data, then show the active ETA from Sage. Download cards can also show live transfer
+speed when Raven has credible telemetry. `Needs attention` cards can remove failed or stale queued tasks while deleting
+only the incomplete managed working folder. Service update and restart jobs stay out of `Needs attention`; track them
+under System, Updates, and Events instead.
 If a `downloadall` bulk run pauses after stale title-task cleanup, check `/admin/system/tasks` for the latest
 `Stale queue cleanup` result and `/admin/activity/queue` for the listed Raven title task. Cancel the exact stale task
 when needed, then continue the run from the owner DM reaction or `/downloadall continue runid:<id>`.

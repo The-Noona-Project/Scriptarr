@@ -4,13 +4,15 @@
  * @file Live Raven queue board for the Next-based Moon admin foundation.
  */
 
-import {useState} from "react";
+import {useEffect, useState} from "react";
 import {hasAdminGrant} from "../lib/access.js";
 import {requestJson, useAdminEventStaleness, useAdminJson} from "../lib/api.js";
 import {formatDate, formatEta, formatPercent, formatTransferRate, normalizeString} from "../lib/format.js";
 import {useAdminToast} from "./AdminToasts.jsx";
 
 const normalizeArray = (value) => Array.isArray(value) ? value : [];
+const ACTIVE_QUEUE_POLL_INTERVAL_MS = 10_000;
+const IDLE_QUEUE_POLL_INTERVAL_MS = 30_000;
 
 /**
  * Render a compact status badge.
@@ -118,7 +120,7 @@ const QueueTaskCard = ({task, permissions, onAction, onDirtyChange}) => {
   const status = normalizeString(task.status, "queued");
   const active = status.toLowerCase() === "running";
   const speedSummary = active ? formatTransferRate(task.downloadSpeedBytesPerSecond) : "";
-  const etaSummary = active ? formatEta(task.etaMinutes) : "";
+  const etaSummary = active ? formatEta(task.etaMinutes) || "measuring" : "";
   const metaItems = [
     `Progress ${formatPercent(task.percent)}`,
     `Priority ${normalizeString(task.priority, "normal")}`
@@ -268,6 +270,22 @@ export const QueuePage = ({user}) => {
   };
   const payload = data || {};
   const stats = payload.stats || {};
+  const hasQueueWork = Boolean(
+    Number(stats.runningCount || 0)
+    || Number(stats.queuedCount || 0)
+    || Number(stats.needsAttentionCount || 0)
+  );
+
+  useEffect(() => {
+    if (editorDirty || typeof window === "undefined") {
+      return undefined;
+    }
+    const interval = window.setInterval(
+      () => void refresh(),
+      hasQueueWork ? ACTIVE_QUEUE_POLL_INTERVAL_MS : IDLE_QUEUE_POLL_INTERVAL_MS
+    );
+    return () => window.clearInterval(interval);
+  }, [editorDirty, hasQueueWork, refresh]);
 
   const handleAction = async (action, task, body) => {
     const taskId = encodeURIComponent(normalizeString(task.taskId));
@@ -398,7 +416,7 @@ export const QueuePage = ({user}) => {
             <h2>Live Raven queue</h2>
           </div>
           <Badge tone={live.state === "live" ? "running" : "warning"}>
-            {refreshing ? "Refreshing quietly" : live.state === "live" ? "Live updates connected" : "Live updates degraded"}
+            {refreshing ? "Refreshing quietly" : live.state === "live" ? "Live updates connected" : "Auto-refresh active"}
           </Badge>
         </div>
         <div className="admin-metric-grid">

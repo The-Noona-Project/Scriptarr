@@ -20,6 +20,8 @@ bookshelf or fully completed.
 Vault also carries Raven ingest state in the catalog: title aggregate status and counts, plus chapter `ingestStatus`,
 `ingestRevision`, `ingestedPageCount`, `ingestedAt`, redacted `ingestError`, and manifest path. Compact reader targets
 only consider chapters whose ingest status is ready.
+Raven download-task heartbeats keep the caller-provided UTC `updatedAt` timestamp so Moon's live queue can distinguish
+fresh active work from genuinely stale tasks even when the MySQL server timezone differs from UTC.
 When Sage resets a title unread, Vault deletes that user's `media_title_state`, `media_chapter_reads`, and
 `media_progress` rows for the title instead of leaving a started unread title on the bookshelf.
 Vault now also persists first-class API key records for Moon and Sage. It stores hashed key material plus metadata for

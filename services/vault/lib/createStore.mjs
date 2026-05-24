@@ -2135,7 +2135,7 @@ const createMemoryStore = (options = {}) => {
       state.ravenDownloadTasks.set(task.taskId, {
         ...(state.ravenDownloadTasks.get(task.taskId) || {}),
         ...task,
-        updatedAt: nowIso()
+        updatedAt: task.updatedAt || nowIso()
       });
       return state.ravenDownloadTasks.get(task.taskId);
     },
@@ -4658,11 +4658,12 @@ const createMysqlStore = (config) => {
       }));
     },
     async upsertRavenDownloadTask(task) {
+      const updatedAt = toMysqlDateTime(task.updatedAt, toMysqlDateTime(nowIso()));
       await pool.query(`
         INSERT INTO raven_download_tasks (
           task_id, title_id, title_name, title_url, provider_id, request_id, request_type, requested_by, status_name, message_text, percent_value, details_json, queued_at, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON DUPLICATE KEY UPDATE
           title_id = VALUES(title_id),
           title_name = VALUES(title_name),
@@ -4676,7 +4677,7 @@ const createMysqlStore = (config) => {
           percent_value = VALUES(percent_value),
           details_json = VALUES(details_json),
           queued_at = VALUES(queued_at),
-          updated_at = NOW()
+          updated_at = VALUES(updated_at)
       `, [
         task.taskId,
         task.titleId || null,
@@ -4690,7 +4691,8 @@ const createMysqlStore = (config) => {
         task.message || "",
         Number.parseInt(String(task.percent || 0), 10) || 0,
         JSON.stringify(task.details || {}),
-        toMysqlDateTime(task.queuedAt, toMysqlDateTime(nowIso()))
+        toMysqlDateTime(task.queuedAt, toMysqlDateTime(nowIso())),
+        updatedAt
       ]);
       const [rows] = await pool.query("SELECT * FROM raven_download_tasks WHERE task_id = ? LIMIT 1", [task.taskId]);
       const row = rows[0];

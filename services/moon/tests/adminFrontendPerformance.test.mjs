@@ -38,6 +38,16 @@ test("admin event staleness is backed by one shared provider stream", () => {
   assert.equal(eventSourceCount, 1);
 });
 
+test("admin queue keeps a polling fallback and always reserves ETA copy", () => {
+  const source = readMoonFile("apps/admin-next/components/QueuePage.jsx");
+
+  assert.match(source, /ACTIVE_QUEUE_POLL_INTERVAL_MS = 10_000/);
+  assert.match(source, /IDLE_QUEUE_POLL_INTERVAL_MS = 30_000/);
+  assert.match(source, /window\.setInterval\(\s*\(\) => void refresh\(\)/);
+  assert.match(source, /formatEta\(task\.etaMinutes\) \|\| "measuring"/);
+  assert.match(source, /"Auto-refresh active"/);
+});
+
 test("system status keeps deep probes behind the explicit check action", () => {
   const source = readMoonFile("apps/admin-next/components/SystemStatusPage.jsx");
 

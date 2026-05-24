@@ -157,13 +157,13 @@ scrapes and metadata enrichment instead of only showing a flat task-style table.
 completion marker when chapter dates are incomplete, while fully undated completed titles remain visible in the
 summary count.
 `/admin/activity/queue` is now a live SSE-backed queue board instead of a static table. It splits Raven work into
-`Running`, `Queued`, and recovery-only `Needs attention` sections, refreshes without a manual page reload, and
-exposes card-level controls for retry, retry-all, cancel, priority changes, and queued-task reordering. Live refresh
-now defers while queue controls are being edited, running cards show live download speed plus an active ETA when Sage
-can estimate one credibly, and recovery cards can remove failed or stale queued tasks with their incomplete working
-folders. The active slot total is display-only here and comes from the configured Raven title-download limit. Section
-bulk controls can cancel all queued work, cancel all running work for root admins, retry all recovery items, or remove
-all removable recovery items.
+`Running`, `Queued`, and recovery-only `Needs attention` sections, refreshes without a manual page reload, and keeps a
+polling fallback active when the event stream is degraded. It exposes card-level controls for retry, retry-all, cancel,
+priority changes, and queued-task reordering. Live refresh now defers while queue controls are being edited, running
+cards reserve ETA copy immediately with `measuring` until Sage can estimate one credibly, and recovery cards can remove
+failed or stale queued tasks with their incomplete working folders. The active slot total is display-only here and
+comes from the configured Raven title-download limit. Section bulk controls can cancel all queued work, cancel all
+running work for root admins, retry all recovery items, or remove all removable recovery items.
 
 Fresh installs intentionally show empty library states until Raven has real imported titles to surface, and the admin
 program now ships in a dark-only theme by default.

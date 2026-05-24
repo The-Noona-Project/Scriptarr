@@ -191,6 +191,42 @@ test("vault deletes persisted Raven download tasks", async () => {
   server.close();
 });
 
+test("vault preserves Raven download task heartbeat timestamps", async () => {
+  const {app} = await createVaultApp();
+  const server = app.listen(0);
+  const {port} = server.address();
+  const baseUrl = `http://127.0.0.1:${port}`;
+
+  const headers = {
+    "Authorization": "Bearer sage-dev-token",
+    "Content-Type": "application/json"
+  };
+  const updatedAt = "2026-05-24T13:53:01.613Z";
+
+  const task = await fetch(`${baseUrl}/api/service/raven/download-tasks/task-heartbeat-1`, {
+    method: "PUT",
+    headers,
+    body: JSON.stringify({
+      taskId: "task-heartbeat-1",
+      titleName: "Age Matters",
+      titleUrl: "https://weebcentral.com/series/age-matters",
+      requestType: "oel",
+      status: "running",
+      percent: 12,
+      updatedAt
+    })
+  }).then((response) => response.json());
+
+  assert.equal(task.updatedAt, updatedAt);
+
+  const tasks = await fetch(`${baseUrl}/api/service/raven/download-tasks`, {
+    headers
+  }).then((response) => response.json());
+  assert.equal(tasks.find((entry) => entry.taskId === "task-heartbeat-1")?.updatedAt, updatedAt);
+
+  server.close();
+});
+
 test("vault durably rejects duplicate active request work keys and releases them when requests stop being active", async () => {
   const {app} = await createVaultApp();
   const server = app.listen(0);
