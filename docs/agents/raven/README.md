@@ -96,6 +96,9 @@
 - Preserve real task telemetry for Moon admin. Active title tasks should carry a true `startedAt` when the attempt
   begins, including AVIF ingest retries, and Raven should only expose `downloadSpeedBytesPerSecond` when it can measure
   a credible live rate from the current work instead of inventing one.
+- Durable AVIF type runs should expose bounded summaries through `/v1/ingest/runs` and `/v1/ingest`, not full child
+  title-task arrays. Keep child task detail behind explicit status calls so Moon's queue and ingest pages can refresh
+  quickly while large type-wide rebuilds are active.
 - Keep queue recovery semantics tight. Failed or stale title tasks can feed Moon's `Needs attention` surface, but
   unrelated operational or service events should never be reclassified as Raven queue recovery items. Removing a failed
   or stale queued task may delete only its incomplete managed `downloading/<type>` working folder, never promoted

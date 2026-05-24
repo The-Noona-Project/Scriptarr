@@ -64,6 +64,9 @@
   payloads to Raven `/v1/imports`, while `/api/moon-v3/admin/ingest` reads the ingest backlog and retries
   `/v1/ingest/:titleId/retry`. The admin ingest `retry-all` action should create or reuse Raven `/v1/ingest/runs`
   jobs per affected library type instead of issuing one retry request per title from the browser.
+- Keep durable `raven-library-ingest` run summaries bounded. Admin ingest and queue payloads may expose active or
+  recent run summaries, but must not hydrate all child job tasks or pass completed/failed title id arrays to Moon page
+  refreshes.
 - Sage owns Appa's Portal ingest broker too. Keep `/api/internal/portal/library/ingest/preview` read-only and
   service-token protected, and make the preview use Raven's compact title-card counts plus hardware status instead of
   full `/v1/ingest` backlog payloads. Keep `/api/internal/portal/library/ingest/runs` as the only Portal path to

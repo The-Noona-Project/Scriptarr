@@ -9,6 +9,7 @@ import {hasAdminGrant} from "../lib/access.js";
 import {requestJson, useAdminEventStaleness, useAdminJson} from "../lib/api.js";
 import {formatDate, formatEta, formatPercent, formatTransferRate, normalizeString} from "../lib/format.js";
 import {useAdminToast} from "./AdminToasts.jsx";
+import {IngestRunsPanel} from "./IngestRunsPanel.jsx";
 
 const normalizeArray = (value) => Array.isArray(value) ? value : [];
 const ACTIVE_QUEUE_POLL_INTERVAL_MS = 10_000;
@@ -426,6 +427,13 @@ export const QueuePage = ({user}) => {
           <MetricCard label="Active slots" value={`${stats.activeSlots ?? 0}/${stats.totalSlots ?? 0}`} />
         </div>
       </section>
+      <IngestRunsPanel
+        runs={normalizeArray(payload.ingestRuns)}
+        title="AVIF library runs"
+        kicker="Library ingest"
+        includeRecent={false}
+        empty="No durable AVIF ingest runs are active right now."
+      />
       <QueueSection
         title="Running"
         kicker="Live work"

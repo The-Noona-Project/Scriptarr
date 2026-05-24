@@ -1310,14 +1310,74 @@ export const registerMoonV3Routes = (app, {
     || normalizeString(task.details?.kind) === "library-ingest"
     || normalizeString(task.details?.recoveryAction) === "retry-ingest";
 
+  const normalizeIngestRunSummary = (run = {}) => {
+    const counts = normalizeObject(run.counts, {}) || {};
+    const totalTitles = Number.parseInt(String(counts.totalTitles ?? run.totalTitles ?? 0), 10) || 0;
+    const completedTitles = Number.parseInt(String(counts.completedTitles ?? run.completedTitles ?? 0), 10) || 0;
+    const failedTitles = Number.parseInt(String(counts.failedTitles ?? run.failedTitles ?? 0), 10) || 0;
+    const remainingTitles = Number.parseInt(String(counts.remainingTitles ?? run.remainingTitles ?? Math.max(0, totalTitles - completedTitles - failedTitles)), 10) || 0;
+    const percent = Math.max(0, Math.min(100, Number.parseInt(String(run.percent ?? (totalTitles > 0 ? Math.floor(((completedTitles + failedTitles) / totalTitles) * 100) : 0)), 10) || 0));
+    return {
+      runId: normalizeString(run.runId),
+      status: normalizeString(run.status, "queued"),
+      active: run.active === true,
+      requestedBy: normalizeString(run.requestedBy),
+      libraryTypeSlug: normalizeTypeSlug(run.libraryTypeSlug),
+      libraryTypeLabel: normalizeString(run.libraryTypeLabel, normalizeString(run.libraryTypeSlug, "Manga")),
+      format: normalizeString(run.format, "avif"),
+      mode: normalizeString(run.mode, "avif-force-rebuild"),
+      message: normalizeString(run.message),
+      counts: {
+        totalTitles,
+        completedTitles,
+        failedTitles,
+        remainingTitles
+      },
+      percent,
+      etaMinutes: run.etaMinutes == null ? null : Number.parseInt(String(run.etaMinutes), 10) || null,
+      createdAt: parseIso(run.createdAt),
+      startedAt: parseIso(run.startedAt),
+      finishedAt: parseIso(run.finishedAt),
+      updatedAt: parseIso(run.updatedAt)
+    };
+  };
+
+  const normalizeIngestRunList = (runs = []) => normalizeArray(runs)
+    .map(normalizeIngestRunSummary)
+    .filter((run) => normalizeString(run.runId));
+
+  const loadIngestRunSummaries = async (status = "active", requestOptions = {}) => {
+    const query = new URLSearchParams({status}).toString();
+    return normalizeIngestRunList(await fetchRavenJson(`/v1/ingest/runs?${query}`, requestOptions));
+  };
+
+  const normalizeIngestRunGroups = async (payload = {}, requestOptions = {}) => {
+    const runs = normalizeObject(payload.runs, {}) || {};
+    const active = normalizeIngestRunList(runs.active);
+    const recent = normalizeIngestRunList(runs.recent);
+    return {
+      active: active.length ? active : await loadIngestRunSummaries("active", requestOptions).catch(() => []),
+      recent: recent.length ? recent : await loadIngestRunSummaries("recent", requestOptions).catch(() => [])
+    };
+  };
+
   const buildLiveRavenQueuePayload = async () => {
-    const [tasks, runtimeSettings] = await Promise.all([
+    const [tasks, runtimeSettings, ingestRuns] = await Promise.all([
       loadLiveRavenTasks(),
-      readRavenDownloadRuntimeSettings()
+      readRavenDownloadRuntimeSettings(),
+      loadIngestRunSummaries("active").catch(() => [])
     ]);
-    return buildAdminQueuePayload(tasks, {
+    const payload = buildAdminQueuePayload(tasks, {
       concurrency: runtimeSettings.activeTitleDownloads
     });
+    return {
+      ...payload,
+      stats: {
+        ...payload.stats,
+        ingestRunCount: ingestRuns.length
+      },
+      ingestRuns
+    };
   };
 
   const loadTasks = async () => {
@@ -2248,7 +2308,11 @@ export const registerMoonV3Routes = (app, {
   }));
 
   app.get("/api/moon-v3/admin/ingest", requireImportRead(async (_req, res) => {
-    res.json(await fetchRavenJson("/v1/ingest"));
+    const payload = await fetchRavenJson("/v1/ingest");
+    res.json({
+      ...payload,
+      runs: await normalizeIngestRunGroups(payload)
+    });
   }));
 
   app.post("/api/moon-v3/admin/ingest/retry-all", requireImportWrite(async (req, res) => {

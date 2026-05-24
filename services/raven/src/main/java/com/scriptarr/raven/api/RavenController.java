@@ -201,7 +201,9 @@ public class RavenController {
      */
     @GetMapping("/v1/ingest")
     public Map<String, Object> ingestBacklog() {
-        return libraryService.listIngestBacklog();
+        Map<String, Object> payload = new LinkedHashMap<>(libraryService.listIngestBacklog());
+        payload.put("runs", ingestRunService.groupedRunSummaries());
+        return payload;
     }
 
     /**
@@ -212,6 +214,17 @@ public class RavenController {
     @GetMapping("/v1/ingest/tasks")
     public List<Map<String, Object>> ingestTasks() {
         return libraryService.listIngestTasks();
+    }
+
+    /**
+     * List durable AVIF rebuild run summaries without child title tasks.
+     *
+     * @param status active, recent, all, or an exact run status
+     * @return bounded durable run summaries
+     */
+    @GetMapping("/v1/ingest/runs")
+    public List<Map<String, Object>> ingestRuns(@RequestParam(name = "status", required = false) String status) {
+        return ingestRunService.listRunSummaries(status);
     }
 
     /**

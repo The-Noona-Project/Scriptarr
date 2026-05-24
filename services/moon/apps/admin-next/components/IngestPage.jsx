@@ -4,14 +4,17 @@
  * @file Raven reader-page ingest backlog page for Moon admin.
  */
 
-import {useState} from "react";
+import {useEffect, useState} from "react";
 import {hasAdminGrant} from "../lib/access.js";
 import {requestJson, useAdminEventStaleness, useAdminJson} from "../lib/api.js";
 import {formatDate, normalizeString} from "../lib/format.js";
 import {useAdminToast} from "./AdminToasts.jsx";
 import {AdminActionBanner, AdminDenseTable, AdminStatusBadge} from "./AdminUi.jsx";
+import {IngestRunsPanel} from "./IngestRunsPanel.jsx";
 
 const normalizeArray = (value) => Array.isArray(value) ? value : [];
+const ACTIVE_INGEST_POLL_INTERVAL_MS = 10_000;
+const IDLE_INGEST_POLL_INTERVAL_MS = 30_000;
 
 const statusTone = (status) => {
   const normalized = normalizeString(status).toLowerCase();
@@ -44,6 +47,13 @@ export const IngestPage = ({user}) => {
     onStale: () => {},
     onRefresh: refresh
   });
+  const summary = data?.summary || {};
+  const hardware = summary.hardware || {};
+  const titles = normalizeArray(data?.titles);
+  const activeRuns = normalizeArray(data?.runs?.active);
+  const hasActiveRuns = activeRuns.length > 0;
+  const retryableTitleCount = titles.filter((title) => normalizeString(title.ingestStatus, "pending").toLowerCase() !== "ready").length;
+  const retryAllBusy = busyTitleId === "__all__";
 
   const retry = async (titleId) => {
     setBusyTitleId(titleId);
@@ -69,6 +79,17 @@ export const IngestPage = ({user}) => {
     await refresh();
   };
 
+  useEffect(() => {
+    if (busyTitleId || typeof window === "undefined") {
+      return undefined;
+    }
+    const interval = window.setInterval(
+      () => void refresh(),
+      hasActiveRuns ? ACTIVE_INGEST_POLL_INTERVAL_MS : IDLE_INGEST_POLL_INTERVAL_MS
+    );
+    return () => window.clearInterval(interval);
+  }, [busyTitleId, hasActiveRuns, refresh]);
+
   if (loading) {
     return (
       <section className="admin-panel admin-state-panel">
@@ -88,12 +109,6 @@ export const IngestPage = ({user}) => {
       </section>
     );
   }
-
-  const summary = data?.summary || {};
-  const hardware = summary.hardware || {};
-  const titles = normalizeArray(data?.titles);
-  const retryableTitleCount = titles.filter((title) => normalizeString(title.ingestStatus, "pending").toLowerCase() !== "ready").length;
-  const retryAllBusy = busyTitleId === "__all__";
 
   return (
     <div className="queue-page">
@@ -118,6 +133,13 @@ export const IngestPage = ({user}) => {
       {normalizeString(hardware.state) === "hardware_missing" ? (
         <AdminActionBanner tone="bad">NVIDIA runtime access is missing for Raven ingest.</AdminActionBanner>
       ) : null}
+
+      <IngestRunsPanel
+        runs={data?.runs || {}}
+        title="AVIF runs"
+        kicker="Library ingest"
+        empty="No durable AVIF ingest runs are active right now."
+      />
 
       <section className="admin-panel">
         <div className="admin-section-heading">

@@ -308,7 +308,7 @@ const defaultIntakePayload = Object.freeze({
  * Create a small dependency stub for Sage's Raven, Warden, Portal, and Oracle
  * calls so the Moon v3 broker routes can be tested in isolation.
  *
- * @param {{libraryTitles?: Array<Record<string, unknown>>, libraryDelayMs?: number, downloadTasks?: Array<Record<string, unknown>>, downloadTasksStatus?: number, ingestTasks?: Array<Record<string, unknown>>, ingestOverview?: Record<string, unknown>, ingestRunResult?: Record<string, unknown>, importResult?: Record<string, unknown>, downloadRuntimeReloadStatus?: number, syncLinkedRequestOnQueue?: boolean, readerChapterTransientMisses?: Record<string, number>, readerMissingChaptersAsHtml?: boolean, readerPageFetchFails?: boolean, readerPageHangs?: boolean, publicSearchResultCount?: number}} [options]
+ * @param {{libraryTitles?: Array<Record<string, unknown>>, libraryDelayMs?: number, downloadTasks?: Array<Record<string, unknown>>, downloadTasksStatus?: number, ingestTasks?: Array<Record<string, unknown>>, ingestOverview?: Record<string, unknown>, ingestRunSummaries?: Record<string, Array<Record<string, unknown>>>, ingestRunResult?: Record<string, unknown>, importResult?: Record<string, unknown>, downloadRuntimeReloadStatus?: number, syncLinkedRequestOnQueue?: boolean, readerChapterTransientMisses?: Record<string, number>, readerMissingChaptersAsHtml?: boolean, readerPageFetchFails?: boolean, readerPageHangs?: boolean, publicSearchResultCount?: number}} [options]
  * @returns {Promise<{server: http.Server, calls: Record<string, number>}>}
  */
 const createDependencyStub = ({
@@ -318,6 +318,7 @@ const createDependencyStub = ({
   downloadTasksStatus = 200,
   ingestTasks = [],
   ingestOverview = null,
+  ingestRunSummaries = {},
   ingestRunResult = null,
   importResult = null,
   downloadRuntimeReloadStatus = 200,
@@ -359,6 +360,7 @@ const createDependencyStub = ({
     metadataSearchUrls: [],
     ingestTasks: 0,
     ingestOverview: 0,
+    ingestRunSummaries: 0,
     ingestRunCreate: 0,
     ingestRunBodies: [],
     ingestRetry: 0,
@@ -911,6 +913,10 @@ const createDependencyStub = ({
           state: "ready",
           encoder: "ffmpeg/av1_nvenc"
         },
+        runs: {
+          active: ingestRunSummaries.active || [],
+          recent: ingestRunSummaries.recent || []
+        },
         titles: currentLibraryTitles.map((title) => ({
           id: title.id,
           title: title.title,
@@ -921,6 +927,15 @@ const createDependencyStub = ({
           ingestError: title.ingestError || ""
         }))
       }));
+      return;
+    }
+
+    if (request.url?.startsWith("/v1/ingest/runs") && request.method === "GET") {
+      calls.ingestRunSummaries += 1;
+      const url = new URL(request.url, "http://127.0.0.1");
+      const status = url.searchParams.get("status") || "active";
+      response.writeHead(200, {"Content-Type": "application/json"});
+      response.end(JSON.stringify(ingestRunSummaries[status] || []));
       return;
     }
 
@@ -2616,6 +2631,22 @@ test("sage brokers admin import and ingest workflows as separate Raven surfaces"
     ingestOverview: {
       summary: {total: 1, ready: 1, failed: 0, pending: 0},
       hardware: {profile: "nvidia-avif", state: "ready", encoder: "ffmpeg/av1_nvenc"},
+      runs: {
+        active: [{
+          runId: "ingestrun_active",
+          status: "running",
+          active: true,
+          libraryTypeSlug: "webtoon",
+          libraryTypeLabel: "Webtoon",
+          format: "avif",
+          mode: "avif-force-rebuild",
+          counts: {totalTitles: 4, completedTitles: 1, failedTitles: 0, remainingTitles: 3},
+          percent: 25,
+          etaMinutes: 12,
+          updatedAt: "2026-05-24T08:00:00.000Z"
+        }],
+        recent: []
+      },
       titles: [{
         id: "dan-da-dan",
         title: "Dandadan",
@@ -2673,6 +2704,10 @@ test("sage brokers admin import and ingest workflows as separate Raven surfaces"
   const ingestPage = await fetch(`${baseUrl}/api/moon-v3/admin/ingest`, {headers}).then((response) => response.json());
   assert.equal(ingestPage.hardware.state, "ready");
   assert.equal(ingestPage.summary.ready, 1);
+  assert.equal(ingestPage.runs.active[0].runId, "ingestrun_active");
+  assert.equal(ingestPage.runs.active[0].counts.totalTitles, 4);
+  assert.equal(ingestPage.runs.active[0].completedTitleIds, undefined);
+  assert.equal(ingestPage.runs.active[0].tasks, undefined);
 
   const retryResponse = await fetch(`${baseUrl}/api/moon-v3/admin/ingest/dan-da-dan/retry`, {
     method: "POST",
@@ -2798,7 +2833,21 @@ test("sage routes queue retries for ingest tasks without using download removal"
         recoveryAction: "retry-ingest"
       },
       updatedAt: "2026-04-25T00:00:00.000Z"
-    }]
+    }],
+    ingestRunSummaries: {
+      active: [{
+        runId: "ingestrun_queue_visible",
+        status: "running",
+        active: true,
+        libraryTypeSlug: "oel",
+        libraryTypeLabel: "OEL",
+        format: "avif",
+        mode: "avif-force-rebuild",
+        counts: {totalTitles: 13, completedTitles: 5, failedTitles: 0, remainingTitles: 8},
+        percent: 38,
+        updatedAt: "2026-05-24T08:15:00.000Z"
+      }]
+    }
   });
   dependencyStub.server.listen(0);
   const dependencyPort = dependencyStub.server.address().port;
@@ -2823,6 +2872,13 @@ test("sage routes queue retries for ingest tasks without using download removal"
     "Authorization": `Bearer ${ownerClaim.token}`,
     "Content-Type": "application/json"
   };
+
+  const queuePayload = await fetch(`${baseUrl}/api/moon-v3/admin/activity/queue`, {headers}).then((response) => response.json());
+  assert.equal(queuePayload.ingestRuns[0].runId, "ingestrun_queue_visible");
+  assert.equal(queuePayload.ingestRuns[0].counts.totalTitles, 13);
+  assert.equal(queuePayload.stats.ingestRunCount, 1);
+  assert.equal(queuePayload.running.length, 0);
+  assert.equal(queuePayload.needsAttention.length, 2);
 
   const ingestRetry = await fetch(`${baseUrl}/api/moon-v3/admin/activity/queue/raven-ingest-manual-title/retry`, {
     method: "POST",

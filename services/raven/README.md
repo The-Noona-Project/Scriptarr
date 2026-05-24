@@ -133,6 +133,8 @@ for Moon and keeps Missing Content quality fields available for damaged source d
 Raven also accepts `POST /v1/ingest/runs` for Appa/Sage-owned library-type reingest jobs. These jobs rebuild only the
 derived AVIF reader pages from existing canonical CBZ archives, create one durable task per ready title, continue after
 per-title failures, and reuse the active queued or running run id when the same library type is already being rebuilt.
+`GET /v1/ingest/runs` returns bounded active, recent, or all run summaries for admin surfaces without returning every
+child title task, and `/v1/ingest` includes active and recent run summaries alongside the per-title backlog.
 If Raven restarts or loses its broker connection mid-run, startup recovery and duplicate same-type requests reattach the
 durable run, preserve already failed title tasks, and continue unfinished queued or stale-running tasks. Active legacy
 WebP-format runs are marked `superseded` before a new AVIF run is accepted for that type.

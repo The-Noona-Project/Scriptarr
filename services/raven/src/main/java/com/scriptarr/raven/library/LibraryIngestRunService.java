@@ -40,6 +40,11 @@ public final class LibraryIngestRunService {
     private static final String STATUS_SUPERSEDED = "superseded";
     private static final String INGEST_FORMAT = "avif";
     private static final String INGEST_MODE = "avif-force-rebuild";
+    private static final int RECENT_RUN_LIMIT = 6;
+    private static final int MIN_ETA_PERCENT = 1;
+    private static final int MAX_ETA_PERCENT = 99;
+    private static final long MIN_ETA_ELAPSED_MILLIS = 30_000;
+    private static final long MAX_ETA_MILLIS = 7L * 24L * 60L * 60L * 1000L;
     private static final List<String> ALLOWED_TYPE_SLUGS = List.of(
         "manga",
         "manhwa",
@@ -160,6 +165,38 @@ public final class LibraryIngestRunService {
         response.put("finishedAt", stringValue(job.get("finishedAt")));
         response.put("updatedAt", stringValue(job.get("updatedAt")));
         return response;
+    }
+
+    /**
+     * List bounded durable ingest-run summaries for admin surfaces.
+     *
+     * @param statusFilter active, recent, all, or an exact run status
+     * @return summarized durable run rows without child title task payloads
+     */
+    public List<Map<String, Object>> listRunSummaries(String statusFilter) {
+        String filter = firstNonBlank(statusFilter, "active").toLowerCase(Locale.ROOT);
+        List<Map<String, Object>> summaries = loadRunJobs().stream()
+            .filter((job) -> matchesSummaryFilter(job, filter))
+            .map(this::runSummaryRow)
+            .sorted((left, right) -> Long.compare(summaryTimestamp(right), summaryTimestamp(left)))
+            .toList();
+        if ("recent".equals(filter)) {
+            return summaries.stream().limit(RECENT_RUN_LIMIT).toList();
+        }
+        return summaries;
+    }
+
+    /**
+     * Build grouped active and recent ingest-run summaries for the ingest
+     * backlog payload.
+     *
+     * @return grouped durable run summaries
+     */
+    public Map<String, Object> groupedRunSummaries() {
+        return Map.of(
+            "active", listRunSummaries("active"),
+            "recent", listRunSummaries("recent")
+        );
     }
 
     /**
@@ -533,6 +570,114 @@ public final class LibraryIngestRunService {
             normalizeMap(job.get("result")),
             true
         );
+    }
+
+    private boolean matchesSummaryFilter(Map<String, Object> job, String filter) {
+        String status = stringValue(job.get("status")).toLowerCase(Locale.ROOT);
+        if ("all".equals(filter)) {
+            return true;
+        }
+        if ("recent".equals(filter)) {
+            return STATUS_COMPLETED.equals(status)
+                || STATUS_FAILED.equals(status)
+                || STATUS_CANCELLED.equals(status)
+                || STATUS_SUPERSEDED.equals(status);
+        }
+        if ("active".equals(filter)) {
+            return STATUS_QUEUED.equals(status) || STATUS_RUNNING.equals(status);
+        }
+        return filter.equals(status);
+    }
+
+    private Map<String, Object> runSummaryRow(Map<String, Object> job) {
+        Map<String, Object> payload = normalizeMap(job.get("payload"));
+        Map<String, Object> result = normalizeMap(job.get("result"));
+        String runId = stringValue(job.get("jobId"));
+        String status = stringValue(job.get("status"));
+        int totalTitles = Math.max(0, toInt(result.get("totalTitles"), toInt(payload.get("titleCount"), 0)));
+        int completedTitles = Math.max(0, toInt(result.get("completedTitles"), 0));
+        int failedTitles = Math.max(0, toInt(result.get("failedTitles"), 0));
+        int remainingTitles = Math.max(0, toInt(result.get("remainingTitles"), totalTitles - completedTitles - failedTitles));
+        int percent = totalTitles > 0
+            ? Math.max(0, Math.min(100, (int) Math.floor(((completedTitles + failedTitles) / (double) totalTitles) * 100)))
+            : 0;
+        Map<String, Object> counts = new LinkedHashMap<>();
+        counts.put("totalTitles", totalTitles);
+        counts.put("completedTitles", completedTitles);
+        counts.put("failedTitles", failedTitles);
+        counts.put("remainingTitles", remainingTitles);
+
+        Map<String, Object> summary = new LinkedHashMap<>();
+        summary.put("runId", runId);
+        summary.put("status", status);
+        summary.put("active", activeRunIds.contains(runId));
+        summary.put("requestedBy", stringValue(job.get("requestedBy")));
+        summary.put("libraryTypeSlug", stringValue(payload.get("libraryTypeSlug")));
+        summary.put("libraryTypeLabel", firstNonBlank(stringValue(payload.get("libraryTypeLabel")), typeLabelForSlug(stringValue(payload.get("libraryTypeSlug")))));
+        summary.put("format", firstNonBlank(stringValue(payload.get("format")), INGEST_FORMAT));
+        summary.put("mode", firstNonBlank(stringValue(payload.get("mode")), INGEST_MODE));
+        summary.put("message", firstNonBlank(stringValue(job.get("message")), messageForRunStatus(status)));
+        summary.put("counts", counts);
+        summary.put("percent", percent);
+        summary.put("etaMinutes", estimateEtaMinutes(job, percent));
+        summary.put("createdAt", stringValue(job.get("createdAt")));
+        summary.put("startedAt", stringValue(job.get("startedAt")));
+        summary.put("finishedAt", stringValue(job.get("finishedAt")));
+        summary.put("updatedAt", stringValue(job.get("updatedAt")));
+        return summary;
+    }
+
+    private String messageForRunStatus(String status) {
+        String normalized = stringValue(status).toLowerCase(Locale.ROOT);
+        return switch (normalized) {
+            case STATUS_QUEUED -> "Queued AVIF rebuild.";
+            case STATUS_RUNNING -> "Rebuilding AVIF pages.";
+            case STATUS_COMPLETED -> "AVIF rebuild completed.";
+            case STATUS_FAILED -> "AVIF rebuild completed with failed title(s).";
+            case STATUS_CANCELLED -> "AVIF rebuild cancelled.";
+            case STATUS_SUPERSEDED -> "AVIF rebuild superseded.";
+            default -> "AVIF rebuild state updated.";
+        };
+    }
+
+    private Integer estimateEtaMinutes(Map<String, Object> job, int percent) {
+        String status = stringValue(job.get("status")).toLowerCase(Locale.ROOT);
+        if (!STATUS_RUNNING.equals(status) || percent < MIN_ETA_PERCENT || percent > MAX_ETA_PERCENT) {
+            return null;
+        }
+        long startedAt = parseInstantMillis(stringValue(job.get("startedAt")));
+        long now = Instant.now().toEpochMilli();
+        if (startedAt <= 0 || startedAt > now) {
+            return null;
+        }
+        long elapsedMillis = now - startedAt;
+        if (elapsedMillis < MIN_ETA_ELAPSED_MILLIS) {
+            return null;
+        }
+        double estimatedTotalMillis = elapsedMillis / (percent / 100.0);
+        long remainingMillis = Math.round(estimatedTotalMillis - elapsedMillis);
+        if (remainingMillis < 0 || remainingMillis > MAX_ETA_MILLIS) {
+            return null;
+        }
+        return Math.max(1, (int) Math.ceil(remainingMillis / 60000.0));
+    }
+
+    private long summaryTimestamp(Map<String, Object> summary) {
+        return Math.max(
+            parseInstantMillis(stringValue(summary.get("updatedAt"))),
+            Math.max(
+                parseInstantMillis(stringValue(summary.get("finishedAt"))),
+                parseInstantMillis(stringValue(summary.get("createdAt")))
+            )
+        );
+    }
+
+    private long parseInstantMillis(String value) {
+        try {
+            return value.isBlank() ? 0 : Instant.parse(value).toEpochMilli();
+        } catch (RuntimeException ignored) {
+            return 0;
+        }
     }
 
     private Map<String, Object> requireRun(String runId) {

@@ -402,7 +402,9 @@ the Raven downloads mount, confirm title and chapter metadata, and Raven copies 
 `/admin/ingest` is the AVIF backlog and recovery surface. It shows Raven's per-title ingest status, hardware state,
 completion counts, and retry controls. Failed ingest keeps the CBZ in place and appears as retryable work instead of
 making the title readable. Its `Retry all` action starts or reuses durable Raven ingest runs by library type for pending
-or failed titles, so large backlogs move through background workers instead of thousands of browser requests.
+or failed titles, so large backlogs move through background workers instead of thousands of browser requests. The page
+also shows active and recent durable type-run summaries with title counts, progress, and ETA when Raven has enough data,
+without loading every child title task into the browser.
 Appa can also start a type-wide AVIF rebuild from Discord with
 `/ingest type:<manga|manhwa|manhua|webtoon|comic|oel>`. The command previews title count from Raven's compact
 title-card projection plus Raven hardware state,
@@ -443,6 +445,8 @@ refreshes without a manual page reload even when the event stream is degraded. I
 retry, retry-all, cancel, priority changes, and queued-task move up/down actions.
 Section bulk buttons can cancel all queued work, cancel all running work for `activity.root` admins, retry all
 recovery items, or remove all removable recovery items.
+Type-wide AVIF rebuilds appear in a separate library-run panel on the queue page; they are not counted as normal Raven
+title tasks and do not use the title-task retry/remove controls.
 Queued cards intentionally do not show ETA values. Running cards reserve ETA space immediately, show `measuring` while
 Raven gathers enough progress data, then show the active ETA from Sage. Download cards can also show live transfer
 speed when Raven has credible telemetry. `Needs attention` cards can remove failed or stale queued tasks while deleting

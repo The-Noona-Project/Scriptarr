@@ -23,6 +23,7 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -123,6 +124,51 @@ class LibraryIngestRunServiceTest {
 
         assertEquals(created.get("runId"), reused.get("runId"));
         assertEquals(true, reused.get("reused"));
+        transcoder.release.countDown();
+        assertEquals("completed", awaitStatus(runService, String.valueOf(created.get("runId")), "completed").get("status"));
+        runService.shutdown();
+    }
+
+    /**
+     * Verify durable run summaries stay small and separate active runs from
+     * recent terminal runs.
+     *
+     * @param tempDir temporary Raven data root
+     * @throws Exception when the fixture cannot be prepared
+     */
+    @Test
+    void runSummariesExposeBoundedActiveAndRecentRowsWithoutTasks(@TempDir Path tempDir) throws Exception {
+        FakeRavenBrokerClient brokerClient = new FakeRavenBrokerClient();
+        TestLogger logger = new TestLogger(tempDir);
+        BlockingTranscoder transcoder = new BlockingTranscoder();
+        LibraryService libraryService = libraryService(brokerClient, logger, transcoder);
+        recordTitle(libraryService, tempDir, "Waiting Title", "Manga", "001.png");
+        seedIngestRunJob(brokerClient, "ingestrun_recent_failed", "failed", "manhwa", 3, 2, 1);
+        seedIngestRunJob(brokerClient, "ingestrun_recent_done", "completed", "oel", 2, 2, 0);
+        LibraryIngestRunService runService = new LibraryIngestRunService(libraryService, brokerClient, logger);
+
+        Map<String, Object> created = runService.createRun(Map.of("libraryTypeSlug", "manga"));
+        assertTrue(transcoder.started.await(2, TimeUnit.SECONDS));
+
+        List<Map<String, Object>> active = runService.listRunSummaries("active");
+        Map<String, Object> activeRun = active.stream()
+            .filter((run) -> created.get("runId").equals(run.get("runId")))
+            .findFirst()
+            .orElseThrow();
+        assertEquals("running", activeRun.get("status"));
+        assertEquals(true, activeRun.get("active"));
+        assertEquals("manga", activeRun.get("libraryTypeSlug"));
+        assertEquals("avif", activeRun.get("format"));
+        assertEquals(1, map(activeRun.get("counts")).get("totalTitles"));
+        assertFalse(activeRun.containsKey("tasks"));
+        assertFalse(activeRun.containsKey("completedTitleIds"));
+        assertFalse(activeRun.containsKey("failedTitleIds"));
+
+        List<Map<String, Object>> recent = runService.listRunSummaries("recent");
+        List<String> recentRunIds = recent.stream().map((run) -> String.valueOf(run.get("runId"))).toList();
+        assertTrue(recentRunIds.containsAll(List.of("ingestrun_recent_done", "ingestrun_recent_failed")));
+        assertTrue(recent.stream().noneMatch((run) -> run.containsKey("tasks")));
+
         transcoder.release.countDown();
         assertEquals("completed", awaitStatus(runService, String.valueOf(created.get("runId")), "completed").get("status"));
         runService.shutdown();

@@ -260,6 +260,9 @@
 - `/admin/activity/queue` is now the live Raven queue board. Keep it card-based, split into `Running`, `Queued`, and
   `Needs attention`, subscribe through the shared admin SSE stream, and re-fetch the queue payload on relevant events
   instead of trying to hand-reconcile every raw event in the browser.
+- Keep durable AVIF type runs separate from Raven title-task cards. `/admin/activity/queue` may show active type-run
+  summaries in a dedicated panel, and `/admin/ingest` should show active or recent type-run summaries above backlog
+  rows, but type runs must not receive title-task retry, remove, priority, or cancel controls.
 - Keep `Needs attention` recovery-only. Do not let unrelated admin or system events such as service restarts leak into
   that section.
 - Preserve the interaction lock around queue controls so SSE refreshes do not collapse the priority select or destroy

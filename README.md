@@ -101,7 +101,8 @@ series are not silently dropped from the calendar.
 Raven keeps CBZ chapters canonical under `downloaded/<type>/...` and now requires an AVIF ingest pass into
 `ingested/<type>/<titleId>/<chapterId>/` before reader pages become available. Moon admin keeps manual CBZ import at
 `/admin/import` and AVIF ingest backlog or retries at `/admin/ingest`; `/admin/library` links directly to both tools
-and can retry ingest for titles that are not reader-ready.
+and can retry ingest for titles that are not reader-ready. `/admin/ingest` and `/admin/activity/queue` also show
+bounded durable AVIF type-run summaries so large background rebuilds are visible without loading every child title task.
 Moon admin also exposes `/admin/system/api` for trusted automation settings, system-level API keys with assigned
 permission groups, personal-key audit, and same-origin Swagger or OpenAPI links. Signed-in readers can create their
 own user-level API keys from `/profile` when they want external readers or trackers to sync only their account data.
