@@ -81,8 +81,10 @@ export const AdminShell = ({children}) => {
     document.title = `${route.title} - ${siteName} Admin`;
   }, [route.title, siteName]);
 
+  const sessionDelayed = Boolean(chrome.authError || chrome.bootstrapError);
+
   if (chrome.loading || !chrome.user) {
-    return <AdminAuthResolvingSurface label={chrome.authError ? "Session check is delayed." : chrome.loading ? "Checking admin session." : "Opening login."} />;
+    return <AdminAuthResolvingSurface label={sessionDelayed ? "Session check is delayed. Retrying." : chrome.loading ? "Checking admin session." : "Opening login."} />;
   }
 
   return (
@@ -121,6 +123,7 @@ export const AdminShell = ({children}) => {
             <p>{route.description}</p>
           </div>
           <div className="admin-topbar-actions">
+            {sessionDelayed ? <span className="admin-badge warning" role="status">Session retrying</span> : null}
             <IdentityCard user={chrome.user} />
             <a className="admin-button ghost" href="/">Open user app</a>
           </div>

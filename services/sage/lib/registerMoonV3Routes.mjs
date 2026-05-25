@@ -819,22 +819,11 @@ export const registerMoonV3Routes = (app, {
     };
   };
 
-  const toQueryString = (query = {}) => {
-    const params = new URLSearchParams();
-    for (const [key, value] of Object.entries(query || {})) {
-      if (value != null && normalizeString(value)) {
-        params.set(key, String(value));
-      }
-    }
-    return params.toString();
-  };
-
   const loadLibraryCardPage = async (query = {}) => {
-    const params = toQueryString({
+    const payload = await vaultClient.listRavenTitleCards({
       ...query,
       view: "card"
     });
-    const payload = await fetchRavenJson(`/v1/library${params ? `?${params}` : "?view=card"}`);
     const normalizedPayload = normalizeObject(payload, {}) || {};
     const titles = normalizeArray(payload?.titles).map(toTitleCardSummary);
     return {
@@ -4979,9 +4968,8 @@ export const registerMoonV3Routes = (app, {
   }));
 
   app.get("/api/moon-v3/user/home", withUser(requireUser, async (req, res) => {
-      const [cardPage, requests, userInputs] = await Promise.all([
+      const [cardPage, userInputs] = await Promise.all([
         loadLibraryCardPageForUser({pageSize: 100, sort: "recent"}, req.user.discordUserId),
-        loadRequests(),
         loadUserStateInputs(req.user.discordUserId)
       ]);
       const activityIds = collectUserActivityTitleIds(userInputs);
@@ -4991,7 +4979,7 @@ export const registerMoonV3Routes = (app, {
 
     res.json(buildMoonHomePayload({
       titles: recentLibrary.titles.length ? recentLibrary.titles : cardPage.titles,
-      requests,
+      requests: [],
       bookshelf: activityLibrary.bookshelf,
       following: activityLibrary.following,
       discordUserId: req.user.discordUserId,

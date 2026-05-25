@@ -1535,6 +1535,15 @@ const signInViaDiscord = async (baseUrl, query = "") => {
   return fetch(`${baseUrl}/api/auth/discord/callback?code=test-oauth-code&state=${encodeURIComponent(state)}`).then((response) => response.json());
 };
 
+const seedVaultRavenTitle = async (vaultPort, title) => fetch(`http://127.0.0.1:${vaultPort}/api/service/raven/titles/${encodeURIComponent(title.id)}`, {
+  method: "PUT",
+  headers: {
+    "Content-Type": "application/json",
+    "Authorization": "Bearer vault-dev-token"
+  },
+  body: JSON.stringify(title)
+});
+
 test.afterEach(() => {
   restoreFetch();
 });
@@ -2105,17 +2114,11 @@ test("sage signs in the first owner through the Discord callback and moderates r
       "Authorization": `Bearer ${ownerClaim.token}`
     }
   }).then((response) => response.json());
+  const libraryCardCallsAfterFullLibrary = dependencyStub.calls.libraryCard;
 
   assert.equal(moonLibrary.titles[0].title, ownerSmokeLibraryTitle.title);
 
-  await fetch(`http://127.0.0.1:${vaultPort}/api/service/raven/titles/${ownerSmokeLibraryTitle.id}`, {
-    method: "PUT",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": "Bearer vault-dev-token"
-    },
-    body: JSON.stringify(ownerSmokeLibraryTitle)
-  });
+  await seedVaultRavenTitle(vaultPort, ownerSmokeLibraryTitle);
   await fetch(`http://127.0.0.1:${vaultPort}/api/service/progress`, {
     method: "POST",
     headers: {
@@ -2148,7 +2151,7 @@ test("sage signs in the first owner through the Discord callback and moderates r
   assert.equal(moonCardLibrary.titles[0].readerTarget.pageIndex, 8);
   assert.equal(moonCardLibrary.pageInfo.pageSize, 1);
   assert.equal(dependencyStub.calls.library, 0);
-  assert.equal(dependencyStub.calls.libraryCard >= 1, true);
+  assert.equal(dependencyStub.calls.libraryCard, libraryCardCallsAfterFullLibrary);
 
   const overview = await fetch(`${baseUrl}/api/moon-v3/admin/overview`, {
     headers: {
@@ -2421,6 +2424,7 @@ test("sage keeps Moon card routes available when Vault reader targets fail", asy
     const headers = {
       "Authorization": `Bearer ${ownerClaim.token}`
     };
+    await seedVaultRavenTitle(vaultPort, ownerSmokeLibraryTitle);
 
     const homeResponse = await fetch(`${baseUrl}/api/moon-v3/user/home`, {headers});
     const home = await homeResponse.json();

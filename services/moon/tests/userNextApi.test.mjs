@@ -89,11 +89,7 @@ test("login return and prep helpers keep post-login cache warming allowlisted", 
   assert.equal(normalizeLoginReturnTo("/api/moon-v3/user/api-keys"), "/");
   assert.equal(normalizeLoginReturnTo("/_next/static/app.js"), "/");
 
-  assert.deepEqual(resolvePostLoginPrepUrls("/admin/system/api"), [
-    "/api/moon-v3/user/home",
-    "/api/moon-v3/user/library?view=card&pageSize=1",
-    "/api/moon-v3/user/library?view=card&pageSize=72"
-  ]);
+  assert.deepEqual(resolvePostLoginPrepUrls("/admin/system/api"), []);
   assert.deepEqual(resolvePostLoginPrepUrls("/reader/webtoon/title/chapter"), [
     "/api/moon-v3/user/home",
     "/api/moon-v3/user/library?view=card&pageSize=1",

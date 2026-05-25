@@ -227,16 +227,17 @@ Architecture invariants:
   Keep browser traffic same-origin through Moon -> Sage, keep task jobs allowlisted, make Status load the lightweight
   registry first and probe GET/read endpoints only from its explicit check action, and keep Oracle/LocalAI settings
   plus Sage-governed AI tool proposals under `/admin/system/ai`.
-- Moon home shelves and the unified `/library` catalogue should use Raven's compact card projection through Sage. Do
-  not load full Raven title/chapter arrays for card lists; hydrate full titles only for title/detail/reader flows or
-  exact continue-reading ids.
+- Moon home shelves and the unified `/library` catalogue should use Sage's Vault-backed compact card projection. Do
+  not route card lists through Raven just to bounce back to Sage/Vault, and do not load full title/chapter arrays for
+  card lists; hydrate full titles only for title/detail/reader flows or exact continue-reading ids.
 - Card links are intentionally split: cover/art opens the best reader URL from `readerTarget`, and title/copy opens the
   canonical title page. Keep this accessible-link split in browse, library, and home shelf cards.
 - Moon chrome should collapse branding, auth, user identity, and first-owner bootstrap into
   `/api/moon/chrome/bootstrap`. Signed-out HTML navigations should redirect to `/login?returnTo=...`, where the
   standalone login page renders the local `/api/moon/auth/discord/start?returnTo=...` href immediately, keep
   `/api/moon/auth/discord/url` as JSON compatibility, and let the collapsed bootstrap subcalls degrade independently
-  under short Moon proxy timeouts.
+  under short Moon proxy timeouts. Auth-broker delays should preserve already-known signed-in chrome, retry with
+  bounded backoff, and avoid converting temporary 5xx auth checks into forced logout or admin redirects.
   OAuth callbacks must stay bound to the short-lived browser state cookie.
 - Moon Settings and Status should paint saved or registry payloads first, then hydrate runtime-only data from
   `/api/moon-v3/admin/settings/runtime` and `/api/moon-v3/admin/system/status/runtime`.

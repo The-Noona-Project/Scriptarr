@@ -67,12 +67,12 @@ export const AdminPageRouter = ({pathname}) => {
     );
   }
 
-  if (chrome.authError) {
+  if ((chrome.authError || chrome.bootstrapError) && !chrome.user) {
     return (
       <section className="admin-panel admin-state-panel is-danger">
         <div className="admin-kicker">Session</div>
         <h2>Admin session unavailable</h2>
-        <p>{chrome.authError}</p>
+        <p>{chrome.authError || chrome.bootstrapError}</p>
       </section>
     );
   }

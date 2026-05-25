@@ -21,9 +21,10 @@ export const LoginPageClient = ({returnTo = "/", prepare = false}) => {
   const router = useRouter();
   const {auth, branding, loaded} = useMoonChrome();
   const targetPath = useMemo(() => normalizeLoginReturnTo(returnTo), [returnTo]);
+  const shouldPrepare = prepare && !(targetPath === "/admin" || targetPath.startsWith("/admin/"));
   const loginHref = useMemo(() => buildMoonDiscordLoginStartHref(targetPath), [targetPath]);
   const redirectedRef = useRef(false);
-  const [prepState, setPrepState] = useState(prepare ? "waiting" : "ready");
+  const [prepState, setPrepState] = useState(shouldPrepare ? "waiting" : "ready");
   const siteName = branding?.siteName || "Scriptarr";
 
   useEffect(() => {
@@ -32,7 +33,7 @@ export const LoginPageClient = ({returnTo = "/", prepare = false}) => {
     }
 
     redirectedRef.current = true;
-    if (!prepare) {
+    if (!shouldPrepare) {
       router.replace(targetPath);
       return undefined;
     }
@@ -59,10 +60,10 @@ export const LoginPageClient = ({returnTo = "/", prepare = false}) => {
       active = false;
       window.clearTimeout(cap);
     };
-  }, [auth, loaded, prepare, router, targetPath]);
+  }, [auth, loaded, router, shouldPrepare, targetPath]);
 
   const signedIn = Boolean(auth);
-  const preparing = signedIn && prepare && ["waiting", "preparing"].includes(prepState);
+  const preparing = signedIn && shouldPrepare && ["waiting", "preparing"].includes(prepState);
 
   return (
     <section className="moon-login-page" aria-labelledby="moon-login-title">

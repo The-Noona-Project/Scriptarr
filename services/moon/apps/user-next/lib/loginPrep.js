@@ -76,6 +76,9 @@ export const resolvePostLoginPrepUserKey = (user) =>
  */
 export const resolvePostLoginPrepUrls = (returnTo = "/") => {
   const parsed = parseReturnTo(returnTo);
+  if (parsed.pathname === "/admin" || parsed.pathname.startsWith("/admin/")) {
+    return [];
+  }
   const urls = [
     HOME_PREP_URL,
     LIBRARY_COUNTS_PREP_URL,

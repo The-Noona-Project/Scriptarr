@@ -4087,12 +4087,7 @@ const createMysqlStore = (config) => {
         cover_accent, summary, release_label, chapter_count, chapters_downloaded, author_name,
         tags_json, aliases_json, metadata_provider, metadata_matched_at, source_url, cover_url,
         quality_status, clean_chapter_count, partial_chapter_count, missing_content_count, quality_summary,
-        ingest_status, ingested_chapter_count, ingest_error, updated_at,
-        (SELECT COUNT(*) FROM raven_chapters rc WHERE rc.title_id = raven_titles.title_id) AS current_chapter_rows,
-        (SELECT COUNT(*) FROM raven_chapters rc WHERE rc.title_id = raven_titles.title_id AND rc.ingest_status = 'ready' AND LOWER(COALESCE(rc.ingest_revision, '')) LIKE '${RAVEN_READER_REVISION_PREFIX}%') AS current_ready_chapter_count,
-        (SELECT COUNT(*) FROM raven_chapters rc WHERE rc.title_id = raven_titles.title_id AND rc.ingest_status = 'failed') AS current_failed_chapter_count,
-        (SELECT COUNT(*) FROM raven_chapters rc WHERE rc.title_id = raven_titles.title_id AND rc.ingest_status = 'running') AS current_running_chapter_count,
-        (SELECT rc.ingest_error FROM raven_chapters rc WHERE rc.title_id = raven_titles.title_id AND rc.ingest_status = 'failed' AND COALESCE(rc.ingest_error, '') <> '' ORDER BY rc.updated_at DESC LIMIT 1) AS current_ingest_error
+        ingest_status, ingested_chapter_count, ingest_error, updated_at
       `;
       const toTitleCardRow = (row) => {
         const currentChapterRows = Number.parseInt(String(row.current_chapter_rows || 0), 10) || 0;
@@ -4169,7 +4164,55 @@ const createMysqlStore = (config) => {
         FROM raven_titles
         ${baseWhereSql}
       `, whereParams);
-      return buildRavenTitleCardPage(titleRows.map(toTitleCardRow), {
+      const titleIds = Array.from(new Set(titleRows.map((row) => normalizeScalarString(row.title_id)).filter(Boolean)));
+      const chapterStatsByTitleId = new Map();
+      const latestErrorByTitleId = new Map();
+      if (titleIds.length) {
+        const titlePlaceholders = titleIds.map(() => "?").join(", ");
+        const [chapterStatsRows] = await pool.query(`
+          SELECT title_id,
+            COUNT(*) AS current_chapter_rows,
+            SUM(CASE WHEN ingest_status = 'ready' AND LOWER(COALESCE(ingest_revision, '')) LIKE ? THEN 1 ELSE 0 END) AS current_ready_chapter_count,
+            SUM(CASE WHEN ingest_status = 'failed' THEN 1 ELSE 0 END) AS current_failed_chapter_count,
+            SUM(CASE WHEN ingest_status = 'running' THEN 1 ELSE 0 END) AS current_running_chapter_count
+          FROM raven_chapters
+          WHERE title_id IN (${titlePlaceholders})
+          GROUP BY title_id
+        `, [`${RAVEN_READER_REVISION_PREFIX}%`, ...titleIds]);
+        for (const row of chapterStatsRows) {
+          chapterStatsByTitleId.set(normalizeScalarString(row.title_id), row);
+        }
+        const [latestErrorRows] = await pool.query(`
+          SELECT rc.title_id, rc.ingest_error
+          FROM raven_chapters rc
+          INNER JOIN (
+            SELECT title_id, MAX(updated_at) AS latest_updated_at
+            FROM raven_chapters
+            WHERE title_id IN (${titlePlaceholders})
+              AND ingest_status = 'failed'
+              AND COALESCE(ingest_error, '') <> ''
+            GROUP BY title_id
+          ) latest ON latest.title_id = rc.title_id AND latest.latest_updated_at = rc.updated_at
+          WHERE rc.ingest_status = 'failed'
+            AND COALESCE(rc.ingest_error, '') <> ''
+          ORDER BY rc.updated_at DESC
+        `, titleIds);
+        for (const row of latestErrorRows) {
+          const titleId = normalizeScalarString(row.title_id);
+          if (!latestErrorByTitleId.has(titleId)) {
+            latestErrorByTitleId.set(titleId, row.ingest_error);
+          }
+        }
+      }
+      const rowsWithChapterStats = titleRows.map((row) => {
+        const titleId = normalizeScalarString(row.title_id);
+        return {
+          ...row,
+          ...(chapterStatsByTitleId.get(titleId) || {}),
+          current_ingest_error: latestErrorByTitleId.get(titleId) || ""
+        };
+      });
+      return buildRavenTitleCardPage(rowsWithChapterStats.map(toTitleCardRow), {
         ...query,
         ids: resolvedExactIds.length ? resolvedExactIds : exactIds
       });

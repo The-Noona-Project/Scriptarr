@@ -8,6 +8,7 @@ import {proxyRequest, proxyStream} from "./proxy.mjs";
 
 const COVER_CACHE_MAX_BYTES = 8 * 1024 * 1024;
 const COVER_CACHE_TIMEOUT_MS = 10_000;
+const DEFAULT_JSON_PROXY_TIMEOUT_MS = 15_000;
 const COVER_CACHE_CONTENT_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 const READER_PAGE_CACHE_MAX_BYTES = 32 * 1024 * 1024;
 const READER_PAGE_CACHE_MAX_TOTAL_BYTES = 1024 * 1024 * 1024;
@@ -72,6 +73,13 @@ const safeCacheToken = (value, limit = 120) => String(value || "")
 const safeInteger = (value, fallback = 0) => {
   const parsed = Number.parseInt(String(value), 10);
   return Number.isFinite(parsed) ? parsed : fallback;
+};
+
+const resolveJsonProxyTimeoutMs = () => {
+  const parsed = Number.parseInt(process.env.SCRIPTARR_MOON_V3_JSON_PROXY_TIMEOUT_MS || "", 10);
+  return Number.isFinite(parsed) && parsed > 0
+    ? parsed
+    : DEFAULT_JSON_PROXY_TIMEOUT_MS;
 };
 
 const sanitizeReaderPageStatusPayload = (payload, {cacheFiles = null, cached = null} = {}) => ({
@@ -394,6 +402,7 @@ const forwardResponseHeaders = (res, headers = {}, {stream = false} = {}) => {
  * @returns {void}
  */
 export const registerMoonV3ProxyRoutes = (app, {config, getSessionToken, logger}) => {
+  const jsonProxyTimeoutMs = resolveJsonProxyTimeoutMs();
   const forwardedHeaders = (req) => ({
     ...(req.headers.accept ? {"Accept": req.headers.accept} : {}),
     ...(req.get("X-Scriptarr-Api-Key") ? {"X-Scriptarr-Api-Key": req.get("X-Scriptarr-Api-Key")} : {})
@@ -477,7 +486,8 @@ export const registerMoonV3ProxyRoutes = (app, {config, getSessionToken, logger}
         path: `/api/moon-v3/${targetPath}${query ? `?${query}` : ""}`,
         method: req.method,
         sessionToken: getSessionToken(req),
-        headers: forwardedHeaders(req)
+        headers: forwardedHeaders(req),
+        signal: AbortSignal.timeout(jsonProxyTimeoutMs)
       });
       const responseBody = Buffer.isBuffer(response.body) ? response.body.toString("utf8") : String(response.body || "");
       const contentType = response.headers["content-type"] || "application/json; charset=utf-8";
@@ -512,7 +522,8 @@ export const registerMoonV3ProxyRoutes = (app, {config, getSessionToken, logger}
       method: req.method,
       body: ["GET", "HEAD"].includes(req.method) ? undefined : req.body,
       sessionToken: getSessionToken(req),
-      headers: forwardedHeaders(req)
+      headers: forwardedHeaders(req),
+      signal: AbortSignal.timeout(jsonProxyTimeoutMs)
     });
 
     const contentType = response.headers["content-type"] || "application/json; charset=utf-8";

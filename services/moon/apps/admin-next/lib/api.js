@@ -304,15 +304,30 @@ export const AdminEventStreamProvider = ({children, user}) => {
       notifySubscribers({domain: "", eventType: "stream-degraded"});
     };
 
+    const startPollingFallback = () => {
+      setState("degraded");
+      markAllSubscribersStale();
+      if (!poller) {
+        poller = window.setInterval(markAllSubscribersStale, 15000);
+      }
+    };
+
     const openStream = async () => {
       setState("connecting");
       let afterSequence = 0;
-      const latest = await requestJson(`/api/moon/v3/admin/events?${[...domainParams, "limit=1", "newestFirst=true"].join("&")}`);
+      const controller = new AbortController();
+      const preflightTimeout = window.setTimeout(() => controller.abort(), 2000);
+      const latest = await requestJson(`/api/moon/v3/admin/events?${[...domainParams, "limit=1", "newestFirst=true"].join("&")}`, {
+        signal: controller.signal
+      });
+      window.clearTimeout(preflightTimeout);
       if (cancelled) {
         return;
       }
       if (latest.ok) {
         afterSequence = sequenceFromEvent(latest.payload?.events?.[0]);
+      } else {
+        startPollingFallback();
       }
       const query = [
         ...domainParams,
@@ -334,10 +349,7 @@ export const AdminEventStreamProvider = ({children, user}) => {
         }
       });
       stream.addEventListener("error", () => {
-        setState("degraded");
-        if (!poller) {
-          poller = window.setInterval(markAllSubscribersStale, 15000);
-        }
+        startPollingFallback();
       });
     };
 

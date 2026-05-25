@@ -62,13 +62,15 @@ Chrome startup uses `/api/moon/chrome/bootstrap?returnTo=...` to collapse brandi
 first-owner bootstrap into one same-origin call. The user, reader, and admin shells treat protected routes as
 auth-gated after chrome resolves; signed-out shells replace the current location with `/login?returnTo=...` instead of
 rendering protected navigation or page-level sign-in cards. If the auth broker is temporarily unavailable, shells hold a
-small session-check-delayed state instead of forcing another login. The older JSON
+small session-check-delayed state instead of forcing another login, retry chrome bootstrap with bounded backoff, and
+preserve already-known signed-in chrome so navigation stays usable during transient Sage or Vault delays. The older JSON
 `/api/moon/auth/discord/url?returnTo=...` route remains available for compatibility. Chrome bootstrap broker calls use
 short per-call timeouts so branding, auth, and first-owner status can degrade independently instead of one slow broker
-blocking the whole shell.
+blocking the whole shell; direct auth-status broker reads are timeout-bounded too.
 The post-login prep pass writes only the existing allowlisted browser-local JSON cache entries: home, compact library
-count/cards, exact library or browse card queries, and profile data for profile returns. It never preloads admin data,
-API-key payloads, reader page/image data, request mutations, title detail, or internal service URLs.
+count/cards, exact library or browse card queries, and profile data for profile returns. It skips admin return targets
+entirely and never preloads admin data, API-key payloads, reader page/image data, request mutations, title detail, or
+internal service URLs.
 The catalogue keeps a quick-jump index rail on the left, tighter search against titles, aliases, types, and tags, a
 remembered Grid/Rows view toggle, and paged InfiniteScroll with a manual fallback button. The home route is
 intentionally simpler too: it starts with a personalized "Your Bookshelf" continue-reading shelf, then stacks cover-led
@@ -188,6 +190,8 @@ The service worker does not cache protected or personalized HTML navigations. It
 the bounded revisioned reader page/chunk cache only.
 Moon's admin event history now comes from the shared Vault-backed durable event log, and the admin SPA subscribes to
 same-origin `/api/moon-v3/admin/events*` feeds for live updates instead of page-specific ad hoc polling.
+The shared admin event provider bounds its latest-event preflight before opening SSE; if that startup read or the
+stream itself fails, subscribers are marked stale and the visible polling fallback refresh path starts immediately.
 The admin System pages for Logs, Events, and Updates are now purpose-built Next surfaces rather than generic record
 cards. Logs use Warden's server-redacted Docker tail through Sage, Events expose durable Vault filters, reader
 telemetry hotspots, and a detail drawer, and Updates restore check/install controls with typed confirmation for

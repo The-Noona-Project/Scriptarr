@@ -43,6 +43,7 @@ const IMAGE_WARM_ERROR_TTL_MS = 60_000;
 const DEFAULT_PRELOAD_CONFIG = resolveReaderPreloadConfig();
 const PAGE_FITS = ["width", "height", "contain"];
 const DIRECTIONS = ["ltr", "rtl"];
+const CHROME_RETRY_DELAYS_MS = [1000, 2500, 5000, 10000];
 
 const normalizeLayoutMode = (value) => ["single", "double", "manga-double", "webtoon"].includes(value) ? value : "webtoon";
 const pagesPerStep = (layoutMode) => layoutMode === "double" || layoutMode === "manga-double" ? 2 : 1;
@@ -52,6 +53,18 @@ const cssEscape = (value) => globalThis.CSS?.escape?.(String(value)) || String(v
 
 const sessionUrlFor = (titleId, chapterId) =>
   `/api/moon-v3/user/reader/title/${encodeURIComponent(titleId)}/chapter/${encodeURIComponent(chapterId)}/session`;
+
+const mergeReaderChromeResult = (current, nextValue) => {
+  const auth = nextValue.auth || (nextValue.authError ? current.auth : null);
+  return {
+    ...current,
+    ...nextValue,
+    auth,
+    branding: nextValue.branding || current.branding,
+    loginUrl: auth ? "" : nextValue.loginUrl || current.loginUrl,
+    loaded: true
+  };
+};
 
 const pagesUrlFor = (titleId, chapterId, {cursor = 0, pageSize = PAGE_CHUNK_SIZE, rev = ""} = {}) => {
   const params = new URLSearchParams({
@@ -225,6 +238,7 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = "", initialSessi
   const activeWebtoonPageRef = useRef({chapterId: bootChapterId, pageIndex: 0});
   const bootPagesPendingRef = useRef(bootPageState.size > 0);
   const loginRedirectingRef = useRef(false);
+  const chromeRetryCountRef = useRef(0);
 
   const title = initialSession?.title || null;
   const isPaged = layoutMode !== "webtoon";
@@ -558,7 +572,10 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = "", initialSessi
       if (!active) {
         return;
       }
-      setChrome((current) => ({...current, ...nextValue}));
+      if (!nextValue.authError) {
+        chromeRetryCountRef.current = 0;
+      }
+      setChrome((current) => mergeReaderChromeResult(current, nextValue));
       if (!nextValue.auth && !nextValue.authError) {
         void loadMoonLoginUrl(returnTo).then((loginUrl) => {
           if (active && loginUrl) {
@@ -571,6 +588,39 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = "", initialSessi
       active = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !chrome.loaded || !chrome.authError) {
+      return undefined;
+    }
+    let cancelled = false;
+    let timer = 0;
+    const retryChrome = () => {
+      const returnTo = `${window.location.pathname}${window.location.search}`;
+      void loadMoonChromeContext(returnTo).then((nextValue) => {
+        if (cancelled) {
+          return;
+        }
+        if (!nextValue.authError) {
+          chromeRetryCountRef.current = 0;
+        }
+        setChrome((current) => mergeReaderChromeResult(current, nextValue));
+        if (nextValue.authError) {
+          scheduleRetry();
+        }
+      });
+    };
+    const scheduleRetry = () => {
+      const delay = CHROME_RETRY_DELAYS_MS[Math.min(chromeRetryCountRef.current, CHROME_RETRY_DELAYS_MS.length - 1)];
+      chromeRetryCountRef.current += 1;
+      timer = window.setTimeout(retryChrome, delay);
+    };
+    scheduleRetry();
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [chrome.authError, chrome.loaded]);
 
   useEffect(() => {
     if (typeof window === "undefined" || loginRedirectingRef.current) {
@@ -1142,7 +1192,7 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = "", initialSessi
     return (
       <main className="reader-app">
         <div className="reader-empty-panel">
-          <p>Session check is delayed.</p>
+          <p>Session check is delayed. Retrying.</p>
           <a href={loginHref}>Open login</a>
         </div>
       </main>

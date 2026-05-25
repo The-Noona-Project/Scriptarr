@@ -61,9 +61,10 @@
   redirects never trap assets or broker calls. The user, reader, and admin client shells should enforce the same rule
   after chrome auth resolves, rendering only a minimal transition while replacing confirmed signed-out protected routes
   with `/login`. If chrome bootstrap reports a degraded auth-broker read, hold a session-check-delayed state instead
-  of forcing another login.
+  of forcing another login, keep any already-known signed-in chrome visible, and retry bootstrap with bounded backoff.
 - `/login` is the system front door. It must render without waiting for chrome/bootstrap, use the same-origin Discord
-  start route, run only the bounded allowlisted post-login prep when `prepare=1`, and always expose a continue action.
+  start route, run only the bounded allowlisted post-login prep when `prepare=1` for user/profile targets, skip prep for
+  admin return targets, and always expose a continue action.
 - Keep HTML responses uncached and static admin or user assets versioned so publishes invalidate the browser cache
   without relying on manual hard refreshes.
 - User and admin chrome should start from `/api/moon/chrome/bootstrap?returnTo=...`, which returns branding, auth,
@@ -72,7 +73,8 @@
   `/api/moon/auth/discord/start?returnTo=...` href immediately. That Moon route sets the OAuth state cookie and
   redirects to Discord. Keep `/api/moon/auth/discord/url?returnTo=...` available as the JSON compatibility endpoint,
   and keep chrome bootstrap broker calls independently timeout-bounded so a slow branding, auth, or first-owner-status
-  response does not block the whole shell.
+  response does not block the whole shell. Do not turn temporary Sage/Vault 5xx auth checks into signed-out redirects
+  or admin access redirects.
 - Keep the user app installable. `manifest.webmanifest` and `/service-worker.js` are Moon-owned routes, and the
   service worker must not cache protected or personalized HTML as `/`. Cache versioned static assets and successful
   revisioned reader page assets only.
@@ -117,7 +119,8 @@
   continue-reading scroller first, then recent-by-type shelves and tag-driven shelves built from explicit tag
   likes/dislikes plus inferred taste from read history, follows, and the active bookshelf.
 - Browse and library shelves should use `/api/moon-v3/user/library?view=card` with server-side filtering and pagination
-  instead of pulling full title details. User title pages should use the split summary, paged chapters, and lazy
+  instead of pulling full title details. Sage should serve those card pages from Vault's compact card projection rather
+  than looping through Raven and back into Sage/Vault. User title pages should use the split summary, paged chapters, and lazy
   requests routes instead of the compatibility full-title payload; reader routes should use the split session and
   page-metadata routes instead of loading full chapter manifests up front. Home shelves should stay bounded to compact card reads and hydrate full titles only for exact
   continue-reading, read-state, or following ids. Use the compact exact-id card projection (`view=card&ids=...`) for
@@ -127,7 +130,8 @@
   keep auth, cookies, API keys, requests mutations, title detail, reader state, and admin data live-only.
 - The post-login prep helper may warm only safe signed-in user payloads: home, library type counts, default compact
   library cards, the exact returned library/browse card URL, and profile only when returning to profile. It must skip
-  admin data, API keys, request mutations, title detail, reader pages, image data, and direct internal service URLs.
+  admin return targets, admin data, API keys, request mutations, title detail, reader pages, image data, and direct
+  internal service URLs.
 - `/library` is the canonical catalogue route. `/browse` and `/library/:type` should feed the same catalogue client and
   settle into `/library` URL state. Use `q`, `type`, `letter`, `view`, and `pageSize`, debounce URL replacement, keep
   previously loaded cards or rows visible while new results refresh, remember the user's grid/row view locally, and

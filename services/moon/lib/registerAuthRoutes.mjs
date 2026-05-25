@@ -2,7 +2,8 @@ import {parseCookies, serializeCookie} from "./cookies.mjs";
 import {proxyJson} from "./proxy.mjs";
 import {canAccessAdmin as canAccessMoonAdmin} from "@scriptarr/access";
 
-const DEFAULT_CHROME_BOOTSTRAP_PROXY_TIMEOUT_MS = 1500;
+const DEFAULT_CHROME_BOOTSTRAP_PROXY_TIMEOUT_MS = 3000;
+const DEFAULT_AUTH_STATUS_PROXY_TIMEOUT_MS = 5000;
 
 /**
  * Serialize the current request query object back into a URL query string.
@@ -105,6 +106,13 @@ const resolveChromeBootstrapProxyTimeoutMs = () => {
     : DEFAULT_CHROME_BOOTSTRAP_PROXY_TIMEOUT_MS;
 };
 
+const resolveAuthStatusProxyTimeoutMs = () => {
+  const parsed = Number.parseInt(process.env.SCRIPTARR_MOON_AUTH_STATUS_PROXY_TIMEOUT_MS || "", 10);
+  return Number.isFinite(parsed) && parsed > 0
+    ? parsed
+    : DEFAULT_AUTH_STATUS_PROXY_TIMEOUT_MS;
+};
+
 const resolvePublicOrigin = (config, req) => {
   try {
     if (config?.publicBaseUrl) {
@@ -192,6 +200,7 @@ const renderAuthRelayPage = ({targetPath, publicOrigin}) => {
 export const registerAuthRoutes = (app, {config, getSessionToken, logger}) => {
   const oauthStateCookieName = `${config.sessionCookieName || "scriptarr_session"}.oauth_state`;
   const chromeBootstrapProxyTimeoutMs = resolveChromeBootstrapProxyTimeoutMs();
+  const authStatusProxyTimeoutMs = resolveAuthStatusProxyTimeoutMs();
   const proxyToSage = (req, targetPath, options = {}) => proxyJson({
     baseUrl: config.sageBaseUrl,
     path: targetPath,
@@ -279,7 +288,9 @@ export const registerAuthRoutes = (app, {config, getSessionToken, logger}) => {
   };
 
   app.get("/api/moon/auth/bootstrap-status", async (req, res) => {
-    const result = await proxyToSage(req, "/api/auth/bootstrap-status");
+    const result = await safeProxyToSage(req, "/api/auth/bootstrap-status", "Bootstrap broker unavailable.", {
+      timeoutMs: authStatusProxyTimeoutMs
+    });
     res.status(result.status).json(result.payload);
   });
 
@@ -376,7 +387,9 @@ export const registerAuthRoutes = (app, {config, getSessionToken, logger}) => {
   });
 
   app.get("/api/moon/auth/status", async (req, res) => {
-    const result = await proxyToSage(req, "/api/auth/status");
+    const result = await safeProxyToSage(req, "/api/auth/status", "Auth broker unavailable.", {
+      timeoutMs: authStatusProxyTimeoutMs
+    });
     res.status(result.status).json(result.payload);
   });
 

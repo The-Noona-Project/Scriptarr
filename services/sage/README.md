@@ -85,8 +85,9 @@ expired prompt decisions are idempotent.
 Sage's allowlisted `stale-queue-cleanup` task now checks Raven title tasks and durable Raven bulk runs together. It
 asks Raven for current bulk-run status so detached `running` runs can reattach when Raven can recover them, and it
 persists exact recovery actions when a stale title task or paused bulk run still needs admin follow-up.
-Sage also brokers compact paginated Moon library card reads from Raven's card projection, passing `q`, `type`,
-`letter`, `cursor`, `pageSize`, `sort`, and optional exact `ids` through instead of sorting a full catalog in memory.
+Sage also brokers compact paginated Moon library card reads from Vault's card projection, passing `q`, `type`,
+`letter`, `cursor`, `pageSize`, `sort`, and optional exact `ids` through without looping through Raven and back into
+Sage/Vault.
 Browse, library, home, and profile shelf clients should use that route and reserve full title payloads for title
 detail and reader routes. Continue-reading and recent-activity card hydration should use the exact-id card projection
 instead of fanning out into individual full-title requests.

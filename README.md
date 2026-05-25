@@ -86,11 +86,13 @@ Scriptarr's user app now runs as an embedded Next.js App Router frontend with a 
 controls, and a simple footer, while the fullscreen reader runs as its own embedded `/reader` Next app.
 Signed-out browser navigations now land on the dedicated Moon `/login` front door first, with the original route kept
 in `returnTo`. The login page starts Discord OAuth through Moon's same-origin start route, then runs a bounded
-post-login warmup for safe user shelves, compact library counts/cards, and profile data only when that target needs it.
+post-login warmup for safe user shelves, compact library counts/cards, and profile data only when that target needs it;
+admin return targets skip that user-data warmup so staff do not wait on home shelves before reaching admin.
 Moon keeps protected and personalized HTML out of service-worker caches; only versioned static assets and revisioned
 reader page/chunk responses are cached. User, reader, and admin client shells also redirect stale signed-out client
-navigations back to `/login` instead of rendering protected app chrome, in-app sign-in cards, or degraded auth-broker
-errors.
+navigations back to `/login` instead of rendering protected app chrome or in-app sign-in cards. Temporary auth-broker
+delays keep any already-known signed-in chrome visible, retry bootstrap with bounded backoff, and surface a delayed
+session state instead of forcing another login.
 That reader supports webtoon, single-page, double-page, and manga-double layouts, LTR/RTL direction, page-fit controls,
 keyboard/touch/controller navigation, and still persists Moon-native progress plus bookmarks behind the same typed
 reader routes.

@@ -454,12 +454,17 @@ export const registerPageRoutes = (app, {adminNextRuntime = null, config = {}, g
       const auth = await proxyJson({
         baseUrl: config.sageBaseUrl || "",
         path: "/api/auth/status",
-        sessionToken
+        sessionToken,
+        signal: AbortSignal.timeout(5000)
       });
 
       if (auth.status === 401) {
         res.redirect(302, buildLoginRedirectLocation(req));
         return true;
+      }
+
+      if (auth.status >= 500) {
+        return false;
       }
 
       const user = auth.payload?.user || auth.payload || null;

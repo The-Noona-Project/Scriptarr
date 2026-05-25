@@ -1860,9 +1860,8 @@ export const registerInternalBrokerRoutes = (app, {
   }));
 
   app.put("/api/internal/jobs/:jobId/tasks/:taskId", withService(requireService, ["scriptarr-raven", "scriptarr-warden"], async (req, res) => {
-    const previous = normalizeArray(await vaultClient.listJobTasks({
-      jobId: req.params.jobId
-    })).find((task) => normalizeString(task.taskId) === normalizeString(req.params.taskId)) || null;
+    const previous = normalizeArray(await vaultClient.listJobTasks(req.params.jobId))
+      .find((task) => normalizeString(task.taskId) === normalizeString(req.params.taskId)) || null;
     const task = await vaultClient.upsertJobTask(req.params.jobId, req.params.taskId, {
       ...req.body,
       taskId: req.params.taskId

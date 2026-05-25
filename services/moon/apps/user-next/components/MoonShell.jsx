@@ -68,6 +68,23 @@ const AuthResolvingSurface = ({label = "Checking session."}) => (
   </div>
 );
 
+const CHROME_RETRY_DELAYS_MS = [1000, 2500, 5000, 10000];
+
+const mergeMoonChromeResult = (current, nextValue, localLoginUrl) => {
+  const brokerDelayed = Boolean(nextValue.authError || nextValue.bootstrapError);
+  const auth = nextValue.auth || (brokerDelayed ? current.auth : null);
+  return {
+    ...current,
+    ...nextValue,
+    auth,
+    branding: nextValue.branding || current.branding,
+    bootstrap: nextValue.bootstrap || current.bootstrap,
+    libraryTypes: nextValue.libraryTypes?.length ? nextValue.libraryTypes : current.libraryTypes,
+    loaded: true,
+    loginUrl: auth ? "" : nextValue.loginUrl || localLoginUrl
+  };
+};
+
 /**
  * Wrap every user page in Moon's local Next shell.
  *
@@ -94,6 +111,8 @@ export const MoonShell = ({children}) => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [installPrompt, setInstallPrompt] = useState(null);
   const libraryTypesLoadingRef = useRef(false);
+  const chromeRetryCountRef = useRef(0);
+  const sessionDelayed = Boolean(chrome.authError) || Boolean(chrome.bootstrapError);
   const syncQueryTypeFromLocation = useCallback(() => {
     try {
       const nextType = String(new URLSearchParams(window.location.search).get("type") || "").trim();
@@ -112,12 +131,10 @@ export const MoonShell = ({children}) => {
     setChrome((current) => current.auth ? current : {...current, loginUrl: localLoginUrl});
     void loadMoonChromeContext(currentRoute).then((nextValue) => {
       if (active) {
-        setChrome((current) => ({
-          ...current,
-          ...nextValue,
-          loaded: true,
-          loginUrl: nextValue.auth ? "" : nextValue.loginUrl || localLoginUrl
-        }));
+        if (!nextValue.authError && !nextValue.bootstrapError) {
+          chromeRetryCountRef.current = 0;
+        }
+        setChrome((current) => mergeMoonChromeResult(current, nextValue, localLoginUrl));
       }
     });
 
@@ -127,11 +144,45 @@ export const MoonShell = ({children}) => {
   }, [publicPathname]);
 
   useEffect(() => {
-    if (isLoginRoute || !chrome.loaded || chrome.auth || chrome.authError) {
+    if (isLoginRoute || !chrome.loaded || !sessionDelayed) {
+      return undefined;
+    }
+    let cancelled = false;
+    let timer = 0;
+    const retryChrome = () => {
+      const currentRoute = `${window.location.pathname}${window.location.search}`;
+      const localLoginUrl = buildMoonLoginHref(currentRoute);
+      void loadMoonChromeContext(currentRoute).then((nextValue) => {
+        if (cancelled) {
+          return;
+        }
+        if (!nextValue.authError && !nextValue.bootstrapError) {
+          chromeRetryCountRef.current = 0;
+        }
+        setChrome((current) => mergeMoonChromeResult(current, nextValue, localLoginUrl));
+        if (nextValue.authError || nextValue.bootstrapError) {
+          scheduleRetry();
+        }
+      });
+    };
+    const scheduleRetry = () => {
+      const delay = CHROME_RETRY_DELAYS_MS[Math.min(chromeRetryCountRef.current, CHROME_RETRY_DELAYS_MS.length - 1)];
+      chromeRetryCountRef.current += 1;
+      timer = window.setTimeout(retryChrome, delay);
+    };
+    scheduleRetry();
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [chrome.authError, chrome.bootstrapError, chrome.loaded, isLoginRoute, sessionDelayed]);
+
+  useEffect(() => {
+    if (isLoginRoute || !chrome.loaded || chrome.auth || sessionDelayed) {
       return;
     }
     window.location.replace(buildMoonLoginHref(`${window.location.pathname}${window.location.search}`));
-  }, [chrome.auth, chrome.authError, chrome.loaded, isLoginRoute]);
+  }, [chrome.auth, chrome.loaded, isLoginRoute, sessionDelayed]);
 
   useEffect(() => {
     syncQueryTypeFromLocation();
@@ -205,7 +256,7 @@ export const MoonShell = ({children}) => {
           <main className="moon-login-stage">{children}</main>
         </div>
       ) : !chrome.loaded || !chrome.auth ? (
-        <AuthResolvingSurface label={chrome.authError ? "Session check is delayed." : chrome.loaded ? "Opening login." : "Checking session."} />
+        <AuthResolvingSurface label={sessionDelayed ? "Session check is delayed. Retrying." : chrome.loaded ? "Opening login." : "Checking session."} />
       ) : (
         <div className="moon-app-shell">
           <header className="moon-header">

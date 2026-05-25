@@ -4,7 +4,7 @@
  * @file Shared auth context and browser providers for Moon admin.
  */
 
-import {createContext, useContext, useEffect, useMemo, useState} from "react";
+import {createContext, useContext, useEffect, useMemo, useRef, useState} from "react";
 import {usePathname, useSearchParams} from "next/navigation";
 import {canAccessAdmin} from "../lib/access.js";
 import {AdminEventStreamProvider, buildAdminLoginHref, loadAdminChromeContext, useAdminEventSubscription} from "../lib/api.js";
@@ -28,6 +28,22 @@ const toPublicAdminPath = (pathname) => {
     return normalized;
   }
   return `/admin${normalized === "/" ? "" : normalized}`;
+};
+
+const CHROME_RETRY_DELAYS_MS = [1000, 2500, 5000, 10000];
+
+const mergeAdminChromeResult = (current, nextChrome, localLoginUrl) => {
+  const brokerDelayed = Boolean(nextChrome.authError || nextChrome.bootstrapError);
+  const user = nextChrome.user || (brokerDelayed ? current.user : null);
+  return {
+    ...current,
+    ...nextChrome,
+    user,
+    branding: nextChrome.branding || current.branding,
+    bootstrap: nextChrome.bootstrap || current.bootstrap,
+    loginUrl: user ? "" : nextChrome.loginUrl || localLoginUrl,
+    loading: false
+  };
 };
 
 /**
@@ -76,29 +92,29 @@ const AdminChromeProvider = ({children}) => {
     loginUrl: buildAdminLoginHref(returnTo),
     loading: true
   });
+  const chromeRetryCountRef = useRef(0);
 
   const refreshChrome = useMemo(() => async () => {
     const localLoginUrl = buildAdminLoginHref(returnTo);
-    setChrome((current) => ({...current, loading: true, loginUrl: current.user ? "" : localLoginUrl}));
+    setChrome((current) => ({...current, loading: !current.user, loginUrl: current.user ? "" : localLoginUrl}));
     const nextChrome = await loadAdminChromeContext(returnTo);
-    setChrome({
-      ...nextChrome,
-      loginUrl: nextChrome.user ? "" : nextChrome.loginUrl || localLoginUrl,
-      loading: false
-    });
+    if (!nextChrome.authError && !nextChrome.bootstrapError) {
+      chromeRetryCountRef.current = 0;
+    }
+    setChrome((current) => mergeAdminChromeResult(current, nextChrome, localLoginUrl));
+    return nextChrome;
   }, [returnTo]);
 
   useEffect(() => {
     let active = true;
     const localLoginUrl = buildAdminLoginHref(returnTo);
-    setChrome((current) => ({...current, loading: true, loginUrl: current.user ? "" : localLoginUrl}));
+    setChrome((current) => ({...current, loading: !current.user, loginUrl: current.user ? "" : localLoginUrl}));
     void loadAdminChromeContext(returnTo).then((nextChrome) => {
       if (active) {
-        setChrome({
-          ...nextChrome,
-          loginUrl: nextChrome.user ? "" : nextChrome.loginUrl || localLoginUrl,
-          loading: false
-        });
+        if (!nextChrome.authError && !nextChrome.bootstrapError) {
+          chromeRetryCountRef.current = 0;
+        }
+        setChrome((current) => mergeAdminChromeResult(current, nextChrome, localLoginUrl));
       }
     });
 
@@ -108,11 +124,36 @@ const AdminChromeProvider = ({children}) => {
   }, [returnTo]);
 
   useEffect(() => {
-    if (typeof window === "undefined" || chrome.loading || chrome.user || chrome.authError || !chrome.loginUrl) {
+    if (typeof window === "undefined" || chrome.loading || !(chrome.authError || chrome.bootstrapError)) {
+      return undefined;
+    }
+    let cancelled = false;
+    let timer = 0;
+    const retryChrome = () => {
+      void refreshChrome().then((nextChrome) => {
+        if (!cancelled && (nextChrome?.authError || nextChrome?.bootstrapError)) {
+          scheduleRetry();
+        }
+      });
+    };
+    const scheduleRetry = () => {
+      const delay = CHROME_RETRY_DELAYS_MS[Math.min(chromeRetryCountRef.current, CHROME_RETRY_DELAYS_MS.length - 1)];
+      chromeRetryCountRef.current += 1;
+      timer = window.setTimeout(retryChrome, delay);
+    };
+    scheduleRetry();
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [chrome.authError, chrome.bootstrapError, chrome.loading, refreshChrome]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || chrome.loading || chrome.user || chrome.authError || chrome.bootstrapError || !chrome.loginUrl) {
       return;
     }
     window.location.replace(chrome.loginUrl);
-  }, [chrome.authError, chrome.loading, chrome.loginUrl, chrome.user]);
+  }, [chrome.authError, chrome.bootstrapError, chrome.loading, chrome.loginUrl, chrome.user]);
 
   const value = useMemo(() => ({
     ...chrome,
