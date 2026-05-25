@@ -634,6 +634,8 @@ public final class LibraryService {
         List<LibraryChapter> updatedChapters = new ArrayList<>();
         int total = chapters.size();
         int completed = 0;
+        int lastTaskPercent = 5;
+        long lastTaskProgressAt = System.currentTimeMillis();
         try {
             for (LibraryChapter chapter : chapters) {
                 if (!chapter.available() || chapter.archivePath() == null || chapter.archivePath().isBlank()) {
@@ -644,13 +646,21 @@ public final class LibraryService {
                     completed += 1;
                     continue;
                 }
-                LibraryChapter runningChapter = withIngestState(chapter, "running", "", chapter.ingestRevision(), chapter.ingestedPageCount(), chapter.ingestedAt(), chapter.ingestManifestPath());
-                LibraryChapter persistedRunning = checkpointIngestChapter(title.id(), runningChapter);
-                updatedChapters.add(persistedRunning);
-                chapters = mergeChapterUpdate(chapters, persistedRunning);
-                LibraryIngestResult result = ingestService.ingestChapter(title, persistedRunning);
+                if (ingestService.canReuseReadyChapter(chapter)) {
+                    updatedChapters.add(chapter);
+                    completed += 1;
+                    int percent = 10 + (int) Math.floor((completed / (double) total) * 85);
+                    if (shouldPersistIngestProgress(percent, lastTaskPercent, lastTaskProgressAt, completed, total)) {
+                        persistIngestTask(taskId, title, "running", "Verified " + completed + " of " + total + " chapter(s).", percent, requestedBy, "");
+                        lastTaskPercent = percent;
+                        lastTaskProgressAt = System.currentTimeMillis();
+                    }
+                    continue;
+                }
+                updatedChapters.add(chapter);
+                LibraryIngestResult result = ingestService.ingestChapter(title, chapter);
                 LibraryChapter readyChapter = withIngestState(
-                    persistedRunning,
+                    chapter,
                     "ready",
                     "",
                     result.revision(),
@@ -663,7 +673,11 @@ public final class LibraryService {
                 chapters = mergeChapterUpdate(chapters, persistedReady);
                 completed += 1;
                 int percent = 10 + (int) Math.floor((completed / (double) total) * 85);
-                persistIngestTask(taskId, title, "running", "Ingested " + completed + " of " + total + " chapter(s).", percent, requestedBy, "");
+                if (shouldPersistIngestProgress(percent, lastTaskPercent, lastTaskProgressAt, completed, total)) {
+                    persistIngestTask(taskId, title, "running", "Ingested " + completed + " of " + total + " chapter(s).", percent, requestedBy, "");
+                    lastTaskPercent = percent;
+                    lastTaskProgressAt = System.currentTimeMillis();
+                }
             }
             LibraryTitle refreshed = persistIngestTitleState(title, chapters);
             persistIngestTask(taskId, refreshed, "completed", "AVIF ingest completed.", 100, requestedBy, "");
@@ -1347,6 +1361,23 @@ public final class LibraryService {
             return "Could not save reader-page progress. Retry reader-page ingest from the admin queue.";
         }
         return normalized;
+    }
+
+    private boolean shouldPersistIngestProgress(
+        int percent,
+        int lastPercent,
+        long lastProgressAt,
+        int completed,
+        int total
+    ) {
+        if (completed >= total) {
+            return true;
+        }
+        int normalizedPercent = Math.max(0, Math.min(100, percent));
+        if (normalizedPercent - lastPercent >= 3) {
+            return true;
+        }
+        return System.currentTimeMillis() - lastProgressAt >= 60_000L;
     }
 
     /**

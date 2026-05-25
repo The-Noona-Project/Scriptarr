@@ -1,6 +1,7 @@
 package com.scriptarr.raven.library;
 
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 
 /**
@@ -53,6 +54,25 @@ public interface PageTranscoder {
      * @throws InterruptedException when interrupted while waiting for the encoder
      */
     void transcode(byte[] inputBytes, String sourceMediaType, Path outputPath, int quality) throws IOException, InterruptedException;
+
+    /**
+     * Convert one source page file into a derived reader page.
+     *
+     * <p>The default implementation preserves the byte-oriented contract for
+     * lightweight tests and simple transcoders. Production transcoders should
+     * override this method when they can stream directly from a source file.</p>
+     *
+     * @param inputPath source image path
+     * @param sourceMediaType source image media type
+     * @param outputPath target output path
+     * @param quality lossy quality hint from 1 to 100
+     * @throws IOException when conversion fails
+     * @throws InterruptedException when interrupted while waiting for the encoder
+     */
+    default void transcodeFile(Path inputPath, String sourceMediaType, Path outputPath, int quality)
+        throws IOException, InterruptedException {
+        transcode(Files.readAllBytes(inputPath), sourceMediaType, outputPath, quality);
+    }
 
     /**
      * Runtime readiness result for a derived page transcoder.

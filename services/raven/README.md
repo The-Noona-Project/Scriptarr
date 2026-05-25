@@ -27,7 +27,9 @@ count, and a manifest path before Moon can serve it.
 Before Raven creates or catalogs a title, it resolves the logical catalog identity of library type plus normalized title
 against Vault's compact title-card projection. Downloads, manual imports, startup rescans, and AVIF ingest setup should
 therefore reuse the canonical title id even when the same title appears under a different source or filesystem folder.
-The v1 AVIF encoder is FFmpeg `av1_nvenc`. Raven requires NVIDIA runtime access for AVIF ingest when
+The v1 AVIF encoder is FFmpeg `av1_nvenc`. Raven converts pages in a bounded per-chapter batch
+(`SCRIPTARR_RAVEN_AVIF_PAGE_CONCURRENCY`, default `4`, max `8`) so the NVIDIA encoder is not starved by one tiny
+FFmpeg process at a time. Raven requires NVIDIA runtime access for AVIF ingest when
 `SCRIPTARR_RAVEN_AVIF_REQUIRE_NVIDIA=true`, `SCRIPTARR_RAVEN_INGEST_GPU_PROFILE=nvidia`, or
 `SCRIPTARR_RAVEN_INGEST_REQUIRE_NVIDIA=true`; missing hardware reports `hardware_missing` for admin attention without
 making Raven's whole health fail.
@@ -110,10 +112,10 @@ already-finished archives. That startup scan uses compact title-card indexes and
 library cannot force repeated full-title catalog reads while auth and admin bootstrap are trying to start.
 The scan keeps its in-memory catalog context current as it repairs folders, which prevents two folders discovered in the
 same pass from creating duplicate durable rows for the same logical title.
-During AVIF ingest, Raven checkpoints each chapter's `running`, `ready`, or `failed` state through Sage's
+During AVIF ingest, Raven checkpoints each chapter's terminal `ready`, `missing`, or `failed` state through Sage's
 single-chapter broker route instead of replacing the full chapter list after every chapter. Full chapter-list
-replacement remains for catalog creation, imports, rescans, and merge repairs, while hot ingest progress writes stay
-small enough for large titles to retry without flooding Vault/MySQL.
+replacement remains for catalog creation, imports, rescans, and merge repairs, while hot ingest progress writes are
+throttled and ready chapters with the current AVIF revision are reused so large retries do not flood Vault/MySQL.
 
 Raven's global title-download concurrency is now controlled by the Sage-backed `raven.download.runtime` setting. The
 default remains two active title downloads, admins can choose `1` through `6` from Moon Settings, and Raven reloads the

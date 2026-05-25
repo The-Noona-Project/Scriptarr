@@ -60,10 +60,6 @@ public final class FfmpegAvifTranscoder implements PageTranscoder {
 
     @Override
     public void transcode(byte[] inputBytes, String sourceMediaType, Path outputPath, int quality) throws IOException, InterruptedException {
-        Readiness ready = readiness();
-        if (!ready.ready()) {
-            throw new IOException(ready.message().isBlank() ? ready.code() : ready.message());
-        }
         if (inputBytes == null || inputBytes.length == 0) {
             throw new IOException("Source page is empty.");
         }
@@ -71,11 +67,25 @@ public final class FfmpegAvifTranscoder implements PageTranscoder {
         Path sourcePath = outputPath.getParent().resolve(UUID.randomUUID() + sourceExtension(sourceMediaType));
         try {
             Files.write(sourcePath, inputBytes);
-            runFfmpeg(sourcePath, outputPath, quality);
-            validateAvifOutput(outputPath);
+            transcodeFile(sourcePath, sourceMediaType, outputPath, quality);
         } finally {
             Files.deleteIfExists(sourcePath);
         }
+    }
+
+    @Override
+    public void transcodeFile(Path inputPath, String sourceMediaType, Path outputPath, int quality)
+        throws IOException, InterruptedException {
+        Readiness ready = readiness();
+        if (!ready.ready()) {
+            throw new IOException(ready.message().isBlank() ? ready.code() : ready.message());
+        }
+        if (inputPath == null || !Files.exists(inputPath) || Files.size(inputPath) <= 0L) {
+            throw new IOException("Source page is empty.");
+        }
+        Files.createDirectories(outputPath.getParent());
+        runFfmpeg(inputPath, outputPath, quality);
+        validateAvifOutput(outputPath);
     }
 
     private Readiness runSelfTest() {

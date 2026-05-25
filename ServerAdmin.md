@@ -422,8 +422,11 @@ Sage/Vault broker during a type-wide rebuild, Raven reattaches the durable run, 
 resets stale running tasks, and continues unfinished title tasks instead of starting a duplicate run. Waiting runs are
 not fake-running; admin pages show them as waiting for the AVIF worker slot until the fair scheduler rotates to them.
 Per-title AVIF progress now checkpoints one chapter row at a time through Sage and Vault, so large titles do not rewrite
-their entire chapter list after every converted chapter. If a checkpoint still exhausts its retry budget, the title
-appears in Needs attention with a retryable reader-page progress message instead of raw broker timeout text.
+their entire chapter list after every converted chapter. Raven also skips unchanged ready chapters during retry and
+throttles progress updates so large titles do not spam the queue store. Page conversion runs in a bounded per-chapter
+batch using `SCRIPTARR_RAVEN_AVIF_PAGE_CONCURRENCY` (default `4`, max `8`) to keep the NVIDIA encoder busy. If a
+checkpoint still exhausts its retry budget, the title appears in Needs attention with a retryable reader-page progress
+message instead of raw broker timeout text.
 Legacy WebP-format type runs are marked `superseded` before the AVIF run starts.
 If a catalog duplicate merge changes the canonical title set for an active type run, Raven supersedes that stale run and
 starts a fresh run against canonical titles only.

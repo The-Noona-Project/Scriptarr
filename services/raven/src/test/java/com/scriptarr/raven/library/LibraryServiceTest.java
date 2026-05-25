@@ -423,7 +423,7 @@ class LibraryServiceTest {
         LibraryTitle ingested = service.ingestTitle(title.id(), "test");
 
         assertEquals(fullReplaceWritesBeforeIngest, brokerClient.replaceChapterListWrites());
-        assertTrue(brokerClient.singleChapterWrites() >= 5);
+        assertTrue(brokerClient.singleChapterWrites() >= 3);
         assertEquals("ready", ingested.ingestStatus());
         assertEquals(2, ingested.ingestedChapterCount());
         assertEquals(2, ingested.chapters().stream().filter((chapter) -> "ready".equals(chapter.ingestStatus())).count());
