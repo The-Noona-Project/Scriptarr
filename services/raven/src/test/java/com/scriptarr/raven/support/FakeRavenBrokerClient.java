@@ -26,6 +26,9 @@ public final class FakeRavenBrokerClient implements RavenBrokerClient {
     private final Map<String, Map<String, JsonNode>> jobTasks = new LinkedHashMap<>();
     private int listLibraryTitlesCalls;
     private int listLibraryTitleCardsCalls;
+    private int replaceChapterListWrites;
+    private int singleChapterWrites;
+    private int remainingLibraryChapterWriteFailures;
     private boolean failNextJobTaskWrite;
     private boolean failNextJobTaskListAfterWriteFailure;
     private int remainingJobListFailures;
@@ -181,6 +184,31 @@ public final class FakeRavenBrokerClient implements RavenBrokerClient {
     }
 
     /**
+     * Count full chapter-list replacement writes.
+     *
+     * @return replacement write count
+     */
+    public int replaceChapterListWrites() {
+        return replaceChapterListWrites;
+    }
+
+    /**
+     * Count single-chapter writes.
+     *
+     * @return single-chapter write count
+     */
+    public int singleChapterWrites() {
+        return singleChapterWrites;
+    }
+
+    /**
+     * Simulate a transient single-chapter write failure.
+     */
+    public void failNextLibraryChapterWrite() {
+        remainingLibraryChapterWriteFailures += 1;
+    }
+
+    /**
      * Simulate a transient durable job-task write failure followed by a failed
      * job-task list reload.
      */
@@ -212,8 +240,33 @@ public final class FakeRavenBrokerClient implements RavenBrokerClient {
 
     @Override
     public JsonNode putLibraryChapters(String titleId, Map<String, Object> payload) {
+        replaceChapterListWrites += 1;
         titleChapters.put(titleId, objectMapper.valueToTree(payload.getOrDefault("chapters", List.of())));
         return titleChapters.get(titleId);
+    }
+
+    @Override
+    public JsonNode putLibraryChapter(String titleId, String chapterId, Map<String, Object> payload) throws IOException {
+        singleChapterWrites += 1;
+        if (remainingLibraryChapterWriteFailures > 0) {
+            remainingLibraryChapterWriteFailures -= 1;
+            throw new IOException("Simulated single-chapter write timeout.");
+        }
+        JsonNode existing = titleChapters.get(titleId);
+        List<Map<String, Object>> chapters = new ArrayList<>();
+        if (existing != null && existing.isArray()) {
+            for (JsonNode chapter : existing) {
+                if (!chapterId.equals(chapter.path("id").asText(""))) {
+                    chapters.add(objectMapper.convertValue(chapter, Map.class));
+                }
+            }
+        }
+        Object chapterPayload = payload.getOrDefault("chapter", payload);
+        Map<String, Object> chapter = objectMapper.convertValue(chapterPayload, Map.class);
+        chapter.put("id", chapterId);
+        chapters.add(chapter);
+        titleChapters.put(titleId, objectMapper.valueToTree(chapters));
+        return objectMapper.valueToTree(chapter);
     }
 
     @Override

@@ -110,6 +110,10 @@ already-finished archives. That startup scan uses compact title-card indexes and
 library cannot force repeated full-title catalog reads while auth and admin bootstrap are trying to start.
 The scan keeps its in-memory catalog context current as it repairs folders, which prevents two folders discovered in the
 same pass from creating duplicate durable rows for the same logical title.
+During AVIF ingest, Raven checkpoints each chapter's `running`, `ready`, or `failed` state through Sage's
+single-chapter broker route instead of replacing the full chapter list after every chapter. Full chapter-list
+replacement remains for catalog creation, imports, rescans, and merge repairs, while hot ingest progress writes stay
+small enough for large titles to retry without flooding Vault/MySQL.
 
 Raven's global title-download concurrency is now controlled by the Sage-backed `raven.download.runtime` setting. The
 default remains two active title downloads, admins can choose `1` through `6` from Moon Settings, and Raven reloads the

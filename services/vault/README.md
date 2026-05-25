@@ -19,7 +19,8 @@ rows still track the current reading position, while the read-state model determ
 bookshelf or fully completed.
 Vault also carries Raven ingest state in the catalog: title aggregate status and counts, plus chapter `ingestStatus`,
 `ingestRevision`, `ingestedPageCount`, `ingestedAt`, redacted `ingestError`, and manifest path. Compact reader targets
-only consider chapters whose ingest status is ready.
+only consider chapters whose ingest status is ready. Raven's AVIF hot path uses Vault's service-only single-chapter
+upsert route for per-chapter progress, so a large title no longer rewrites all sibling chapter rows on each checkpoint.
 Raven download-task heartbeats keep the caller-provided UTC `updatedAt` timestamp so Moon's live queue can distinguish
 fresh active work from genuinely stale tasks even when the MySQL server timezone differs from UTC.
 When Sage resets a title unread, Vault deletes that user's `media_title_state`, `media_chapter_reads`, and

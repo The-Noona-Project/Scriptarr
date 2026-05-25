@@ -502,6 +502,13 @@ export const createCachedStore = (
       invalidate("raven-titles:list", `raven-title:${titleId}`);
       return replaced;
     },
+    async upsertRavenChapter(titleId, chapter) {
+      const upserted = await baseStore.upsertRavenChapter(titleId, chapter);
+      invalidatePrefix("raven-title-cards:", "raven-title-summary:", "raven-title-chapters:");
+      invalidatePrefix("reader-targets:");
+      invalidate("raven-titles:list", `raven-title:${titleId}`);
+      return upserted;
+    },
     async listRavenDownloadTasks() {
       return readThrough("raven-download-tasks:list", () => baseStore.listRavenDownloadTasks());
     },

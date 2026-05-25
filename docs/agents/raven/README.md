@@ -49,6 +49,9 @@
   a `manifest.json`, and ready ingest metadata with a current `avif-` revision into the catalog.
 - Ingest failures keep the CBZ, delete only staged or derived ingest output, and surface as retryable Needs attention
   work with `recoveryAction: retry-ingest`.
+- Per-title AVIF ingest must checkpoint individual chapter state through Sage's single-chapter Raven broker route.
+  Do not call full chapter-list replacement from the running/ready/failed hot loop; reserve full replacement for
+  catalog creation, import, rescan, and merge flows.
 - The v1 ingest encoder is FFmpeg `av1_nvenc`. NVIDIA runtime checks are required for AVIF ingest when the profile or
   AVIF env requires it, but missing hardware should degrade the ingest surface with `hardware_missing` instead of
   failing the whole Raven service.

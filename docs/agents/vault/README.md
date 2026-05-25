@@ -48,7 +48,8 @@
   through both memory and MySQL stores so Moon can surface Missing Content without scraping task logs.
 - Raven catalog rows now also carry AVIF ingest state. Preserve title aggregate ingest status/count/error plus chapter
   `ingestStatus`, `ingestRevision`, `ingestedPageCount`, `ingestedAt`, redacted `ingestError`, and manifest path through
-  memory and MySQL stores.
+  memory and MySQL stores. Keep the single-chapter upsert route aligned with full chapter replacement so Raven can
+  checkpoint ingest progress without deleting and reinserting sibling chapter rows.
 - Reader-target projections should only choose chapters whose ingest status is `ready`; available CBZ-only chapters are
   not reader-ready.
 - Vault owns the compact Raven title-card projection at `/api/service/raven/title-cards`. Keep it title-table-only,

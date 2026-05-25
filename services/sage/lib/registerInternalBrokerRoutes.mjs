@@ -1783,6 +1783,16 @@ export const registerInternalBrokerRoutes = (app, {
     res.json(await vaultClient.replaceRavenChapters(req.params.titleId, normalizeArray(req.body?.chapters)));
   }));
 
+  app.put("/api/internal/vault/raven/titles/:titleId/chapters/:chapterId", withService(requireService, ["scriptarr-raven"], async (req, res) => {
+    const chapter = req.body && typeof req.body.chapter === "object" && req.body.chapter
+      ? req.body.chapter
+      : req.body;
+    res.json(await vaultClient.upsertRavenChapter(req.params.titleId, req.params.chapterId, {
+      ...chapter,
+      id: req.params.chapterId
+    }));
+  }));
+
   app.get("/api/internal/vault/raven/download-tasks", withService(requireService, ["scriptarr-raven"], async (_req, res) => {
     res.json(await vaultClient.listRavenDownloadTasks());
   }));

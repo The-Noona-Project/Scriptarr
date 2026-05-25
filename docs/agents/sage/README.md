@@ -78,6 +78,9 @@
   `portal.ingestRunNotifications` setting.
 - Queue retry code must treat `raven-ingest` tasks as ingest retries from the existing CBZ. Do not send those through
   normal download retry or delete canonical CBZ files from queue cleanup.
+- Raven chapter checkpoint writes are brokered through
+  `/api/internal/vault/raven/titles/:titleId/chapters/:chapterId`. Keep it Raven-only, bounded to one chapter payload,
+  and routed through Vault so AVIF ingest progress never bypasses Sage or rewrites a title's full chapter list.
 - Keep section bulk queue actions brokered here too: cancel all queued work for `activity.write`, cancel all running
   work for `activity.root`, and remove all removable recovery items without touching promoted library content.
 - Keep `needsAttention` limited to retriable or stale Raven title-task recovery work, not generic admin events. The

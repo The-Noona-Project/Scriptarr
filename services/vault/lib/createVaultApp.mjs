@@ -614,6 +614,16 @@ export const createVaultApp = async ({
     res.json(await store.replaceRavenChapters(req.params.titleId, Array.isArray(req.body?.chapters) ? req.body.chapters : []));
   });
 
+  app.put("/api/service/raven/titles/:titleId/chapters/:chapterId", requireJson, async (req, res) => {
+    const chapter = req.body && typeof req.body.chapter === "object" && req.body.chapter
+      ? req.body.chapter
+      : req.body;
+    res.json(await store.upsertRavenChapter(req.params.titleId, {
+      ...chapter,
+      id: req.params.chapterId
+    }));
+  });
+
   app.get("/api/service/raven/download-tasks", async (_req, res) => {
     res.json(await store.listRavenDownloadTasks());
   });

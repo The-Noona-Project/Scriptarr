@@ -6470,11 +6470,36 @@ test("sage brokers oversized Raven title payloads without tripping internal JSON
   });
   assert.equal(stored.status, 200);
 
+  const unauthorizedChapterWrite = await fetch(`${baseUrl}/api/internal/vault/raven/titles/title-large/chapters/title-large-c2`, {
+    method: "PUT",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({chapter: oversizedTitle.chapters[1]})
+  });
+  assert.equal(unauthorizedChapterWrite.status, 401);
+
+  const chapterCheckpoint = await fetch(`${baseUrl}/api/internal/vault/raven/titles/title-large/chapters/title-large-c2`, {
+    method: "PUT",
+    headers: ravenHeaders,
+    body: JSON.stringify({
+      chapter: {
+        ...oversizedTitle.chapters[1],
+        ingestStatus: "ready",
+        ingestRevision: "avif-single-checkpoint",
+        ingestedPageCount: 12,
+        ingestedAt: "2026-04-21T00:05:00.000Z",
+        ingestManifestPath: "/downloads/ingested/manhwa/title-large/title-large-c2/manifest.json"
+      }
+    })
+  });
+  assert.equal(chapterCheckpoint.status, 200);
+
   const loaded = await fetch(`${baseUrl}/api/internal/vault/raven/titles/title-large`, {
     headers: ravenHeaders
   }).then((response) => response.json());
   assert.equal(loaded.id, "title-large");
   assert.equal(loaded.chapters.length, 411);
+  assert.equal(loaded.chapters.find((chapter) => chapter.id === "title-large-c1").ingestRevision, oversizedTitle.chapters[0].ingestRevision);
+  assert.equal(loaded.chapters.find((chapter) => chapter.id === "title-large-c2").ingestRevision, "avif-single-checkpoint");
   assert.equal(loaded.summary.length, 150_000);
 
   await closeServer(sageServer);

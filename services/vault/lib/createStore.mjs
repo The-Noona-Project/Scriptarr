@@ -2030,6 +2030,17 @@ const createMemoryStore = (options = {}) => {
       }])));
       return Array.from(state.ravenChapters.get(canonicalTitleId).values());
     },
+    async upsertRavenChapter(titleId, chapter) {
+      const canonicalTitleId = resolveMemoryRavenTitleId(titleId);
+      const normalizedChapter = {
+        ...normalizeRavenChapter(chapter),
+        updatedAt: nowIso()
+      };
+      const chapters = state.ravenChapters.get(canonicalTitleId) || new Map();
+      chapters.set(normalizedChapter.id, normalizedChapter);
+      state.ravenChapters.set(canonicalTitleId, new Map(sortRavenChapters(Array.from(chapters.values())).map((entry) => [entry.id, entry])));
+      return normalizedChapter;
+    },
     async previewRavenTitleDuplicates(filters = {}) {
       const titles = Array.from(state.ravenTitles.values()).map((title) =>
         normalizeRavenTitle(title, Array.from((state.ravenChapters.get(title.id) || new Map()).values()))
@@ -4395,6 +4406,66 @@ const createMysqlStore = (config) => {
         }
         const [rows] = await connection.query("SELECT * FROM raven_chapters WHERE title_id = ?", [canonicalTitleId]);
         return rows.map(toRavenChapter);
+      });
+    },
+    async upsertRavenChapter(titleId, chapter) {
+      return withTransaction(async (connection) => {
+        const canonicalTitleId = await resolveMysqlRavenTitleId(titleId, connection);
+        const normalizedChapter = normalizeRavenChapter(chapter);
+        await connection.query(`
+          INSERT INTO raven_chapters (
+            title_id, chapter_id, label_name, chapter_number, page_count, release_date, is_available, archive_path, source_url,
+            quality_status, expected_page_count, missing_page_count, missing_pages_json, quality_notes_json,
+            ingest_status, ingest_revision, ingested_page_count, ingested_at, ingest_error, ingest_manifest_path, updated_at
+          )
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+          ON DUPLICATE KEY UPDATE
+            label_name = VALUES(label_name),
+            chapter_number = VALUES(chapter_number),
+            page_count = VALUES(page_count),
+            release_date = VALUES(release_date),
+            is_available = VALUES(is_available),
+            archive_path = VALUES(archive_path),
+            source_url = VALUES(source_url),
+            quality_status = VALUES(quality_status),
+            expected_page_count = VALUES(expected_page_count),
+            missing_page_count = VALUES(missing_page_count),
+            missing_pages_json = VALUES(missing_pages_json),
+            quality_notes_json = VALUES(quality_notes_json),
+            ingest_status = VALUES(ingest_status),
+            ingest_revision = VALUES(ingest_revision),
+            ingested_page_count = VALUES(ingested_page_count),
+            ingested_at = VALUES(ingested_at),
+            ingest_error = VALUES(ingest_error),
+            ingest_manifest_path = VALUES(ingest_manifest_path),
+            updated_at = NOW()
+        `, [
+          canonicalTitleId,
+          normalizedChapter.id,
+          normalizedChapter.label || normalizedChapter.id,
+          normalizedChapter.chapterNumber || null,
+          Number.parseInt(String(normalizedChapter.pageCount || 0), 10) || 0,
+          normalizedChapter.releaseDate || null,
+          normalizedChapter.available === false ? 0 : 1,
+          normalizedChapter.archivePath || null,
+          normalizedChapter.sourceUrl || null,
+          normalizeRavenQualityStatus(normalizedChapter.qualityStatus),
+          Number.parseInt(String(normalizedChapter.expectedPageCount || 0), 10) || 0,
+          Number.parseInt(String(normalizedChapter.missingPageCount || 0), 10) || 0,
+          JSON.stringify(normalizedChapter.missingPages),
+          JSON.stringify(normalizedChapter.qualityNotes),
+          normalizeRavenIngestStatus(normalizedChapter.ingestStatus),
+          normalizedChapter.ingestRevision || null,
+          Number.parseInt(String(normalizedChapter.ingestedPageCount || 0), 10) || 0,
+          toMysqlDateTime(normalizedChapter.ingestedAt),
+          normalizedChapter.ingestError || null,
+          normalizedChapter.ingestManifestPath || null
+        ]);
+        const [rows] = await connection.query(
+          "SELECT * FROM raven_chapters WHERE title_id = ? AND chapter_id = ? LIMIT 1",
+          [canonicalTitleId, normalizedChapter.id]
+        );
+        return rows[0] ? toRavenChapter(rows[0]) : normalizedChapter;
       });
     },
     async previewRavenTitleDuplicates(filters = {}) {

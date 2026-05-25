@@ -103,6 +103,20 @@ public interface RavenBrokerClient {
     JsonNode putLibraryChapters(String titleId, Map<String, Object> payload) throws IOException, InterruptedException;
 
     /**
+     * Upsert one chapter for a Raven library title without replacing siblings.
+     *
+     * @param titleId stable title id
+     * @param chapterId stable chapter id
+     * @param payload chapter payload wrapper
+     * @return parsed JSON response
+     * @throws IOException when the response cannot be read
+     * @throws InterruptedException when the request is interrupted
+     */
+    default JsonNode putLibraryChapter(String titleId, String chapterId, Map<String, Object> payload) throws IOException, InterruptedException {
+        throw new IOException("Single-chapter Raven broker writes are unavailable.");
+    }
+
+    /**
      * Load persisted Raven download tasks.
      *
      * @return parsed JSON array payload

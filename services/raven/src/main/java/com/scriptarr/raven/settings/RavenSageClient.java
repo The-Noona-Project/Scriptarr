@@ -130,6 +130,11 @@ public class RavenSageClient implements RavenBrokerClient {
     }
 
     @Override
+    public JsonNode putLibraryChapter(String titleId, String chapterId, Map<String, Object> payload) throws IOException, InterruptedException {
+        return put("/api/internal/vault/raven/titles/" + encode(titleId) + "/chapters/" + encode(chapterId), payload);
+    }
+
+    @Override
     public JsonNode listDownloadTasks() throws IOException, InterruptedException {
         return get("/api/internal/vault/raven/download-tasks");
     }
@@ -195,8 +200,7 @@ public class RavenSageClient implements RavenBrokerClient {
             .header("Content-Type", "application/json")
             .GET()
             .build();
-        HttpResponse<String> response = send(path, request, timeout);
-        return parseResponse(path, response);
+        return sendParsed(path, request, timeout);
     }
 
     private JsonNode put(String path, Map<String, Object> payload) throws IOException, InterruptedException {
@@ -208,8 +212,7 @@ public class RavenSageClient implements RavenBrokerClient {
             .header("Content-Type", "application/json")
             .PUT(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(payload)))
             .build();
-        HttpResponse<String> response = send(path, request, timeout);
-        return parseResponse(path, response);
+        return sendParsed(path, request, timeout);
     }
 
     private JsonNode patch(String path, Map<String, Object> payload) throws IOException, InterruptedException {
@@ -221,8 +224,7 @@ public class RavenSageClient implements RavenBrokerClient {
             .header("Content-Type", "application/json")
             .method("PATCH", HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(payload)))
             .build();
-        HttpResponse<String> response = send(path, request, timeout);
-        return parseResponse(path, response);
+        return sendParsed(path, request, timeout);
     }
 
     private JsonNode delete(String path) throws IOException, InterruptedException {
@@ -234,8 +236,23 @@ public class RavenSageClient implements RavenBrokerClient {
             .header("Content-Type", "application/json")
             .DELETE()
             .build();
-        HttpResponse<String> response = send(path, request, timeout);
-        return parseResponse(path, response);
+        return sendParsed(path, request, timeout);
+    }
+
+    private JsonNode sendParsed(String path, HttpRequest request, Duration timeout) throws IOException, InterruptedException {
+        IOException lastError = null;
+        for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
+            try {
+                return parseResponse(path, sendOnce(path, request, timeout));
+            } catch (IOException error) {
+                lastError = error;
+                if (attempt >= MAX_ATTEMPTS || !isRetryableBrokerError(error)) {
+                    throw error;
+                }
+                TimeUnit.MILLISECONDS.sleep(Math.max(1, retryDelay.toMillis()) * attempt);
+            }
+        }
+        throw lastError == null ? new IOException("Sage request failed for " + path + ".") : lastError;
     }
 
     private HttpResponse<String> send(String path, HttpRequest request, Duration timeout) throws IOException, InterruptedException {
@@ -294,6 +311,19 @@ public class RavenSageClient implements RavenBrokerClient {
             throw new IOException(message);
         }
         return payload;
+    }
+
+    private boolean isRetryableBrokerError(IOException error) {
+        String message = error.getMessage() == null ? "" : error.getMessage().toLowerCase();
+        return message.contains("timed out")
+            || message.contains("timeout")
+            || message.contains("fetch failed")
+            || message.contains("connection reset")
+            || message.contains("connection refused")
+            || message.contains("returned 500")
+            || message.contains("returned 502")
+            || message.contains("returned 503")
+            || message.contains("returned 504");
     }
 
     private String trimBaseUrl() {

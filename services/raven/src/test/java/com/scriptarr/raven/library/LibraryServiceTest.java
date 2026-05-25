@@ -26,6 +26,7 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -383,6 +384,88 @@ class LibraryServiceTest {
         assertFalse(task.path("startedAt").asText("").isBlank());
         assertFalse(task.path("updatedAt").asText("").isBlank());
         assertEquals(task.path("startedAt").asText(), task.path("details").path("startedAt").asText());
+    }
+
+    /**
+     * Verify AVIF ingest checkpoints individual chapters instead of replacing
+     * a title's full chapter list for every running and ready transition.
+     *
+     * @param tempDir temporary test directory
+     * @throws Exception when the archive fixture cannot be prepared
+     */
+    @Test
+    void ingestTitleUsesSingleChapterCheckpoints(@TempDir Path tempDir) throws Exception {
+        FakeRavenBrokerClient brokerClient = new FakeRavenBrokerClient();
+        ScriptarrLogger logger = mock(ScriptarrLogger.class);
+        when(logger.getDownloadsRoot()).thenReturn(tempDir);
+        LibraryService service = new LibraryService(brokerClient, new RavenSettingsService(brokerClient, logger, List.of()), logger);
+
+        Path titleFolder = tempDir.resolve("downloaded").resolve("manga").resolve("Blue_Period");
+        Files.createDirectories(titleFolder);
+        Path firstArchive = writeArchive(titleFolder.resolve("Blue Period c001.cbz"), Map.of("001.png", pngPage(20)));
+        Path secondArchive = writeArchive(titleFolder.resolve("Blue Period c002.cbz"), Map.of("001.png", pngPage(30)));
+        LibraryTitle title = service.recordDownloadedTitle(
+            "Blue Period",
+            "Manga",
+            "https://weebcentral.com/series/blue-period",
+            "",
+            null,
+            List.of(
+                new LibraryChapter("", "Chapter 1", "1", 1, null, true, firstArchive.toString(), "", null),
+                new LibraryChapter("", "Chapter 2", "2", 1, null, true, secondArchive.toString(), "", null)
+            ),
+            titleFolder,
+            titleFolder
+        );
+        int fullReplaceWritesBeforeIngest = brokerClient.replaceChapterListWrites();
+        brokerClient.failNextLibraryChapterWrite();
+
+        LibraryTitle ingested = service.ingestTitle(title.id(), "test");
+
+        assertEquals(fullReplaceWritesBeforeIngest, brokerClient.replaceChapterListWrites());
+        assertTrue(brokerClient.singleChapterWrites() >= 5);
+        assertEquals("ready", ingested.ingestStatus());
+        assertEquals(2, ingested.ingestedChapterCount());
+        assertEquals(2, ingested.chapters().stream().filter((chapter) -> "ready".equals(chapter.ingestStatus())).count());
+    }
+
+    /**
+     * Verify exhausted chapter checkpoint retries become a useful admin queue
+     * message while preserving the retryable Raven ingest task.
+     *
+     * @param tempDir temporary test directory
+     * @throws Exception when the archive fixture cannot be prepared
+     */
+    @Test
+    void ingestTitleFailureUsesActionableCheckpointMessage(@TempDir Path tempDir) throws Exception {
+        FakeRavenBrokerClient brokerClient = new FakeRavenBrokerClient();
+        ScriptarrLogger logger = mock(ScriptarrLogger.class);
+        when(logger.getDownloadsRoot()).thenReturn(tempDir);
+        LibraryService service = new LibraryService(brokerClient, new RavenSettingsService(brokerClient, logger, List.of()), logger);
+
+        Path titleFolder = tempDir.resolve("downloaded").resolve("manhwa").resolve("A_Bona_Fide_Killer");
+        Files.createDirectories(titleFolder);
+        Path archive = writeArchive(titleFolder.resolve("A Bona Fide Killer c001.cbz"), Map.of("001.png", pngPage(20)));
+        LibraryTitle title = service.recordDownloadedTitle(
+            "A Bona Fide Killer",
+            "Manhwa",
+            "https://weebcentral.com/series/a-bona-fide-killer",
+            "",
+            null,
+            List.of(new LibraryChapter("", "Chapter 1", "1", 1, null, true, archive.toString(), "", null)),
+            titleFolder,
+            titleFolder
+        );
+        brokerClient.failNextLibraryChapterWrite();
+        brokerClient.failNextLibraryChapterWrite();
+        brokerClient.failNextLibraryChapterWrite();
+
+        assertThrows(IllegalStateException.class, () -> service.ingestTitle(title.id(), "test"));
+
+        JsonNode task = brokerClient.listDownloadTasks().get(0);
+        assertEquals("failed", task.path("status").asText());
+        assertEquals("Could not save reader-page progress. Retry reader-page ingest from the admin queue.", task.path("message").asText());
+        assertEquals("chapter_progress_persist_failed", task.path("details").path("failureCode").asText());
     }
 
     /**

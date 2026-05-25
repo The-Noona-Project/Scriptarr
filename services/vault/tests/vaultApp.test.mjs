@@ -826,6 +826,107 @@ test("vault exposes compact Raven title cards without chapter payloads", async (
   server.close();
 });
 
+test("vault upserts one Raven chapter without replacing sibling chapters", async () => {
+  const {app} = await createVaultApp();
+  const server = app.listen(0);
+  const {port} = server.address();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const headers = {
+    "Authorization": "Bearer sage-dev-token",
+    "Content-Type": "application/json"
+  };
+
+  await fetch(`${baseUrl}/api/service/raven/titles/blue-period`, {
+    method: "PUT",
+    headers,
+    body: JSON.stringify({
+      id: "blue-period",
+      title: "Blue Period",
+      mediaType: "manga",
+      libraryTypeLabel: "Manga",
+      libraryTypeSlug: "manga",
+      status: "active",
+      latestChapter: "2",
+      chapterCount: 2,
+      chaptersDownloaded: 2,
+      workingRoot: "/downloads/downloading/manga/Blue_Period",
+      downloadRoot: "/downloads/downloaded/manga/Blue_Period",
+      chapters: [{
+        id: "blue-period-c1",
+        label: "Chapter 1",
+        chapterNumber: "1",
+        pageCount: 10,
+        available: true,
+        archivePath: "/downloads/downloaded/manga/Blue_Period/Chapter_1.cbz",
+        ingestStatus: "ready",
+        ingestRevision: "avif-test-revision",
+        ingestedPageCount: 10,
+        ingestedAt: "2026-04-24T00:00:00.000Z",
+        ingestManifestPath: "/downloads/ingested/manga/blue-period/blue-period-c1/manifest.json"
+      }, {
+        id: "blue-period-c2",
+        label: "Chapter 2",
+        chapterNumber: "2",
+        pageCount: 11,
+        available: true,
+        archivePath: "/downloads/downloaded/manga/Blue_Period/Chapter_2.cbz",
+        ingestStatus: "pending"
+      }]
+    })
+  });
+
+  await fetch(`${baseUrl}/api/service/raven/titles/blue-period-copy`, {
+    method: "PUT",
+    headers,
+    body: JSON.stringify({
+      id: "blue-period-copy",
+      title: "Blue Period",
+      mediaType: "manga",
+      libraryTypeLabel: "Manga",
+      libraryTypeSlug: "manga",
+      status: "active",
+      latestChapter: "2",
+      chapterCount: 2,
+      chaptersDownloaded: 2,
+      workingRoot: "/downloads/downloading/manga/Blue_Period_Copy",
+      downloadRoot: "/downloads/downloaded/manga/Blue_Period_Copy"
+    })
+  });
+
+  const before = await fetch(`${baseUrl}/api/service/raven/titles/blue-period/chapters`, {headers}).then((response) => response.json());
+  assert.equal(before.chapters.length, 2);
+  assert.equal(before.chapters.find((chapter) => chapter.id === "blue-period-c2").ingestStatus, "pending");
+
+  const updated = await fetch(`${baseUrl}/api/service/raven/titles/blue-period-copy/chapters/blue-period-c2`, {
+    method: "PUT",
+    headers,
+    body: JSON.stringify({
+      chapter: {
+        id: "ignored-route-id-wins",
+        label: "Chapter 2",
+        chapterNumber: "2",
+        pageCount: 11,
+        available: true,
+        archivePath: "/downloads/downloaded/manga/Blue_Period/Chapter_2.cbz",
+        ingestStatus: "ready",
+        ingestRevision: "avif-single-checkpoint",
+        ingestedPageCount: 11,
+        ingestedAt: "2026-04-24T00:05:00.000Z",
+        ingestManifestPath: "/downloads/ingested/manga/blue-period/blue-period-c2/manifest.json"
+      }
+    })
+  }).then((response) => response.json());
+  assert.equal(updated.id, "blue-period-c2");
+  assert.equal(updated.ingestStatus, "ready");
+
+  const after = await fetch(`${baseUrl}/api/service/raven/titles/blue-period/chapters`, {headers}).then((response) => response.json());
+  assert.equal(after.chapters.length, 2);
+  assert.equal(after.chapters.find((chapter) => chapter.id === "blue-period-c1").ingestStatus, "ready");
+  assert.equal(after.chapters.find((chapter) => chapter.id === "blue-period-c2").ingestRevision, "avif-single-checkpoint");
+
+  server.close();
+});
+
 test("vault returns conflicts for duplicate owner claims and stale request revisions", async () => {
   const {app} = await createVaultApp();
   const server = app.listen(0);

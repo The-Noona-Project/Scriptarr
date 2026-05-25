@@ -617,6 +617,13 @@ export const createVaultClient = (config) => {
         context: "Failed to replace Raven chapters in Vault"
       })).payload;
     },
+    async upsertRavenChapter(titleId, chapterId, chapter) {
+      return (await requestJson(baseUrl, headers, `/api/service/raven/titles/${encodeURIComponent(titleId)}/chapters/${encodeURIComponent(chapterId)}`, {
+        method: "PUT",
+        body: {chapter},
+        context: "Failed to upsert a Raven chapter in Vault"
+      })).payload;
+    },
     async listRavenDownloadTasks() {
       return (await requestJson(baseUrl, headers, "/api/service/raven/download-tasks", {
         context: "Failed to list Raven download tasks from Vault"

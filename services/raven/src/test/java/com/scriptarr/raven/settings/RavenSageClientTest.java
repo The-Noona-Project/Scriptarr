@@ -13,6 +13,7 @@ import java.util.Map;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -55,6 +56,51 @@ class RavenSageClientTest {
 
             assertTrue(client.putJobTask("run-1", "task-1", Map.of("status", "queued")).path("ok").asBoolean());
             assertEquals(2, attempts.get());
+        } finally {
+            server.stop(0);
+            executor.shutdownNow();
+        }
+    }
+
+    /**
+     * Verify single-chapter checkpoints use the bounded broker route and retry
+     * transient Sage/Vault status responses.
+     *
+     * @throws Exception when the test HTTP server cannot be started
+     */
+    @Test
+    void putLibraryChapterUsesSingleChapterRouteAndRetriesTransientStatus() throws Exception {
+        AtomicInteger attempts = new AtomicInteger();
+        AtomicReference<String> requestBody = new AtomicReference<>("");
+        var executor = Executors.newCachedThreadPool();
+        HttpServer server = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0);
+        server.setExecutor(executor);
+        server.createContext("/api/internal/vault/raven/titles/title-1/chapters/chapter-1", (exchange) -> {
+            int attempt = attempts.incrementAndGet();
+            requestBody.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            if (attempt == 1) {
+                byte[] body = "{}".getBytes(StandardCharsets.UTF_8);
+                exchange.sendResponseHeaders(503, body.length);
+                exchange.getResponseBody().write(body);
+                exchange.close();
+                return;
+            }
+            byte[] body = "{\"id\":\"chapter-1\",\"ingestStatus\":\"ready\"}".getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        });
+        server.start();
+        try {
+            RavenSageClient client = testClient(server, Duration.ofMillis(50));
+
+            assertEquals("ready", client.putLibraryChapter(
+                "title-1",
+                "chapter-1",
+                Map.of("chapter", Map.of("id", "chapter-1", "ingestStatus", "running"))
+            ).path("ingestStatus").asText());
+            assertEquals(2, attempts.get());
+            assertTrue(requestBody.get().contains("\"chapter\""));
         } finally {
             server.stop(0);
             executor.shutdownNow();

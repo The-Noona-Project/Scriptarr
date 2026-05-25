@@ -53,6 +53,7 @@ public final class LibraryService {
     private static final String IMPORT_STAGING_FOLDER_NAME = "import-staging";
     private static final String RESCAN_JOB_ID = "raven-library-rescan";
     private static final String RESCAN_TASK_ID = RESCAN_JOB_ID + "_scan";
+    private static final int CHAPTER_CHECKPOINT_ATTEMPTS = 3;
     private static final TypeReference<List<LibraryTitle>> TITLE_LIST_TYPE = new TypeReference<>() {
     };
     private static final TypeReference<List<LibraryChapter>> CHAPTER_LIST_TYPE = new TypeReference<>() {
@@ -307,8 +308,10 @@ public final class LibraryService {
      */
     public synchronized LibraryTitle upsertTitle(LibraryTitle title) {
         try {
-            JsonNode payload = brokerClient.putLibraryTitle(title.id(), objectMapper.convertValue(title, new TypeReference<>() {
-            }));
+            Map<String, Object> titlePayload = objectMapper.convertValue(title, new TypeReference<>() {
+            });
+            titlePayload.remove("chapters");
+            JsonNode payload = brokerClient.putLibraryTitle(title.id(), titlePayload);
             return objectMapper.treeToValue(payload, LibraryTitle.class);
         } catch (Exception error) {
             logger.warn("LIBRARY", "Failed to persist Raven title.", error.getMessage());
@@ -333,6 +336,73 @@ public final class LibraryService {
         } catch (Exception error) {
             logger.warn("LIBRARY", "Failed to persist Raven chapters.", error.getMessage());
             throw new IllegalStateException("Failed to persist Raven chapters.", error);
+        }
+    }
+
+    /**
+     * Persist one chapter checkpoint without replacing sibling chapters.
+     *
+     * @param titleId stable title id
+     * @param chapter chapter checkpoint to persist
+     * @return persisted chapter payload
+     */
+    private LibraryChapter upsertChapter(String titleId, LibraryChapter chapter) {
+        try {
+            JsonNode payload = brokerClient.putLibraryChapter(titleId, chapter.id(), Map.of("chapter", chapter));
+            if (payload == null || payload.isMissingNode() || payload.path("error").isTextual()) {
+                return chapter;
+            }
+            return objectMapper.treeToValue(payload, LibraryChapter.class);
+        } catch (Exception error) {
+            if (error instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
+            logger.warn("LIBRARY", "Failed to persist Raven chapter checkpoint.", error.getMessage());
+            throw new IllegalStateException("Could not save reader-page progress. Retry reader-page ingest from the admin queue.", error);
+        }
+    }
+
+    /**
+     * Persist an AVIF ingest checkpoint with bounded retry.
+     *
+     * @param titleId stable title id
+     * @param chapter chapter checkpoint to persist
+     * @return persisted chapter payload
+     */
+    private LibraryChapter checkpointIngestChapter(String titleId, LibraryChapter chapter) {
+        RuntimeException lastError = null;
+        for (int attempt = 1; attempt <= CHAPTER_CHECKPOINT_ATTEMPTS; attempt += 1) {
+            try {
+                return upsertChapter(titleId, chapter);
+            } catch (RuntimeException error) {
+                lastError = error;
+                if (attempt >= CHAPTER_CHECKPOINT_ATTEMPTS) {
+                    throw error;
+                }
+                logger.warn(
+                    "LIBRARY",
+                    "Retrying Raven chapter checkpoint.",
+                    "titleId=" + titleId + " chapterId=" + chapter.id() + " attempt=" + attempt + "/" + CHAPTER_CHECKPOINT_ATTEMPTS
+                );
+                sleepBeforeCheckpointRetry(attempt);
+            }
+        }
+        throw lastError == null
+            ? new IllegalStateException("Could not save reader-page progress. Retry reader-page ingest from the admin queue.")
+            : lastError;
+    }
+
+    /**
+     * Back off briefly between checkpoint writes.
+     *
+     * @param attempt current attempt count
+     */
+    private void sleepBeforeCheckpointRetry(int attempt) {
+        try {
+            TimeUnit.MILLISECONDS.sleep(250L * Math.max(1, attempt));
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Could not save reader-page progress. Retry reader-page ingest from the admin queue.", error);
         }
     }
 
@@ -568,18 +638,19 @@ public final class LibraryService {
             for (LibraryChapter chapter : chapters) {
                 if (!chapter.available() || chapter.archivePath() == null || chapter.archivePath().isBlank()) {
                     LibraryChapter missingChapter = withIngestState(chapter, "missing", "", "", 0, null, "");
-                    updatedChapters.add(missingChapter);
-                    chapters = mergeChapterUpdate(chapters, missingChapter);
-                    replaceChapters(title.id(), chapters);
+                    LibraryChapter persistedMissing = checkpointIngestChapter(title.id(), missingChapter);
+                    updatedChapters.add(persistedMissing);
+                    chapters = mergeChapterUpdate(chapters, persistedMissing);
                     completed += 1;
                     continue;
                 }
                 LibraryChapter runningChapter = withIngestState(chapter, "running", "", chapter.ingestRevision(), chapter.ingestedPageCount(), chapter.ingestedAt(), chapter.ingestManifestPath());
-                updatedChapters.add(runningChapter);
-                replaceChapters(title.id(), mergeChapterUpdate(chapters, runningChapter));
-                LibraryIngestResult result = ingestService.ingestChapter(title, runningChapter);
+                LibraryChapter persistedRunning = checkpointIngestChapter(title.id(), runningChapter);
+                updatedChapters.add(persistedRunning);
+                chapters = mergeChapterUpdate(chapters, persistedRunning);
+                LibraryIngestResult result = ingestService.ingestChapter(title, persistedRunning);
                 LibraryChapter readyChapter = withIngestState(
-                    runningChapter,
+                    persistedRunning,
                     "ready",
                     "",
                     result.revision(),
@@ -587,19 +658,19 @@ public final class LibraryService {
                     result.ingestedAt(),
                     result.manifestPath()
                 );
-                updatedChapters.set(updatedChapters.size() - 1, readyChapter);
-                chapters = mergeChapterUpdate(chapters, readyChapter);
-                replaceChapters(title.id(), chapters);
+                LibraryChapter persistedReady = checkpointIngestChapter(title.id(), readyChapter);
+                updatedChapters.set(updatedChapters.size() - 1, persistedReady);
+                chapters = mergeChapterUpdate(chapters, persistedReady);
                 completed += 1;
                 int percent = 10 + (int) Math.floor((completed / (double) total) * 85);
                 persistIngestTask(taskId, title, "running", "Ingested " + completed + " of " + total + " chapter(s).", percent, requestedBy, "");
             }
-            LibraryTitle refreshed = replaceTitleWithChapters(title, chapters);
+            LibraryTitle refreshed = persistIngestTitleState(title, chapters);
             persistIngestTask(taskId, refreshed, "completed", "AVIF ingest completed.", 100, requestedBy, "");
             return refreshed;
         } catch (LibraryIngestException error) {
             LibraryChapter failedChapter = updatedChapters.isEmpty() ? chapters.get(0) : updatedChapters.get(updatedChapters.size() - 1);
-            chapters = mergeChapterUpdate(chapters, withIngestState(
+            LibraryChapter failedState = withIngestState(
                 failedChapter,
                 "failed",
                 sanitizeError(error.getMessage()),
@@ -607,14 +678,15 @@ public final class LibraryService {
                 failedChapter.ingestedPageCount(),
                 failedChapter.ingestedAt(),
                 failedChapter.ingestManifestPath()
-            ));
-            LibraryTitle refreshed = replaceTitleWithChapters(title, chapters);
-            persistIngestTask(taskId, refreshed, "failed", sanitizeError(error.getMessage()), Math.max(10, completed * 100 / total), requestedBy, error.failureCode());
+            );
+            chapters = mergeChapterUpdate(chapters, persistFailedChapterCheckpoint(title.id(), failedState));
+            LibraryTitle refreshed = persistIngestTitleState(title, chapters);
+            persistIngestTask(taskId, refreshed, "failed", userSafeIngestMessage(error.getMessage()), Math.max(10, completed * 100 / total), requestedBy, error.failureCode());
             throw error;
         } catch (RuntimeException error) {
             LibraryChapter failedChapter = updatedChapters.isEmpty() ? chapters.get(0) : updatedChapters.get(updatedChapters.size() - 1);
             String message = sanitizeError(firstNonBlank(error.getMessage(), "Unexpected AVIF ingest failure."));
-            chapters = mergeChapterUpdate(chapters, withIngestState(
+            LibraryChapter failedState = withIngestState(
                 failedChapter,
                 "failed",
                 message,
@@ -622,9 +694,10 @@ public final class LibraryService {
                 failedChapter.ingestedPageCount(),
                 failedChapter.ingestedAt(),
                 failedChapter.ingestManifestPath()
-            ));
-            LibraryTitle refreshed = replaceTitleWithChapters(title, chapters);
-            persistIngestTask(taskId, refreshed, "failed", message, Math.max(10, completed * 100 / total), requestedBy, "unexpected_error");
+            );
+            chapters = mergeChapterUpdate(chapters, persistFailedChapterCheckpoint(title.id(), failedState));
+            LibraryTitle refreshed = persistIngestTitleState(title, chapters);
+            persistIngestTask(taskId, refreshed, "failed", userSafeIngestMessage(message), Math.max(10, completed * 100 / total), requestedBy, failureCodeFor(message));
             throw error;
         }
     }
@@ -1025,9 +1098,16 @@ public final class LibraryService {
             .toList();
     }
 
-    private LibraryTitle replaceTitleWithChapters(LibraryTitle title, List<LibraryChapter> chapters) {
+    /**
+     * Build a title summary from the latest chapter list.
+     *
+     * @param title base title payload
+     * @param chapters latest chapter payloads
+     * @return title summary with aggregate quality and ingest state
+     */
+    private LibraryTitle buildTitleWithChapters(LibraryTitle title, List<LibraryChapter> chapters) {
         TitleQuality titleQuality = summarizeTitleQuality(chapters);
-        LibraryTitle updatedTitle = new LibraryTitle(
+        return new LibraryTitle(
             title.id(),
             title.title(),
             title.mediaType(),
@@ -1058,6 +1138,73 @@ public final class LibraryService {
             titleQuality.summary(),
             Instant.now().toString()
         );
+    }
+
+    /**
+     * Persist title-level ingest aggregates after per-chapter checkpoints.
+     *
+     * @param title base title payload
+     * @param chapters latest chapter payloads
+     * @return persisted title payload with latest chapters attached
+     */
+    private LibraryTitle persistIngestTitleState(LibraryTitle title, List<LibraryChapter> chapters) {
+        LibraryTitle updatedTitle = buildTitleWithChapters(title, chapters);
+        LibraryTitle persisted = upsertTitle(updatedTitle);
+        return persisted == null ? updatedTitle : new LibraryTitle(
+            persisted.id(),
+            persisted.title(),
+            persisted.mediaType(),
+            persisted.libraryTypeLabel(),
+            persisted.libraryTypeSlug(),
+            persisted.status(),
+            persisted.latestChapter(),
+            persisted.coverAccent(),
+            persisted.summary(),
+            persisted.releaseLabel(),
+            persisted.chapterCount(),
+            persisted.chaptersDownloaded(),
+            persisted.author(),
+            persisted.tags(),
+            persisted.aliases(),
+            persisted.metadataProvider(),
+            persisted.metadataMatchedAt(),
+            persisted.relations(),
+            persisted.sourceUrl(),
+            persisted.coverUrl(),
+            persisted.workingRoot(),
+            persisted.downloadRoot(),
+            List.copyOf(chapters),
+            persisted.qualityStatus(),
+            persisted.cleanChapterCount(),
+            persisted.partialChapterCount(),
+            persisted.missingContentCount(),
+            persisted.qualitySummary(),
+            persisted.updatedAt()
+        );
+    }
+
+    /**
+     * Best-effort failed checkpoint persistence used when ingest already failed.
+     *
+     * @param titleId stable title id
+     * @param failedChapter failed chapter state
+     * @return persisted or local failed chapter state
+     */
+    private LibraryChapter persistFailedChapterCheckpoint(String titleId, LibraryChapter failedChapter) {
+        try {
+            return checkpointIngestChapter(titleId, failedChapter);
+        } catch (RuntimeException error) {
+            logger.warn(
+                "LIBRARY",
+                "Failed to persist Raven failed-chapter checkpoint.",
+                "titleId=" + titleId + " chapterId=" + failedChapter.id() + " reason=" + sanitizeError(error.getMessage())
+            );
+            return failedChapter;
+        }
+    }
+
+    private LibraryTitle replaceTitleWithChapters(LibraryTitle title, List<LibraryChapter> chapters) {
+        LibraryTitle updatedTitle = buildTitleWithChapters(title, chapters);
         LibraryTitle persisted = upsertTitle(updatedTitle);
         List<LibraryChapter> persistedChapters = replaceChapters(title.id(), chapters);
         return persisted == null ? updatedTitle : new LibraryTitle(
@@ -1181,6 +1328,42 @@ public final class LibraryService {
     private String sanitizeError(String value) {
         String normalized = Optional.ofNullable(value).orElse("Raven ingest failed.").replaceAll("[\\r\\n]+", " ").trim();
         return normalized.length() > 240 ? normalized.substring(0, 240) : normalized;
+    }
+
+    /**
+     * Convert internal broker errors into an admin-actionable queue message.
+     *
+     * @param value raw failure message
+     * @return user-safe failure message
+     */
+    private String userSafeIngestMessage(String value) {
+        String normalized = sanitizeError(value);
+        String lower = normalized.toLowerCase(Locale.ROOT);
+        if (lower.contains("failed to persist raven chapters")
+            || lower.contains("failed to persist raven chapter")
+            || lower.contains("could not save reader-page progress")
+            || lower.contains("request timed out")
+            || lower.contains("sage request timed out")) {
+            return "Could not save reader-page progress. Retry reader-page ingest from the admin queue.";
+        }
+        return normalized;
+    }
+
+    /**
+     * Classify unexpected AVIF ingest errors for admin recovery payloads.
+     *
+     * @param value raw failure message
+     * @return stable failure code
+     */
+    private String failureCodeFor(String value) {
+        String lower = sanitizeError(value).toLowerCase(Locale.ROOT);
+        if (lower.contains("could not save reader-page progress")
+            || lower.contains("failed to persist raven chapter")
+            || lower.contains("request timed out")
+            || lower.contains("sage request timed out")) {
+            return "chapter_progress_persist_failed";
+        }
+        return "unexpected_error";
     }
 
     private void scanManagedDownloadedRoot(Path downloadedRoot, ScanCatalogContext scanContext) throws IOException {
