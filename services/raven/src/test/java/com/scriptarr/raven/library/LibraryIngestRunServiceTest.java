@@ -215,6 +215,7 @@ class LibraryIngestRunServiceTest {
         List<Map<String, Object>> runs = maps(result.get("runs"));
 
         assertEquals(2, result.get("startedCount"));
+        assertEquals(List.of("oel", "manga"), result.get("order"));
         assertEquals(2, runs.size());
         assertTrue(runs.stream().noneMatch((run) -> run.containsKey("tasks")));
         for (Map<String, Object> run : runs) {

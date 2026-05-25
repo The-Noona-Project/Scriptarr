@@ -714,11 +714,21 @@ public final class LibraryIngestRunService {
     }
 
     private int compareRunnableRuns(Map<String, Object> left, Map<String, Object> right) {
+        int priority = Integer.compare(libraryTypePriority(left), libraryTypePriority(right));
+        if (priority != 0) {
+            return priority;
+        }
         int updated = Long.compare(runOrderTimestamp(left), runOrderTimestamp(right));
         if (updated != 0) {
             return updated;
         }
         return stringValue(left.get("jobId")).compareTo(stringValue(right.get("jobId")));
+    }
+
+    private int libraryTypePriority(Map<String, Object> job) {
+        String type = stringValue(normalizeMap(job.get("payload")).get("libraryTypeSlug")).toLowerCase(Locale.ROOT);
+        int index = CLEAN_RESTART_ORDER.indexOf(type);
+        return index >= 0 ? index : CLEAN_RESTART_ORDER.size();
     }
 
     private long runOrderTimestamp(Map<String, Object> job) {
