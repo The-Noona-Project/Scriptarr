@@ -62,13 +62,14 @@
   wrappers around Raven task-control operations.
 - Sage owns the Moon-safe split between manual import and AVIF ingest: `/api/moon-v3/admin/import` forwards CBZ import
   payloads to Raven `/v1/imports`, while `/api/moon-v3/admin/ingest` reads the ingest backlog and retries
-  `/v1/ingest/:titleId/retry`. The admin ingest `retry-all` action should proxy Raven's restart-active flow and create
+  `/v1/ingest/:titleId/retry`. The admin ingest `retry-all` action should proxy Raven's clean-restart flow and create
   or reuse `/v1/ingest/runs` jobs per affected library type instead of issuing one retry request per title from the
-  browser.
+  browser. Clean restart is ingest-only and must not delete catalog rows, CBZ archives, requests, or user state.
 - Keep durable `raven-library-ingest` run summaries bounded. Admin ingest and queue payloads may expose active or
   recent run summaries, but must not hydrate all child job tasks or pass completed/failed title id arrays to Moon page
   refreshes. Safe fields include scheduler state, current-title text, queue position, progress, timing, and allowed
-  resume/cancel/restart actions; strip raw paths, exception text, and oversized nested data.
+  resume/cancel/restart actions; strip raw paths, exception text, and oversized nested data. Use the lightweight ingest
+  overview route for active polling so admin pages do not reload the full backlog table every few seconds.
 - Sage owns Appa's Portal ingest broker too. Keep `/api/internal/portal/library/ingest/preview` read-only and
   service-token protected, and make the preview use Raven's compact title-card counts plus hardware status instead of
   full `/v1/ingest` backlog payloads. Keep `/api/internal/portal/library/ingest/runs` as the only Portal path to

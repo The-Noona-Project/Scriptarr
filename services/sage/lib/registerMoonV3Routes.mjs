@@ -1349,6 +1349,8 @@ export const registerMoonV3Routes = (app, {
         needsRecovery: runtime.needsRecovery === true,
         queuedPosition,
         blockedByRunId: normalizeString(runtime.blockedByRunId),
+        titleLanes: Number.parseInt(String(runtime.titleLanes ?? 0), 10) || 0,
+        activeTitleLanes: Number.parseInt(String(runtime.activeTitleLanes ?? 0), 10) || 0,
         lastProgressAt: parseIso(runtime.lastProgressAt),
         checkedAt: parseIso(runtime.checkedAt)
       },
@@ -1389,11 +1391,47 @@ export const registerMoonV3Routes = (app, {
     };
   };
 
+  const normalizeIngestPayload = async (payload = {}, requestOptions = {}) => {
+    const summary = normalizeObject(payload.summary, {}) || {};
+    const hardware = normalizeObject(summary.hardware, normalizeObject(payload.hardware, {}) || {}) || {};
+    const totalTitles = Number.parseInt(String(summary.totalTitles ?? summary.total ?? 0), 10) || 0;
+    const readyTitles = Number.parseInt(String(summary.readyTitles ?? summary.ready ?? 0), 10) || 0;
+    const pendingTitles = Number.parseInt(String(summary.pendingTitles ?? summary.pending ?? 0), 10) || 0;
+    const failedTitles = Number.parseInt(String(summary.failedTitles ?? summary.failed ?? 0), 10) || 0;
+    const runs = await normalizeIngestRunGroups(payload, requestOptions);
+    return {
+      ...payload,
+      hardware,
+      summary: {
+        total: totalTitles,
+        ready: readyTitles,
+        pending: pendingTitles,
+        failed: failedTitles,
+        totalTitles,
+        readyTitles,
+        pendingTitles,
+        failedTitles,
+        hardware
+      },
+      titles: normalizeArray(payload.titles),
+      runs
+    };
+  };
+
   const buildLiveRavenQueuePayload = async () => {
-    const [tasks, runtimeSettings, ingestRuns] = await Promise.all([
+    const [tasks, runtimeSettings, ingestResult] = await Promise.all([
       loadLiveRavenTasks(),
       readRavenDownloadRuntimeSettings(),
-      loadIngestRunSummaries("active").catch(() => [])
+      loadIngestRunSummaries("active")
+        .then((runs) => ({runs, degraded: null}))
+        .catch((error) => ({
+          runs: [],
+          degraded: {
+            component: "ingestRuns",
+            reason: "raven-ingest-runs-unavailable",
+            message: truncateText(error?.message || "Raven ingest run summaries are unavailable.", 180)
+          }
+        }))
     ]);
     const payload = buildAdminQueuePayload(tasks, {
       concurrency: runtimeSettings.activeTitleDownloads
@@ -1401,10 +1439,11 @@ export const registerMoonV3Routes = (app, {
     return {
       ...payload,
       stats: {
-        ...payload.stats,
-        ingestRunCount: ingestRuns.length
+          ...payload.stats,
+        ingestRunCount: ingestResult.runs.length
       },
-      ingestRuns
+      ingestRuns: ingestResult.runs,
+      degraded: ingestResult.degraded ? [ingestResult.degraded] : []
     };
   };
 
@@ -2337,22 +2376,17 @@ export const registerMoonV3Routes = (app, {
 
   app.get("/api/moon-v3/admin/ingest", requireImportRead(async (_req, res) => {
     const payload = await fetchRavenJson("/v1/ingest");
-    res.json({
-      ...payload,
-      runs: await normalizeIngestRunGroups(payload)
-    });
+    res.json(await normalizeIngestPayload(payload));
+  }));
+
+  app.get("/api/moon-v3/admin/ingest/overview", requireImportRead(async (_req, res) => {
+    const payload = await fetchRavenJson("/v1/ingest/overview");
+    res.json(await normalizeIngestPayload(payload));
   }));
 
   app.post("/api/moon-v3/admin/ingest/retry-all", requireImportWrite(async (req, res) => {
-    const overview = await serviceJson(config.ravenBaseUrl, "/v1/ingest");
-    if (!overview.ok) {
-      res.status(overview.status || 502).json({error: overview.payload?.error || "Raven ingest backlog is unavailable."});
-      return;
-    }
-    const retryableTitles = normalizeArray(overview.payload?.titles)
-      .filter((title) => normalizeString(title?.id) && normalizeString(title?.ingestStatus, "pending").toLowerCase() !== "ready");
     const requestedBy = normalizeString(req.user?.discordUserId || req.user?.username, "scriptarr-admin");
-    const result = await serviceJson(config.ravenBaseUrl, "/v1/ingest/runs/restart-active", {
+    const result = await serviceJson(config.ravenBaseUrl, "/v1/ingest/runs/clean-restart", {
       method: "POST",
       body: {requestedBy}
     });
@@ -2363,7 +2397,9 @@ export const registerMoonV3Routes = (app, {
     const runs = normalizeIngestRunList(result.payload?.runs);
     const startedCount = Number.parseInt(String(result.payload?.startedCount ?? runs.length ?? 0), 10) || 0;
     const supersededCount = Number.parseInt(String(result.payload?.supersededCount ?? 0), 10) || 0;
+    const compactedCount = Number.parseInt(String(result.payload?.compactedCount ?? 0), 10) || 0;
     const failedCount = Number.parseInt(String(result.payload?.failedCount ?? 0), 10) || 0;
+    const retryableTitleCount = runs.reduce((total, run) => total + Number(run.counts?.totalTitles || 0), 0);
     const message = normalizeString(
       result.payload?.message,
       startedCount
@@ -2379,19 +2415,36 @@ export const registerMoonV3Routes = (app, {
       targetId: "ingest",
       message: `${req.user.username} started fair AVIF rebuilds for ${startedCount} library type${startedCount === 1 ? "" : "s"}.`,
       metadata: {
-        retryableTitleCount: retryableTitles.length,
+        retryableTitleCount,
         startedCount,
         supersededCount,
+        compactedCount,
         failedCount
       }
     });
     res.json({
-      retryableTitleCount: retryableTitles.length,
+      retryableTitleCount,
       startedCount,
       supersededCount,
+      compactedCount,
       failedCount,
       message: failedCount ? `${message} ${failedCount} type${failedCount === 1 ? "" : "s"} failed to start.` : message,
       runs
+    });
+  }));
+
+  app.post("/api/moon-v3/admin/ingest/runs/clean-restart", requireImportWrite(async (req, res) => {
+    const result = await serviceJson(config.ravenBaseUrl, "/v1/ingest/runs/clean-restart", {
+      method: "POST",
+      body: {requestedBy: normalizeString(req.user?.discordUserId || req.user?.username, "scriptarr-admin")}
+    });
+    if (!result.ok) {
+      res.status(result.status || 502).json({error: result.payload?.error || "Raven could not clean-restart AVIF runs."});
+      return;
+    }
+    res.status(202).json({
+      ...result.payload,
+      runs: normalizeIngestRunList(result.payload?.runs)
     });
   }));
 

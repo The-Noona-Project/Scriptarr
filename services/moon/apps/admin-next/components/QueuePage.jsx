@@ -247,7 +247,7 @@ const QueueSection = ({
  * @returns {import("react").ReactNode}
  */
 export const QueuePage = ({user}) => {
-  const {loading, refreshing, error, data, refresh} = useAdminJson("/api/moon/v3/admin/activity/queue", {
+  const {loading, refreshing, error, data, lastLoadedAt, lastRefreshError, refresh} = useAdminJson("/api/moon/v3/admin/activity/queue", {
     fallback: {
       stats: {},
       running: [],
@@ -260,7 +260,7 @@ export const QueuePage = ({user}) => {
   const [busyRunId, setBusyRunId] = useState("");
   const {notify} = useAdminToast();
   const live = useAdminEventStaleness({
-    domains: ["activity"],
+    domains: ["activity", "import"],
     enabled: true,
     locked: editorDirty,
     onStale: () => {},
@@ -281,6 +281,18 @@ export const QueuePage = ({user}) => {
     || Number(stats.needsAttentionCount || 0)
     || activeIngestRuns.length
   );
+  const refreshLabel = (() => {
+    if (refreshing) {
+      return "Updating";
+    }
+    if (live.state === "live") {
+      return "Live";
+    }
+    if (lastRefreshError && lastLoadedAt) {
+      return `Showing data from ${formatDate(lastLoadedAt)}`;
+    }
+    return "Polling fallback";
+  })();
 
   useEffect(() => {
     if (editorDirty || typeof window === "undefined") {
@@ -444,8 +456,8 @@ export const QueuePage = ({user}) => {
             <div className="admin-kicker">Activity</div>
             <h2>Live Raven queue</h2>
           </div>
-          <Badge tone={live.state === "live" ? "running" : "warning"}>
-            {refreshing ? "Refreshing quietly" : live.state === "live" ? "Live updates connected" : "Auto-refresh active"}
+          <Badge tone={live.state === "live" && !lastRefreshError ? "running" : "warning"}>
+            {refreshLabel}
           </Badge>
         </div>
         <div className="admin-metric-grid">

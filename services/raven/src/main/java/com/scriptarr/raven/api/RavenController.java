@@ -207,6 +207,18 @@ public class RavenController {
     }
 
     /**
+     * Poll-friendly ingest overview that avoids loading every backlog row.
+     *
+     * @return ingest hardware and durable run summaries
+     */
+    @GetMapping("/v1/ingest/overview")
+    public Map<String, Object> ingestOverview() {
+        Map<String, Object> payload = new LinkedHashMap<>(libraryService.listIngestOverview());
+        payload.put("runs", ingestRunService.groupedRunSummaries());
+        return payload;
+    }
+
+    /**
      * List durable ingest task snapshots for Moon's Needs attention queue.
      *
      * @return ingest tasks
@@ -275,6 +287,25 @@ public class RavenController {
     public ResponseEntity<?> restartActiveIngestRuns(@RequestBody(required = false) Map<String, Object> body) {
         try {
             return ResponseEntity.accepted().body(ingestRunService.restartActiveRuns(body));
+        } catch (IllegalArgumentException error) {
+            return ResponseEntity.badRequest().body(Map.of("error", error.getMessage()));
+        } catch (IllegalStateException error) {
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("error", error.getMessage()));
+        }
+    }
+
+    /**
+     * Non-destructively supersede active AVIF runs, compact superseded run
+     * noise, and start fresh library-type rebuilds in Scriptarr's preferred
+     * OEL-first order.
+     *
+     * @param body optional restart payload
+     * @return cleanup and restart summary
+     */
+    @PostMapping("/v1/ingest/runs/clean-restart")
+    public ResponseEntity<?> cleanRestartIngestRuns(@RequestBody(required = false) Map<String, Object> body) {
+        try {
+            return ResponseEntity.accepted().body(ingestRunService.cleanRestartRuns(body));
         } catch (IllegalArgumentException error) {
             return ResponseEntity.badRequest().body(Map.of("error", error.getMessage()));
         } catch (IllegalStateException error) {

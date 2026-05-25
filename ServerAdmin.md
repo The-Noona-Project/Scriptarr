@@ -401,14 +401,16 @@ the Raven downloads mount, confirm title and chapter metadata, and Raven copies 
 `downloaded/<type>/<title-folder>` library tree before queueing ingest.
 `/admin/ingest` is the AVIF backlog and recovery surface. It shows Raven's per-title ingest status, hardware state,
 completion counts, and retry controls. Failed ingest keeps the CBZ in place and appears as retryable work instead of
-making the title readable. Its `Start / rebuild all` action restarts active type rebuilds and starts or reuses durable
-Raven ingest runs by library type for pending or failed titles, so large backlogs move through background workers instead
-of thousands of browser requests. Raven uses a fair single-lane AVIF scheduler for those type runs: one title converts at
-a time, then the scheduler rotates to the next active library type so OEL, manga, manhwa, and other backlogs can all
-make progress. Restart-all may briefly show a run as preparing while Raven writes the durable title-task list in the
-background; after that, the run moves into the normal waiting/running fair-scheduler states. The page also shows active
-and recent durable type-run summaries with state labels, current title, queue position, last progress, title counts,
-resume/cancel controls, and ETA when Raven has enough data, without loading every child title task into the browser.
+making the title readable. Its `Start / rebuild all` action asks Raven for a clean ingest restart: active AVIF runs are
+superseded, old superseded run noise is compacted, and fresh runs start in OEL, Manhua, Manhwa, Manga, Webtoon, Comic
+order without deleting catalog rows, CBZ archives, requests, read state, follows, bookmarks, or user data. Raven uses
+balanced fair title lanes for those type runs (`SCRIPTARR_RAVEN_AVIF_TITLE_LANES`, default `2`, max `3`): one title per
+leased library type converts at a time, then the scheduler rotates to the next active type so OEL, manga, manhwa, and
+other backlogs can all make progress. Restart-all may briefly show a run as preparing while Raven writes the durable
+title-task list in the background; after that, the run moves into the normal waiting/running fair-scheduler states. The
+page also shows active and recent durable type-run summaries with state labels, current title, queue position, last
+progress, title counts, resume/cancel controls, and ETA when Raven has enough data, without loading every child title
+task into the browser.
 Appa can also start a type-wide AVIF rebuild from Discord with
 `/ingest type:<manga|manhwa|manhua|webtoon|comic|oel>`. The command previews title count from Raven's compact
 title-card projection plus Raven hardware state,
@@ -423,8 +425,10 @@ resets stale running tasks, and continues unfinished title tasks instead of star
 not fake-running; admin pages show them as waiting for the AVIF worker slot until the fair scheduler rotates to them.
 Per-title AVIF progress now checkpoints one chapter row at a time through Sage and Vault, so large titles do not rewrite
 their entire chapter list after every converted chapter. Raven also skips unchanged ready chapters during retry and
-throttles progress updates so large titles do not spam the queue store. Page conversion runs in a bounded per-chapter
-batch using `SCRIPTARR_RAVEN_AVIF_PAGE_CONCURRENCY` (default `4`, max `8`) to keep the NVIDIA encoder busy. If a
+throttles progress updates so large titles do not spam the queue store. Page conversion runs with a bounded per-chapter
+window using `SCRIPTARR_RAVEN_AVIF_PAGE_CONCURRENCY` (default `4`, max `8`) and a shared global encoder pool using
+`SCRIPTARR_RAVEN_AVIF_ENCODER_SLOTS` (default `6`, max `8`) to keep the NVIDIA encoder busy without spawning unbounded
+FFmpeg workers. If a
 checkpoint still exhausts its retry budget, the title appears in Needs attention with a retryable reader-page progress
 message instead of raw broker timeout text.
 Legacy WebP-format type runs are marked `superseded` before the AVIF run starts.

@@ -117,6 +117,8 @@ export const loadAdminLoginUrl = async (returnTo = "/admin") => {
  *   error: string,
  *   status: number,
  *   data: T,
+ *   lastLoadedAt: string,
+ *   lastRefreshError: string,
  *   refresh: () => Promise<void>,
  *   setData: import("react").Dispatch<import("react").SetStateAction<T>>
  * }}
@@ -127,6 +129,8 @@ export const useAdminJson = (url, {enabled = true, fallback = /** @type {T} */ (
   const [error, setError] = useState("");
   const [status, setStatus] = useState(0);
   const [data, setData] = useState(fallback);
+  const [lastLoadedAt, setLastLoadedAt] = useState("");
+  const [lastRefreshError, setLastRefreshError] = useState("");
   const fallbackRef = useRef(fallback);
   const hasLoadedRef = useRef(false);
   const controllerRef = useRef(null);
@@ -147,13 +151,19 @@ export const useAdminJson = (url, {enabled = true, fallback = /** @type {T} */ (
       setError("");
       setStatus(0);
       setData(fallbackRef.current);
+      setLastLoadedAt("");
+      setLastRefreshError("");
       hasLoadedRef.current = false;
       return;
     }
 
     const initialLoad = !hasLoadedRef.current;
+    if (!initialLoad && controllerRef.current) {
+      return;
+    }
     if (initialLoad) {
       setLoading(true);
+      abortCurrent();
     } else {
       setRefreshing(true);
     }
@@ -161,7 +171,6 @@ export const useAdminJson = (url, {enabled = true, fallback = /** @type {T} */ (
     const controller = new AbortController();
     const requestId = requestIdRef.current + 1;
     requestIdRef.current = requestId;
-    abortCurrent();
     controllerRef.current = controller;
 
     const isCurrentRequest = () =>
@@ -178,6 +187,7 @@ export const useAdminJson = (url, {enabled = true, fallback = /** @type {T} */ (
     setStatus(result.status);
     if (!result.ok) {
       setError(initialLoad ? result.payload?.error || "Moon could not finish loading this admin page." : "");
+      setLastRefreshError(initialLoad ? "" : result.payload?.error || "Moon could not refresh this admin page.");
       setLoading(false);
       setRefreshing(false);
       return;
@@ -185,6 +195,8 @@ export const useAdminJson = (url, {enabled = true, fallback = /** @type {T} */ (
 
     setData(result.payload);
     setError("");
+    setLastRefreshError("");
+    setLastLoadedAt(new Date().toISOString());
     hasLoadedRef.current = true;
     setLoading(false);
     setRefreshing(false);
@@ -200,7 +212,7 @@ export const useAdminJson = (url, {enabled = true, fallback = /** @type {T} */ (
     controllerRef.current = null;
   }, []);
 
-  return {loading, refreshing, error, status, data, refresh, setData};
+  return {loading, refreshing, error, status, data, lastLoadedAt, lastRefreshError, refresh, setData};
 };
 
 const AdminEventStreamContext = createContext(null);

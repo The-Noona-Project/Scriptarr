@@ -27,9 +27,10 @@ count, and a manifest path before Moon can serve it.
 Before Raven creates or catalogs a title, it resolves the logical catalog identity of library type plus normalized title
 against Vault's compact title-card projection. Downloads, manual imports, startup rescans, and AVIF ingest setup should
 therefore reuse the canonical title id even when the same title appears under a different source or filesystem folder.
-The v1 AVIF encoder is FFmpeg `av1_nvenc`. Raven converts pages in a bounded per-chapter batch
-(`SCRIPTARR_RAVEN_AVIF_PAGE_CONCURRENCY`, default `4`, max `8`) so the NVIDIA encoder is not starved by one tiny
-FFmpeg process at a time. Raven requires NVIDIA runtime access for AVIF ingest when
+The v1 AVIF encoder is FFmpeg `av1_nvenc`. Raven converts pages with a bounded per-chapter window
+(`SCRIPTARR_RAVEN_AVIF_PAGE_CONCURRENCY`, default `4`, max `8`) and a shared global encoder pool
+(`SCRIPTARR_RAVEN_AVIF_ENCODER_SLOTS`, default `6`, max `8`) so multiple titles can keep the NVIDIA encoder busy
+without spawning unbounded FFmpeg processes. Raven requires NVIDIA runtime access for AVIF ingest when
 `SCRIPTARR_RAVEN_AVIF_REQUIRE_NVIDIA=true`, `SCRIPTARR_RAVEN_INGEST_GPU_PROFILE=nvidia`, or
 `SCRIPTARR_RAVEN_INGEST_REQUIRE_NVIDIA=true`; missing hardware reports `hardware_missing` for admin attention without
 making Raven's whole health fail.
@@ -142,12 +143,13 @@ per-title failures, and reuse the active queued or running run id when the same 
 `GET /v1/ingest/runs` returns bounded active, recent, or all run summaries for admin surfaces without returning every
 child title task, including the scheduler state, current title, queue position, last progress time, and conservative
 ETA when Raven has credible timing. `/v1/ingest` includes active and recent run summaries alongside the per-title
-backlog. Type-wide rebuilds use one fair AVIF scheduler lane because title conversion is globally serialized: Raven
-processes one title for the current type, persists progress, then rotates to the next active type instead of marking
-multiple type runs as fake-running.
-The restart-all/admin flow creates lightweight preparing run summaries first, then materializes the per-title durable
-tasks in the background before handing them to the fair scheduler so the browser request does not wait on thousands of
-broker writes.
+backlog. Type-wide rebuilds use balanced fair title lanes (`SCRIPTARR_RAVEN_AVIF_TITLE_LANES`, default `2`, max `3`):
+Raven processes one title per leased library type, persists progress, then rotates to the next active type instead of
+marking waiting runs as fake-running. A per-title lock still serializes duplicate attempts for the same title id.
+The clean restart/admin flow (`POST /v1/ingest/runs/clean-restart`) supersedes active AVIF runs without deleting
+catalog data or CBZ archives, compacts old superseded run noise, then starts fresh runs in OEL, Manhua, Manhwa, Manga,
+Webtoon, Comic order. It creates lightweight preparing run summaries first, then materializes the per-title durable
+tasks in the background so the browser request does not wait on thousands of broker writes.
 If Raven restarts or loses its broker connection mid-run, startup recovery and duplicate same-type requests reattach the
 durable run, preserve already failed title tasks, and continue unfinished queued or stale-running tasks. Active legacy
 WebP-format runs are marked `superseded` before a new AVIF run is accepted for that type.

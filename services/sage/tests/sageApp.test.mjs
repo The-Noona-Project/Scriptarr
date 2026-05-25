@@ -900,7 +900,7 @@ const createDependencyStub = ({
       return;
     }
 
-    if (request.url === "/v1/ingest") {
+    if (request.url === "/v1/ingest" || request.url === "/v1/ingest/overview") {
       calls.ingestOverview += 1;
       const readyCount = currentLibraryTitles.filter((title) => title.ingestStatus === "ready").length;
       response.writeHead(200, {"Content-Type": "application/json"});
@@ -942,7 +942,7 @@ const createDependencyStub = ({
       return;
     }
 
-    if (request.url === "/v1/ingest/runs/restart-active" && request.method === "POST") {
+    if ((request.url === "/v1/ingest/runs/restart-active" || request.url === "/v1/ingest/runs/clean-restart") && request.method === "POST") {
       calls.ingestRunRestart += 1;
       readRequestBody(request).then((buffer) => {
         const payload = JSON.parse(buffer.toString() || "{}");

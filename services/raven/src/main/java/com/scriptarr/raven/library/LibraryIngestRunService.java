@@ -24,6 +24,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
 /**
@@ -48,6 +49,8 @@ public final class LibraryIngestRunService {
     private static final long MIN_ETA_ELAPSED_MILLIS = 30_000;
     private static final long MAX_ETA_MILLIS = 7L * 24L * 60L * 60L * 1000L;
     private static final int PREPARATION_WORKER_COUNT = 4;
+    private static final int DEFAULT_TITLE_LANES = 2;
+    private static final int MAX_TITLE_LANES = 3;
     private static final long SCHEDULER_STARTUP_STALE_MILLIS = 10L * 60L * 1000L;
     private static final List<String> ALLOWED_TYPE_SLUGS = List.of(
         "manga",
@@ -57,26 +60,32 @@ public final class LibraryIngestRunService {
         "comic",
         "oel"
     );
+    private static final List<String> CLEAN_RESTART_ORDER = List.of(
+        "oel",
+        "manhua",
+        "manhwa",
+        "manga",
+        "webtoon",
+        "comic"
+    );
 
     private final LibraryService libraryService;
     private final RavenBrokerClient brokerClient;
     private final ScriptarrLogger logger;
     private final ObjectMapper objectMapper = new ObjectMapper();
-    private final ExecutorService worker = Executors.newSingleThreadExecutor((runnable) -> {
-        Thread thread = new Thread(runnable, "raven-library-ingest-runner");
-        thread.setDaemon(true);
-        return thread;
-    });
+    private final int titleLaneCount = resolveConfiguredTitleLanes();
+    private final ExecutorService worker = Executors.newFixedThreadPool(titleLaneCount, new TitleLaneThreadFactory());
     private final ExecutorService preparationWorker = Executors.newFixedThreadPool(PREPARATION_WORKER_COUNT, (runnable) -> {
         Thread thread = new Thread(runnable, "raven-library-ingest-preparer");
         thread.setDaemon(true);
         return thread;
     });
     private final Set<String> activeRunIds = ConcurrentHashMap.newKeySet();
+    private final Set<String> cancellationRequestedRunIds = ConcurrentHashMap.newKeySet();
     private final Map<String, Map<String, Object>> cachedRunJobs = new ConcurrentHashMap<>();
     private volatile boolean schedulerRunning;
     private volatile long schedulerStartedAtMillis;
-    private volatile String currentRunId = "";
+    private volatile int workerSlotsInUse;
 
     /**
      * Create the durable Raven library ingest-run service.
@@ -202,6 +211,7 @@ public final class LibraryIngestRunService {
         if (isRunTerminal(job)) {
             return status(normalizedRunId);
         }
+        cancellationRequestedRunIds.add(normalizedRunId);
         for (Map<String, Object> task : loadTitleTasks(normalizedRunId)) {
             if (!isTaskTerminal(task)) {
                 putTitleTask(normalizedRunId, withTaskStatus(
@@ -214,9 +224,6 @@ public final class LibraryIngestRunService {
             }
         }
         activeRunIds.remove(normalizedRunId);
-        if (normalizedRunId.equals(currentRunId)) {
-            currentRunId = "";
-        }
         updateJob(
             job,
             STATUS_CANCELLED,
@@ -236,29 +243,45 @@ public final class LibraryIngestRunService {
      * @return rollout restart summary
      */
     public synchronized Map<String, Object> restartActiveRuns(Map<String, Object> body) {
+        return cleanRestartRuns(body);
+    }
+
+    /**
+     * Supersede noisy active AVIF runs, cooperatively stop active title work,
+     * and start fresh runs in Scriptarr's preferred library order.
+     *
+     * @param body optional body with requestedBy
+     * @return non-destructive cleanup and restart summary
+     */
+    public synchronized Map<String, Object> cleanRestartRuns(Map<String, Object> body) {
         Map<String, Object> request = body == null ? Map.of() : body;
         String requestedBy = firstNonBlank(stringValue(request.get("requestedBy")), "scriptarr-admin");
         Set<String> libraryTypes = retryableLibraryTypes();
         int supersededCount = 0;
+        int compactedCount = 0;
         for (Map<String, Object> job : loadRunJobs()) {
             if (isDurableActive(job)) {
                 String type = stringValue(normalizeMap(job.get("payload")).get("libraryTypeSlug")).toLowerCase(Locale.ROOT);
                 if (!type.isBlank()) {
                     libraryTypes.add(type);
                 }
-                supersedeRunJobOnly(job, "Superseded by admin restart of AVIF rebuilds.");
+                supersedeRun(job, "Superseded by clean AVIF ingest restart.");
                 supersededCount += 1;
+            } else if (STATUS_SUPERSEDED.equals(stringValue(job.get("status")).toLowerCase(Locale.ROOT))) {
+                compactedCount += compactSupersededRun(job);
             }
         }
         List<Map<String, Object>> runs = new ArrayList<>();
-        for (String libraryType : libraryTypes.stream().sorted().toList()) {
+        for (String libraryType : orderedLibraryTypes(libraryTypes)) {
             runs.add(createPreparingRun(libraryType, requestedBy));
         }
         return Map.of(
             "supersededCount", supersededCount,
+            "compactedCount", compactedCount,
             "startedCount", runs.size(),
+            "order", runs.stream().map((run) -> stringValue(run.get("libraryTypeSlug"))).toList(),
             "runs", runs,
-            "message", "Restarted durable AVIF ingest runs across " + runs.size() + " library type(s)."
+            "message", "Clean-started durable AVIF ingest runs across " + runs.size() + " library type(s)."
         );
     }
 
@@ -508,21 +531,17 @@ public final class LibraryIngestRunService {
         preparationWorker.shutdownNow();
     }
 
-    private void runSchedulerLoop() {
+    private void runSchedulerLoop(String runId) {
         try {
-            while (!Thread.currentThread().isInterrupted()) {
-                Map<String, Object> job = nextRunnableJob();
-                if (job.isEmpty()) {
-                    return;
-                }
-                processOneTitle(stringValue(job.get("jobId")));
-            }
+            processOneTitle(runId);
         } finally {
             synchronized (this) {
-                schedulerRunning = false;
-                schedulerStartedAtMillis = 0;
-                currentRunId = "";
-                activeRunIds.clear();
+                activeRunIds.remove(normalizeRunId(runId));
+                workerSlotsInUse = Math.max(0, workerSlotsInUse - 1);
+                schedulerRunning = workerSlotsInUse > 0;
+                if (!schedulerRunning) {
+                    schedulerStartedAtMillis = 0;
+                }
             }
             if (hasRunnableJobs()) {
                 scheduleRunWorker();
@@ -535,8 +554,6 @@ public final class LibraryIngestRunService {
         List<String> completedTitleIds = new ArrayList<>();
         List<String> failedTitleIds = new ArrayList<>();
         try {
-            activeRunIds.add(normalizedRunId);
-            currentRunId = normalizedRunId;
             Map<String, Object> job = requireRun(normalizedRunId);
             if (isRunTerminal(job)) {
                 return;
@@ -565,7 +582,11 @@ public final class LibraryIngestRunService {
             Map<String, Object> runningTask = withTaskStatus(task, STATUS_RUNNING, "Rebuilding title AVIF pages.", 5, Map.of());
             putTitleTask(normalizedRunId, runningTask);
             try {
-                LibraryTitle title = libraryService.ingestTitle(titleId, stringValue(task.get("requestedBy")));
+                LibraryTitle title = libraryService.ingestTitle(
+                    titleId,
+                    stringValue(task.get("requestedBy")),
+                    () -> cancellationRequestedRunIds.contains(normalizedRunId) || Thread.currentThread().isInterrupted()
+                );
                 if (taskStillWritable(normalizedRunId, stringValue(runningTask.get("taskId")))) {
                     putTitleTask(normalizedRunId, withTaskStatus(
                         runningTask,
@@ -578,6 +599,23 @@ public final class LibraryIngestRunService {
                             "ingestedChapterCount", title.ingestedChapterCount()
                         )
                     ));
+                }
+            } catch (LibraryIngestException error) {
+                String status = "ingest_cancelled".equals(error.failureCode()) ? STATUS_CANCELLED : STATUS_FAILED;
+                if (taskStillWritable(normalizedRunId, stringValue(runningTask.get("taskId")))) {
+                    putTitleTask(normalizedRunId, withTaskStatus(
+                        runningTask,
+                        status,
+                        sanitizeError(error.getMessage()),
+                        100,
+                        Map.of(
+                            "titleId", titleId,
+                            "error", sanitizeError(error.getMessage())
+                        )
+                    ));
+                }
+                if (!STATUS_CANCELLED.equals(status)) {
+                    logger.warn("LIBRARY", "Raven library ingest run failed a title.", "titleId=" + titleId + " error=" + error.getMessage());
                 }
             } catch (Exception error) {
                 if (taskStillWritable(normalizedRunId, stringValue(runningTask.get("taskId")))) {
@@ -612,11 +650,6 @@ public final class LibraryIngestRunService {
             } catch (Exception updateError) {
                 logger.warn("LIBRARY", "Raven could not persist failed library ingest run state.", updateError.getMessage());
             }
-        } finally {
-            activeRunIds.remove(normalizedRunId);
-            if (normalizedRunId.equals(currentRunId)) {
-                currentRunId = "";
-            }
         }
     }
 
@@ -625,6 +658,9 @@ public final class LibraryIngestRunService {
         for (Map<String, Object> job : loadRunJobs()) {
             String runId = stringValue(job.get("jobId"));
             if (runId.isBlank() || !isDurableActive(job) || isLegacyActiveRun(job)) {
+                continue;
+            }
+            if (activeRunIds.contains(runId) || cancellationRequestedRunIds.contains(runId)) {
                 continue;
             }
             String status = stringValue(job.get("status")).toLowerCase(Locale.ROOT);
@@ -798,24 +834,39 @@ public final class LibraryIngestRunService {
     }
 
     private synchronized boolean scheduleRunWorker() {
-        if (schedulerRunning && currentRunId.isBlank() && schedulerStartupIsStale()) {
-            schedulerRunning = false;
-            schedulerStartedAtMillis = 0;
-        }
-        if (worker.isShutdown() || schedulerRunning) {
+        if (worker.isShutdown()) {
             return false;
         }
-        schedulerRunning = true;
-        schedulerStartedAtMillis = Instant.now().toEpochMilli();
-        try {
-            worker.execute(this::runSchedulerLoop);
-            return true;
-        } catch (RejectedExecutionException error) {
-            schedulerRunning = false;
-            schedulerStartedAtMillis = 0;
-            logger.warn("LIBRARY", "Raven library ingest-run worker could not accept a durable run.", error.getMessage());
-            return false;
+        boolean scheduled = false;
+        while (workerSlotsInUse < titleLaneCount) {
+            Map<String, Object> job = nextRunnableJob();
+            if (job.isEmpty()) {
+                break;
+            }
+            String runId = normalizeRunId(stringValue(job.get("jobId")));
+            if (runId.isBlank() || !activeRunIds.add(runId)) {
+                break;
+            }
+            workerSlotsInUse += 1;
+            schedulerRunning = true;
+            if (schedulerStartedAtMillis <= 0) {
+                schedulerStartedAtMillis = Instant.now().toEpochMilli();
+            }
+            try {
+                worker.execute(() -> runSchedulerLoop(runId));
+                scheduled = true;
+            } catch (RejectedExecutionException error) {
+                activeRunIds.remove(runId);
+                workerSlotsInUse = Math.max(0, workerSlotsInUse - 1);
+                schedulerRunning = workerSlotsInUse > 0;
+                if (!schedulerRunning) {
+                    schedulerStartedAtMillis = 0;
+                }
+                logger.warn("LIBRARY", "Raven library ingest-run worker could not accept a durable run.", error.getMessage());
+                break;
+            }
         }
+        return scheduled;
     }
 
     private boolean schedulerStartupIsStale() {
@@ -1072,10 +1123,8 @@ public final class LibraryIngestRunService {
 
     private void supersedeRun(Map<String, Object> job, String message) {
         String runId = stringValue(job.get("jobId"));
+        cancellationRequestedRunIds.add(runId);
         activeRunIds.remove(runId);
-        if (runId.equals(currentRunId)) {
-            currentRunId = "";
-        }
         for (Map<String, Object> task : loadTitleTasks(runId)) {
             if (!isTaskTerminal(task)) {
                 putTitleTask(runId, withTaskStatus(
@@ -1101,10 +1150,8 @@ public final class LibraryIngestRunService {
 
     private void supersedeRunJobOnly(Map<String, Object> job, String message) {
         String runId = stringValue(job.get("jobId"));
+        cancellationRequestedRunIds.add(runId);
         activeRunIds.remove(runId);
-        if (runId.equals(currentRunId)) {
-            currentRunId = "";
-        }
         updateJob(
             job,
             STATUS_SUPERSEDED,
@@ -1195,12 +1242,17 @@ public final class LibraryIngestRunService {
         int position = 1;
         for (Map<String, Object> job : active) {
             String runId = stringValue(job.get("jobId"));
-            positions.put(runId, runId.equals(currentRunId) ? 0 : position);
-            if (!runId.equals(currentRunId)) {
+            boolean running = activeRunIds.contains(runId);
+            positions.put(runId, running ? 0 : position);
+            if (!running) {
                 position += 1;
             }
         }
         return positions;
+    }
+
+    private String firstActiveRunId() {
+        return activeRunIds.stream().sorted().findFirst().orElse("");
     }
 
     private Map<String, Object> runtimeSummary(
@@ -1210,12 +1262,12 @@ public final class LibraryIngestRunService {
     ) {
         String runId = stringValue(job.get("jobId"));
         String status = stringValue(job.get("status")).toLowerCase(Locale.ROOT);
-        boolean workerActive = activeRunIds.contains(runId) && runId.equals(currentRunId);
+        boolean workerActive = activeRunIds.contains(runId);
         boolean terminal = isRunTerminal(job);
         boolean preparing = STATUS_PREPARING.equals(status);
-        boolean schedulerPreflight = schedulerRunning && currentRunId.isBlank();
+        boolean schedulerPreflight = schedulerRunning && activeRunIds.isEmpty();
         boolean schedulerStalled = schedulerRunning
-            && currentRunId.isBlank()
+            && activeRunIds.isEmpty()
             && schedulerStartupIsStale()
             && !preparing
             && tasks.stream().anyMatch((task) -> !isTaskTerminal(task));
@@ -1241,7 +1293,9 @@ public final class LibraryIngestRunService {
         runtime.put("workerActive", workerActive);
         runtime.put("needsRecovery", needsRecovery || ("detached".equals(schedulerState) && tasks.stream().anyMatch((task) -> !isTaskTerminal(task))));
         runtime.put("queuedPosition", positions.getOrDefault(runId, workerActive ? 0 : null));
-        runtime.put("blockedByRunId", !workerActive && schedulerRunning && !currentRunId.isBlank() ? currentRunId : "");
+        runtime.put("blockedByRunId", !workerActive && schedulerRunning ? firstActiveRunId() : "");
+        runtime.put("titleLanes", titleLaneCount);
+        runtime.put("activeTitleLanes", activeRunIds.size());
         runtime.put("lastProgressAt", lastProgressAt(job, tasks));
         runtime.put("checkedAt", Instant.now().toString());
         return runtime;
@@ -1426,6 +1480,49 @@ public final class LibraryIngestRunService {
         return LibraryNaming.normalizeTypeLabel(firstNonBlank(typeSlug, "manga"));
     }
 
+    private List<String> orderedLibraryTypes(Set<String> libraryTypes) {
+        Set<String> normalized = Optional.ofNullable(libraryTypes).orElse(Set.of()).stream()
+            .map(LibraryNaming::normalizeTypeSlug)
+            .filter(ALLOWED_TYPE_SLUGS::contains)
+            .collect(Collectors.toCollection(LinkedHashSet::new));
+        List<String> ordered = new ArrayList<>();
+        for (String type : CLEAN_RESTART_ORDER) {
+            if (normalized.remove(type)) {
+                ordered.add(type);
+            }
+        }
+        ordered.addAll(normalized.stream().sorted().toList());
+        return List.copyOf(ordered);
+    }
+
+    private int compactSupersededRun(Map<String, Object> job) {
+        Map<String, Object> payload = new LinkedHashMap<>(normalizeMap(job.get("payload")));
+        if (Boolean.TRUE.equals(payload.get("compacted"))) {
+            return 0;
+        }
+        payload.put("compacted", true);
+        payload.put("compactedAt", Instant.now().toString());
+        Map<String, Object> compacted = new LinkedHashMap<>(job);
+        compacted.put("payload", payload);
+        compacted.put("message", firstNonBlank(stringValue(job.get("message")), "Superseded AVIF rebuild compacted."));
+        compacted.put("updatedAt", Instant.now().toString());
+        putJob(stringValue(job.get("jobId")), compacted);
+        return 1;
+    }
+
+    private static int resolveConfiguredTitleLanes() {
+        String raw = Optional.ofNullable(System.getenv("SCRIPTARR_RAVEN_AVIF_TITLE_LANES"))
+            .filter((value) -> !value.isBlank())
+            .orElseGet(() -> Optional.ofNullable(System.getenv("SCRIPTARR_RAVEN_INGEST_TITLE_LANES")).orElse(""));
+        try {
+            return raw == null || raw.isBlank()
+                ? DEFAULT_TITLE_LANES
+                : Math.max(1, Math.min(MAX_TITLE_LANES, Integer.parseInt(raw.trim())));
+        } catch (NumberFormatException ignored) {
+            return DEFAULT_TITLE_LANES;
+        }
+    }
+
     private String titleTaskId(String runId, String titleId) {
         return runId + "_title_" + LibraryNaming.slugifySegment(titleId);
     }
@@ -1494,5 +1591,16 @@ public final class LibraryIngestRunService {
 
     private String stringValue(Object value) {
         return value == null ? "" : String.valueOf(value).trim();
+    }
+
+    private static final class TitleLaneThreadFactory implements java.util.concurrent.ThreadFactory {
+        private final AtomicInteger counter = new AtomicInteger(1);
+
+        @Override
+        public Thread newThread(Runnable runnable) {
+            Thread thread = new Thread(runnable, "raven-library-ingest-title-" + counter.getAndIncrement());
+            thread.setDaemon(true);
+            return thread;
+        }
     }
 }

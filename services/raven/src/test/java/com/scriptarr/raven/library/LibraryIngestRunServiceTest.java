@@ -130,14 +130,14 @@ class LibraryIngestRunServiceTest {
     }
 
     /**
-     * Verify a second library type waits behind the single fair scheduler lane
-     * instead of being reported as another true running worker.
+     * Verify the balanced fair scheduler can use a second title lane instead
+     * of reporting all other library types as fake waiting work.
      *
      * @param tempDir temporary Raven data root
      * @throws Exception when the fixture cannot be prepared
      */
     @Test
-    void fairSchedulerKeepsOtherTypesWaitingWhileOneTitleRuns(@TempDir Path tempDir) throws Exception {
+    void fairSchedulerUsesSecondTitleLaneWhileFirstTitleBlocks(@TempDir Path tempDir) throws Exception {
         FakeRavenBrokerClient brokerClient = new FakeRavenBrokerClient();
         TestLogger logger = new TestLogger(tempDir);
         BlockingTranscoder transcoder = new BlockingTranscoder();
@@ -149,12 +149,12 @@ class LibraryIngestRunServiceTest {
         Map<String, Object> manga = runService.createRun(Map.of("libraryTypeSlug", "manga"));
         assertTrue(transcoder.started.await(2, TimeUnit.SECONDS));
         Map<String, Object> oel = runService.createRun(Map.of("libraryTypeSlug", "oel"));
-        Map<String, Object> oelStatus = runService.status(String.valueOf(oel.get("runId")));
+        Map<String, Object> oelStatus = awaitStatus(runService, String.valueOf(oel.get("runId")), "running");
 
-        assertEquals("queued", oelStatus.get("status"));
-        assertEquals("waiting", map(oelStatus.get("runtime")).get("schedulerState"));
+        assertEquals("running", oelStatus.get("status"));
+        assertEquals("running", map(oelStatus.get("runtime")).get("schedulerState"));
         assertEquals("running", map(runService.status(String.valueOf(manga.get("runId"))).get("runtime")).get("schedulerState"));
-        assertTrue((Integer) map(oelStatus.get("runtime")).get("queuedPosition") > 0);
+        assertEquals(0, map(oelStatus.get("runtime")).get("queuedPosition"));
 
         transcoder.release.countDown();
         assertEquals("completed", awaitStatus(runService, String.valueOf(manga.get("runId")), "completed").get("status"));
@@ -163,7 +163,8 @@ class LibraryIngestRunServiceTest {
     }
 
     /**
-     * Verify cancelling a waiting run keeps it from consuming the AVIF lane.
+     * Verify cancelling a run waiting behind the configured title lanes keeps
+     * it from consuming an AVIF lane.
      *
      * @param tempDir temporary Raven data root
      * @throws Exception when the fixture cannot be prepared
@@ -175,11 +176,13 @@ class LibraryIngestRunServiceTest {
         BlockingTranscoder transcoder = new BlockingTranscoder();
         LibraryService libraryService = libraryService(brokerClient, logger, transcoder);
         recordTitle(libraryService, tempDir, "Blocked Manga", "Manga", "001.png");
+        recordTitle(libraryService, tempDir, "Blocked Manhwa", "Manhwa", "001.png");
         LibraryTitle waitingTitle = recordTitle(libraryService, tempDir, "Waiting OEL", "OEL", "001.png");
         LibraryIngestRunService runService = new LibraryIngestRunService(libraryService, brokerClient, logger);
 
         Map<String, Object> manga = runService.createRun(Map.of("libraryTypeSlug", "manga"));
         assertTrue(transcoder.started.await(2, TimeUnit.SECONDS));
+        Map<String, Object> manhwa = runService.createRun(Map.of("libraryTypeSlug", "manhwa"));
         Map<String, Object> oel = runService.createRun(Map.of("libraryTypeSlug", "oel"));
         Map<String, Object> cancelled = runService.cancelRun(String.valueOf(oel.get("runId")));
 
@@ -187,6 +190,7 @@ class LibraryIngestRunServiceTest {
         assertEquals(List.of("cancelled"), statuses(cancelled));
         transcoder.release.countDown();
         assertEquals("completed", awaitStatus(runService, String.valueOf(manga.get("runId")), "completed").get("status"));
+        assertEquals("completed", awaitStatus(runService, String.valueOf(manhwa.get("runId")), "completed").get("status"));
         assertEquals("pending", libraryService.findTitleById(waitingTitle.id()).ingestStatus());
         runService.shutdown();
     }

@@ -48,15 +48,17 @@ test("admin queue keeps a polling fallback and always reserves ETA copy", () => 
   assert.match(source, /<IngestRunsPanel/);
   assert.match(source, /payload\.ingestRuns/);
   assert.match(source, /canImportWrite/);
-  assert.match(source, /"Auto-refresh active"/);
+  assert.match(source, /"Polling fallback"/);
+  assert.match(source, /domains: \["activity", "import"\]/);
 });
 
 test("admin ingest exposes bulk retry through a same-origin route", () => {
   const source = readMoonFile("apps/admin-next/components/IngestPage.jsx");
 
   assert.match(source, /\/api\/moon\/v3\/admin\/ingest\/retry-all/);
+  assert.match(source, /\/api\/moon\/v3\/admin\/ingest\/overview/);
   assert.match(source, /ACTIVE_INGEST_POLL_INTERVAL_MS = 5_000/);
-  assert.match(source, /window\.setInterval\(\s*\(\) => void refresh\(\)/);
+  assert.match(source, /hasActiveRuns \? refreshOverview\(\) : refresh\(\)/);
   assert.match(source, /<IngestRunsPanel/);
   assert.match(source, /Start \/ rebuild all/);
   assert.match(source, /\/api\/moon\/v3\/admin\/ingest\/runs\/\$\{encodeURIComponent\(runId\)\}\/\$\{action\}/);

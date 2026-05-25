@@ -35,12 +35,14 @@
   same-type requests must reattach detached queued/running runs, preserve already failed title tasks, and continue only
   unfinished queued or stale-running tasks. Legacy WebP-format active runs should be marked `superseded` before the
   AVIF run starts.
-- Keep type-wide AVIF rebuilds on the fair single-lane scheduler. Only the currently leased run/task should be marked
-  `running`; other unfinished active runs should remain queued or waiting with a bounded queue position. Summaries may
-  expose scheduler state, current title text, last progress, and ETA, but never full child task arrays or storage paths.
-  Resume, cancel, and restart-active controls should change durable run state without creating duplicate active runs.
-  Restart-active should return bounded preparing run summaries quickly and materialize large per-title task sets in the
-  background before queueing them onto the fair scheduler.
+- Keep type-wide AVIF rebuilds on bounded fair title lanes (`SCRIPTARR_RAVEN_AVIF_TITLE_LANES`, default `2`, max `3`).
+  Only leased run/tasks should be marked `running`; unfinished runs beyond the lane count should remain queued or
+  waiting with a bounded queue position. Summaries may expose scheduler state, current title text, last progress, and
+  ETA, but never full child task arrays or storage paths. Resume, cancel, restart-active, and clean-restart controls
+  should change durable run state without creating duplicate active runs. Clean restart must be ingest-only: supersede
+  AVIF runs, compact superseded run noise, and start fresh runs OEL-first without deleting catalog rows or CBZ archives.
+  Restart actions should return bounded preparing run summaries quickly and materialize large per-title task sets in
+  the background before queueing them onto the fair scheduler.
 - If the canonical title set changes because Vault merged duplicate catalog rows, a same-type ingest request should
   supersede the stale active run and queue a fresh AVIF rebuild over canonical title ids only.
 - Keep `/v1/ingest` backlog and Appa preview/count paths lightweight. They should use compact title-card projections
@@ -53,8 +55,9 @@
   route. Do not call full chapter-list replacement from the hot loop; reserve full replacement for catalog creation,
   import, rescan, and merge flows. Avoid per-chapter `running` writes unless a future UI needs time-throttled
   long-chapter visibility.
-- Keep AVIF conversion page-parallel but bounded. `SCRIPTARR_RAVEN_AVIF_PAGE_CONCURRENCY` defaults to `4` and should
-  stay capped so Raven uses the NVIDIA encoder effectively without spawning unbounded FFmpeg processes.
+- Keep AVIF conversion page-parallel but bounded. `SCRIPTARR_RAVEN_AVIF_PAGE_CONCURRENCY` defaults to `4` and
+  `SCRIPTARR_RAVEN_AVIF_ENCODER_SLOTS` defaults to `6`; both should stay capped so Raven uses the NVIDIA encoder
+  effectively without spawning unbounded FFmpeg processes.
 - Before retrying a ready chapter, verify the existing AVIF revision, manifest, and page files. Reuse unchanged ready
   chapters instead of forcing the GPU to rebuild pages it already produced.
 - The v1 ingest encoder is FFmpeg `av1_nvenc`. NVIDIA runtime checks are required for AVIF ingest when the profile or

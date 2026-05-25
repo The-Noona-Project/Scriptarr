@@ -4,7 +4,7 @@
  * @file Raven reader-page ingest backlog page for Moon admin.
  */
 
-import {useEffect, useState} from "react";
+import {useCallback, useEffect, useState} from "react";
 import {hasAdminGrant} from "../lib/access.js";
 import {requestJson, useAdminEventStaleness, useAdminJson} from "../lib/api.js";
 import {formatDate, normalizeString} from "../lib/format.js";
@@ -34,10 +34,12 @@ const statusTone = (status) => {
  * @returns {import("react").ReactNode}
  */
 export const IngestPage = ({user}) => {
-  const {loading, refreshing, error, data, refresh} = useAdminJson("/api/moon/v3/admin/ingest", {
+  const {loading, refreshing, error, data, lastLoadedAt, lastRefreshError, refresh, setData} = useAdminJson("/api/moon/v3/admin/ingest", {
     fallback: {summary: {}, titles: []}
   });
   const [busyTitleId, setBusyTitleId] = useState("");
+  const [overviewRefreshing, setOverviewRefreshing] = useState(false);
+  const [overviewLoadedAt, setOverviewLoadedAt] = useState("");
   const {notify} = useAdminToast();
   const canWrite = hasAdminGrant(user, "import", "write");
   const live = useAdminEventStaleness({
@@ -54,6 +56,39 @@ export const IngestPage = ({user}) => {
   const hasActiveRuns = activeRuns.length > 0;
   const retryableTitleCount = titles.filter((title) => normalizeString(title.ingestStatus, "pending").toLowerCase() !== "ready").length;
   const retryAllBusy = busyTitleId === "__all__";
+  const lastSeenAt = overviewLoadedAt || lastLoadedAt;
+  const refreshLabel = (() => {
+    if (refreshing || overviewRefreshing) {
+      return "Updating";
+    }
+    if (live.state === "live") {
+      return "Live";
+    }
+    if (lastRefreshError && lastSeenAt) {
+      return `Showing data from ${formatDate(lastSeenAt)}`;
+    }
+    return "Polling fallback";
+  })();
+  const refreshTone = live.state === "live" && !lastRefreshError ? "good" : "warning";
+
+  const refreshOverview = useCallback(async () => {
+    setOverviewRefreshing(true);
+    const result = await requestJson("/api/moon/v3/admin/ingest/overview");
+    if (result.ok) {
+      setData((current) => ({
+        ...(current || {}),
+        summary: {
+          ...(current?.summary || {}),
+          hardware: result.payload?.summary?.hardware || current?.summary?.hardware || {}
+        },
+        runs: result.payload?.runs || current?.runs || {}
+      }));
+      setOverviewLoadedAt(new Date().toISOString());
+    } else if (!hasActiveRuns) {
+      await refresh();
+    }
+    setOverviewRefreshing(false);
+  }, [hasActiveRuns, refresh, setData]);
 
   const retry = async (titleId) => {
     setBusyTitleId(titleId);
@@ -102,11 +137,11 @@ export const IngestPage = ({user}) => {
       return undefined;
     }
     const interval = window.setInterval(
-      () => void refresh(),
+      () => void (hasActiveRuns ? refreshOverview() : refresh()),
       hasActiveRuns ? ACTIVE_INGEST_POLL_INTERVAL_MS : IDLE_INGEST_POLL_INTERVAL_MS
     );
     return () => window.clearInterval(interval);
-  }, [busyTitleId, hasActiveRuns, refresh]);
+  }, [busyTitleId, hasActiveRuns, refresh, refreshOverview]);
 
   if (loading) {
     return (
@@ -136,8 +171,8 @@ export const IngestPage = ({user}) => {
             <div className="admin-kicker">Import</div>
             <h2>AVIF ingest</h2>
           </div>
-          <AdminStatusBadge tone={live.state === "live" ? "good" : "warning"}>
-            {refreshing ? "Refreshing quietly" : live.state === "live" ? "Live" : "Degraded"}
+          <AdminStatusBadge tone={refreshTone}>
+            {refreshLabel}
           </AdminStatusBadge>
         </div>
         <div className="admin-metric-grid">

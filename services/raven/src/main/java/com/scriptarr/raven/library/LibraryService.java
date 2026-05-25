@@ -40,6 +40,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.BooleanSupplier;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
@@ -69,6 +70,7 @@ public final class LibraryService {
     private final Map<String, ReaderArchiveIndex> readerArchiveIndexes = new ConcurrentHashMap<>();
     private final Map<String, PageValidationResult> readerPageValidations = new ConcurrentHashMap<>();
     private final Map<String, String> ingestTaskStartedAt = new ConcurrentHashMap<>();
+    private final Map<String, Object> titleIngestLocks = new ConcurrentHashMap<>();
 
     /**
      * Create the shared Raven library service.
@@ -620,7 +622,34 @@ public final class LibraryService {
      * @param requestedBy actor requesting ingest
      * @return updated title
      */
-    public synchronized LibraryTitle ingestTitle(String titleId, String requestedBy) {
+    public LibraryTitle ingestTitle(String titleId, String requestedBy) {
+        return ingestTitle(titleId, requestedBy, () -> false);
+    }
+
+    /**
+     * Run or retry AVIF ingest for every chapter in a title with cooperative
+     * cancellation. Different titles may ingest concurrently, but a single
+     * title id remains serialized so two callers cannot publish the same
+     * chapter folder at once.
+     *
+     * @param titleId title id
+     * @param requestedBy actor requesting ingest
+     * @param cancelled cancellation predicate checked between units of work
+     * @return updated title
+     */
+    public LibraryTitle ingestTitle(String titleId, String requestedBy, BooleanSupplier cancelled) {
+        String normalizedTitleId = firstNonBlank(titleId, "").trim();
+        Object titleLock = titleIngestLocks.computeIfAbsent(normalizedTitleId, (_key) -> new Object());
+        synchronized (titleLock) {
+            try {
+                return ingestTitleLocked(normalizedTitleId, requestedBy, cancelled == null ? () -> false : cancelled);
+            } finally {
+                titleIngestLocks.remove(normalizedTitleId, titleLock);
+            }
+        }
+    }
+
+    private LibraryTitle ingestTitleLocked(String titleId, String requestedBy, BooleanSupplier cancelled) {
         LibraryTitle title = loadTitleById(titleId);
         if (title == null) {
             throw new IllegalArgumentException("Raven title not found.");
@@ -638,6 +667,7 @@ public final class LibraryService {
         long lastTaskProgressAt = System.currentTimeMillis();
         try {
             for (LibraryChapter chapter : chapters) {
+                throwIfIngestCancelled(cancelled);
                 if (!chapter.available() || chapter.archivePath() == null || chapter.archivePath().isBlank()) {
                     LibraryChapter missingChapter = withIngestState(chapter, "missing", "", "", 0, null, "");
                     LibraryChapter persistedMissing = checkpointIngestChapter(title.id(), missingChapter);
@@ -658,7 +688,8 @@ public final class LibraryService {
                     continue;
                 }
                 updatedChapters.add(chapter);
-                LibraryIngestResult result = ingestService.ingestChapter(title, chapter);
+                LibraryIngestResult result = ingestService.ingestChapter(title, chapter, cancelled);
+                throwIfIngestCancelled(cancelled);
                 LibraryChapter readyChapter = withIngestState(
                     chapter,
                     "ready",
@@ -679,6 +710,7 @@ public final class LibraryService {
                     lastTaskProgressAt = System.currentTimeMillis();
                 }
             }
+            throwIfIngestCancelled(cancelled);
             LibraryTitle refreshed = persistIngestTitleState(title, chapters);
             persistIngestTask(taskId, refreshed, "completed", "AVIF ingest completed.", 100, requestedBy, "");
             return refreshed;
@@ -750,6 +782,25 @@ public final class LibraryService {
                 "hardware", ingestService.hardwareStatus()
             ),
             "titles", rows
+        );
+    }
+
+    /**
+     * Build a lightweight ingest overview for polling active durable type runs.
+     * This intentionally avoids loading all compact title rows.
+     *
+     * @return hardware and stable summary placeholders
+     */
+    public Map<String, Object> listIngestOverview() {
+        return Map.of(
+            "summary", Map.of(
+                "totalTitles", 0,
+                "readyTitles", 0,
+                "pendingTitles", 0,
+                "failedTitles", 0,
+                "hardware", ingestService.hardwareStatus()
+            ),
+            "titles", List.of()
         );
     }
 
@@ -1195,6 +1246,12 @@ public final class LibraryService {
             persisted.qualitySummary(),
             persisted.updatedAt()
         );
+    }
+
+    private void throwIfIngestCancelled(BooleanSupplier cancelled) {
+        if (cancelled != null && cancelled.getAsBoolean()) {
+            throw new LibraryIngestException("ingest_cancelled", "AVIF ingest cancelled by admin.");
+        }
     }
 
     /**

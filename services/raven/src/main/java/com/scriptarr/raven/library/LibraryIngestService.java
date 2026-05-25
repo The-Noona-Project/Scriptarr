@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.scriptarr.raven.settings.RavenNamingSettings;
 import com.scriptarr.raven.settings.RavenSettingsService;
 import com.scriptarr.raven.support.ScriptarrLogger;
+import jakarta.annotation.PreDestroy;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
@@ -32,6 +33,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BooleanSupplier;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
@@ -45,12 +47,16 @@ public final class LibraryIngestService {
     private static final int AVIF_QUALITY = 50;
     private static final int DEFAULT_PAGE_CONCURRENCY = 4;
     private static final int MAX_PAGE_CONCURRENCY = 8;
+    private static final int DEFAULT_ENCODER_SLOTS = 6;
+    private static final int MAX_ENCODER_SLOTS = 8;
     private static final int NVIDIA_PROBE_TIMEOUT_SECONDS = 3;
 
     private final RavenSettingsService settingsService;
     private final ScriptarrLogger logger;
     private final PageTranscoder transcoder;
     private final int pageConcurrency;
+    private final int encoderSlots;
+    private final ExecutorService pageExecutor;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     /**
@@ -62,7 +68,7 @@ public final class LibraryIngestService {
      */
     @Autowired
     public LibraryIngestService(RavenSettingsService settingsService, ScriptarrLogger logger, PageTranscoder transcoder) {
-        this(settingsService, logger, transcoder, resolveConfiguredPageConcurrency());
+        this(settingsService, logger, transcoder, resolveConfiguredPageConcurrency(), resolveConfiguredEncoderSlots());
     }
 
     /**
@@ -75,10 +81,22 @@ public final class LibraryIngestService {
      * @param pageConcurrency maximum per-chapter page transcodes
      */
     LibraryIngestService(RavenSettingsService settingsService, ScriptarrLogger logger, PageTranscoder transcoder, int pageConcurrency) {
+        this(settingsService, logger, transcoder, pageConcurrency, resolveConfiguredEncoderSlots());
+    }
+
+    private LibraryIngestService(
+        RavenSettingsService settingsService,
+        ScriptarrLogger logger,
+        PageTranscoder transcoder,
+        int pageConcurrency,
+        int encoderSlots
+    ) {
         this.settingsService = settingsService;
         this.logger = logger;
         this.transcoder = transcoder;
         this.pageConcurrency = Math.max(1, Math.min(MAX_PAGE_CONCURRENCY, pageConcurrency));
+        this.encoderSlots = Math.max(1, Math.min(MAX_ENCODER_SLOTS, encoderSlots));
+        this.pageExecutor = Executors.newFixedThreadPool(this.encoderSlots, new PageWorkerThreadFactory());
     }
 
     /**
@@ -90,7 +108,21 @@ public final class LibraryIngestService {
      * @return successful ingest result
      */
     public LibraryIngestResult ingestChapter(LibraryTitle title, LibraryChapter chapter) {
+        return ingestChapter(title, chapter, () -> false);
+    }
+
+    /**
+     * Convert a single canonical CBZ chapter into AVIF pages with cooperative
+     * cancellation between extraction, transcode, and publish checkpoints.
+     *
+     * @param title library title owning the chapter
+     * @param chapter chapter with a canonical CBZ archive path
+     * @param cancelled cancellation predicate
+     * @return successful ingest result
+     */
+    public LibraryIngestResult ingestChapter(LibraryTitle title, LibraryChapter chapter, BooleanSupplier cancelled) {
         assertHardwareReady();
+        throwIfCancelled(cancelled);
         Path archivePath = resolveArchivePath(chapter);
         Path dataRoot = resolveDataRoot();
         Path finalRoot = dataRoot
@@ -105,14 +137,16 @@ public final class LibraryIngestService {
 
         try {
             Files.createDirectories(stageRoot);
-            List<PageManifestEntry> pages = transcodeArchivePages(title, archivePath, stageRoot);
+            List<PageManifestEntry> pages = transcodeArchivePages(title, archivePath, stageRoot, cancelled == null ? () -> false : cancelled);
             if (pages.isEmpty()) {
                 throw new LibraryIngestException("empty_archive", "CBZ archive did not contain readable image pages.");
             }
+            throwIfCancelled(cancelled);
             String revision = buildRevision(archivePath, pages.size());
             String ingestedAt = Instant.now().toString();
             Path manifestPath = stageRoot.resolve("manifest.json");
             writeManifest(manifestPath, title, chapter, archivePath, revision, ingestedAt, pages);
+            throwIfCancelled(cancelled);
             publishStage(stageRoot, finalRoot);
             return new LibraryIngestResult(
                 "ready",
@@ -129,6 +163,14 @@ public final class LibraryIngestService {
             deleteTreeQuietly(stageRoot);
             throw new LibraryIngestException("ingest_failed", sanitizeError(error.getMessage()));
         }
+    }
+
+    /**
+     * Stop the shared AVIF page worker pool on Spring shutdown.
+     */
+    @PreDestroy
+    public void shutdown() {
+        pageExecutor.shutdownNow();
     }
 
     /**
@@ -163,6 +205,8 @@ public final class LibraryIngestService {
         status.put("encoder", transcoder.encoderName());
         status.put("format", transcoder.format());
         status.put("mediaType", transcoder.mediaType());
+        status.put("pageConcurrency", pageConcurrency);
+        status.put("encoderSlots", encoderSlots);
         status.put("message", present ? encoder.message() : "NVIDIA runtime access is not available for Raven ingest.");
         return Map.copyOf(status);
     }
@@ -185,10 +229,16 @@ public final class LibraryIngestService {
         return transcoder.format() + "-";
     }
 
-    private List<PageManifestEntry> transcodeArchivePages(LibraryTitle title, Path archivePath, Path stageRoot)
+    private List<PageManifestEntry> transcodeArchivePages(
+        LibraryTitle title,
+        Path archivePath,
+        Path stageRoot,
+        BooleanSupplier cancelled
+    )
         throws IOException, InterruptedException {
         RavenNamingSettings namingSettings = settingsService.getNamingSettings();
         Path sourceRoot = stageRoot.resolve(".source");
+        List<Future<PageManifestEntry>> futures = new ArrayList<>();
         try (ZipFile zipFile = new ZipFile(archivePath.toFile())) {
             List<? extends ZipEntry> entries = zipFile.stream()
                 .filter((entry) -> !entry.isDirectory())
@@ -201,9 +251,11 @@ public final class LibraryIngestService {
                     ))
                     .thenComparing(ZipEntry::getName))
                 .toList();
-            List<PageTranscodeInput> inputs = new ArrayList<>();
             Files.createDirectories(sourceRoot);
+            List<PageManifestEntry> pages = new ArrayList<>();
+            int collected = 0;
             for (int index = 0; index < entries.size(); index++) {
+                throwIfCancelled(cancelled);
                 ZipEntry entry = entries.get(index);
                 String slug = String.format(Locale.ROOT, "p%06d%s", index + 1, transcoder.fileExtension());
                 Path outputPath = stageRoot.resolve(slug);
@@ -212,38 +264,15 @@ public final class LibraryIngestService {
                 try (InputStream stream = zipFile.getInputStream(entry)) {
                     Files.copy(stream, sourcePath, StandardCopyOption.REPLACE_EXISTING);
                 }
-                inputs.add(new PageTranscodeInput(index, slug, mediaType, sourcePath, outputPath));
+                futures.add(submitPageTranscode(new PageTranscodeInput(index, slug, mediaType, sourcePath, outputPath), cancelled));
+                while (futures.size() - collected >= pageConcurrency) {
+                    pages.add(readPageFuture(futures.get(collected)));
+                    collected += 1;
+                }
             }
-            return transcodeExtractedPages(inputs);
-        } finally {
-            deleteTreeQuietly(sourceRoot);
-        }
-    }
-
-    private List<PageManifestEntry> transcodeExtractedPages(List<PageTranscodeInput> inputs)
-        throws IOException, InterruptedException {
-        if (inputs.isEmpty()) {
-            return List.of();
-        }
-        int workers = Math.min(pageConcurrency, inputs.size());
-        if (workers <= 1) {
-            List<PageManifestEntry> pages = new ArrayList<>();
-            for (PageTranscodeInput input : inputs) {
-                pages.add(transcodeOnePage(input));
-            }
-            return pages;
-        }
-
-        ExecutorService executor = Executors.newFixedThreadPool(workers, new PageWorkerThreadFactory());
-        List<Future<PageManifestEntry>> futures = new ArrayList<>();
-        try {
-            for (PageTranscodeInput input : inputs) {
-                Callable<PageManifestEntry> task = () -> transcodeOnePage(input);
-                futures.add(executor.submit(task));
-            }
-            List<PageManifestEntry> pages = new ArrayList<>();
-            for (Future<PageManifestEntry> future : futures) {
-                pages.add(future.get());
+            while (collected < futures.size()) {
+                pages.add(readPageFuture(futures.get(collected)));
+                collected += 1;
             }
             pages.sort(Comparator.comparingInt(PageManifestEntry::index));
             return pages;
@@ -251,8 +280,34 @@ public final class LibraryIngestService {
             cancelAll(futures);
             Thread.currentThread().interrupt();
             throw error;
-        } catch (ExecutionException error) {
+        } catch (IOException | LibraryIngestException error) {
             cancelAll(futures);
+            throw error;
+        } finally {
+            deleteTreeQuietly(sourceRoot);
+        }
+    }
+
+    private Future<PageManifestEntry> submitPageTranscode(PageTranscodeInput input, BooleanSupplier cancelled) {
+        Callable<PageManifestEntry> task = () -> {
+            try {
+                throwIfCancelled(cancelled);
+                return transcodeOnePage(input, cancelled);
+            } finally {
+                Files.deleteIfExists(input.sourcePath());
+            }
+        };
+        return pageExecutor.submit(task);
+    }
+
+    private PageManifestEntry readPageFuture(Future<PageManifestEntry> future) throws IOException, InterruptedException {
+        try {
+            return future.get();
+        } catch (InterruptedException error) {
+            future.cancel(true);
+            Thread.currentThread().interrupt();
+            throw error;
+        } catch (ExecutionException error) {
             Throwable cause = error.getCause();
             if (cause instanceof IOException ioError) {
                 throw ioError;
@@ -261,14 +316,17 @@ public final class LibraryIngestService {
                 Thread.currentThread().interrupt();
                 throw interrupted;
             }
+            if (cause instanceof LibraryIngestException ingestError) {
+                throw ingestError;
+            }
             throw new IOException(firstNonBlank(cause == null ? "" : cause.getMessage(), "AVIF page conversion failed."), cause);
-        } finally {
-            executor.shutdownNow();
         }
     }
 
-    private PageManifestEntry transcodeOnePage(PageTranscodeInput input) throws IOException, InterruptedException {
+    private PageManifestEntry transcodeOnePage(PageTranscodeInput input, BooleanSupplier cancelled) throws IOException, InterruptedException {
+        throwIfCancelled(cancelled);
         transcoder.transcodeFile(input.sourcePath(), input.mediaType(), input.outputPath(), AVIF_QUALITY);
+        throwIfCancelled(cancelled);
         return new PageManifestEntry(input.index(), input.slug(), Files.size(input.outputPath()));
     }
 
@@ -405,6 +463,12 @@ public final class LibraryIngestService {
         }
     }
 
+    private void throwIfCancelled(BooleanSupplier cancelled) {
+        if (cancelled != null && cancelled.getAsBoolean()) {
+            throw new LibraryIngestException("ingest_cancelled", "AVIF ingest cancelled by admin.");
+        }
+    }
+
     private boolean requiresNvidiaRuntime() {
         String avifRequire = Optional.ofNullable(System.getenv("SCRIPTARR_RAVEN_AVIF_REQUIRE_NVIDIA")).orElse("");
         if (List.of("1", "true", "yes", "on").contains(avifRequire.trim().toLowerCase(Locale.ROOT))) {
@@ -529,6 +593,19 @@ public final class LibraryIngestService {
             return raw == null || raw.isBlank() ? DEFAULT_PAGE_CONCURRENCY : Integer.parseInt(raw.trim());
         } catch (NumberFormatException ignored) {
             return DEFAULT_PAGE_CONCURRENCY;
+        }
+    }
+
+    private static int resolveConfiguredEncoderSlots() {
+        String raw = Optional.ofNullable(System.getenv("SCRIPTARR_RAVEN_AVIF_ENCODER_SLOTS"))
+            .filter((value) -> !value.isBlank())
+            .orElseGet(() -> Optional.ofNullable(System.getenv("SCRIPTARR_RAVEN_INGEST_ENCODER_SLOTS")).orElse(""));
+        try {
+            return raw == null || raw.isBlank()
+                ? DEFAULT_ENCODER_SLOTS
+                : Math.max(1, Math.min(MAX_ENCODER_SLOTS, Integer.parseInt(raw.trim())));
+        } catch (NumberFormatException ignored) {
+            return DEFAULT_ENCODER_SLOTS;
         }
     }
 
