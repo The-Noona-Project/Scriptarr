@@ -360,6 +360,8 @@ export const resolveServicePlan = ({env = process.env, containerNamePrefix = ""}
     image: resolveServiceImage("scriptarr-moon", {env}),
     env: {
       SCRIPTARR_SAGE_BASE_URL: `http://scriptarr-sage:${sagePort}`,
+      SCRIPTARR_SERVICE_TOKEN: serviceTokens["scriptarr-moon"],
+      SCRIPTARR_PUBLIC_BASE_URL: publicBaseUrl,
       SCRIPTARR_MOON_PORT: String(moonPort),
       SCRIPTARR_MOON_COVER_CACHE_DIR: "/app/cover-cache",
       SCRIPTARR_MOON_READER_PAGE_CACHE_DIR: "/app/reader-page-cache"

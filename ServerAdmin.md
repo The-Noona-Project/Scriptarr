@@ -317,6 +317,11 @@ chat even if an admin enabled them on the AI page.
 - monitor the live Raven queue board and reprioritize, retry, or cancel work from `/admin/activity/queue`; the active
   slot total shown there reflects the configured Raven title-download limit
 
+Moon live updates use a same-origin WebSocket first, then the older SSE stream, then backup refresh polling. The browser
+only connects to Moon; Moon validates the existing session cookie plus a short-lived live ticket before bridging to
+Sage on the internal Docker network. Sage authorizes the event domains, sanitizes live/history event payloads, and keeps
+durable state in Vault.
+
 ## Moon Route Model
 
 Moon now serves three distinct programs from one runtime:
@@ -459,8 +464,8 @@ source is selected. `/admin/wanted/missing-chapters` redirects to this canonical
 dated chapter entries when available and get one title-level completion marker when Raven only has title or chapter
 update timestamps. Titles with no usable date are counted as undated completed instead of being dropped.
 `/admin/activity/queue` is now a live queue board. It groups Raven work into `Running`, `Queued`, and recovery-only
-`Needs attention`, subscribes to the shared admin SSE stream, and keeps a polling fallback active so Raven progress
-refreshes without a manual page reload even when the event stream is degraded. It exposes card-level controls for
+`Needs attention`, subscribes to the shared admin live stream, and keeps backup refresh active so Raven progress
+refreshes without a manual page reload even when WebSocket or SSE transport is degraded. It exposes card-level controls for
 retry, retry-all, cancel, priority changes, and queued-task move up/down actions.
 Section bulk buttons can cancel all queued work, cancel all running work for `activity.root` admins, retry all
 recovery items, or remove all removable recovery items.

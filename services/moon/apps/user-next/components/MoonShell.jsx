@@ -9,6 +9,7 @@ import Link from "next/link";
 import {usePathname} from "next/navigation";
 import {buildMoonLoginHref, loadMoonChromeContext, requestJson} from "../lib/api.js";
 import {normalizeBrowseType} from "../lib/browse.js";
+import {startUserLiveInvalidation} from "../lib/live.js";
 import {buildLibraryPath, classifyPathname, getLibraryTypes} from "../lib/navigationRoutes.js";
 import {Flex} from "./UiPrimitives.jsx";
 import {DesktopNavigation, MobileNavigation} from "./LocalNavigation.jsx";
@@ -69,6 +70,16 @@ const AuthResolvingSurface = ({label = "Checking session."}) => (
 );
 
 const CHROME_RETRY_DELAYS_MS = [1000, 2500, 5000, 10000];
+
+const UserLiveSync = ({enabled}) => {
+  useEffect(() => {
+    if (!enabled) {
+      return undefined;
+    }
+    return startUserLiveInvalidation();
+  }, [enabled]);
+  return null;
+};
 
 const mergeMoonChromeResult = (current, nextValue, localLoginUrl) => {
   const brokerDelayed = Boolean(nextValue.authError || nextValue.bootstrapError);
@@ -251,6 +262,7 @@ export const MoonShell = ({children}) => {
 
   return (
     <MoonChromeContext.Provider value={chromeContextValue}>
+      <UserLiveSync enabled={Boolean(chrome.auth)} />
       {isLoginRoute ? (
         <div className="moon-login-shell">
           <main className="moon-login-stage">{children}</main>

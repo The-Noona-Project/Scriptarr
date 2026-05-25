@@ -6,6 +6,12 @@ import {Readable} from "node:stream";
 import {ADMIN_ACCESS_DOMAINS} from "@scriptarr/access";
 import {hasDomainAccess, hasPermission} from "./auth.mjs";
 import {
+  ensureEventReadAccess,
+  normalizeRequestedEventDomains,
+  resolveReadableEventDomains
+} from "./eventAccess.mjs";
+import {sanitizeAdminEvent} from "./liveEventPayloads.mjs";
+import {
   ADMIN_TOAST_GLOBAL_KEY,
   MOON_BRANDING_KEY,
   adminToastUserKey,
@@ -116,28 +122,6 @@ const normalizePositiveInteger = (value, fallback) => {
   const parsed = Number.parseInt(String(value), 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 };
-const EVENT_DOMAIN_ACCESS = Object.freeze({
-  auth: "users",
-  users: "users",
-  access: "users",
-  overview: "overview",
-  library: "library",
-  add: "add",
-  import: "import",
-  calendar: "calendar",
-  mediamanagement: "mediamanagement",
-  activity: "activity",
-  wanted: "wanted",
-  requests: "requests",
-  discord: "discord",
-  ai: "ai",
-  settings: "settings",
-  database: "database",
-  system: "system",
-  publicapi: "publicapi",
-  follow: "library",
-  reader: "library"
-});
 const READER_TELEMETRY_SLOW_THRESHOLDS_MS = Object.freeze({
   "session-fetch": 1200,
   "page-chunk-fetch": 900,
@@ -746,6 +730,7 @@ const mergeDisplayStrings = (...values) => {
  *   config: Record<string, string>,
  *   logger?: {warn: Function},
  *   vaultClient: ReturnType<import("./vaultClient.mjs").createVaultClient>,
+ *   liveEventHub?: {publish?: (event: Record<string, unknown> | null | undefined) => void},
  *   requireUser: ReturnType<import("./auth.mjs").requireSession>,
  *   requirePermission: (permission: string) => import("express").RequestHandler,
  *   requireAdminGrant: (domain: string, level?: "" | "read" | "write" | "root") => import("express").RequestHandler,
@@ -768,6 +753,7 @@ export const registerMoonV3Routes = (app, {
   config,
   logger,
   vaultClient,
+  liveEventHub,
   requireUser,
   requirePermission,
   requireAdminGrant,
@@ -1943,24 +1929,12 @@ export const registerMoonV3Routes = (app, {
   const requireSystemRoot = (handler) => withAdminAccess("system", "root", handler);
   const requirePublicApiRead = (handler) => withAdminAccess("publicapi", "read", handler);
   const requirePublicApiRoot = (handler) => withAdminAccess("publicapi", "root", handler);
-  const appendEvent = (payload) => appendDurableEvent(vaultClient, payload, logger);
-  const appendEventForUser = (payload) => appendUserEvent(vaultClient, payload, logger);
-  const normalizeRequestedEventDomains = (value) => Array.isArray(value)
-    ? value.map((entry) => normalizeString(entry)).filter(Boolean)
-    : value
-      ? [normalizeString(value)].filter(Boolean)
-      : [];
-  const ensureEventReadAccess = (user, domains = []) => {
-    const normalizedDomains = normalizeRequestedEventDomains(domains);
-    if (!normalizedDomains.length) {
-      return hasDomainAccess(user, "system", "read");
-    }
-    return normalizedDomains.every((domain) => hasDomainAccess(
-      user,
-      EVENT_DOMAIN_ACCESS[domain] || "system",
-      "read"
-    ));
+  const publishAppendedEvent = (event) => {
+    liveEventHub?.publish?.(event);
+    return event;
   };
+  const appendEvent = async (payload) => publishAppendedEvent(await appendDurableEvent(vaultClient, payload, logger));
+  const appendEventForUser = async (payload) => publishAppendedEvent(await appendUserEvent(vaultClient, payload, logger));
   const normalizeRequestedEventFilter = (value) => normalizeRequestedEventDomains(value);
   const buildEventFiltersFromQuery = (query = {}) => ({
     domains: normalizeRequestedEventDomains(query.domain),
@@ -4295,19 +4269,21 @@ export const registerMoonV3Routes = (app, {
 
   app.get("/api/moon-v3/admin/events", withUser(requireUser, async (req, res) => {
     const filters = buildEventFiltersFromQuery(req.query);
-    if (!ensureEventReadAccess(req.user, filters.domains)) {
+    const readableDomains = resolveReadableEventDomains(req.user, filters.domains);
+    if (!readableDomains) {
       res.status(403).json({error: "Missing admin grant for the requested event domains."});
       return;
     }
+    filters.domains = readableDomains;
     res.json({
-      events: normalizeArray(await vaultClient.listEvents(filters)),
+      events: normalizeArray(await vaultClient.listEvents(filters)).map((event) => sanitizeAdminEvent(event)),
       filters
     });
   }));
 
   app.get("/api/moon-v3/admin/events/stream", withUser(requireUser, async (req, res) => {
-    const domains = normalizeRequestedEventDomains(req.query.domain);
-    if (!ensureEventReadAccess(req.user, domains)) {
+    const domains = resolveReadableEventDomains(req.user, req.query.domain);
+    if (!domains || !ensureEventReadAccess(req.user, domains)) {
       res.status(403).json({error: "Missing admin grant for the requested event domains."});
       return;
     }
@@ -4371,7 +4347,7 @@ export const registerMoonV3Routes = (app, {
               return;
             }
             cursor = Math.max(cursor, Number.parseInt(String(event.sequence || 0), 10) || cursor);
-            const ok = await writeEventChunk(`id: ${cursor}\nevent: admin-event\ndata: ${JSON.stringify(event)}\n\n`);
+            const ok = await writeEventChunk(`id: ${cursor}\nevent: admin-event\ndata: ${JSON.stringify(sanitizeAdminEvent(event))}\n\n`);
             if (!ok) {
               return;
             }

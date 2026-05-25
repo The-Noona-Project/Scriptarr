@@ -4,6 +4,7 @@ import http from "node:http";
 import fs from "node:fs/promises";
 import {fileURLToPath} from "node:url";
 import path from "node:path";
+import {WebSocket, WebSocketServer} from "ws";
 
 process.env.NODE_ENV = "test";
 
@@ -22,6 +23,60 @@ const closeServer = (server) => new Promise((resolve, reject) => {
 });
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const openWebSocket = (url, options = {}) => new Promise((resolve, reject) => {
+  const socket = new WebSocket(url, options);
+  socket.once("open", () => resolve(socket));
+  socket.once("error", reject);
+});
+
+const readWebSocketJson = (socket, timeoutMs = 2500) => new Promise((resolve, reject) => {
+  const timer = setTimeout(() => {
+    cleanup();
+    reject(new Error("Timed out waiting for WebSocket message."));
+  }, timeoutMs);
+  const cleanup = () => {
+    clearTimeout(timer);
+    socket.off("message", onMessage);
+    socket.off("error", onError);
+  };
+  const onError = (error) => {
+    cleanup();
+    reject(error);
+  };
+  const onMessage = (message) => {
+    cleanup();
+    try {
+      resolve(JSON.parse(Buffer.isBuffer(message) ? message.toString("utf8") : String(message || "")));
+    } catch (error) {
+      reject(error);
+    }
+  };
+  socket.once("message", onMessage);
+  socket.once("error", onError);
+});
+
+const waitForWebSocketClose = (socket, timeoutMs = 2500) => new Promise((resolve, reject) => {
+  const timer = setTimeout(() => {
+    cleanup();
+    reject(new Error("Timed out waiting for WebSocket close."));
+  }, timeoutMs);
+  const cleanup = () => {
+    clearTimeout(timer);
+    socket.off("close", onClose);
+    socket.off("error", onError);
+  };
+  const onError = (error) => {
+    cleanup();
+    reject(error);
+  };
+  const onClose = (code) => {
+    cleanup();
+    resolve(code);
+  };
+  socket.once("close", onClose);
+  socket.once("error", onError);
+});
 
 /**
  * Start a tiny Sage stub that returns both JSON and raw SVG payloads so Moon's
@@ -630,6 +685,158 @@ const createSageStub = ({requests = [], streamProbe = null, delays = {}} = {}) =
   response.writeHead(404, {"Content-Type": "application/json"});
   response.end(JSON.stringify({error: "Not found"}));
 }));
+
+test("moon live websocket uses same-origin tickets and bridges to Sage internally", async () => {
+  const previousSageBaseUrl = process.env.SCRIPTARR_SAGE_BASE_URL;
+  const previousServiceToken = process.env.SCRIPTARR_SERVICE_TOKEN;
+  const previousPublicBaseUrl = process.env.SCRIPTARR_PUBLIC_BASE_URL;
+  const internalSubscriptions = [];
+  const statusCalls = [];
+  const sageServer = http.createServer((request, response) => {
+    if (request.url === "/api/auth/status") {
+      statusCalls.push(request.headers.authorization || "");
+      response.writeHead(200, {"Content-Type": "application/json"});
+      response.end(JSON.stringify({
+        authenticated: true,
+        user: {discordUserId: "member-1", username: "Member"}
+      }));
+      return;
+    }
+    response.writeHead(404, {"Content-Type": "application/json"});
+    response.end(JSON.stringify({error: "Not found"}));
+  });
+  const sageWss = new WebSocketServer({noServer: true});
+  const sageSockets = new Set();
+  sageServer.on("upgrade", (request, socket, head) => {
+    if (request.url !== "/api/internal/moon/live/ws" || request.headers.authorization !== "Bearer moon-dev-token") {
+      socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
+      socket.destroy();
+      return;
+    }
+    sageWss.handleUpgrade(request, socket, head, (ws) => sageWss.emit("connection", ws, request));
+  });
+  sageWss.on("connection", (socket) => {
+    sageSockets.add(socket);
+    socket.once("close", () => sageSockets.delete(socket));
+    socket.on("message", (message) => {
+      const payload = JSON.parse(Buffer.isBuffer(message) ? message.toString("utf8") : String(message || ""));
+      internalSubscriptions.push(payload);
+      socket.send(JSON.stringify({
+        type: "ready",
+        transport: "websocket",
+        domains: payload.domains,
+        sequence: 7
+      }));
+    });
+  });
+  sageServer.listen(0);
+  process.env.SCRIPTARR_SAGE_BASE_URL = `http://127.0.0.1:${sageServer.address().port}`;
+  process.env.SCRIPTARR_SERVICE_TOKEN = "moon-dev-token";
+  process.env.SCRIPTARR_PUBLIC_BASE_URL = "http://127.0.0.1";
+
+  const {app, attachLiveWebSocketServer} = await createMoonApp();
+  const moonServer = app.listen(0);
+  attachLiveWebSocketServer(moonServer);
+  const moonPort = moonServer.address().port;
+  const baseUrl = `http://127.0.0.1:${moonPort}`;
+
+  try {
+    const missingCookie = await fetch(`${baseUrl}/api/moon/live/ticket`, {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({client: "admin", domains: ["system"]})
+    });
+    assert.equal(missingCookie.status, 401);
+
+    const ticketResponse = await fetch(`${baseUrl}/api/moon/live/ticket`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        cookie: "scriptarr_session=member-token"
+      },
+      body: JSON.stringify({client: "admin", domains: ["system"]})
+    });
+    assert.equal(ticketResponse.status, 200);
+    const ticket = await ticketResponse.json();
+    assert.equal(Boolean(ticket.ticket), true);
+    assert.deepEqual(ticket.domains, ["system"]);
+    assert.deepEqual(statusCalls, ["Bearer member-token"]);
+
+    await assert.rejects(
+      openWebSocket(`ws://127.0.0.1:${moonPort}/api/moon/live/ws`, {
+        headers: {
+          cookie: "scriptarr_session=member-token",
+          origin: "https://evil.example"
+        }
+      }),
+      /Unexpected server response: 401/
+    );
+    await assert.rejects(
+      openWebSocket(`ws://127.0.0.1:${moonPort}/api/moon/live/ws?ticket=${encodeURIComponent(ticket.ticket)}`, {
+        headers: {
+          cookie: "scriptarr_session=member-token",
+          origin: baseUrl
+        }
+      }),
+      /Unexpected server response: 400/
+    );
+
+    const browserSocket = await openWebSocket(`ws://127.0.0.1:${moonPort}/api/moon/live/ws`, {
+      headers: {
+        cookie: "scriptarr_session=member-token",
+        origin: baseUrl
+      }
+    });
+    browserSocket.send(JSON.stringify({
+      type: "hello",
+      ticket: ticket.ticket,
+      client: "admin",
+      domains: ["system"]
+    }));
+    assert.equal((await readWebSocketJson(browserSocket)).type, "ready");
+    assert.equal(internalSubscriptions[0].sessionToken, "member-token");
+    assert.deepEqual(internalSubscriptions[0].domains, ["system"]);
+
+    const reusedSocket = await openWebSocket(`ws://127.0.0.1:${moonPort}/api/moon/live/ws`, {
+      headers: {
+        cookie: "scriptarr_session=member-token",
+        origin: baseUrl
+      }
+    });
+    reusedSocket.send(JSON.stringify({
+      type: "hello",
+      ticket: ticket.ticket,
+      client: "admin",
+      domains: ["system"]
+    }));
+    assert.equal(await waitForWebSocketClose(reusedSocket), 1008);
+    const browserClose = waitForWebSocketClose(browserSocket);
+    browserSocket.close();
+    await browserClose;
+  } finally {
+    if (previousSageBaseUrl == null) {
+      delete process.env.SCRIPTARR_SAGE_BASE_URL;
+    } else {
+      process.env.SCRIPTARR_SAGE_BASE_URL = previousSageBaseUrl;
+    }
+    if (previousServiceToken == null) {
+      delete process.env.SCRIPTARR_SERVICE_TOKEN;
+    } else {
+      process.env.SCRIPTARR_SERVICE_TOKEN = previousServiceToken;
+    }
+    if (previousPublicBaseUrl == null) {
+      delete process.env.SCRIPTARR_PUBLIC_BASE_URL;
+    } else {
+      process.env.SCRIPTARR_PUBLIC_BASE_URL = previousPublicBaseUrl;
+    }
+    for (const socket of sageSockets) {
+      socket.terminate();
+    }
+    sageWss.close();
+    await closeServer(moonServer);
+    await closeServer(sageServer);
+  }
+});
 
 test("moon serves branded split entry documents, typed routes, PWA assets, and Moon v3 proxy payloads", async () => {
   const cwd = process.cwd();

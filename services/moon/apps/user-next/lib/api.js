@@ -13,6 +13,7 @@ import {
   writePersistentMoonJsonCache
 } from "./persistentJsonCache.js";
 import {buildMoonLoginPageHref, normalizeLoginReturnTo} from "./loginReturnTo.js";
+import {LIVE_INVALIDATE_EVENT, shouldRefreshUrlForLiveDomains} from "./live.js";
 
 /**
  * Perform a same-origin JSON request against Moon.
@@ -235,6 +236,19 @@ export const useMoonJson = (url, {enabled = true, fallback = /** @type {T} */ (n
       controllerRef.current?.abort?.();
     };
   }, [fetchValue, ...deps]);
+
+  useEffect(() => {
+    if (!enabled || !url || typeof window === "undefined") {
+      return undefined;
+    }
+    const onLiveInvalidate = (event) => {
+      if (hasLoadedRef.current && shouldRefreshUrlForLiveDomains(url, event.detail?.domains || [])) {
+        void fetchValue();
+      }
+    };
+    window.addEventListener(LIVE_INVALIDATE_EVENT, onLiveInvalidate);
+    return () => window.removeEventListener(LIVE_INVALIDATE_EVENT, onLiveInvalidate);
+  }, [enabled, fetchValue, url]);
 
   useEffect(() => {
     if (!persistentEnabled || !hasLoadedRef.current) {

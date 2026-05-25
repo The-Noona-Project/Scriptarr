@@ -4,6 +4,7 @@ import {resolveMoonConfig} from "./config.mjs";
 import {parseCookies} from "./cookies.mjs";
 import {registerAuthRoutes} from "./registerAuthRoutes.mjs";
 import {registerLegacyApiRoutes} from "./registerLegacyApiRoutes.mjs";
+import {registerLiveRoutes} from "./registerLiveRoutes.mjs";
 import {registerMoonV3ProxyRoutes} from "./registerMoonV3ProxyRoutes.mjs";
 import {registerPageRoutes} from "./registerPageRoutes.mjs";
 import {registerPublicApiRoutes} from "./registerPublicApiRoutes.mjs";
@@ -62,7 +63,8 @@ const warmSageBrokerConnection = async (config, logger) => {
  * }} [options]
  * @returns {Promise<{
  *   app: import("express").Express,
-  *   config: ReturnType<typeof resolveMoonConfig>
+  *   config: ReturnType<typeof resolveMoonConfig>,
+  *   attachLiveWebSocketServer: (server: import("node:http").Server) => import("ws").WebSocketServer
   * }>}
  */
 export const createMoonApp = async ({logger = createLogger("MOON")} = {}) => {
@@ -93,6 +95,7 @@ export const createMoonApp = async ({logger = createLogger("MOON")} = {}) => {
 
   registerAuthRoutes(app, {config, getSessionToken, logger});
   registerLegacyApiRoutes(app, {config, getSessionToken});
+  const attachLiveWebSocketServer = registerLiveRoutes(app, {config, getSessionToken, logger});
   registerMoonV3ProxyRoutes(app, {config, getSessionToken, logger});
   registerPublicApiRoutes(app, {config});
   registerPageRoutes(app, {adminNextRuntime, config, getSessionToken, readerNextRuntime, userNextRuntime});
@@ -101,7 +104,7 @@ export const createMoonApp = async ({logger = createLogger("MOON")} = {}) => {
     sageBaseUrl: config.sageBaseUrl
   });
 
-  return {app, config};
+  return {app, config, attachLiveWebSocketServer};
 };
 
 export default createMoonApp;

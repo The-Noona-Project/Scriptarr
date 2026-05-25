@@ -20,6 +20,7 @@ try {
         port: built.config.port
       });
     });
+    built.attachLiveWebSocketServer?.(server);
     server.on("error", (error) => {
       logger.error("Sage listener failed.", {error});
     });

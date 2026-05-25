@@ -38,6 +38,8 @@ test("service plan exposes the fixed Scriptarr network and selfhost mysql by def
   assert.equal(plan.services.find((service) => service.name === "scriptarr-sage").env.SCRIPTARR_VAULT_AUTH_TIMEOUT_MS, "8000");
   assert.equal(plan.services.find((service) => service.name === "scriptarr-portal").env.SCRIPTARR_APPA_DISCORD_TOKEN, "appa-token");
   assert.equal(plan.services.find((service) => service.name === "scriptarr-portal").env.SCRIPTARR_APPA_DISCORD_CLIENT_ID, "appa-client-id");
+  assert.equal(moon.env.SCRIPTARR_SERVICE_TOKEN, plan.serviceTokens["scriptarr-moon"]);
+  assert.equal(moon.env.SCRIPTARR_PUBLIC_BASE_URL, "http://localhost:3000");
   assert.equal(moon.env.SCRIPTARR_MOON_READER_PAGE_CACHE_DIR, "/app/reader-page-cache");
   assert.equal(moon.mounts.some((mount) => mount.containerPath === "/app/reader-page-cache"), true);
   assert.equal(oracle.env.SCRIPTARR_SAGE_BASE_URL, "http://scriptarr-sage:3004");

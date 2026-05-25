@@ -15,7 +15,9 @@ const normalizeBaseUrl = (value, fallback) => String(value || fallback).replace(
  *   sageBaseUrl: string,
  *   coverCacheDir: string,
  *   readerPageCacheDir: string,
- *   sessionCookieName: string
+ *   sessionCookieName: string,
+ *   serviceToken: string,
+ *   publicBaseUrl: string
  * }}
  */
 export const resolveMoonConfig = () => ({
@@ -23,7 +25,9 @@ export const resolveMoonConfig = () => ({
   sageBaseUrl: normalizeBaseUrl(process.env.SCRIPTARR_SAGE_BASE_URL, "http://127.0.0.1:3004"),
   coverCacheDir: process.env.SCRIPTARR_MOON_COVER_CACHE_DIR || "data/moon-cover-cache",
   readerPageCacheDir: process.env.SCRIPTARR_MOON_READER_PAGE_CACHE_DIR || "data/moon-reader-page-cache",
-  sessionCookieName: "scriptarr_session"
+  sessionCookieName: "scriptarr_session",
+  serviceToken: process.env.SCRIPTARR_SERVICE_TOKEN || process.env.SCRIPTARR_MOON_SERVICE_TOKEN || "moon-dev-token",
+  publicBaseUrl: normalizeBaseUrl(process.env.SCRIPTARR_PUBLIC_BASE_URL, "")
 });
 
 export default resolveMoonConfig;

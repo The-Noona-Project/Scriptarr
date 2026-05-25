@@ -154,7 +154,11 @@
   repair flow instead of leaking Raven directly into the browser.
 - Sage now owns the shared admin event read path too. Keep `/api/moon-v3/admin/events` and
   `/api/moon-v3/admin/events/stream` same-origin and Moon-safe, authorize them by the requested event domains, and use
-  internal broker routes plus Vault's durable event log instead of ad hoc page-specific aggregations.
+  internal broker routes plus Vault's durable event log instead of ad hoc page-specific aggregations. Blank event-domain
+  requests must expand only to the signed-in user's readable domains, not all Vault events.
+- Sage owns the internal Moon live WebSocket at `/api/internal/moon/live/ws`. Accept only Moon's service token, recheck
+  the forwarded browser session and grants, sanitize the event DTO for WS/SSE/history, and publish from the shared live
+  event hub instead of creating one Vault poller per client.
 - Sage owns the Settings DB explorer broker at `/api/moon-v3/admin/settings/database`. Keep overview, table browsing,
   and settings-row edits behind database grants, route all data through Vault, redact sensitive values, and never add
   arbitrary SQL endpoints.

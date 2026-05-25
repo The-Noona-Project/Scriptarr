@@ -31,14 +31,17 @@ test("admin toasts read the dedicated toast settings endpoint", () => {
 test("admin event staleness is backed by one shared provider stream", () => {
   const source = readMoonFile("apps/admin-next/lib/api.js");
   const eventSourceCount = source.match(/new EventSource/g)?.length || 0;
+  const webSocketCount = source.match(/new WebSocket/g)?.length || 0;
 
   assert.match(source, /export const AdminEventStreamProvider/);
   assert.match(source, /export const useAdminEventSubscription/);
   assert.match(source, /export const useAdminEventStaleness/);
   assert.equal(eventSourceCount, 1);
+  assert.equal(webSocketCount, 1);
+  assert.match(source, /\/api\/moon\/live\/ticket/);
 });
 
-test("admin queue keeps a polling fallback and always reserves ETA copy", () => {
+test("admin queue keeps backup refresh and always reserves ETA copy", () => {
   const source = readMoonFile("apps/admin-next/components/QueuePage.jsx");
 
   assert.match(source, /ACTIVE_QUEUE_POLL_INTERVAL_MS = 5_000/);
@@ -48,7 +51,7 @@ test("admin queue keeps a polling fallback and always reserves ETA copy", () => 
   assert.match(source, /<IngestRunsPanel/);
   assert.match(source, /payload\.ingestRuns/);
   assert.match(source, /canImportWrite/);
-  assert.match(source, /"Polling fallback"/);
+  assert.match(source, /"Backup refresh"/);
   assert.match(source, /domains: \["activity", "import"\]/);
 });
 

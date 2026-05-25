@@ -12,6 +12,7 @@
   "dependencies": {
     "@scriptarr/access": "file:../../packages/scriptarr-access",
     "@scriptarr/logging": "file:../../packages/scriptarr-logging",
-    "express": "^5.1.0"
+    "express": "^5.1.0",
+    "ws": "^8.20.0"
   }
 }

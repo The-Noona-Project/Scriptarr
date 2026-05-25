@@ -27,6 +27,8 @@ import {
   normalizeMoonBrandingSettings
 } from "./adminUiSettings.mjs";
 import {registerMoonV3Routes} from "./registerMoonV3Routes.mjs";
+import {createLiveEventHub} from "./liveEventHub.mjs";
+import {registerSageLiveWebSocketServer} from "./registerLiveWebSocketServer.mjs";
 import {createServiceAuth} from "./serviceAuth.mjs";
 import {registerInternalBrokerRoutes} from "./registerInternalBrokerRoutes.mjs";
 import {buildIntakeSelection, evaluateSelectionAgainstGuardState} from "./requestSelectionGuards.mjs";
@@ -577,11 +579,12 @@ const loadLegacyLibrary = async (config) => {
  * @param {{
  *   logger?: {info: Function, warn: Function, error: Function}
  * }} [options]
- * @returns {Promise<{app: import("express").Express, config: ReturnType<typeof resolveSageConfig>}>}
+ * @returns {Promise<{app: import("express").Express, config: ReturnType<typeof resolveSageConfig>, attachLiveWebSocketServer: (server: import("node:http").Server) => void}>}
  */
 export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
   const config = resolveSageConfig();
   const vaultClient = createVaultClient(config);
+  const liveEventHub = createLiveEventHub({vaultClient, logger});
   const app = express();
   const requireUser = requireSession(vaultClient);
   const requireService = createServiceAuth(config);
@@ -1905,6 +1908,7 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
     config,
     logger,
     vaultClient,
+    liveEventHub,
     requireUser,
     requirePermission: (permission) => requirePermission(vaultClient, permission),
     requireAdminGrant: (domain, level = "read") => requireAdminGrant(vaultClient, domain, level),
@@ -1961,6 +1965,13 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
     publicBaseUrl: config.publicBaseUrl
   });
 
-  return {app, config};
+  const attachLiveWebSocketServer = (server) => registerSageLiveWebSocketServer(server, {
+    config,
+    vaultClient,
+    liveEventHub,
+    logger
+  });
+
+  return {app, config, attachLiveWebSocketServer};
 };
 

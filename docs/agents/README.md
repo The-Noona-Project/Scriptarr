@@ -85,15 +85,15 @@ Coding rules that avoid hidden drift:
 - Do not let first-party services bypass Sage for shared state. Vault is the only database owner.
 - Keep list views on compact projections. Hydrate full Raven title, chapter, manifest, or user-state payloads only for
   title/detail/reader routes or exact-id cards.
-- Keep resource lifetimes explicit. Long-lived caches, token maps, SSE or proxy streams, admin polling, Discord work
+- Keep resource lifetimes explicit. Long-lived caches, token maps, WebSocket/SSE/proxy streams, admin polling, Discord work
   queues, LocalAI actions, Docker command output, downloader futures, and subprocesses should have clear caps,
   abort/close paths, and tests for stalled or disconnected callers.
 - For the unified `/library` catalogue, keep the URL as the source of truth for search/filter/view state and refresh
   only the results chunk. `/browse` remains a compatibility entrypoint. Server-side card payloads should include the
   minimal `readerTarget` needed for art-click reader links and should already be deduplicated by canonical catalog
   identity before Moon paginates or appends rows.
-- Keep admin SSE shared through Moon's admin provider; page-local `EventSource` instances are a regression unless the
-  route has a strong isolated reason.
+- Keep admin live transport shared through Moon's admin provider; page-local `WebSocket` or `EventSource` instances are
+  a regression unless the route has a strong isolated reason.
 - Keep stale product language out of code and docs. Scriptarr is the product, Noona is only the Discord bot/persona,
   and Kavita/Komf/old Noona Raven should appear only as explicit historical reference.
 - Treat Moon, Raven, Sage, Vault, Portal, Warden, Oracle, and LocalAI as internal/admin codenames. Normal reader UI,
@@ -248,10 +248,10 @@ When the next task is "make Moon faster," start with observation instead of edit
 
 - Capture a small timing table for `/`, `/browse`, `/library`, a title or reader route, `/admin/settings`,
   `/admin/system/status`, `/admin/activity/queue`, and `/admin/requests`.
-- Separate document or Next asset load, Moon chrome/bootstrap calls, main route payload, admin SSE/event calls, payload
+- Separate document or Next asset load, Moon chrome/bootstrap calls, main route payload, admin live/event calls, payload
   byte size, and downstream Sage/Raven/Vault latency where the payload crosses services.
 - Check whether the page is blocked by JS bundle size, same-origin API fan-out, downstream broker latency, payload
-  shape, cover/image work, auth/session bootstrap, SSE startup, or hydration/client rendering work.
+  shape, cover/image work, auth/session bootstrap, live transport startup, or hydration/client rendering work.
 - Keep proven fast paths intact: compact library cards, bounded home shelves, toast-only settings reads, shared admin
   event stream, lightweight System Status first load, and explicit deep status checks.
 - Prefer narrow proof first: Moon helper tests, Sage payload tests, Raven/Vault projection tests, then user/reader/admin

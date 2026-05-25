@@ -38,6 +38,8 @@
   but those requests terminate at Oracle's embedded runtime routes. Keep Warden's role focused on service-plan mounts,
   environment, GPU device requests, and drift detection.
 - Warden should inject Sage broker settings into Portal, Oracle, and Raven instead of direct first-party base URLs.
+- Warden should inject Moon's service token and `SCRIPTARR_PUBLIC_BASE_URL` into Moon so Moon can enforce same-origin
+  live WebSocket tickets and authenticate its internal Sage live bridge.
 - Warden should inject Sage's `SCRIPTARR_VAULT_AUTH_TIMEOUT_MS`, defaulting managed production to `8000` ms while
   honoring explicit `SCRIPTARR_VAULT_AUTH_TIMEOUT_MS` or legacy `SCRIPTARR_AUTH_VAULT_TIMEOUT_MS` overrides.
 - Warden should launch Raven with the VPN runtime device/capability contract (`NET_ADMIN` and `/dev/net/tun`) when not

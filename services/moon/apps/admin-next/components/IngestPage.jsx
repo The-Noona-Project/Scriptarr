@@ -67,7 +67,7 @@ export const IngestPage = ({user}) => {
     if (lastRefreshError && lastSeenAt) {
       return `Showing data from ${formatDate(lastSeenAt)}`;
     }
-    return "Polling fallback";
+    return "Backup refresh";
   })();
   const refreshTone = live.state === "live" && !lastRefreshError ? "good" : "warning";
 

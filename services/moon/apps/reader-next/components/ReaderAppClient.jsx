@@ -27,6 +27,7 @@ import {
   warmReaderPageImages
 } from "../lib/pageChunks.js";
 import {buildReaderPath, buildReaderPathForTitle} from "../lib/routes.js";
+import {startReaderLiveInvalidation} from "../lib/live.js";
 import {countDecodedReaderPages, readerTelemetryNow, recordReaderTelemetry} from "../lib/readerTelemetry.js";
 import ReaderControls from "./ReaderControls.jsx";
 import ReaderSettings from "./ReaderSettings.jsx";
@@ -45,6 +46,7 @@ const PAGE_FITS = ["width", "height", "contain"];
 const DIRECTIONS = ["ltr", "rtl"];
 const CHROME_RETRY_DELAYS_MS = [1000, 2500, 5000, 10000];
 
+const normalizeArray = (value) => Array.isArray(value) ? value : [];
 const normalizeLayoutMode = (value) => ["single", "double", "manga-double", "webtoon"].includes(value) ? value : "webtoon";
 const pagesPerStep = (layoutMode) => layoutMode === "double" || layoutMode === "manga-double" ? 2 : 1;
 const pageRatio = (pageIndex, pageCount) => pageIndex / Math.max(1, Math.max(1, pageCount) - 1);
@@ -195,7 +197,8 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = "", initialSessi
     refreshing,
     error,
     status,
-    data: initialSession
+    data: initialSession,
+    refresh: refreshInitialSession
   } = useMoonJson(chrome.loaded && chrome.auth ? sessionUrlFor(titleId, chapterId) : null, {
     enabled: Boolean(chrome.loaded && chrome.auth),
     fallback: bootSession,
@@ -301,6 +304,28 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = "", initialSessi
       return next;
     });
   }, []);
+
+  useEffect(() => {
+    if (!chrome.auth || !title?.id) {
+      return undefined;
+    }
+    let refreshTimer = 0;
+    const stopLiveInvalidation = startReaderLiveInvalidation({
+      onInvalidate: (payload) => {
+        if (!normalizeArray(payload.domains).some((domain) => ["library", "follow", "reader"].includes(domain))) {
+          return;
+        }
+        window.clearTimeout(refreshTimer);
+        refreshTimer = window.setTimeout(() => {
+          void refreshInitialSession();
+        }, 500);
+      }
+    });
+    return () => {
+      window.clearTimeout(refreshTimer);
+      stopLiveInvalidation();
+    };
+  }, [chrome.auth, refreshInitialSession, title?.id]);
 
   const fetchSession = useCallback(async (nextChapterId) => {
     const key = String(nextChapterId || "").trim();

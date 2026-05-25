@@ -40,6 +40,9 @@
 - The old untyped `/title/:id` and `/reader/:titleId/:chapterId` paths are compatibility shims only. New Moon links
   should emit the typed canonical paths.
 - Moon stays responsible for browser-safe proxying into Sage. Browsers should not call Raven, Warden, Vault, Portal, or Oracle directly.
+- Moon owns the public live WebSocket edge at `/api/moon/live/ws`. Issue live tickets through
+  `/api/moon/live/ticket`, require the existing session cookie plus same-origin `Origin`, and bridge to Sage's internal
+  live socket with Moon's service token. Do not put tickets, sessions, or service tokens in query strings or storage.
 - Keep user requests and admin add-title on the shared intake engine. Moon should submit `query` plus
   `selectedMetadata` for requester flows, and only include `selectedDownload` on admin approval or admin add flows
   instead of regressing to free-text-only request payloads.
@@ -75,6 +78,9 @@
   and keep chrome bootstrap broker calls independently timeout-bounded so a slow branding, auth, or first-owner-status
   response does not block the whole shell. Do not turn temporary Sage/Vault 5xx auth checks into signed-out redirects
   or admin access redirects.
+- Admin live transport should prefer WebSocket, then the existing SSE stream, then backup refresh polling. User and
+  reader live transport is quiet invalidation only; it must never block chrome bootstrap, navigation, reader page/image
+  loading, or force a signed-out state when the live socket fails.
 - Keep the user app installable. `manifest.webmanifest` and `/service-worker.js` are Moon-owned routes, and the
   service worker must not cache protected or personalized HTML as `/`. Cache versioned static assets and successful
   revisioned reader page assets only.
@@ -184,7 +190,7 @@
 - `/admin/system/logs` must only read allowlisted, server-redacted Docker log tails through Moon -> Sage -> Warden.
   Never add browser-direct Docker, Warden, or raw secret log access.
 - `/admin/system/events` should use Vault's durable event log with brokered filters and a detail drawer. Preserve the
-  selected event and filters during SSE refreshes.
+  selected event and filters during live refreshes.
 - `/admin/system/updates` is an actionable Moon surface that checks or starts managed-service update jobs through Sage.
   Viewing requires `system.read`; check/install actions require `system.root` plus the typed confirmation
   `UPDATE SCRIPTARR`.
@@ -207,10 +213,10 @@
 - `/admin/settings/database` is a hidden-from-nav full page opened only from Settings. Keep it Moon -> Sage -> Vault,
   require database grants through the route model, show redacted/paginated rows, and allow editing only the validated
   settings JSON path the broker exposes.
-- Use the shared `AdminToastProvider` for admin action results, async jobs, and live SSE events. Page-local toast
+- Use the shared `AdminToastProvider` for admin action results, async jobs, and live admin events. Page-local toast
   stacks should only be introduced for isolated surfaces that cannot sit under the admin provider.
-- Admin SSE should be shared through the provider. Pages register event domains and stale callbacks instead of opening
-  their own `EventSource` connections.
+- Admin live transport should be shared through the provider. Pages register event domains and stale callbacks instead
+  of opening their own `WebSocket` or `EventSource` connections.
 - `/admin/system/ai` is the dedicated Oracle, LocalAI, and AI tooling page. Keep provider, provider-specific model
   dropdown, temperature, masked key state, LocalAI profile/image controls, manual install/start/remove actions,
   lifecycle progress, health/status, completion toasts, test prompt, tool toggles, assistant prompts, and confirmable
@@ -249,7 +255,7 @@
   the resolve path for `unavailable` requests instead of assuming every request is immediately approvable.
 - `/admin/requests` now also owns the source-pick and override path for requester metadata picks. Moderators can
   replace metadata or download selections before they approve or resolve the request. The page is a moderation inbox,
-  not a raw table: default to Needs review, keep active request edits stable across SSE refreshes, and require a
+  not a raw table: default to Needs review, keep active request edits stable across live refreshes, and require a
   moderator comment before calling the deny route. Bulk actions are limited to refresh-source and deny; approvals stay
   per request so staff make one source decision at a time.
 - Request drawer state should reset only when the selected request id or revision changes. Use the locally selected
@@ -265,7 +271,7 @@
   required default onboarding group, and treat group assignment as the way to make moderators or other admins instead
   of reviving flat role toggles. Use the domains payload as the source of truth for the grant matrix.
 - `/admin/activity/queue` is now the live Raven queue board. Keep it card-based, split into `Running`, `Queued`, and
-  `Needs attention`, subscribe through the shared admin SSE stream, and re-fetch the queue payload on relevant events
+  `Needs attention`, subscribe through the shared admin live stream, and re-fetch the queue payload on relevant events
   instead of trying to hand-reconcile every raw event in the browser.
 - Keep durable AVIF type runs separate from Raven title-task cards. `/admin/activity/queue` may show active type-run
   summaries in a dedicated panel, and `/admin/ingest` should show active or recent type-run summaries above backlog
@@ -273,11 +279,11 @@
   resume/cancel run controls, fair-scheduler labels such as Running current title or Waiting for worker slot, current
   title text, queue position, last progress, and credible ETA. `/admin/ingest` should use the lightweight overview
   polling route while durable type runs are active and refresh the backlog table less often. Refresh badges should say
-  `Live`, `Polling fallback`, `Updating`, or `Showing data from ...`; reserve `Degraded` for actual SSE and HTTP
+  `Live`, `Backup refresh`, `Updating`, or `Showing data from ...`; reserve `Degraded` for actual transport and HTTP
   failure states. Queue pages should subscribe to both `activity` and `import` events because they render AVIF runs.
 - Keep `Needs attention` recovery-only. Do not let unrelated admin or system events such as service restarts leak into
   that section.
-- Preserve the interaction lock around queue controls so SSE refreshes do not collapse the priority select or destroy
+- Preserve the interaction lock around queue controls so live refreshes do not collapse the priority select or destroy
   in-progress edits. Apply one trailing refresh after the control blurs or the action completes.
 - Queue controls belong on the cards. `activity.write` can retry, remove failed or stale queued work, cancel all
   queued work, remove all removable recovery items, reprioritize, and reorder queued work, while `activity.root` is

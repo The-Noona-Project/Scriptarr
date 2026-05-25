@@ -291,7 +291,7 @@ export const QueuePage = ({user}) => {
     if (lastRefreshError && lastLoadedAt) {
       return `Showing data from ${formatDate(lastLoadedAt)}`;
     }
-    return "Polling fallback";
+    return "Backup refresh";
   })();
 
   useEffect(() => {

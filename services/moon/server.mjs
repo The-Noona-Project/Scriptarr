@@ -17,6 +17,7 @@ try {
         port: built.config.port
       });
     });
+    built.attachLiveWebSocketServer?.(server);
     server.on("error", (error) => {
       logger.error("Moon listener failed.", {error});
     });

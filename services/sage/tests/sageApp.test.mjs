@@ -9,6 +9,7 @@ process.env.NODE_ENV = "test";
 process.env.SCRIPTARR_VAULT_DRIVER = "memory";
 process.env.SCRIPTARR_SERVICE_TOKENS = JSON.stringify({
   "scriptarr-sage": "sage-dev-token",
+  "scriptarr-moon": "moon-dev-token",
   "scriptarr-vault": "vault-dev-token",
   "scriptarr-portal": "portal-dev-token",
   "scriptarr-oracle": "oracle-dev-token",
@@ -20,6 +21,7 @@ process.env.SUPERUSER_ID = "owner-1";
 
 const {createVaultApp} = await import("../../vault/lib/createVaultApp.mjs");
 const {createSageApp} = await import("../lib/createSageApp.mjs");
+const {WebSocket} = await import("ws");
 
 const originalFetch = globalThis.fetch;
 
@@ -27,6 +29,19 @@ const closeServer = (server) => new Promise((resolve, reject) => {
   server?.closeIdleConnections?.();
   server?.closeAllConnections?.();
   server?.close((error) => error ? reject(error) : resolve());
+});
+
+/**
+ * Stop a test WebSocket server after terminating any accepted clients.
+ *
+ * @param {import("ws").WebSocketServer} webSocketServer
+ * @returns {Promise<void>}
+ */
+const closeWebSocketServer = (webSocketServer) => new Promise((resolve, reject) => {
+  for (const client of webSocketServer?.clients || []) {
+    client.terminate();
+  }
+  webSocketServer?.close((error) => error ? reject(error) : resolve());
 });
 
 /**
@@ -45,6 +60,81 @@ const waitForCondition = async (condition, timeoutMs = 1000) => {
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
 };
+
+/**
+ * Open a WebSocket and resolve only after the connection is established.
+ *
+ * @param {string} url
+ * @param {Record<string, unknown>} [options]
+ * @returns {Promise<WebSocket>}
+ */
+const openWebSocket = (url, options = {}) => new Promise((resolve, reject) => {
+  const socket = new WebSocket(url, options);
+  socket.once("open", () => resolve(socket));
+  socket.once("error", reject);
+});
+
+/**
+ * Read one JSON WebSocket message.
+ *
+ * @param {WebSocket} socket
+ * @param {number} [timeoutMs]
+ * @returns {Promise<Record<string, unknown>>}
+ */
+const readWebSocketJson = (socket, timeoutMs = 4000) => new Promise((resolve, reject) => {
+  const timer = setTimeout(() => {
+    cleanup();
+    reject(new Error("Timed out waiting for WebSocket message."));
+  }, timeoutMs);
+  const cleanup = () => {
+    clearTimeout(timer);
+    socket.off("message", onMessage);
+    socket.off("error", onError);
+  };
+  const onError = (error) => {
+    cleanup();
+    reject(error);
+  };
+  const onMessage = (message) => {
+    cleanup();
+    try {
+      resolve(JSON.parse(Buffer.isBuffer(message) ? message.toString("utf8") : String(message || "")));
+    } catch (error) {
+      reject(error);
+    }
+  };
+  socket.once("message", onMessage);
+  socket.once("error", onError);
+});
+
+/**
+ * Wait for a WebSocket to close.
+ *
+ * @param {WebSocket} socket
+ * @param {number} [timeoutMs]
+ * @returns {Promise<number>}
+ */
+const waitForWebSocketClose = (socket, timeoutMs = 2500) => new Promise((resolve, reject) => {
+  const timer = setTimeout(() => {
+    cleanup();
+    reject(new Error("Timed out waiting for WebSocket close."));
+  }, timeoutMs);
+  const cleanup = () => {
+    clearTimeout(timer);
+    socket.off("close", onClose);
+    socket.off("error", onError);
+  };
+  const onError = (error) => {
+    cleanup();
+    reject(error);
+  };
+  const onClose = (code) => {
+    cleanup();
+    resolve(code);
+  };
+  socket.once("close", onClose);
+  socket.once("error", onError);
+});
 
 /**
  * Read a test proxy request body into a buffer for forwarding.
@@ -4639,7 +4729,112 @@ test("sage exposes group-based admin users access and domain-scoped event reads"
     });
     assert.equal(forbiddenEvents.status, 403);
 
+    const expandedEventsResponse = await fetch(`${baseUrl}/api/moon-v3/admin/events`, {
+      headers: readerHeaders
+    });
+    assert.equal(expandedEventsResponse.status, 200);
+    const expandedEventsPayload = await expandedEventsResponse.json();
+    assert.equal(expandedEventsPayload.filters.domains.includes("users"), true);
+    assert.equal(expandedEventsPayload.filters.domains.includes("system"), false);
+    assert.equal(expandedEventsPayload.events.every((event) => ["auth", "users", "access"].includes(event.domain)), true);
+
   } finally {
+    await closeServer(sageServer);
+    await closeServer(vaultServer);
+    await closeServer(dependencyStub.server);
+  }
+});
+
+test("sage live websocket accepts Moon service subscriptions and sanitizes event payloads", async () => {
+  const {app: vaultApp} = await createVaultApp();
+  const vaultServer = vaultApp.listen(0);
+  const vaultPort = vaultServer.address().port;
+
+  const dependencyStub = await createDependencyStub({libraryTitles: []});
+  dependencyStub.server.listen(0);
+  const dependencyPort = dependencyStub.server.address().port;
+
+  process.env.SCRIPTARR_VAULT_BASE_URL = `http://127.0.0.1:${vaultPort}`;
+  process.env.SCRIPTARR_WARDEN_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_PORTAL_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_ORACLE_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_RAVEN_BASE_URL = `http://127.0.0.1:${dependencyPort}`;
+  process.env.SCRIPTARR_DISCORD_CLIENT_ID = "discord-client-id";
+  process.env.SCRIPTARR_DISCORD_CLIENT_SECRET = "discord-client-secret";
+
+  const {app: sageApp, attachLiveWebSocketServer} = await createSageApp();
+  const sageServer = sageApp.listen(0);
+  const liveWebSocketServer = attachLiveWebSocketServer(sageServer);
+  const sagePort = sageServer.address().port;
+  const baseUrl = `http://127.0.0.1:${sagePort}`;
+  const liveUrl = `ws://127.0.0.1:${sagePort}/api/internal/moon/live/ws`;
+
+  try {
+    installDiscordFetchStub({
+      id: "owner-1",
+      username: "Owner",
+      global_name: "Owner",
+      avatar: null
+    });
+    const ownerClaim = await signInViaDiscord(baseUrl);
+
+    await assert.rejects(
+      openWebSocket(liveUrl, {headers: {"Authorization": "Bearer invalid-token"}}),
+      /Unexpected server response: 401/
+    );
+    await assert.rejects(
+      openWebSocket(`${liveUrl}?sessionToken=${encodeURIComponent(ownerClaim.token)}`, {headers: {"Authorization": "Bearer moon-dev-token"}}),
+      /Unexpected server response: 400/
+    );
+
+    const socket = await openWebSocket(liveUrl, {headers: {"Authorization": "Bearer moon-dev-token"}});
+    socket.send(JSON.stringify({
+      type: "subscribe",
+      client: "admin",
+      sessionToken: ownerClaim.token,
+      domains: ["system"]
+    }));
+    const ready = await readWebSocketJson(socket);
+    assert.equal(ready.type, "ready");
+    assert.deepEqual(ready.domains, ["system"]);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    const eventResponse = await fetch(`http://127.0.0.1:${vaultPort}/api/service/events`, {
+      method: "POST",
+      headers: {
+        "Authorization": "Bearer sage-dev-token",
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        domain: "system",
+        eventType: "live-test",
+        severity: "info",
+        actorType: "service",
+        actorId: "test",
+        actorLabel: "Test",
+        targetType: "service",
+        targetId: "scriptarr-sage",
+        message: "Live test event.",
+        metadata: {
+          safe: "visible",
+          url: "https://secret.example/token=abc",
+          nested: {nope: true}
+        }
+      })
+    });
+    assert.equal(eventResponse.status, 201);
+
+    const liveEvent = await readWebSocketJson(socket);
+    assert.equal(liveEvent.type, "event");
+    assert.equal(liveEvent.event.domain, "system");
+    assert.equal(liveEvent.event.metadata.safe, "visible");
+    assert.equal(Object.hasOwn(liveEvent.event.metadata, "url"), false);
+    assert.equal(Object.hasOwn(liveEvent.event.metadata, "nested"), false);
+    const closed = waitForWebSocketClose(socket);
+    socket.close();
+    await closed;
+  } finally {
+    await closeWebSocketServer(liveWebSocketServer);
     await closeServer(sageServer);
     await closeServer(vaultServer);
     await closeServer(dependencyStub.server);

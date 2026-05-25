@@ -240,6 +240,16 @@ const normalizeDomains = (domains) => Array.isArray(domains)
 
 const sequenceFromEvent = (event) => Number.parseInt(String(event?.sequence || 0), 10) || 0;
 
+const openLiveSocketUrl = () => {
+  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  return `${protocol}//${window.location.host}/api/moon/live/ws`;
+};
+
+const requestLiveTicket = async ({client, domains}) => requestJson("/api/moon/live/ticket", {
+  method: "POST",
+  json: {client, domains}
+});
+
 /**
  * Provide one shared Moon admin event stream for all admin page subscribers.
  *
@@ -278,14 +288,16 @@ export const AdminEventStreamProvider = ({children, user}) => {
   }, [version]);
 
   useEffect(() => {
-    if (!user || !subscribers.current.size || typeof EventSource === "undefined") {
+    if (!user || !subscribers.current.size) {
       setState("idle");
       return undefined;
     }
 
     let cancelled = false;
+    let socket = null;
     let stream = null;
     let poller = 0;
+    let fallbackStarted = false;
     const domains = domainKey === "*"
       ? []
       : domainKey.split("|").map((domain) => domain.trim()).filter(Boolean);
@@ -312,7 +324,11 @@ export const AdminEventStreamProvider = ({children, user}) => {
       }
     };
 
-    const openStream = async () => {
+    const openSseStream = async () => {
+      if (typeof EventSource === "undefined") {
+        startPollingFallback();
+        return;
+      }
       setState("connecting");
       let afterSequence = 0;
       const controller = new AbortController();
@@ -353,10 +369,66 @@ export const AdminEventStreamProvider = ({children, user}) => {
       });
     };
 
-    void openStream();
+    const startFallback = () => {
+      if (cancelled || fallbackStarted) {
+        return;
+      }
+      fallbackStarted = true;
+      void openSseStream().catch(() => startPollingFallback());
+    };
+
+    const openWebSocket = async () => {
+      if (typeof WebSocket === "undefined") {
+        startFallback();
+        return;
+      }
+      setState("connecting");
+      const ticket = await requestLiveTicket({client: "admin", domains});
+      if (!ticket.ok || !ticket.payload?.ticket || cancelled) {
+        startFallback();
+        return;
+      }
+      socket = new WebSocket(openLiveSocketUrl());
+      socket.addEventListener("open", () => {
+        socket?.send(JSON.stringify({
+          type: "hello",
+          ticket: ticket.payload.ticket,
+          client: "admin",
+          domains,
+          latestOnly: true
+        }));
+      });
+      socket.addEventListener("message", (message) => {
+        try {
+          const payload = JSON.parse(message.data || "{}");
+          if (payload.type === "ready") {
+            if (poller) {
+              window.clearInterval(poller);
+              poller = 0;
+            }
+            setState("live");
+            return;
+          }
+          if (payload.type === "event") {
+            notifySubscribers(payload.event);
+            return;
+          }
+          if (payload.type === "invalidate" || payload.type === "resync-required") {
+            markAllSubscribersStale();
+          }
+        } catch {
+          markAllSubscribersStale();
+        }
+      });
+      socket.addEventListener("error", startFallback);
+      socket.addEventListener("close", startFallback);
+    };
+
+    void openWebSocket().catch(startFallback);
 
     return () => {
       cancelled = true;
+      socket?.close();
       stream?.close();
       if (poller) {
         window.clearInterval(poller);

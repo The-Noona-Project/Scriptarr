@@ -73,7 +73,8 @@ owner stays protected outside normal reassignment, while everyone else receives 
 with admin route-family `read`, `write`, or `root` grants plus baseline user capabilities. Scriptarr seeds `Member`
 as the no-AI opt-out group, `Member-AI` as the default group with Noona chat access, plus `Moderator` and `Admin`,
 keeps exactly one default onboarding group for new or returning Discord sign-ins, and now
-backs admin activity feeds with a shared durable event log plus same-origin SSE updates. The Users page is a dedicated
+backs admin activity feeds with a shared durable event log plus same-origin WebSocket updates, with SSE and backup
+refresh still available when a proxy cannot upgrade the connection. The Users page is a dedicated
 access-control console with search, filters, a protected owner state, group assignment drawers, and a grant matrix
 editor instead of a generic records view.
 Raven now keeps WeebCentral first by default, exposes MangaDex as a second normal download-provider option, and enables
@@ -161,6 +162,8 @@ For end-to-end Docker verification, use:
 
 - Browser traffic stays behind Moon. Browsers should not call Warden, Vault, Raven, Portal, Oracle, or LocalAI
   directly.
+- Live browser updates also stay behind Moon: the browser opens Moon's same-origin WebSocket, Moon bridges internally
+  to Sage with a service token, and durable event state remains in Vault through Sage.
 - Users can create and track requests in Moon and Discord, but Raven only receives approved work.
 - Moon user requests and Moon admin add-title now share one metadata-first intake engine. User and Discord requests
   persist the selected metadata first, admins pick download sources during approval, and unavailable requests can be
@@ -245,8 +248,8 @@ For end-to-end Docker verification, use:
   and credentials.
 - Portal also sends DMs when duplicate blockers attach a user to the ready-notify waitlist, when an unavailable
   request later finds a source, and when an unavailable request expires after 90 days.
-- Sage and Moon now treat admin events as a first-class brokered contract. Browsers read event history and SSE updates
-  only through Moon-owned `/api/moon-v3/admin/events*` routes, while async service state changes append immutable
+- Sage and Moon now treat admin events as a first-class brokered contract. Browsers read event history, WebSocket
+  updates, and fallback SSE updates only through Moon-owned routes, while async service state changes append immutable
   summaries into Vault instead of building page-specific ad hoc timelines.
 - Moon admin uses one shared toast provider for action results, async jobs, and live admin event stream updates. Global
   defaults live in Vault settings and individual admins can keep personal notification overrides.

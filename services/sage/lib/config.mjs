@@ -58,6 +58,7 @@ const parseServiceTokens = (value) => {
 export const resolveSageConfig = () => {
   const serviceTokens = {
     "scriptarr-sage": process.env.SCRIPTARR_SAGE_SERVICE_TOKEN || "sage-dev-token",
+    "scriptarr-moon": process.env.SCRIPTARR_MOON_SERVICE_TOKEN || "moon-dev-token",
     ...parseServiceTokens(process.env.SCRIPTARR_SERVICE_TOKENS)
   };
 
