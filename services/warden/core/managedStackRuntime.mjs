@@ -104,6 +104,8 @@ const valuesForOption = (extraArgs = [], option) => {
   return values.filter(Boolean);
 };
 
+const normalizeLinuxCapability = (value) => normalizeString(value).toUpperCase().replace(/^CAP_/, "");
+
 /**
  * Resolve desired Linux capabilities from descriptor extra Docker arguments.
  *
@@ -112,7 +114,8 @@ const valuesForOption = (extraArgs = [], option) => {
  */
 export const desiredCapabilitiesForExtraArgs = (extraArgs = []) =>
   valuesForOption(extraArgs, "--cap-add")
-    .map((entry) => entry.toUpperCase())
+    .map(normalizeLinuxCapability)
+    .filter(Boolean)
     .sort();
 
 /**
@@ -123,7 +126,7 @@ export const desiredCapabilitiesForExtraArgs = (extraArgs = []) =>
  */
 export const actualCapabilitiesForInspect = (inspect) =>
   (inspect?.HostConfig?.CapAdd || [])
-    .map((entry) => normalizeString(entry).toUpperCase())
+    .map(normalizeLinuxCapability)
     .filter(Boolean)
     .sort();
 

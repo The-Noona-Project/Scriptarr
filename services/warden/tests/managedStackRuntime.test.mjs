@@ -22,7 +22,7 @@ test("managed stack runtime normalizes capability and device drift inputs", () =
   const extraArgs = ["--cap-add", "NET_ADMIN", "--device", "/dev/net/tun"];
   const inspect = {
     HostConfig: {
-      CapAdd: ["NET_ADMIN"],
+      CapAdd: ["CAP_NET_ADMIN"],
       Devices: [{
         PathOnHost: "/dev/net/tun",
         PathInContainer: "/dev/net/tun",
