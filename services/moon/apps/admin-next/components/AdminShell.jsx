@@ -82,7 +82,7 @@ export const AdminShell = ({children}) => {
   }, [route.title, siteName]);
 
   if (chrome.loading || !chrome.user) {
-    return <AdminAuthResolvingSurface label={chrome.loading ? "Checking admin session." : "Opening login."} />;
+    return <AdminAuthResolvingSurface label={chrome.authError ? "Session check is delayed." : chrome.loading ? "Checking admin session." : "Opening login."} />;
   }
 
   return (

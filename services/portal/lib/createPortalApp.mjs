@@ -279,9 +279,10 @@ export const createPortalApp = async ({
     res.status(request.status).json(request.payload);
   });
 
-  app.post("/api/chat", async (req, res) => {
-    const response = await sage.chat({message: req.body?.message});
-    res.status(response.status).json(response.payload);
+  app.post("/api/chat", async (_req, res) => {
+    res.status(410).json({
+      error: "Noona chat access is managed through Discord mentions or /chat with Scriptarr Users permissions."
+    });
   });
 
   logger.info("Portal app initialized.", {

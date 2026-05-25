@@ -108,11 +108,11 @@ const AdminChromeProvider = ({children}) => {
   }, [returnTo]);
 
   useEffect(() => {
-    if (typeof window === "undefined" || chrome.loading || chrome.user || !chrome.loginUrl) {
+    if (typeof window === "undefined" || chrome.loading || chrome.user || chrome.authError || !chrome.loginUrl) {
       return;
     }
     window.location.replace(chrome.loginUrl);
-  }, [chrome.loading, chrome.loginUrl, chrome.user]);
+  }, [chrome.authError, chrome.loading, chrome.loginUrl, chrome.user]);
 
   const value = useMemo(() => ({
     ...chrome,

@@ -69,6 +69,9 @@ test("loadMoonLoginUrl resolves Moon's local login page without a broker fetch",
       "/login?returnTo=%2Fbrowse%3Fq%3Dmoon"
     );
     assert.equal(buildMoonLoginHref("//evil.example/login"), "/login?returnTo=%2F");
+    assert.equal(buildMoonLoginHref("/\\evil.example/login"), "/login?returnTo=%2F");
+    assert.equal(buildMoonLoginHref("/%5Cevil.example/login"), "/login?returnTo=%2F");
+    assert.equal(buildMoonLoginHref("/%2F%2Fevil.example/login"), "/login?returnTo=%2F");
     assert.equal(buildMoonLoginHref("/api/moon/auth/status"), "/login?returnTo=%2F");
     assert.equal(
       buildMoonDiscordLoginStartHref("/library?type=webtoon"),
@@ -84,6 +87,7 @@ test("login return and prep helpers keep post-login cache warming allowlisted", 
   assert.equal(normalizeLoginReturnTo("/admin/system/api"), "/admin/system/api");
   assert.equal(normalizeLoginReturnTo("/login?returnTo=/admin"), "/");
   assert.equal(normalizeLoginReturnTo("/api/moon-v3/user/api-keys"), "/");
+  assert.equal(normalizeLoginReturnTo("/_next/static/app.js"), "/");
 
   assert.deepEqual(resolvePostLoginPrepUrls("/admin/system/api"), [
     "/api/moon-v3/user/home",

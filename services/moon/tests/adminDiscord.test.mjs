@@ -50,7 +50,8 @@ test("discord settings helper preserves notification channel and command role ru
 test("discord command rows merge runtime inventory with draft settings", () => {
   const settings = normalizeDiscordSettings({
     commands: {
-      request: {enabled: true, roleId: "role-1"}
+      request: {enabled: true, roleId: "role-1"},
+      chat: {enabled: true, roleId: "legacy-chat-role"}
     }
   });
   const rows = buildDiscordCommandRows(settings, [{id: "request", description: "Requests"}], [{
@@ -59,12 +60,21 @@ test("discord command rows merge runtime inventory with draft settings", () => {
     registered: true,
     status: "Registered",
     roleManaged: true
+  }, {
+    name: "chat",
+    label: "/chat",
+    registered: true,
+    status: "Registered",
+    roleManaged: true
   }]);
   const request = rows.find((row) => row.id === "request");
+  const chat = rows.find((row) => row.id === "chat");
 
   assert.equal(request.registered, true);
   assert.equal(request.roleId, "role-1");
   assert.equal(request.description, "Requests");
+  assert.equal(chat.roleManaged, false);
+  assert.equal(chat.roleId, "");
 });
 
 test("discord settings helper preserves Appa command gates and split ownership", () => {

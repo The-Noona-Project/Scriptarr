@@ -175,7 +175,26 @@ export const useMoonJson = (url, {enabled = true, fallback = /** @type {T} */ (n
 
 const normalizeReturnTo = (returnTo = "/reader") => {
   const trimmed = typeof returnTo === "string" ? returnTo.trim() : "";
-  return trimmed.startsWith("/") && !trimmed.startsWith("//") && !trimmed.startsWith("/api/") ? trimmed : "/reader";
+  if (!trimmed || /[\\\u0000-\u001f\u007f]/.test(trimmed)) {
+    return "/reader";
+  }
+  let decoded = "";
+  try {
+    decoded = decodeURIComponent(trimmed);
+  } catch {
+    return "/reader";
+  }
+  if (!decoded.startsWith("/") || decoded.startsWith("//") || decoded.startsWith("/api/") || /[\\\u0000-\u001f\u007f]/.test(decoded)) {
+    return "/reader";
+  }
+  try {
+    const parsed = new URL(decoded, "https://moon.local");
+    return parsed.origin === "https://moon.local"
+      ? `${parsed.pathname}${parsed.search}${parsed.hash}`
+      : "/reader";
+  } catch {
+    return "/reader";
+  }
 };
 
 /**

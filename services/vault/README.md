@@ -8,7 +8,9 @@ as managed-service updates and Raven pipeline activity.
 Vault now also persists reusable permission groups, user-group assignments, and the shared durable event log that
 powers `/admin/users`, `/admin/requests`, and `/admin/system/events`. The bootstrap owner stays protected, while every
 other user's admin access is derived from one or more permission groups plus a required default onboarding group for
-new or returning Discord sign-ins.
+new or returning Discord sign-ins. The seeded default is `Member-AI`, which includes `use_noona_chat`; `Member` stays
+available as the no-AI opt-out group, and Vault performs a one-time repair that moves old default-only `Member` users
+to `Member-AI` without reapplying that move after an admin later removes chat access.
 Session reads stay on the fast path: Vault looks up the requested token, checks its TTL, and leaves expired-row cleanup
 to startup and periodic pruning. MySQL stores keep session and role indexes for auth/bootstrap lookups.
 For external MySQL deployments, Vault keeps the shared pool warm with a guarded low-frequency health probe and logs

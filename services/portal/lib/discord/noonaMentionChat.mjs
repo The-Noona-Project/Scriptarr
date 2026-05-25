@@ -63,7 +63,7 @@ const buildUserPayload = (author = {}, member = {}) => ({
  *   getSettings: () => Record<string, unknown>,
  *   getBotUserId?: () => string,
  *   sage: {noonaChat?: Function},
- *   roleManager: {checkAccess: Function},
+ *   roleManager?: {checkAccess: Function},
  *   logger?: {warn?: Function, error?: Function},
  *   onRuntimeEvent?: Function,
  *   onReviewCandidate?: Function,
@@ -80,7 +80,6 @@ export const createNoonaMentionHandler = ({
   getSettings,
   getBotUserId,
   sage,
-  roleManager,
   logger,
   onRuntimeEvent,
   onReviewCandidate,
@@ -122,20 +121,6 @@ export const createNoonaMentionHandler = ({
     return false;
   }
   const userId = normalizeString(message?.author?.id);
-
-  const access = botAuthoredAllowed ? {allowed: true} : roleManager.checkAccess({
-    guildId,
-    guild: message?.guild,
-    user: message?.author,
-    member: message?.member
-  }, "chat", {});
-  if (!access.allowed) {
-    await sendPublicAiReply(message, access.message || "You do not have permission to talk to Noona here.", {
-      userId,
-      fallback: "You do not have permission to talk to Noona here."
-    });
-    return true;
-  }
 
   const buildCandidate = ({
     reply,
@@ -227,9 +212,12 @@ export const createNoonaMentionHandler = ({
       }
     });
     const payload = response?.payload || {};
+    const permissionDenied = response?.status === 403 || payload.status === 403;
     const reply = payload.reply || (response?.ok
       ? "Noona is here."
-      : "Noona is having trouble reaching her brain right now. Try me again soon.");
+      : permissionDenied
+        ? "You do not have Noona chat access yet. Ask an admin to update your Scriptarr user groups."
+        : "Noona is having trouble reaching her brain right now. Try me again soon.");
     const replies = await editPublicAiReply({
       message,
       placeholder,
@@ -252,7 +240,7 @@ export const createNoonaMentionHandler = ({
       at: new Date().toISOString(),
       authorId: userId,
       channelId,
-      message: response?.ok ? "" : "sage-error",
+      message: response?.ok ? "" : permissionDenied ? "permission-denied" : "sage-error",
       degraded: payload.oracle?.degraded === true,
       degradedReason: payload.oracle?.degraded === true ? "oracle.degraded" : ""
     });
@@ -261,7 +249,7 @@ export const createNoonaMentionHandler = ({
       replies,
       response,
       noonaOk: response?.ok === true,
-      reason: response?.ok ? "" : "sage-error"
+      reason: response?.ok ? "" : permissionDenied ? "permission-denied" : "sage-error"
     });
     if (response?.ok || peerBotMentioned) {
       await runReview(candidate, {awaitReview: peerBotMentioned});

@@ -1065,6 +1065,17 @@ test("vault manages permission groups, durable events, and deleted-user recreati
   }).then((response) => response.json());
   assert.equal(owner.role, "owner");
 
+  const ownerRefresh = await fetch(`${baseUrl}/api/service/users/upsert-discord`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      discordUserId: "owner-1",
+      username: "Owner Refreshed",
+      role: "member"
+    })
+  }).then((response) => response.json());
+  assert.equal(ownerRefresh.role, "owner");
+
   const reader = await fetch(`${baseUrl}/api/service/users/upsert-discord`, {
     method: "POST",
     headers,
@@ -1074,13 +1085,14 @@ test("vault manages permission groups, durable events, and deleted-user recreati
     })
   }).then((response) => response.json());
   assert.equal(reader.role, "member");
-  assert.equal(reader.groups[0].id, "member");
+  assert.equal(reader.groups[0].id, "member-ai");
+  assert.equal(reader.permissions.includes("use_noona_chat"), true);
 
   const accessOverview = await fetch(`${baseUrl}/api/service/access`, {
     headers
   }).then((response) => response.json());
-  assert.equal(accessOverview.defaultGroupId, "member");
-  assert.equal(accessOverview.groups.length >= 3, true);
+  assert.equal(accessOverview.defaultGroupId, "member-ai");
+  assert.equal(accessOverview.groups.length >= 4, true);
 
   const opsGroup = await fetch(`${baseUrl}/api/service/permission-groups`, {
     method: "POST",
@@ -1107,6 +1119,19 @@ test("vault manages permission groups, durable events, and deleted-user recreati
   }).then((response) => response.json());
   assert.deepEqual(updatedReader.groups.map((group) => group.id), ["requests-ops"]);
   assert.equal(updatedReader.adminGrants.requests, "root");
+
+  const invalidGroupResponse = await fetch(`${baseUrl}/api/service/users/reader-1/groups`, {
+    method: "PUT",
+    headers,
+    body: JSON.stringify({
+      groupIds: ["missing-group"]
+    })
+  });
+  assert.equal(invalidGroupResponse.status, 409);
+  const readerAfterInvalidGroup = await fetch(`${baseUrl}/api/service/users/by-discord/reader-1`, {
+    headers
+  }).then((response) => response.json());
+  assert.deepEqual(readerAfterInvalidGroup.groups.map((group) => group.id), ["requests-ops"]);
 
   await fetch(`${baseUrl}/api/service/progress`, {
     method: "POST",
@@ -1192,7 +1217,7 @@ test("vault manages permission groups, durable events, and deleted-user recreati
     })
   }).then((response) => response.json());
   assert.equal(recreatedReader.role, "member");
-  assert.equal(recreatedReader.groups[0].id, "member");
+  assert.equal(recreatedReader.groups[0].id, "member-ai");
 
   server.close();
 });

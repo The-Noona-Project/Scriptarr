@@ -437,7 +437,8 @@ starts a fresh run against canonical titles only.
 `/admin/users` is now the access-control workspace: a dense user directory, reusable permission-group editor, group
 assignment panel, and recent auth or access events in one page. Staff access is no longer a flat role toggle. Moon now
 evaluates unioned permission groups with route-family `read`, `write`, or `root` grants, while the bootstrap owner
-stays visible but protected from deletion or demotion.
+stays visible but protected from deletion or demotion. `Member-AI` is the default non-owner group and grants Noona
+chat through `use_noona_chat`; `Member` remains the no-AI opt-out group.
 `/admin/requests` is the moderation inbox. It opens on requests needing review, lets staff search or filter by status,
 and keeps request details in a drawer with saved metadata, selected source snapshots, duplicate waitlist state,
 timeline, linked Raven ids, and approve, resolve, refresh-source, override, or deny actions. Denying a request requires
@@ -526,8 +527,9 @@ storing image data in chat memory.
 Noona mention chat is public by design in this version. With it enabled, users can mention the real bot user id in any
 allowed guild channel, for example `@Noona Ai are you alive?`, and Portal replies to that message after sending the
 request through Sage. Portal ignores bots, wrong guilds, empty mentions, channels outside the allowlist, and unmentioned
-chatter. It also reuses the `/chat` command gate, so setting a required role on `/chat` applies to natural mentions
-too. Portal now replies immediately with a requester-mentioned `Thinking...` placeholder, edits that same message with
+chatter. User eligibility is checked by Sage against Vault permission groups before memory, proposals, read context, or
+Oracle are used. Manage access from `/admin/users` with `Member-AI` or another group containing `use_noona_chat`;
+the saved `/chat` role id is ignored for Noona chat authorization. Portal now replies immediately with a requester-mentioned `Thinking...` placeholder, edits that same message with
 the final answer, and reports how many request(s) are ahead when Noona or Appa is already answering another AI request.
 Only the requester mention is allowed in AI replies. Leave the allowed-channel list blank to allow every channel in the
 configured guild, or restrict it to known safe channel ids for a quieter rollout.
@@ -550,9 +552,9 @@ The split Discord command set is:
 
 When Appa is disabled or unavailable, Noona registers the legacy single-bot command set, including `/ding`, `/status`,
 `/chat`, `/search`, `/request`, `/subscribe`, `/trivia`, and owner-only DM `/downloadall`. Split mode does not
-register `/chat`; natural Noona mention chat remains the public chat surface and still reuses the saved `/chat` role
-gate. In fallback mode, legacy `/chat` shares Noona's AI queue and edits its ephemeral placeholder once the response is
-ready.
+register `/chat`; natural Noona mention chat remains the public chat surface and uses `/admin/users` group access.
+In fallback mode, legacy `/chat` shares Noona's AI queue, asks Sage's Noona chat route with the Discord user identity,
+and edits its ephemeral placeholder once the response is ready.
 
 Blank role ids mean any member in the configured guild can use that slash command. `downloadall` ignores guild roles,
 is only supported in bot DMs, and only checks the configured DM superuser id.

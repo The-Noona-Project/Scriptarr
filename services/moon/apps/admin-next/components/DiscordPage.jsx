@@ -367,7 +367,7 @@ export const DiscordPage = ({user}) => {
             <div>
               <div className="admin-kicker">Noona Chat</div>
               <h2>Mention replies</h2>
-              <p className="admin-muted">Public replies use the `/chat` role gate, Sage-curated memory, and conservative admin proposals.</p>
+              <p className="admin-muted">Public replies use Sage-curated memory and conservative admin proposals. User access is managed in <a href="/admin/users">Users</a> with Member-AI or another Noona Chat group.</p>
             </div>
             <AdminStatusBadge tone={draft.noonaChat.enabled ? "good" : "queued"}>
               {draft.noonaChat.enabled ? "enabled" : "disabled"}
@@ -713,6 +713,9 @@ export const DiscordPage = ({user}) => {
               const appaOwned = draft.appa.enabled && row.owner === "appa";
               const sharedOwned = draft.appa.enabled && row.owner === "both";
               const appaSetting = draft.appa.commands[row.id] || {enabled: true, roleId: ""};
+              if (row.id === "chat") {
+                return <span className="admin-muted">Managed in Users</span>;
+              }
               if (sharedOwned && row.id !== "downloadall") {
                 return (
                   <span className="admin-command-role-stack">

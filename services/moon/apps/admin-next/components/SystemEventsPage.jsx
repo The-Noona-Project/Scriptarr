@@ -40,6 +40,19 @@ const severityTone = (severity) => {
   return "good";
 };
 
+const redactEventTargetId = (targetId) => {
+  const normalized = normalizeString(targetId);
+  if (normalized.startsWith("sess_")) {
+    return "session:redacted";
+  }
+  return normalized;
+};
+
+const redactEvent = (event = {}) => ({
+  ...event,
+  targetId: redactEventTargetId(event.targetId)
+});
+
 /**
  * @returns {import("react").ReactNode}
  */
@@ -101,7 +114,7 @@ export const SystemEventsPage = () => {
       recommendations: []
     }
   });
-  const events = normalizeArray(data?.events);
+  const events = normalizeArray(data?.events).map(redactEvent);
   const selectedEvent = events.find((event) => normalizeString(event.eventId) === selectedEventId) || null;
   const readerSummary = readerReport?.summary || {};
   const readerHotspots = useMemo(() => {

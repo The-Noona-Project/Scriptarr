@@ -2175,6 +2175,13 @@ a {
   }
 }
 
+@media (prefers-reduced-motion: reduce) {
+  .moon-login-progress span {
+    animation: none;
+    transform: translateX(70%);
+  }
+}
+
 @media (max-width: 1080px) {
   .moon-hero,
   .moon-title-hero,

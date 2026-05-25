@@ -188,7 +188,7 @@ export const buildDiscordCommandRows = (settings = {}, catalog = [], inventory =
     const id = normalizeString(command.id || command.name);
     const setting = normalizeObject(settings.commands?.[id]);
     const appaSetting = normalizeObject(settings.appa?.commands?.[id]);
-    const roleManaged = command.roleManaged !== false && id !== "downloadall";
+    const roleManaged = command.roleManaged !== false && id !== "downloadall" && id !== "chat";
     return {
       id,
       name: normalizeString(command.name, id),

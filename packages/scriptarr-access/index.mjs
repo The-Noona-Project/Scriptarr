@@ -30,6 +30,11 @@ export const BASELINE_USER_CAPABILITIES = Object.freeze([
   "read_ai_status",
   "manage_personal_api_keys"
 ]);
+export const NOONA_CHAT_CAPABILITY = "use_noona_chat";
+const AI_USER_CAPABILITIES = Object.freeze([
+  ...BASELINE_USER_CAPABILITIES,
+  NOONA_CHAT_CAPABILITY
+]);
 
 const ACCESS_LEVEL_ORDER = Object.freeze({
   "": 0,
@@ -221,6 +226,7 @@ export const deriveLegacyPermissions = (user = {}) => {
     derived.add("read_requests");
     derived.add("read_library");
     derived.add("read_ai_status");
+    derived.add(NOONA_CHAT_CAPABILITY);
     return Array.from(derived).sort();
   }
 
@@ -263,9 +269,17 @@ export const seedPermissionGroups = () => ([
   {
     id: "member",
     name: "Member",
-    description: "Default reader access for signed-in Scriptarr users.",
-    isDefault: true,
+    description: "Reader access without Noona public chat.",
+    isDefault: false,
     permissions: [...BASELINE_USER_CAPABILITIES],
+    adminGrants: normalizeAdminGrants({})
+  },
+  {
+    id: "member-ai",
+    name: "Member-AI",
+    description: "Default reader access with Noona public chat.",
+    isDefault: true,
+    permissions: [...AI_USER_CAPABILITIES],
     adminGrants: normalizeAdminGrants({})
   },
   {
@@ -273,7 +287,7 @@ export const seedPermissionGroups = () => ([
     name: "Moderator",
     description: "Request triage and operational library visibility without full system control.",
     isDefault: false,
-    permissions: [...BASELINE_USER_CAPABILITIES],
+    permissions: [...AI_USER_CAPABILITIES],
     adminGrants: normalizeAdminGrants({
       overview: "read",
       library: "read",
@@ -288,7 +302,7 @@ export const seedPermissionGroups = () => ([
     name: "Admin",
     description: "Full administrative control across Moon route families.",
     isDefault: false,
-    permissions: [...BASELINE_USER_CAPABILITIES],
+    permissions: [...AI_USER_CAPABILITIES],
     adminGrants: fullAdminGrantMap
   }
 ]);
@@ -298,6 +312,7 @@ export default {
   ADMIN_ACCESS_DOMAIN_IDS,
   ACCESS_LEVELS,
   BASELINE_USER_CAPABILITIES,
+  NOONA_CHAT_CAPABILITY,
   canAccessAdmin,
   deriveLegacyPermissions,
   deriveRoleLabel,

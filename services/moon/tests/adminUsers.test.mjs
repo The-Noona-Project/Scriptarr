@@ -5,6 +5,8 @@ import {
   buildGroupDraft,
   buildUserMetrics,
   filterUsers,
+  hasNoonaChatAccess,
+  patchGroupCapability,
   patchGroupGrant,
   resolveExistingUserSelection,
   serializeGroupDraft,
@@ -15,7 +17,7 @@ test("admin users helpers count and filter access buckets", () => {
   const users = [
     {discordUserId: "owner", username: "Owner", role: "owner", isOwner: true, accessSummary: {adminDomains: ["settings"]}},
     {discordUserId: "admin", username: "Admin", role: "admin", accessSummary: {adminDomains: ["users"]}, groups: [{name: "Managers"}]},
-    {discordUserId: "reader", username: "Reader", role: "member", accessSummary: {adminDomains: []}, groups: []}
+    {discordUserId: "reader", username: "Reader", role: "member", permissions: ["use_noona_chat"], accessSummary: {adminDomains: []}, groups: []}
   ];
 
   const metrics = buildUserMetrics(users, [{id: "member"}, {id: "managers"}]);
@@ -24,7 +26,10 @@ test("admin users helpers count and filter access buckets", () => {
   assert.equal(metrics.owners, 1);
   assert.equal(metrics.admins, 2);
   assert.equal(metrics.readers, 1);
+  assert.equal(metrics.noonaChat, 1);
   assert.deepEqual(filterUsers(users, {filter: "admins", query: "manager"}).map((user) => user.discordUserId), ["admin"]);
+  assert.deepEqual(filterUsers(users, {filter: "noona-chat"}).map((user) => user.discordUserId), ["reader"]);
+  assert.equal(hasNoonaChatAccess(users[2]), true);
 });
 
 test("admin users helpers normalize group grant drafts", () => {
@@ -35,14 +40,16 @@ test("admin users helpers normalize group grant drafts", () => {
     adminGrants: {users: "read"}
   });
   const patched = patchGroupGrant(draft, "requests", "root");
+  const withNoonaChat = patchGroupCapability(patched, undefined, true);
   const serialized = serializeGroupDraft({
+    ...withNoonaChat,
     ...patched,
-    permissionsText: "read_library, create_requests"
+    permissionsText: `${withNoonaChat.permissionsText}, create_requests`
   });
 
   assert.equal(serialized.adminGrants.users, "read");
   assert.equal(serialized.adminGrants.requests, "root");
-  assert.deepEqual(serialized.permissions, ["read_library", "create_requests"]);
+  assert.deepEqual(serialized.permissions, ["create_requests", "read_library", "use_noona_chat"]);
 });
 
 test("admin users selection helper never auto-opens the first visible user", () => {

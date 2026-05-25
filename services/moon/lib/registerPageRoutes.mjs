@@ -93,18 +93,31 @@ const isPublicHtmlPath = (pathname) => PUBLIC_HTML_PATHS.has(pathname) || pathna
  * @returns {string}
  */
 const sanitizeHtmlReturnToPath = (value, fallback = "/") => {
+  const unsafeCharacters = /[\\\u0000-\u001f\u007f]/;
+  const safeFallback = typeof fallback === "string" && fallback.startsWith("/") && !fallback.startsWith("//") && !unsafeCharacters.test(fallback)
+    ? fallback
+    : "/";
   const normalized = typeof value === "string" ? value.trim() : "";
-  if (!normalized.startsWith("/") || normalized.startsWith("//")) {
-    return fallback;
+  if (!normalized || unsafeCharacters.test(normalized)) {
+    return safeFallback;
+  }
+  let decoded;
+  try {
+    decoded = decodeURIComponent(normalized);
+  } catch {
+    return safeFallback;
+  }
+  if (!decoded.startsWith("/") || decoded.startsWith("//") || unsafeCharacters.test(decoded)) {
+    return safeFallback;
   }
   let parsed;
   try {
-    parsed = new URL(normalized, "https://moon.local");
+    parsed = new URL(decoded, "https://moon.local");
   } catch {
-    return fallback;
+    return safeFallback;
   }
-  if (isPublicHtmlPath(parsed.pathname) || isAssetOrAuthPath(parsed.pathname)) {
-    return fallback;
+  if (parsed.origin !== "https://moon.local" || isPublicHtmlPath(parsed.pathname) || isAssetOrAuthPath(parsed.pathname)) {
+    return safeFallback;
   }
   return `${parsed.pathname}${parsed.search}`;
 };

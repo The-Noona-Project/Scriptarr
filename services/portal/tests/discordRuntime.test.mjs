@@ -1204,7 +1204,7 @@ test("legacy chat command edits an immediate Thinking reply and queues concurren
   const calls = [];
   const commands = createPortalCommands({
     sage: {
-      async chat(payload) {
+      async noonaChat(payload) {
         calls.push(payload);
         if (payload.message === "first question") {
           await new Promise((resolve) => {
@@ -1240,7 +1240,15 @@ test("legacy chat command edits an immediate Thinking reply and queues concurren
   releaseFirst();
   await Promise.all([firstRun, secondRun]);
 
-  assert.deepEqual(calls, [{message: "first question"}, {message: "second question"}]);
+  assert.deepEqual(calls.map((call) => ({
+    message: call.message,
+    rawMessage: call.rawMessage,
+    discordUserId: call.user.discordUserId,
+    username: call.user.username
+  })), [
+    {message: "first question", rawMessage: "first question", discordUserId: "user-1", username: "CaptainPax"},
+    {message: "second question", rawMessage: "second question", discordUserId: "user-1", username: "CaptainPax"}
+  ]);
   assert.equal(first.__calls.editReply[1].content, "<@user-1> first answer");
   assert.equal(second.__calls.editReply[1].content, "<@user-1> Thinking...");
   assert.equal(second.__calls.editReply[2].content, "<@user-1> second answer");

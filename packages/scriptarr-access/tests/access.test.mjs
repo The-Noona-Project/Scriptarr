@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   ADMIN_ACCESS_DOMAIN_IDS,
   BASELINE_USER_CAPABILITIES,
+  NOONA_CHAT_CAPABILITY,
   canAccessAdmin,
   deriveLegacyPermissions,
   hasGrant,
@@ -51,10 +52,13 @@ test("legacy permission derivation keeps baseline capabilities and admin compati
   assert.equal(permissions.includes("admin"), true);
 });
 
-test("seed permission groups include member as the only default and admin covers all domains", () => {
+test("seed permission groups include Member-AI as the default and admin covers all domains", () => {
   const groups = seedPermissionGroups();
   assert.equal(groups.filter((group) => group.isDefault).length, 1);
-  assert.equal(groups.find((group) => group.id === "member")?.isDefault, true);
+  assert.equal(groups.find((group) => group.id === "member")?.isDefault, false);
+  assert.equal(groups.find((group) => group.id === "member")?.permissions.includes(NOONA_CHAT_CAPABILITY), false);
+  assert.equal(groups.find((group) => group.id === "member-ai")?.isDefault, true);
+  assert.equal(groups.find((group) => group.id === "member-ai")?.permissions.includes(NOONA_CHAT_CAPABILITY), true);
   assert.equal(BASELINE_USER_CAPABILITIES.includes("manage_personal_api_keys"), true);
   assert.equal(groups.find((group) => group.id === "member")?.permissions.includes("manage_personal_api_keys"), true);
   assert.equal(ADMIN_ACCESS_DOMAIN_IDS.includes("database"), true);

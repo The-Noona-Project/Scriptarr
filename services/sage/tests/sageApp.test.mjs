@@ -1572,12 +1572,35 @@ test("sage carries a sanitized returnTo path through Discord OAuth state", async
   assert.equal(authUrlPayload.returnTo, "/browse?q=moon");
   assert.ok(state);
 
+  for (const unsafeReturnTo of ["/\\evil.example", "/%5Cevil.example", "/%2F%2Fevil.example", "/api/moon/chrome/bootstrap", "/login"]) {
+    const unsafePayload = await fetch(`${baseUrl}/api/auth/discord/url?returnTo=${encodeURIComponent(unsafeReturnTo)}`)
+      .then((response) => response.json());
+    assert.equal(unsafePayload.returnTo, "/");
+  }
+
   const missingStateResponse = await fetch(`${baseUrl}/api/auth/discord/callback?code=test-oauth-code`);
   assert.equal(missingStateResponse.status, 403);
   assert.match((await missingStateResponse.json()).error, /OAuth state/i);
 
   const ownerClaim = await signInViaDiscord(baseUrl, `state=${encodeURIComponent(state)}`);
   assert.equal(ownerClaim.returnTo, "/browse?q=moon");
+  const authEvents = await fetch(`${baseUrl.replace(String(sagePort), String(vaultPort))}/api/service/events?domain=auth`, {
+    headers: {"Authorization": "Bearer sage-dev-token"}
+  }).then((response) => response.json());
+  assert.equal(authEvents[0].targetType, "session");
+  assert.match(authEvents[0].targetId, /^session:[a-f0-9]{16}$/);
+  assert.notEqual(authEvents[0].targetId, ownerClaim.token);
+  const logoutResponse = await fetch(`${baseUrl}/api/auth/logout`, {
+    method: "POST",
+    headers: {"Authorization": `Bearer ${ownerClaim.token}`}
+  });
+  assert.equal(logoutResponse.status, 200);
+  const authEventsAfterLogout = await fetch(`${baseUrl.replace(String(sagePort), String(vaultPort))}/api/service/events?domain=auth`, {
+    headers: {"Authorization": "Bearer sage-dev-token"}
+  }).then((response) => response.json());
+  const logoutEvent = authEventsAfterLogout.find((event) => event.eventType === "logout");
+  assert.match(logoutEvent.targetId, /^session:[a-f0-9]{16}$/);
+  assert.notEqual(logoutEvent.targetId, ownerClaim.token);
 
   await closeServer(sageServer);
   await closeServer(vaultServer);
@@ -4591,7 +4614,8 @@ test("sage exposes group-based admin users access and domain-scoped event reads"
     });
     assert.equal(usersResponse.status, 200);
     const usersPayload = await usersResponse.json();
-    assert.equal(usersPayload.defaultGroupId, "member");
+    assert.equal(usersPayload.defaultGroupId, "member-ai");
+    assert.equal(usersPayload.groups.some((entry) => entry.id === "member" && !entry.permissions.includes("use_noona_chat")), true);
     assert.equal(usersPayload.groups.some((entry) => entry.id === "user-managers"), true);
     assert.equal(usersPayload.users.some((entry) =>
       entry.discordUserId === "reader-2"

@@ -5,7 +5,7 @@
 export const portalCommandCatalog = Object.freeze([
   {name: "ding", label: "/ding", description: "Quick bot health reply.", scope: "Guild slash command", mode: "slash", roleManaged: true, registrationScope: "guild", splitOwner: "appa"},
   {name: "status", label: "/status", description: "Read-only Scriptarr runtime summary.", scope: "Guild slash command", mode: "slash", roleManaged: true, registrationScope: "guild", splitOwner: "appa"},
-  {name: "chat", label: "/chat", description: "Legacy single-bot Noona chat.", scope: "Guild slash command", mode: "slash", roleManaged: true, registrationScope: "guild", splitOwner: "legacy"},
+  {name: "chat", label: "/chat", description: "Legacy single-bot Noona chat. User access is managed in Scriptarr Users.", scope: "Guild slash command", mode: "slash", roleManaged: false, registrationScope: "guild", splitOwner: "legacy"},
   {name: "search", label: "/search", description: "Search the current Scriptarr library.", scope: "Guild slash command", mode: "slash", roleManaged: true, registrationScope: "guild", splitOwner: "noona"},
   {name: "request", label: "/request", description: "Search intake matches and file a moderated request.", scope: "Guild slash command", mode: "slash", roleManaged: true, registrationScope: "guild", splitOwner: "noona"},
   {name: "subscribe", label: "/subscribe", description: "Follow a library title for Discord notifications.", scope: "Guild slash command", mode: "slash", roleManaged: true, registrationScope: "guild", splitOwner: "noona"},

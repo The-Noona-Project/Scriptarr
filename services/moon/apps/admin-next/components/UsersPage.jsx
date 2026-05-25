@@ -12,6 +12,8 @@ import {
   buildUserMetrics,
   filterUsers,
   grantLevels,
+  hasNoonaChatAccess,
+  patchGroupCapability,
   patchGroupGrant,
   resolveExistingUserSelection,
   serializeGroupDraft,
@@ -32,6 +34,12 @@ const emptyPayload = Object.freeze({
 });
 
 const groupNames = (user) => normalizeArray(user.groups).map((group) => normalizeString(group.name, group.id)).join(", ") || "No groups";
+
+const noonaChatBadge = (user) => (
+  <AdminStatusBadge tone={hasNoonaChatAccess(user) ? "good" : "queued"}>
+    {hasNoonaChatAccess(user) ? "Noona Chat" : "No AI"}
+  </AdminStatusBadge>
+);
 
 const accessTone = (user) => {
   if (user.isOwner || user.role === "owner") {
@@ -225,6 +233,7 @@ export const UsersPage = ({user}) => {
           <article className="admin-metric-card"><span>Total users</span><strong>{metrics.total}</strong></article>
           <article className="admin-metric-card"><span>Admins</span><strong>{metrics.admins}</strong></article>
           <article className="admin-metric-card"><span>Readers</span><strong>{metrics.readers}</strong></article>
+          <article className="admin-metric-card"><span>Noona chat</span><strong>{metrics.noonaChat}</strong></article>
           <article className="admin-metric-card"><span>Groups</span><strong>{metrics.groups}</strong></article>
         </div>
         <AdminFilterBar>
@@ -239,6 +248,8 @@ export const UsersPage = ({user}) => {
               <option value="owners">Owners</option>
               <option value="admins">Admins</option>
               <option value="readers">Readers</option>
+              <option value="noona-chat">Noona Chat</option>
+              <option value="noona-muted">No AI</option>
             </select>
           </label>
         </AdminFilterBar>
@@ -260,6 +271,7 @@ export const UsersPage = ({user}) => {
             columns={[
               {key: "username", label: "User", render: (row) => <strong>{formatDisplayValue(row.username, "Unknown")}</strong>},
               {key: "role", label: "Access", render: (row) => <AdminStatusBadge tone={accessTone(row)}>{formatDisplayValue(row.accessSummary?.label, row.role)}</AdminStatusBadge>},
+              {key: "noona", label: "Noona", render: noonaChatBadge},
               {key: "groups", label: "Groups", render: groupNames},
               {key: "updatedAt", label: "Updated", render: (row) => formatDate(row.updatedAt)}
             ]}
@@ -326,6 +338,7 @@ export const UsersPage = ({user}) => {
               <span><strong>Discord id</strong>{selectedUser.discordUserId}</span>
               <span><strong>Role</strong>{selectedUser.role}</span>
               <span><strong>Access</strong>{formatDisplayValue(selectedUser.accessSummary?.label, "Reader access")}</span>
+              <span><strong>Noona Chat</strong>{hasNoonaChatAccess(selectedUser) ? "Allowed" : "Not allowed"}</span>
               <span><strong>Updated</strong>{formatDate(selectedUser.updatedAt)}</span>
             </div>
             <div className="admin-checkbox-grid">
@@ -373,6 +386,17 @@ export const UsersPage = ({user}) => {
               <label>
                 <span>Capabilities</span>
                 <input value={groupDrawer.draft.permissionsText} onChange={(event) => setGroupDrawer((current) => ({...current, draft: {...current.draft, permissionsText: event.target.value}}))} placeholder="read_library, create_requests" />
+              </label>
+            </div>
+            <div className="admin-checkbox-grid">
+              <label>
+                <input
+                  disabled={!canRoot}
+                  type="checkbox"
+                  checked={groupDrawer.draft.noonaChatEnabled === true}
+                  onChange={(event) => setGroupDrawer((current) => ({...current, draft: patchGroupCapability(current.draft, undefined, event.target.checked)}))}
+                />
+                <span>Noona Chat</span>
               </label>
             </div>
             <label className="admin-full-field">

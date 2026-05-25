@@ -53,7 +53,8 @@
   `vault-session`, and `auth-event`. Use the Sage Vault client timeout options for auth reads/writes, keep one
   bootstrap-status read in the callback path, log per-phase timing plus redacted `vault-user` substeps, retry
   transient Vault auth reads and idempotent user upserts, return user-safe phase errors, and never let auth-event
-  persistence failure reject a session that Vault already created.
+  persistence failure reject a session that Vault already created. Store `session:<hash>` event target ids, not raw
+  session tokens.
 - Moon's root-only content reset is Sage-owned orchestration. Keep the preview plus execute flow brokered, require the
   explicit confirmation string, append `content-reset-started` and `content-reset-completed` events, clear Vault's
   content-side state first, then trigger Raven's managed storage reset.
@@ -98,10 +99,11 @@
   routes for intake search, request creation, library search, follow updates, onboarding tests, release channel tests,
   update channel tests, and Raven durable downloadall runs.
 - Broker public Noona mention chat through `/api/internal/portal/noona-chat`. Sage should own the capped
-  `portal.noonaChat.memory` settings payload, natural memory commands, secret rejection, conservative read-context
-  loading, latest posted GitHub update digest context, public proposal filtering, Oracle fallback, and admin-safe
-  memory review/clear payloads. Portal must not call Oracle or Vault directly for this flow.
-- Keep pure Noona presence/status prompts on the fast path: skip Discord user upsert and Vault-backed Noona memory,
+  `portal.noonaChat.memory` settings payload, the `use_noona_chat` capability check, denied-user visibility in
+  `/admin/users`, natural memory commands, secret rejection, conservative read-context loading, latest posted GitHub
+  update digest context, public proposal filtering, Oracle fallback, and admin-safe memory review/clear payloads.
+  Portal must not call Oracle or Vault directly for this flow.
+- Keep pure Noona presence/status prompts on the fast path: check `use_noona_chat`, then skip Discord user upsert and Vault-backed Noona memory,
   gather only bounded live service and Portal runtime context, and return deterministic copy without calling Oracle.
 - The next Noona tone pass should use a repeatable fixture set instead of one-off prompt tweaks: casual greeting,
   "are you alive", update/how-to question, admin-ish status question, requester help, lore/catchphrase, and a degraded

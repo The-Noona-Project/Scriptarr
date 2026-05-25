@@ -70,8 +70,9 @@ queue one high-confidence source automatically. If Scriptarr cannot find a sourc
 it after 90 days if it still cannot be matched.
 Moon admin `/admin/users` now also runs on a group-based access model instead of a flat role toggle. The bootstrap
 owner stays protected outside normal reassignment, while everyone else receives one or more reusable permission groups
-with admin route-family `read`, `write`, or `root` grants plus baseline user capabilities. Scriptarr seeds `Member`,
-`Moderator`, and `Admin`, keeps exactly one default onboarding group for new or returning Discord sign-ins, and now
+with admin route-family `read`, `write`, or `root` grants plus baseline user capabilities. Scriptarr seeds `Member`
+as the no-AI opt-out group, `Member-AI` as the default group with Noona chat access, plus `Moderator` and `Admin`,
+keeps exactly one default onboarding group for new or returning Discord sign-ins, and now
 backs admin activity feeds with a shared durable event log plus same-origin SSE updates. The Users page is a dedicated
 access-control console with search, filters, a protected owner state, group assignment drawers, and a grant matrix
 editor instead of a generic records view.
@@ -183,9 +184,10 @@ For end-to-end Docker verification, use:
   `/ingest type:<library-type>`, `/downloadall`, `/trivia start|stop`, `/discord inspect|testpost`, admin mentions,
   and serious corrections. If Appa is disabled or fails, Noona keeps the legacy single-bot admin fallback.
 - Public guild mention chat is now optional in `/admin/discord`. When enabled, users can say `@Noona Ai are you alive?`
-  in allowed guild channels and Portal will reply publicly through Sage. The flow reuses the `/chat` command role gate,
-  ignores unmentioned chatter, bots, wrong guilds, and empty prompts, and keeps trivia message handling separate so one
-  Discord message is not processed twice.
+  in allowed guild channels and Portal will reply publicly through Sage. User eligibility is managed from `/admin/users`
+  through `Member-AI` or another group with `use_noona_chat`; `/admin/discord` controls enablement, channels, memory,
+  and runtime settings, not the Noona user gate. The flow ignores unmentioned chatter, bots, wrong guilds, and empty
+  prompts, and keeps trivia message handling separate so one Discord message is not processed twice.
 - Scriptarr bundles default Discord avatar assets for Noona and Appa. Portal can apply the configured bundled avatar
   when the bot has no custom avatar, while Sage gives Noona read-only visual context so she can answer what she and
   Appa look like without storing image data in chat memory.

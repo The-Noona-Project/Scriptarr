@@ -233,8 +233,8 @@ test("portal HTTP surface covers command inventory, request routing, chat routin
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify({message: "how is scriptarr doing?"})
       });
-      assert.equal(chatResponse.status, 200);
-      assert.equal((await chatResponse.json()).reply, "Noona says the stack looks healthy.");
+      assert.equal(chatResponse.status, 410);
+      assert.match((await chatResponse.json()).error, /Scriptarr Users permissions/i);
 
       const render = await fetch(`${portal.baseUrl}/api/onboarding/render`, {
         method: "POST",

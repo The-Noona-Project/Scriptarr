@@ -45,7 +45,7 @@ const sendStoreError = (logger, res, error, context = {}) => {
     });
     return true;
   }
-  if (["PROTECTED_OWNER", "DEFAULT_GROUP_REQUIRED", "PERMISSION_GROUP_CONFLICT", "API_KEY_CONFLICT", "API_KEY_REQUIRED", "DATABASE_SETTING_INVALID"].includes(error?.code)) {
+  if (["PROTECTED_OWNER", "DEFAULT_GROUP_REQUIRED", "PERMISSION_GROUP_CONFLICT", "UNKNOWN_PERMISSION_GROUP", "API_KEY_CONFLICT", "API_KEY_REQUIRED", "DATABASE_SETTING_INVALID"].includes(error?.code)) {
     logger.warn("Vault rejected an access-control mutation.", {
       ...context,
       code: error.code

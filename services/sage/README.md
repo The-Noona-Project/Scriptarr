@@ -18,9 +18,11 @@ Moon web now creates requests only through `/myrequests`, and Discord `/request`
 sequence. Sage exposes the browser-safe and Portal-safe orchestration steps separately: metadata search, admin-only
 download-option lookup from the selected metadata result, and final moderated request creation.
 Sage also brokers public Noona mention chat for Portal. Portal sends natural `@Noona` guild mentions to
-`/api/internal/portal/noona-chat`; Sage upserts the Discord user, applies capped Vault-backed memory summaries, gathers
-only conservative read context, optionally drafts low-risk admin proposals, and then calls Oracle with optional context.
-Oracle remains non-mutating, and Portal never calls Oracle directly for public chat.
+`/api/internal/portal/noona-chat`; Sage checks the caller's Vault-backed `use_noona_chat` capability before memory,
+read context, proposals, or Oracle are used. Denied callers are still recorded as no-AI `Member` users so they appear in
+`/admin/users`. Allowed users can use capped Vault-backed memory summaries, conservative read context, optional
+low-risk admin proposals, and then Oracle with optional context. Oracle remains non-mutating, and Portal never calls
+Oracle directly for public chat.
 For presence and health questions such as "are you online?", "are you connected?", or "are you there?", Sage answers
 from a bounded live status path instead of waiting on the LLM or Vault-backed Noona memory. The public Noona reply uses
 safe user-facing wording and can include whether Appa is connected, while the Appa admin reply may include the
@@ -59,7 +61,8 @@ Sage now also carries a sanitized Moon `returnTo` path through Discord OAuth `st
 the page where login started instead of always landing in admin or one fixed callback destination.
 The Discord callback now records bounded phase timing for the Discord token exchange, Discord profile lookup, Vault
 user upsert, Vault session creation, and best-effort auth-event persistence. If the durable auth event cannot be
-stored after the session is created, Sage logs the failure and still returns the valid session token. The `vault-user`
+stored after the session is created, Sage logs the failure and still returns the valid session token. Auth events store
+a deterministic `session:<hash>` target id instead of the raw bearer token. The `vault-user`
 phase also logs redacted substeps for bootstrap status, existing-user lookup, and owner/member upsert, and it retries
 transient Vault auth reads or idempotent upserts. The Discord, Vault user/session, and auth-event phase timeouts
 default to 8 seconds, Warden-managed 8 seconds in production, and 1.5 seconds. They can be tuned with

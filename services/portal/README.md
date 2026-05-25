@@ -21,9 +21,9 @@ existing installs do not lose admin controls. When Appa is enabled and `SCRIPTAR
 - Appa owns admin `/ding`, `/status`, `/ingest`, owner-only DM `/downloadall`, `/trivia start`, `/trivia stop`,
   admin mentions, legacy raw DM `downloadall ...`, downloadall reactions, and serious public corrections after Noona
   replies.
-- Split mode does not register the legacy `/chat` slash command; Noona's natural mention chat still reuses that saved
-  command gate for role checks. In single-bot fallback mode, legacy `/chat` uses Noona's same one-at-a-time AI queue
-  and edits its ephemeral `Thinking...` response when the answer is ready.
+- Split mode does not register the legacy `/chat` slash command; Noona's natural mention chat uses Sage's
+  Vault-backed `use_noona_chat` check. In single-bot fallback mode, legacy `/chat` uses the same Sage Noona chat route,
+  carries the Discord user identity, and edits its ephemeral `Thinking...` response when the answer is ready.
 
 Discord `/request` now mirrors Moon's web flow instead of using a one-shot fuzzy picker. Portal first shows raw
 metadata-provider matches, then lets the requester submit one exact metadata choice with optional notes. Staff later
@@ -57,8 +57,9 @@ If Discord reports that the saved requester can no longer receive DMs, Portal ac
 undeliverable instead of retrying forever.
 
 Guild id, onboarding settings, release notification channel id, GitHub update channel id, DM superuser id, Noona
-mention-chat settings, Appa split/review settings, and per-command role gates are managed from Moon admin at
-`/admin/discord`. Discord bot credentials remain env-managed. `SCRIPTARR_DISCORD_BOT_PERSONA` is now only a legacy
+mention-chat enable/channel/memory settings, Appa split/review settings, and per-command role gates are managed from
+Moon admin at `/admin/discord`. Noona chat user eligibility is managed from `/admin/users` through `Member-AI` or any
+group with `use_noona_chat`. Discord bot credentials remain env-managed. `SCRIPTARR_DISCORD_BOT_PERSONA` is now only a legacy
 single-bot avatar fallback; split mode always treats the primary bot as Noona and the second bot as Appa.
 Portal bundles default Discord avatars for Noona and Appa under `assets/discord`. `SCRIPTARR_DISCORD_AVATAR_MODE`
 defaults to `missing`, which uploads the bundled avatar only when a bot has no custom avatar. Use `off` to disable
@@ -75,9 +76,10 @@ degraded state, retries settings in the background with bounded backoff, and aut
 commands once the settings read succeeds.
 
 Noona mention chat lets guild users talk naturally to the real bot user id, such as `@Noona Ai are you alive?`. Portal
-detects the bot mention by Discord user id, removes the mention from the prompt, checks the same `/chat` role gate used
-by the slash command, sends a requester-mentioned `Thinking...` reply immediately, asks Sage, and edits that same
-message with the final response. If another request is already running for that bot, Portal first replies with the
+detects the bot mention by Discord user id, removes the mention from the prompt, sends a requester-mentioned
+`Thinking...` reply immediately, asks Sage, and edits that same message with the final response. Sage decides whether
+the caller has `use_noona_chat` before Oracle is called, so Portal no longer uses the saved `/chat` role id for Noona
+authorization. If another request is already running for that bot, Portal first replies with the
 number of request(s) ahead, then edits the placeholder to `Thinking...` when the job starts. It ignores bots, wrong
 guilds, empty prompts, disallowed channels, and ordinary unmentioned chatter. Mention chat returns `true` to the guild
 message pipeline when it handles a message, so trivia does not also process the same message as a guess. Portal allows

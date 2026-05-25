@@ -34,9 +34,9 @@
   configured trivia channel as guesses, post quiet reactions for wrong guesses, announce the first correct winner, and
   acknowledge leaderboard posts only after Discord accepts the message.
 - Portal owns only the Discord delivery side of natural Noona mention chat. Detect mentions by bot user id, not
-  display name; ignore bots, wrong guilds, disallowed channels, empty prompts, and unmentioned chatter; reuse the
-  `/chat` command role gate; send or edit a requester-mentioned `Thinking...` placeholder through the per-bot AI
-  queue; reply publicly to the triggering message; and split replies safely before Discord's message limit.
+  display name; ignore bots, wrong guilds, disallowed channels, empty prompts, and unmentioned chatter; let Sage/Vault
+  enforce `use_noona_chat`; send or edit a requester-mentioned `Thinking...` placeholder through the per-bot AI queue;
+  reply publicly to the triggering message; and split replies safely before Discord's message limit.
 - Mention chat must call Sage's `/api/internal/portal/noona-chat` route, not Oracle directly. Sage owns durable memory,
   allowed read context, latest posted update digest context, conservative proposal detection, and Oracle fallback
   behavior.

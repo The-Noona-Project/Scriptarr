@@ -18,6 +18,8 @@ import {
   buildNoonaVisualIdentityReply,
   isVisualIdentityPrompt
 } from "./noonaVisualIdentity.mjs";
+import {NOONA_CHAT_CAPABILITY} from "@scriptarr/access";
+import {hasPermission} from "./auth.mjs";
 
 export const NOONA_CHAT_READ_TOOL_IDS = Object.freeze([
   "stack_status",
@@ -55,6 +57,9 @@ const isStatusPrompt = (message) => /\b(status|health|healthy|alive|online|offli
 const isTriviaPrompt = (message) => /\btrivia\b/i.test(normalizeString(message));
 const isLibraryPrompt = (message) => /\b(library|search|find|have|manga|comic|manhwa|webtoon)\b/i.test(normalizeString(message));
 const isUpdatePrompt = (message) => /\b(update|updates|updated|changelog|change\s*log|release\s+notes?|what\s+changed|new\s+commit|github|how\s+(do|can)\s+i\s+use)\b/i.test(normalizeString(message));
+const isNoonaAccessPrompt = (message) => /\b(permission|access|allowed|allow|can\s+i|can\s+they|who\s+can|member-ai|member ai|\/chat)\b/i.test(normalizeString(message))
+  && /\b(noona|chat|talk|reply|use)\b/i.test(normalizeString(message));
+const extractMentionedDiscordUserId = (message) => normalizeString(message).match(/<@!?(\d+)>/)?.[1] || "";
 const shouldUseDeterministicStatusReply = (message) => isStatusPrompt(message)
   && !isActionPrompt(message)
   && !isTriviaPrompt(message)
@@ -273,6 +278,23 @@ const proposalReply = (planned) => {
     : "";
 };
 
+const noonaPermissionDeniedReply = () =>
+  "You do not have Noona chat access yet. Ask an admin to add you to Member-AI in Scriptarr Users.";
+
+const noonaAccessReply = (targetUser, targetLabel = "you") => {
+  if (!targetUser) {
+    return "I do not see that Discord user in Scriptarr Users yet.";
+  }
+  const allowed = hasPermission(targetUser, NOONA_CHAT_CAPABILITY);
+  const groups = normalizeArray(targetUser.groups)
+    .map((group) => normalizeString(group.name, group.id))
+    .filter(Boolean);
+  const groupText = groups.length ? ` Groups: ${groups.join(", ")}.` : "";
+  return allowed
+    ? `${targetLabel} can use Noona chat through Scriptarr Users.${groupText}`
+    : `${targetLabel} cannot use Noona chat right now. Add Member-AI or another group with Noona chat access.${groupText}`;
+};
+
 const fallbackReply = (message) => {
   if (/long\s+live\s+noona/i.test(normalizeString(message))) {
     return "LONG LIVE NOONA. Big sister heard you loud and clear.";
@@ -313,7 +335,51 @@ export const createNoonaChatService = ({
       return {ok: false, status: 400, error: "discord user id is required."};
     }
 
+    const displayName = normalizeString(user.username || user.displayName || user.globalName, "Discord Reader");
+    const existingUser = await vaultClient.getUserByDiscordId?.(discordUserId).catch(() => null);
+    if (!hasPermission(existingUser, NOONA_CHAT_CAPABILITY)) {
+      await vaultClient.upsertDiscordUser?.({
+        discordUserId,
+        username: displayName,
+        avatarUrl: normalizeString(user.avatarUrl) || null,
+        role: "member",
+        initialGroupId: "member"
+      }).catch(() => null);
+      return {
+        ok: false,
+        status: 403,
+        error: "Noona chat access is managed in Scriptarr Users.",
+        reply: noonaPermissionDeniedReply(),
+        permission: {
+          capability: NOONA_CHAT_CAPABILITY,
+          allowed: false
+        }
+      };
+    }
+
     let memoryContext = {userFacts: [], serverFacts: [], counts: {users: 0, userFacts: 0, serverFacts: 0}};
+    if (isNoonaAccessPrompt(message)) {
+      const mentionedDiscordUserId = extractMentionedDiscordUserId(message);
+      const targetUser = mentionedDiscordUserId && mentionedDiscordUserId !== discordUserId
+        ? await vaultClient.getUserByDiscordId?.(mentionedDiscordUserId).catch(() => null)
+        : existingUser;
+      return {
+        ok: true,
+        reply: noonaAccessReply(targetUser, mentionedDiscordUserId && mentionedDiscordUserId !== discordUserId ? "That user" : "You"),
+        memory: memoryContext,
+        oracle: {
+          disabled: false,
+          degraded: false,
+          skipped: true
+        },
+        deterministic: true,
+        permission: {
+          capability: NOONA_CHAT_CAPABILITY,
+          allowed: hasPermission(targetUser, NOONA_CHAT_CAPABILITY)
+        }
+      };
+    }
+
     if (shouldUseDeterministicStatusReply(message)) {
       const readContext = await buildStatusReadContext({config, serviceJson});
       return {
@@ -332,9 +398,8 @@ export const createNoonaChatService = ({
 
     await vaultClient.upsertDiscordUser?.({
       discordUserId,
-      username: normalizeString(user.username || user.displayName || user.globalName, "Discord Reader"),
-      avatarUrl: normalizeString(user.avatarUrl) || null,
-      role: "member"
+      username: displayName,
+      avatarUrl: normalizeString(user.avatarUrl) || null
     }).catch(() => null);
 
     let memory = await readNoonaChatMemory(vaultClient);
@@ -361,7 +426,7 @@ export const createNoonaChatService = ({
         prompt: message,
         user: {
           discordUserId,
-          username: normalizeString(user.username || user.displayName || user.globalName, "Discord Reader")
+          username: displayName
         },
         allowedToolIds: NOONA_CHAT_PROPOSAL_TOOL_IDS
       });
@@ -395,7 +460,7 @@ export const createNoonaChatService = ({
           visualIdentity: buildNoonaVisualIdentityContext(),
           user: {
             discordUserId,
-            username: normalizeString(user.username || user.displayName || user.globalName, "Reader"),
+            username: displayName,
             displayName: normalizeString(user.displayName || user.globalName || user.username)
           },
           memory: memoryContext,

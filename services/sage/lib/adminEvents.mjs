@@ -1,6 +1,7 @@
 /**
  * @file Durable event helpers for Sage-backed admin activity.
  */
+import crypto from "node:crypto";
 
 const normalizeString = (value, fallback = "") => {
   const normalized = typeof value === "string" ? value.trim() : "";
@@ -32,6 +33,23 @@ export const buildServiceActor = (serviceName, label = serviceName) => ({
   actorId: normalizeString(serviceName),
   actorLabel: normalizeString(label, normalizeString(serviceName, "Scriptarr service"))
 });
+
+/**
+ * Build a deterministic, non-secret target id for auth session events.
+ *
+ * @param {unknown} token
+ * @returns {string}
+ */
+export const buildSessionAuditTargetId = (token) => {
+  const normalized = normalizeString(token);
+  if (!normalized) {
+    return "session:unknown";
+  }
+  if (normalized.startsWith("session:")) {
+    return normalized;
+  }
+  return `session:${crypto.createHash("sha256").update(normalized).digest("hex").slice(0, 16)}`;
+};
 
 /**
  * Append a durable event to Vault while failing soft for the caller.
@@ -89,6 +107,7 @@ export const appendUserEvent = async (vaultClient, payload, logger, options = {}
 export default {
   appendDurableEvent,
   appendUserEvent,
+  buildSessionAuditTargetId,
   buildServiceActor,
   buildUserActor
 };

@@ -1200,6 +1200,10 @@ const createConflictError = (message, code) => {
   return error;
 };
 
+const NOONA_CHAT_MEMBER_AI_MIGRATION_KEY = "vault.access.noonaChatMemberAiMigrated.v1";
+const MEMBER_GROUP_ID = "member";
+const MEMBER_AI_GROUP_ID = "member-ai";
+
 const createMemoryStore = (options = {}) => {
   const sessionTtlMs = resolveSessionTtlMs(options.sessionTtlMs ?? SESSION_TTL_MS, {
     allowShort: Object.hasOwn(options, "sessionTtlMs")
@@ -1239,6 +1243,27 @@ const createMemoryStore = (options = {}) => {
   const seedMemoryGroups = () => {
     persistMemoryGroups(ensureSeedPermissionGroups(Array.from(state.permissionGroups.values()), nowIso));
   };
+  const markMemoryMigration = (key) => {
+    state.settings.set(key, {key, value: {completedAt: nowIso()}, updatedAt: nowIso()});
+  };
+  const migrateMemoryNoonaChatMembers = () => {
+    if (state.settings.has(NOONA_CHAT_MEMBER_AI_MIGRATION_KEY) || !state.permissionGroups.has(MEMBER_AI_GROUP_ID)) {
+      return;
+    }
+    const affected = [];
+    for (const user of state.users.values()) {
+      if (user.role === "owner") {
+        continue;
+      }
+      const assignments = state.userGroupAssignments.get(user.discordUserId || user.id);
+      if (assignments?.size === 1 && assignments.has(MEMBER_GROUP_ID)) {
+        state.userGroupAssignments.set(user.discordUserId || user.id, new Set([MEMBER_AI_GROUP_ID]));
+        affected.push(user.discordUserId || user.id);
+      }
+    }
+    markMemoryMigration(NOONA_CHAT_MEMBER_AI_MIGRATION_KEY);
+    affected.forEach((discordUserId) => refreshMemoryUserAccess(discordUserId));
+  };
   const getMemoryGroupIdsForUser = (discordUserId) => Array.from(state.userGroupAssignments.get(discordUserId) || []);
   const getMemoryGroupsForUser = (discordUserId) => getMemoryGroupIdsForUser(discordUserId)
     .map((groupId) => state.permissionGroups.get(groupId))
@@ -1263,12 +1288,15 @@ const createMemoryStore = (options = {}) => {
       refreshMemoryUserAccess(discordUserId);
     }
   };
-  const ensureDefaultGroupAssignment = (discordUserId) => {
+  const ensureDefaultGroupAssignment = (discordUserId, preferredGroupId = "") => {
     const existing = state.userGroupAssignments.get(discordUserId);
     if (existing?.size) {
       return;
     }
-    const defaultGroupId = getDefaultGroupId(readMemoryGroups());
+    const normalizedPreferredGroupId = normalizeString(preferredGroupId);
+    const defaultGroupId = normalizedPreferredGroupId && state.permissionGroups.has(normalizedPreferredGroupId)
+      ? normalizedPreferredGroupId
+      : getDefaultGroupId(readMemoryGroups());
     if (!defaultGroupId) {
       return;
     }
@@ -1423,6 +1451,7 @@ const createMemoryStore = (options = {}) => {
     sessionTtlMs,
     async init() {
       seedMemoryGroups();
+      migrateMemoryNoonaChatMembers();
       return true;
     },
     async health() {
@@ -1437,7 +1466,7 @@ const createMemoryStore = (options = {}) => {
         ownerDiscordUserId: owner?.discordUserId || null
       };
     },
-    async upsertDiscordUser({discordUserId, username, avatarUrl, role, permissions, claimOwner = false}) {
+    async upsertDiscordUser({discordUserId, username, avatarUrl, role, permissions, claimOwner = false, initialGroupId = ""}) {
       const owner = Array.from(state.users.values()).find((user) => user.role === "owner");
       if (claimOwner && owner && owner.discordUserId !== discordUserId) {
         const error = new Error("Owner already claimed.");
@@ -1445,7 +1474,7 @@ const createMemoryStore = (options = {}) => {
         throw error;
       }
       const existing = state.users.get(discordUserId);
-      const nextRole = role || existing?.role || (claimOwner ? "owner" : "member");
+      const nextRole = claimOwner ? "owner" : existing?.role || role || "member";
       const next = {
         id: discordUserId,
         discordUserId,
@@ -1461,7 +1490,7 @@ const createMemoryStore = (options = {}) => {
       };
       state.users.set(discordUserId, next);
       if (nextRole !== "owner") {
-        ensureDefaultGroupAssignment(discordUserId);
+        ensureDefaultGroupAssignment(discordUserId, initialGroupId);
       }
       return refreshMemoryUserAccess(discordUserId);
     },
@@ -1536,10 +1565,14 @@ const createMemoryStore = (options = {}) => {
       if (user.role === "owner") {
         throw createConflictError("The protected owner cannot be reassigned.", "PROTECTED_OWNER");
       }
-      const validGroupIds = Array.from(new Set((Array.isArray(groupIds) ? groupIds : [])
+      const requestedGroupIds = Array.from(new Set((Array.isArray(groupIds) ? groupIds : [])
         .map((groupId) => normalizeString(groupId))
-        .filter((groupId) => state.permissionGroups.has(groupId))));
-      state.userGroupAssignments.set(discordUserId, new Set(validGroupIds));
+        .filter(Boolean)));
+      const unknownGroupIds = requestedGroupIds.filter((groupId) => !state.permissionGroups.has(groupId));
+      if (unknownGroupIds.length) {
+        throw createConflictError(`Unknown permission group: ${unknownGroupIds[0]}.`, "UNKNOWN_PERMISSION_GROUP");
+      }
+      state.userGroupAssignments.set(discordUserId, new Set(requestedGroupIds));
       return refreshMemoryUserAccess(discordUserId);
     },
     async deleteUser(discordUserId) {
@@ -2646,6 +2679,29 @@ const createMysqlStore = (config) => {
       ]);
     }
 
+    const [noonaMigrationRows] = await pool.query("SELECT setting_key FROM settings WHERE setting_key = ? LIMIT 1", [NOONA_CHAT_MEMBER_AI_MIGRATION_KEY]);
+    if (!noonaMigrationRows[0] && seededGroups.some((group) => group.id === MEMBER_AI_GROUP_ID)) {
+      const [userRows] = await pool.query("SELECT discord_user_id, role_name FROM users WHERE role_name <> 'owner'");
+      for (const row of userRows) {
+        const [assignmentRows] = await pool.query(
+          "SELECT group_id FROM user_permission_groups WHERE discord_user_id = ?",
+          [row.discord_user_id]
+        );
+        if (assignmentRows.length === 1 && assignmentRows[0]?.group_id === MEMBER_GROUP_ID) {
+          await pool.query(`
+            UPDATE user_permission_groups
+            SET group_id = ?, updated_at = NOW()
+            WHERE discord_user_id = ? AND group_id = ?
+          `, [MEMBER_AI_GROUP_ID, row.discord_user_id, MEMBER_GROUP_ID]);
+        }
+      }
+      await pool.query(`
+        INSERT INTO settings (setting_key, setting_value, updated_at)
+        VALUES (?, ?, NOW())
+        ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value), updated_at = NOW()
+      `, [NOONA_CHAT_MEMBER_AI_MIGRATION_KEY, JSON.stringify({completedAt: nowIso()})]);
+    }
+
     const defaultGroupId = getDefaultGroupId(seededGroups);
     if (defaultGroupId) {
       const [userRows] = await pool.query("SELECT discord_user_id, role_name FROM users WHERE role_name <> 'owner'");
@@ -3160,7 +3216,7 @@ const createMysqlStore = (config) => {
         ownerDiscordUserId: rows[0]?.discord_user_id || null
       };
     },
-    async upsertDiscordUser({discordUserId, username, avatarUrl, role, permissions, claimOwner = false}) {
+    async upsertDiscordUser({discordUserId, username, avatarUrl, role, permissions, claimOwner = false, initialGroupId = ""}) {
       await withTransaction(async (connection) => {
         const [existingRows] = await connection.query("SELECT * FROM users WHERE discord_user_id = ? LIMIT 1 FOR UPDATE", [discordUserId]);
         const existing = existingRows[0];
@@ -3170,7 +3226,7 @@ const createMysqlStore = (config) => {
           throw createConflictError("Owner already claimed.", "OWNER_ALREADY_CLAIMED");
         }
 
-        const nextRole = role || existing?.role_name || (claimOwner ? "owner" : "member");
+        const nextRole = claimOwner ? "owner" : existing?.role_name || role || "member";
         const nextPermissions = Array.isArray(permissions) && permissions.length
           ? permissions
           : deriveLegacyPermissions({
@@ -3186,7 +3242,11 @@ const createMysqlStore = (config) => {
 
         if (nextRole !== "owner") {
           const groups = await listPermissionGroupsFrom(connection);
-          const defaultGroupId = getDefaultGroupId(groups);
+          const normalizedInitialGroupId = normalizeString(initialGroupId);
+          const initialGroup = normalizedInitialGroupId
+            ? groups.find((group) => group.id === normalizedInitialGroupId)
+            : null;
+          const defaultGroupId = initialGroup?.id || getDefaultGroupId(groups);
           const [assignmentRows] = await connection.query(
             "SELECT group_id FROM user_permission_groups WHERE discord_user_id = ? LIMIT 1",
             [discordUserId]
@@ -3324,18 +3384,22 @@ const createMysqlStore = (config) => {
         if (userRows[0].role_name === "owner") {
           throw createConflictError("The protected owner cannot be reassigned.", "PROTECTED_OWNER");
         }
-        const validGroupIds = Array.from(new Set((Array.isArray(groupIds) ? groupIds : [])
+        const requestedGroupIds = Array.from(new Set((Array.isArray(groupIds) ? groupIds : [])
           .map((entry) => normalizeString(entry))
           .filter(Boolean)));
-        if (validGroupIds.length) {
-          const placeholders = validGroupIds.map(() => "?").join(", ");
+        if (requestedGroupIds.length) {
+          const placeholders = requestedGroupIds.map(() => "?").join(", ");
           const [groupRows] = await connection.query(
             `SELECT group_id FROM permission_groups WHERE group_id IN (${placeholders})`,
-            validGroupIds
+            requestedGroupIds
           );
           const allowedIds = new Set(groupRows.map((row) => row.group_id));
+          const unknownGroupIds = requestedGroupIds.filter((entry) => !allowedIds.has(entry));
+          if (unknownGroupIds.length) {
+            throw createConflictError(`Unknown permission group: ${unknownGroupIds[0]}.`, "UNKNOWN_PERMISSION_GROUP");
+          }
           await connection.query("DELETE FROM user_permission_groups WHERE discord_user_id = ?", [normalizedDiscordUserId]);
-          for (const groupId of validGroupIds.filter((entry) => allowedIds.has(entry))) {
+          for (const groupId of requestedGroupIds) {
             await connection.query(`
               INSERT INTO user_permission_groups (discord_user_id, group_id, created_at, updated_at)
               VALUES (?, ?, NOW(), NOW())

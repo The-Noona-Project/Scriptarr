@@ -127,11 +127,11 @@ export const MoonShell = ({children}) => {
   }, [publicPathname]);
 
   useEffect(() => {
-    if (isLoginRoute || !chrome.loaded || chrome.auth) {
+    if (isLoginRoute || !chrome.loaded || chrome.auth || chrome.authError) {
       return;
     }
     window.location.replace(buildMoonLoginHref(`${window.location.pathname}${window.location.search}`));
-  }, [chrome.auth, chrome.loaded, isLoginRoute]);
+  }, [chrome.auth, chrome.authError, chrome.loaded, isLoginRoute]);
 
   useEffect(() => {
     syncQueryTypeFromLocation();
@@ -205,7 +205,7 @@ export const MoonShell = ({children}) => {
           <main className="moon-login-stage">{children}</main>
         </div>
       ) : !chrome.loaded || !chrome.auth ? (
-        <AuthResolvingSurface label={chrome.loaded ? "Opening login." : "Checking session."} />
+        <AuthResolvingSurface label={chrome.authError ? "Session check is delayed." : chrome.loaded ? "Opening login." : "Checking session."} />
       ) : (
         <div className="moon-app-shell">
           <header className="moon-header">

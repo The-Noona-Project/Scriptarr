@@ -30,14 +30,43 @@ const toQueryString = (query) => {
 };
 
 const sanitizeReturnToPath = (value, fallback = "/") => {
+  const unsafeCharacters = /[\\\u0000-\u001f\u007f]/;
+  const safeFallback = typeof fallback === "string" && fallback.startsWith("/") && !fallback.startsWith("//") && !unsafeCharacters.test(fallback)
+    ? fallback
+    : "/";
   const normalized = typeof value === "string" ? value.trim() : "";
-  if (!normalized.startsWith("/") || normalized.startsWith("//")) {
-    return fallback;
+  if (!normalized || unsafeCharacters.test(normalized)) {
+    return safeFallback;
   }
-  if (normalized.startsWith("/api/")) {
-    return fallback;
+  let decoded;
+  try {
+    decoded = decodeURIComponent(normalized);
+  } catch {
+    return safeFallback;
   }
-  return normalized || fallback;
+  if (!decoded.startsWith("/") || decoded.startsWith("//") || unsafeCharacters.test(decoded)) {
+    return safeFallback;
+  }
+  let parsed;
+  try {
+    parsed = new URL(decoded, "https://moon.local");
+  } catch {
+    return safeFallback;
+  }
+  const pathname = parsed.pathname || "/";
+  if (
+    parsed.origin !== "https://moon.local"
+    || pathname === "/api"
+    || pathname.startsWith("/api/")
+    || pathname === "/login"
+    || pathname.startsWith("/login/")
+    || pathname.startsWith("/_next/")
+    || pathname.startsWith("/admin/_next/")
+    || pathname.startsWith("/reader/_next/")
+  ) {
+    return safeFallback;
+  }
+  return `${pathname}${parsed.search}${parsed.hash}` || safeFallback;
 };
 
 const parseOauthState = (value) => {

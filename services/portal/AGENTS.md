@@ -20,8 +20,9 @@ optional Appa admin/reviewer chat, and the Oracle chat bridge through Sage.
 - Noona trivia guesses are normal guild messages in the configured channel. Portal should ignore bots, wrong channels,
   and inactive rounds; Sage owns the round, guess, score, and leaderboard state.
 - Public Noona mention chat should detect the real bot mention by Discord user id, not display name. It must ignore
-  bots, wrong guilds, empty prompts, disallowed channels, and unmentioned chatter; reuse the `/chat` role gate; reply
-  publicly; split long replies; and return handled so trivia does not also process the same message.
+  bots, wrong guilds, empty prompts, disallowed channels, and unmentioned chatter; let Sage/Vault enforce
+  `use_noona_chat`; reply publicly; split long replies; and return handled so trivia does not also process the same
+  message.
 - Appa review should happen after Noona replies and only post same-thread corrections for serious verdicts. Persist
   review and delivery results through Sage with redacted excerpts, not raw transcripts.
 - Appa Discord diagnostics may inspect recent messages only in configured Noona/Appa-allowed channels. Redact content

@@ -59,9 +59,26 @@ export const requestJson = async (url, options = {}) => {
  */
 export const normalizeAdminReturnTo = (returnTo = "/admin") => {
   const trimmedReturnTo = typeof returnTo === "string" ? returnTo.trim() : "";
-  return trimmedReturnTo.startsWith("/admin") && !trimmedReturnTo.startsWith("//")
-    ? trimmedReturnTo
-    : "/admin";
+  if (!trimmedReturnTo || /[\\\u0000-\u001f\u007f]/.test(trimmedReturnTo)) {
+    return "/admin";
+  }
+  let decoded = "";
+  try {
+    decoded = decodeURIComponent(trimmedReturnTo);
+  } catch {
+    return "/admin";
+  }
+  if (!decoded.startsWith("/admin") || decoded.startsWith("//") || /[\\\u0000-\u001f\u007f]/.test(decoded)) {
+    return "/admin";
+  }
+  try {
+    const parsed = new URL(decoded, "https://moon.local");
+    return parsed.origin === "https://moon.local" && parsed.pathname.startsWith("/admin")
+      ? `${parsed.pathname}${parsed.search}${parsed.hash}`
+      : "/admin";
+  } catch {
+    return "/admin";
+  }
 };
 
 /**

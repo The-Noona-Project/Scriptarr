@@ -274,18 +274,27 @@ test("Noona mention handler allows one guarded Appa smoke message", async () => 
   assert.equal(message.__calls.edit[0].content, "<@appa-1> I am online.");
 });
 
-test("Noona mention handler applies the chat role gate before calling Sage", async () => {
+test("Noona mention handler relies on Sage for Noona chat permission denials", async () => {
+  const calls = {sage: 0};
   const handler = createHandler({
     sage: {
       async noonaChat() {
-        throw new Error("Sage should not be called when the chat role gate denies access.");
+        calls.sage += 1;
+        return {
+          ok: false,
+          status: 403,
+          payload: {
+            reply: "You do not have Noona chat access yet."
+          }
+        };
       }
     }
   });
   const message = createMessage({roleIds: []});
 
   assert.equal(await handler(message), true);
-  assert.match(message.__calls.reply[0].content, /<@user-1> .*permission/i);
+  assert.equal(calls.sage, 1);
+  assert.match(message.__calls.edit[0].content, /<@user-1> .*Noona chat access/i);
 });
 
 test("Noona mention handler suppresses raw Sage errors in public replies", async () => {

@@ -84,7 +84,7 @@ export const resolveSageConfig = () => {
     ),
     vaultAuthTimeoutMs: parsePositiveInteger(
       process.env.SCRIPTARR_VAULT_AUTH_TIMEOUT_MS,
-      3000,
+      8000,
       process.env.SCRIPTARR_AUTH_VAULT_TIMEOUT_MS
     ),
     authEventTimeoutMs: parsePositiveInteger(process.env.SCRIPTARR_AUTH_EVENT_TIMEOUT_MS, 1500),

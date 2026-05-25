@@ -1,6 +1,6 @@
 import {interactionAiPayload, queueStatusText} from "../aiChatMessages.mjs";
 import {createAiResponseQueue, isAiResponseQueueCancelError} from "../aiResponseQueue.mjs";
-import {sendInteractionReply} from "../utils.mjs";
+import {normalizeString, sendInteractionReply} from "../utils.mjs";
 
 const defaultChatAiQueue = createAiResponseQueue();
 
@@ -23,10 +23,27 @@ export const createChatCommand = ({sage, aiQueue = defaultChatAiQueue}) => ({
     await interaction.deferReply?.({flags: 64});
     const message = interaction.options?.getString?.("message") || "";
     const userId = interaction.user?.id || interaction.member?.user?.id || "";
+    const member = interaction.member || {};
+    const user = interaction.user || member.user || {};
     let response;
     try {
       response = await aiQueue.run(
-        ({signal}) => sage.chat({message}, {signal}),
+        ({signal}) => sage.noonaChat({
+          message,
+          rawMessage: message,
+          guildId: normalizeString(interaction.guildId || interaction.guild?.id),
+          channelId: normalizeString(interaction.channelId || interaction.channel?.id),
+          interactionId: normalizeString(interaction.id),
+          user: {
+            discordUserId: userId,
+            username: normalizeString(user.username || member.displayName || user.globalName, "Discord Reader"),
+            globalName: normalizeString(user.globalName),
+            displayName: normalizeString(member.displayName || user.globalName || user.username),
+            avatarUrl: typeof user.displayAvatarURL === "function" ? normalizeString(user.displayAvatarURL()) : normalizeString(user.avatarUrl)
+          },
+          memoryEnabled: true,
+          proposalMode: "conservative"
+        }, {signal}),
         {
           onQueued: ({ahead}) => sendInteractionReply(interaction, interactionAiPayload(queueStatusText(ahead), {
             userId,
@@ -49,7 +66,9 @@ export const createChatCommand = ({sage, aiQueue = defaultChatAiQueue}) => ({
     await sendInteractionReply(interaction, {
       ...interactionAiPayload(response.ok
         ? response.payload?.reply || "Noona did not return a response."
-        : response.payload?.error || "Noona is unavailable right now.", {
+        : response.status === 403
+          ? response.payload?.reply || "You do not have Noona chat access yet."
+          : response.payload?.error || "Noona is unavailable right now.", {
         userId,
         fallback: "Noona is unavailable right now.",
         ephemeral: true

@@ -8,6 +8,15 @@ import {createNoonaChatService} from "../lib/noonaChatService.mjs";
 const createMemoryVault = () => {
   const settings = new Map();
   const users = [];
+  const usersById = new Map([
+    ["user-1", {
+      discordUserId: "user-1",
+      username: "CaptainPax",
+      role: "member",
+      permissions: ["read_library", "use_noona_chat"],
+      groups: [{id: "member-ai", name: "Member-AI", permissions: ["read_library", "use_noona_chat"]}]
+    }]
+  ]);
   return {
     users,
     async getSetting(key) {
@@ -19,7 +28,32 @@ const createMemoryVault = () => {
     },
     async upsertDiscordUser(user) {
       users.push(user);
-      return user;
+      const existing = usersById.get(user.discordUserId) || {};
+      const next = {
+        ...existing,
+        ...user,
+        role: existing.role || user.role || "member",
+        permissions: existing.permissions || ["read_library"],
+        groups: existing.groups || [{id: user.initialGroupId || "member-ai", name: user.initialGroupId || "Member-AI", permissions: user.initialGroupId === "member" ? ["read_library"] : ["read_library", "use_noona_chat"]}]
+      };
+      usersById.set(user.discordUserId, next);
+      return next;
+    },
+    async getUserByDiscordId(discordUserId) {
+      return usersById.get(discordUserId) || null;
+    },
+    async assignUserGroups(discordUserId, groupIds = []) {
+      const existing = usersById.get(discordUserId);
+      if (!existing) {
+        return null;
+      }
+      const next = {
+        ...existing,
+        permissions: groupIds.includes("member-ai") ? ["read_library", "use_noona_chat"] : ["read_library"],
+        groups: groupIds.map((id) => ({id, name: id === "member-ai" ? "Member-AI" : "Member", permissions: id === "member-ai" ? ["read_library", "use_noona_chat"] : ["read_library"]}))
+      };
+      usersById.set(discordUserId, next);
+      return next;
     },
     async listRavenTitleCards() {
       return {
@@ -93,6 +127,38 @@ const mentionPayload = (message, overrides = {}) => ({
     displayName: "Pax"
   },
   ...overrides
+});
+
+test("Noona chat denies users without use_noona_chat before Oracle or memory", async () => {
+  const calls = [];
+  const vault = createMemoryVault();
+  const {service} = createService({vault, calls});
+
+  const result = await service.handlePortalMention(mentionPayload("remember that I like robots", {
+    user: {
+      discordUserId: "new-user",
+      username: "New Reader"
+    }
+  }));
+
+  assert.equal(result.ok, false);
+  assert.equal(result.status, 403);
+  assert.match(result.reply, /Member-AI/i);
+  assert.equal(calls.some((call) => call.path === "/api/chat"), false);
+  assert.equal((await readNoonaChatMemory(vault)).users["new-user"], undefined);
+  assert.equal(vault.users[0].initialGroupId, "member");
+});
+
+test("Noona chat answers permission prompts from Vault state without Oracle", async () => {
+  const calls = [];
+  const {service} = createService({calls});
+
+  const result = await service.handlePortalMention(mentionPayload("can I use Noona chat?"));
+
+  assert.equal(result.ok, true);
+  assert.equal(result.deterministic, true);
+  assert.match(result.reply, /can use Noona chat/i);
+  assert.equal(calls.some((call) => call.path === "/api/chat"), false);
 });
 
 test("Noona chat memory stores, recalls, forgets, and rejects secrets", async () => {

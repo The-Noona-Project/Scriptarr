@@ -15,7 +15,9 @@
   routes instead of calling Vault directly.
 - Raven VPN settings and Oracle credentials live here in 3.0.
 - Keep exactly one default onboarding permission group at all times. New or returning Discord users should land on that
-  group automatically when they do not already have assignments.
+  group automatically when they do not already have assignments. `Member-AI` is the seeded default and includes
+  `use_noona_chat`; `Member` is the no-AI opt-out group. Preserve the one-time migration marker so old default-only
+  `Member` users move once to `Member-AI`, but later admin removals are not undone.
 - Deleting a user from Vault-backed access should clear sessions plus local group assignments, but preserve requests,
   progress, follows, bookmarks, and durable events so a future Discord sign-in can recreate that user cleanly.
 - Durable events should stay immutable, summary-oriented, and retention-managed instead of storing large raw snapshots.

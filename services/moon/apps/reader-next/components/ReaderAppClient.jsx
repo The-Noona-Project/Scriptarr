@@ -576,7 +576,7 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = "", initialSessi
     if (typeof window === "undefined" || loginRedirectingRef.current) {
       return;
     }
-    const shouldRedirectForChrome = chrome.loaded && !chrome.auth;
+    const shouldRedirectForChrome = chrome.loaded && !chrome.auth && !chrome.authError;
     const shouldRedirectForApi = status === 401;
     if (!shouldRedirectForChrome && !shouldRedirectForApi) {
       return;
@@ -1134,6 +1134,19 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = "", initialSessi
 
   if (!chrome.loaded || (loading && !initialSession)) {
     return <ReaderInitialSkeleton />;
+  }
+
+  if (chrome.loaded && chrome.authError && !chrome.auth) {
+    const returnTo = typeof window === "undefined" ? "/reader" : `${window.location.pathname}${window.location.search}`;
+    const loginHref = chrome.loginUrl || `/login?returnTo=${encodeURIComponent(returnTo)}`;
+    return (
+      <main className="reader-app">
+        <div className="reader-empty-panel">
+          <p>Session check is delayed.</p>
+          <a href={loginHref}>Open login</a>
+        </div>
+      </main>
+    );
   }
 
   if (!chrome.auth || status === 401) {

@@ -3,6 +3,7 @@
  */
 
 export const grantLevels = Object.freeze(["", "read", "write", "root"]);
+export const NOONA_CHAT_CAPABILITY = "use_noona_chat";
 
 export const normalizeArray = (value) => Array.isArray(value) ? value : [];
 
@@ -10,6 +11,18 @@ export const normalizeString = (value, fallback = "") => {
   const normalized = typeof value === "string" ? value.trim() : "";
   return normalized || fallback;
 };
+
+const normalizePermissionsText = (value) => normalizeString(value)
+  .split(",")
+  .map((entry) => normalizeString(entry))
+  .filter(Boolean);
+
+export const hasNoonaChatAccess = (user = {}) =>
+  normalizeArray(user.permissions).includes(NOONA_CHAT_CAPABILITY)
+  || normalizeArray(user.groups).some((group) => normalizeArray(group.permissions).includes(NOONA_CHAT_CAPABILITY));
+
+export const groupHasCapability = (group = {}, capability = NOONA_CHAT_CAPABILITY) =>
+  normalizeArray(group.permissions).includes(capability);
 
 /**
  * Resolve the stable table and drawer key for a user row.
@@ -83,6 +96,7 @@ export const buildUserMetrics = (users = [], groups = []) => {
     owners: rows.filter((user) => user.isOwner || user.role === "owner").length,
     admins: rows.filter((user) => normalizeArray(user.accessSummary?.adminDomains).length > 0 || user.isOwner || user.role === "owner").length,
     readers: rows.filter((user) => !user.isOwner && normalizeArray(user.accessSummary?.adminDomains).length === 0).length,
+    noonaChat: rows.filter((user) => hasNoonaChatAccess(user)).length,
     groups: normalizeArray(groups).length
   };
 };
@@ -98,6 +112,7 @@ export const userSearchText = (user = {}) => [
   user.discordUserId,
   user.role,
   user.accessSummary?.label,
+  hasNoonaChatAccess(user) ? "noona chat member-ai ai" : "noona muted no-ai",
   ...normalizeArray(user.groups).map((group) => `${group.id} ${group.name}`)
 ].map((entry) => normalizeString(entry).toLowerCase()).filter(Boolean).join(" ");
 
@@ -121,6 +136,12 @@ export const filterUsers = (users = [], {query = "", filter = "all"} = {}) => {
       if (filter === "readers") {
         return !user.isOwner && normalizeArray(user.accessSummary?.adminDomains).length === 0;
       }
+      if (filter === "noona-chat") {
+        return hasNoonaChatAccess(user);
+      }
+      if (filter === "noona-muted") {
+        return !hasNoonaChatAccess(user);
+      }
       return true;
     })
     .filter((user) => !normalizedQuery || userSearchText(user).includes(normalizedQuery));
@@ -138,10 +159,25 @@ export const buildGroupDraft = (group = {}) => ({
   description: normalizeString(group.description),
   isDefault: group.isDefault === true,
   permissionsText: normalizeArray(group.permissions).join(", "),
+  noonaChatEnabled: groupHasCapability(group),
   adminGrants: {
     ...(group.adminGrants || {})
   }
 });
+
+export const patchGroupCapability = (draft = {}, capability = NOONA_CHAT_CAPABILITY, enabled = false) => {
+  const permissions = new Set(normalizePermissionsText(draft.permissionsText));
+  if (enabled) {
+    permissions.add(capability);
+  } else {
+    permissions.delete(capability);
+  }
+  return {
+    ...draft,
+    noonaChatEnabled: enabled,
+    permissionsText: Array.from(permissions).sort().join(", ")
+  };
+};
 
 /**
  * Serialize a group drawer draft for Sage.
@@ -153,10 +189,7 @@ export const serializeGroupDraft = (draft = {}) => ({
   name: normalizeString(draft.name, "Permission group"),
   description: normalizeString(draft.description),
   isDefault: draft.isDefault === true,
-  permissions: normalizeString(draft.permissionsText)
-    .split(",")
-    .map((entry) => normalizeString(entry))
-    .filter(Boolean),
+  permissions: Array.from(new Set(normalizePermissionsText(draft.permissionsText))).sort(),
   adminGrants: Object.fromEntries(Object.entries(draft.adminGrants || {})
     .map(([domain, level]) => [domain, normalizeGrantLevel(level)])
     .filter(([, level]) => level))
@@ -167,7 +200,11 @@ export default {
   buildUserMetrics,
   filterUsers,
   grantLevels,
+  groupHasCapability,
+  hasNoonaChatAccess,
+  NOONA_CHAT_CAPABILITY,
   normalizeGrantLevel,
+  patchGroupCapability,
   patchGroupGrant,
   resolveExistingUserSelection,
   serializeGroupDraft,

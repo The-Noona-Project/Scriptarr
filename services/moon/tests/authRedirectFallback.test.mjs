@@ -21,7 +21,7 @@ test("protected signed-out user views redirect instead of rendering a login card
   assert.match(shell, /window\.location\.replace\(buildMoonLoginHref\(`\$\{window\.location\.pathname\}\$\{window\.location\.search\}`\)\)/);
   assert.match(shell, /moon-auth-resolving/);
   assert.doesNotMatch(shell, /chrome\.authError \|\|/);
-  assert.doesNotMatch(shell, /label=\{chrome\.authError/);
+  assert.match(shell, /Session check is delayed/);
   assert.match(stateView, /window\.location\.replace\(loginUrl \|\| buildMoonLoginHref\(returnTo\)\)/);
   assert.doesNotMatch(`${stateView}\n${protectedPages}`, /Sign in to keep reading/);
   assert.doesNotMatch(`${stateView}\n${protectedPages}`, /Continue with Discord/);
@@ -37,9 +37,9 @@ test("admin and reader signed-out states redirect without rendering sign-in pane
   assert.match(adminProviders, /window\.location\.replace\(chrome\.loginUrl\)/);
   assert.match(adminShell, /admin-auth-resolving/);
   assert.match(readerClient, /window\.location\.replace\(loginUrl \|\| fallbackLoginUrl\)/);
-  assert.doesNotMatch(adminProviders, /chrome\.authError \|\|/);
-  assert.doesNotMatch(adminShell, /chrome\.authError/);
-  assert.doesNotMatch(readerClient, /chrome\.loaded && !chrome\.auth && !chrome\.authError/);
+  assert.match(adminProviders, /chrome\.authError/);
+  assert.match(adminShell, /Session check is delayed/);
+  assert.match(readerClient, /chrome\.loaded && !chrome\.auth && !chrome\.authError/);
   assert.doesNotMatch(`${adminShell}\n${adminRouter}`, /Admin sign-in required|Not signed in|Continue with Discord/);
   assert.doesNotMatch(readerClient, /Sign in to read|Sign in with Discord/);
   assert.doesNotMatch(`${adminProviders}\n${adminShell}\n${readerClient}`, /Auth broker unavailable|AUTH\.BROKER UNAVAILABLE/);

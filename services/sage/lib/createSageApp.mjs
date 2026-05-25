@@ -15,7 +15,7 @@ import {
   sanitizeReturnToPath
 } from "./discordAuth.mjs";
 import {hasPermission, requireAdminGrant, requirePermission, requireSession} from "./auth.mjs";
-import {appendUserEvent} from "./adminEvents.mjs";
+import {appendUserEvent, buildSessionAuditTargetId} from "./adminEvents.mjs";
 import {
   ADMIN_TOAST_GLOBAL_KEY,
   MOON_BRANDING_KEY,
@@ -1075,7 +1075,7 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
       eventType: "logout",
       user: req.user,
       targetType: "session",
-      targetId: req.sessionToken,
+      targetId: buildSessionAuditTargetId(req.sessionToken),
       message: `${req.user.username} signed out of Moon.`,
       metadata: {
         discordUserId: req.user.discordUserId

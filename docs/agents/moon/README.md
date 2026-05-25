@@ -59,8 +59,9 @@
 - Signed-out HTML navigations for user, reader, and admin pages should redirect to `/login?returnTo=...`. Exclude
   `/login`, Moon APIs, OAuth callback/start routes, Next assets, icons, the manifest, and the service worker so auth
   redirects never trap assets or broker calls. The user, reader, and admin client shells should enforce the same rule
-  after chrome auth resolves, rendering only a minimal transition while replacing stale signed-out protected routes
-  with `/login`, even when chrome bootstrap reports a degraded auth-broker read.
+  after chrome auth resolves, rendering only a minimal transition while replacing confirmed signed-out protected routes
+  with `/login`. If chrome bootstrap reports a degraded auth-broker read, hold a session-check-delayed state instead
+  of forcing another login.
 - `/login` is the system front door. It must render without waiting for chrome/bootstrap, use the same-origin Discord
   start route, run only the bounded allowlisted post-login prep when `prepare=1`, and always expose a continue action.
 - Keep HTML responses uncached and static admin or user assets versioned so publishes invalidate the browser cache
@@ -224,7 +225,9 @@
   logs.
 - Keep Noona mention-chat controls operational rather than decorative: the page should save the `portal.discord.noonaChat`
   settings object, make `publicReplies` visible but fixed, keep memory review counts clear, and call the Sage memory
-  clear route through Moon's same-origin API. Do not call Portal, Vault, or Oracle directly from the browser.
+  clear route through Moon's same-origin API. User eligibility belongs in `/admin/users` via `Member-AI` or
+  `use_noona_chat`; do not present `/chat` role ids as the Noona chat gate. Do not call Portal, Vault, or Oracle
+  directly from the browser.
 - `/admin/library` should stay dense and operational, closer to Sonarr's series index than to a marketing gallery.
   Favor sortable status, release, coverage, and path information over oversized cards.
 - `/admin/library/:type/:titleId` is the admin drill-down companion to that dense index. Keep it operational and

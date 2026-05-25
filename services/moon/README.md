@@ -61,7 +61,8 @@ standalone user app route that paints before chrome/bootstrap finishes, starts D
 Chrome startup uses `/api/moon/chrome/bootstrap?returnTo=...` to collapse branding, auth state, user identity, and
 first-owner bootstrap into one same-origin call. The user, reader, and admin shells treat protected routes as
 auth-gated after chrome resolves; signed-out shells replace the current location with `/login?returnTo=...` instead of
-rendering protected navigation, page-level sign-in cards, or degraded auth-broker errors. The older JSON
+rendering protected navigation or page-level sign-in cards. If the auth broker is temporarily unavailable, shells hold a
+small session-check-delayed state instead of forcing another login. The older JSON
 `/api/moon/auth/discord/url?returnTo=...` route remains available for compatibility. Chrome bootstrap broker calls use
 short per-call timeouts so branding, auth, and first-owner status can degrade independently instead of one slow broker
 blocking the whole shell.
@@ -124,7 +125,8 @@ route now renders inside the Next shell and continues to use Moon's same-origin 
 `/admin/users` now acts as the full access-control surface: a dense user directory, reusable permission-group editor,
 group assignment panel, and recent auth or access event feed in one place. The bootstrap owner remains protected, and
 all other admin access is now derived from one or more permission groups with per-route-family `read`, `write`, or
-`root` grants.
+`root` grants. The same page now owns Noona chat eligibility: `Member-AI` grants `use_noona_chat`, while `Member` is
+the no-AI opt-out group.
 `/admin/requests` is the dedicated moderation inbox instead of a generic data page. It defaults to requests needing
 review, keeps saved metadata and source snapshots visible in a drawer, and calls the Sage-backed approve, resolve,
 refresh-source, override, and deny routes without resetting active edits during live refreshes. It supports safe bulk
