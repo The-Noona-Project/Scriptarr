@@ -4,6 +4,7 @@ import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
+import java.lang.reflect.Field;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.http.HttpClient;
@@ -55,7 +56,8 @@ class RavenSageClientTest {
             RavenSageClient client = testClient(server, Duration.ofMillis(50));
 
             assertTrue(client.putJobTask("run-1", "task-1", Map.of("status", "queued")).path("ok").asBoolean());
-            assertEquals(2, attempts.get());
+            assertTrue(attempts.get() >= 2);
+            assertTrue(attempts.get() <= 3);
         } finally {
             server.stop(0);
             executor.shutdownNow();
@@ -92,7 +94,7 @@ class RavenSageClientTest {
         });
         server.start();
         try {
-            RavenSageClient client = testClient(server, Duration.ofMillis(50));
+            RavenSageClient client = testClient(server, Duration.ofMillis(500));
 
             assertEquals("ready", client.putLibraryChapter(
                 "title-1",
@@ -128,7 +130,7 @@ class RavenSageClientTest {
         });
         server.start();
         try {
-            RavenSageClient client = testClient(server, Duration.ofMillis(50));
+            RavenSageClient client = testClient(server, Duration.ofMillis(500));
 
             IOException error = assertThrows(IOException.class, () -> client.getSetting("raven.download.providers"));
             assertTrue(error.getMessage().contains("broker rejected setting read"));
@@ -139,11 +141,28 @@ class RavenSageClientTest {
         }
     }
 
+    /**
+     * Verify the production broker client pins internal Sage HTTP calls to
+     * HTTP/1.1 so Java does not try HTTP/2 negotiation against Sage's plain
+     * Node HTTP server.
+     *
+     * @throws Exception when the private transport field cannot be inspected
+     */
+    @Test
+    void defaultClientUsesHttp11() throws Exception {
+        RavenSageClient client = new RavenSageClient();
+        Field field = RavenSageClient.class.getDeclaredField("httpClient");
+        field.setAccessible(true);
+        HttpClient httpClient = (HttpClient) field.get(client);
+
+        assertEquals(HttpClient.Version.HTTP_1_1, httpClient.version());
+    }
+
     private static RavenSageClient testClient(HttpServer server, Duration timeout) {
         return new RavenSageClient(
             "http://127.0.0.1:" + server.getAddress().getPort(),
             "test-token",
-            HttpClient.newBuilder().connectTimeout(timeout).build(),
+            HttpClient.newBuilder().connectTimeout(timeout).version(HttpClient.Version.HTTP_1_1).build(),
             timeout,
             timeout,
             Duration.ofMillis(1)

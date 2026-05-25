@@ -4,6 +4,8 @@
 - Raven owns downloader, library, metadata, PIA/OpenVPN download support, and provider orchestration.
 - Raven must not call Vault directly anymore. Shared settings, secrets, titles, chapters, metadata matches, and task
   snapshots all flow through Sage's internal broker routes.
+- Raven's internal Sage broker client should use plain HTTP/1.1. Do not let Java's default HTTP version negotiation
+  stall Raven-to-Sage calls against Sage's Node HTTP server.
 - Launch defaults keep MangaDex enabled first, Anime-Planet enabled ahead of MangaUpdates for scrape-based enrichment,
   and AniList, MyAnimeList, and ComicVine following the configured priority and credential gates.
 - Download-provider selection is now explicit. Raven intake should search enabled metadata providers first, expand

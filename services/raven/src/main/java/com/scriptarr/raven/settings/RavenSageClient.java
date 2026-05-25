@@ -45,7 +45,10 @@ public class RavenSageClient implements RavenBrokerClient {
         this(
             "http://127.0.0.1:3004",
             "raven-dev-token",
-            HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(8)).build(),
+            HttpClient.newBuilder()
+                .connectTimeout(Duration.ofSeconds(8))
+                .version(HttpClient.Version.HTTP_1_1)
+                .build(),
             Duration.ofSeconds(12),
             Duration.ofSeconds(20),
             Duration.ofMillis(250)
