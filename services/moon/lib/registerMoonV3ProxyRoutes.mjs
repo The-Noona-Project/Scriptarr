@@ -237,6 +237,52 @@ const sendProxyStreamFailure = (res, error) => {
 };
 
 /**
+ * Start an upstream JSON request and abort it if the downstream browser
+ * disconnects before Moon has received the upstream response.
+ *
+ * @param {import("express").Response} res
+ * @param {Parameters<typeof proxyRequest>[0]} options
+ * @param {{timeoutMs?: number}} [settings]
+ * @returns {Promise<Awaited<ReturnType<typeof proxyRequest>> | null>}
+ */
+const proxyRequestWithResponseAbort = async (res, options, {timeoutMs = 0} = {}) => {
+  const controller = new AbortController();
+  let clientClosed = false;
+  let timedOut = false;
+  let timeout = null;
+  const abortPendingRequest = () => {
+    clientClosed = true;
+    controller.abort();
+  };
+  res.once("close", abortPendingRequest);
+  if (timeoutMs > 0) {
+    timeout = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, timeoutMs);
+  }
+  try {
+    return await proxyRequest({
+      ...options,
+      signal: controller.signal
+    });
+  } catch (error) {
+    if (clientClosed) {
+      return null;
+    }
+    if (timedOut) {
+      throw new Error("The operation was aborted due to timeout");
+    }
+    throw error;
+  } finally {
+    res.off("close", abortPendingRequest);
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+};
+
+/**
  * Start an upstream stream request and abort it if the downstream client
  * disconnects before the upstream response arrives.
  *
@@ -481,14 +527,16 @@ export const registerMoonV3ProxyRoutes = (app, {config, getSessionToken, logger}
       const imageTargetPath = toReaderPageImagePath(targetPath);
       const cacheFiles = resolveReaderPageCacheFiles(config, imageTargetPath, req.query);
       const cached = await readReaderPageCacheEntry(cacheFiles);
-      const response = await proxyRequest({
+      const response = await proxyRequestWithResponseAbort(res, {
         baseUrl: config.sageBaseUrl,
         path: `/api/moon-v3/${targetPath}${query ? `?${query}` : ""}`,
         method: req.method,
         sessionToken: getSessionToken(req),
-        headers: forwardedHeaders(req),
-        signal: AbortSignal.timeout(jsonProxyTimeoutMs)
-      });
+        headers: forwardedHeaders(req)
+      }, {timeoutMs: jsonProxyTimeoutMs});
+      if (!response) {
+        return;
+      }
       const responseBody = Buffer.isBuffer(response.body) ? response.body.toString("utf8") : String(response.body || "");
       const contentType = response.headers["content-type"] || "application/json; charset=utf-8";
       res.status(response.status);
@@ -516,15 +564,17 @@ export const registerMoonV3ProxyRoutes = (app, {config, getSessionToken, logger}
       res.json(sanitizeReaderPageStatusPayload(payload, {cacheFiles, cached}));
       return;
     }
-    const response = await proxyRequest({
+    const response = await proxyRequestWithResponseAbort(res, {
       baseUrl: config.sageBaseUrl,
       path: `/api/moon-v3/${targetPath}${query ? `?${query}` : ""}`,
       method: req.method,
       body: ["GET", "HEAD"].includes(req.method) ? undefined : req.body,
       sessionToken: getSessionToken(req),
-      headers: forwardedHeaders(req),
-      signal: AbortSignal.timeout(jsonProxyTimeoutMs)
-    });
+      headers: forwardedHeaders(req)
+    }, {timeoutMs: jsonProxyTimeoutMs});
+    if (!response) {
+      return;
+    }
 
     const contentType = response.headers["content-type"] || "application/json; charset=utf-8";
     res.status(response.status);

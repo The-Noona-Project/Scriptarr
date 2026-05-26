@@ -1395,6 +1395,74 @@ test("moon chrome bootstrap times out slow broker subcalls independently", async
   }
 });
 
+test("moon aborts upstream Moon v3 JSON proxy requests when the browser disconnects", async () => {
+  const cwd = process.cwd();
+  const previousTimeout = process.env.SCRIPTARR_MOON_V3_JSON_PROXY_TIMEOUT_MS;
+  process.chdir(path.join(path.dirname(fileURLToPath(import.meta.url)), ".."));
+  process.env.SCRIPTARR_MOON_V3_JSON_PROXY_TIMEOUT_MS = "5000";
+
+  let upstreamHit = false;
+  let upstreamClosed = false;
+  const sageStub = http.createServer((request, response) => {
+    const requestUrl = new URL(request.url || "/", "http://moon.test");
+    if (requestUrl.pathname !== "/api/moon-v3/user/home") {
+      response.writeHead(404, {"Content-Type": "application/json"});
+      response.end(JSON.stringify({error: "Not found"}));
+      return;
+    }
+    upstreamHit = true;
+    request.once("close", () => {
+      upstreamClosed = true;
+    });
+    setTimeout(() => {
+      if (!response.destroyed) {
+        response.writeHead(200, {"Content-Type": "application/json"});
+        response.end(JSON.stringify({shelves: []}));
+      }
+    }, 1000);
+  });
+  sageStub.listen(0);
+  const sagePort = sageStub.address().port;
+  process.env.SCRIPTARR_SAGE_BASE_URL = `http://127.0.0.1:${sagePort}`;
+
+  const {app} = await createMoonApp();
+  const server = app.listen(0);
+  const baseUrl = `http://127.0.0.1:${server.address().port}`;
+
+  try {
+    await new Promise((resolve, reject) => {
+      const request = http.get(`${baseUrl}/api/moon-v3/user/home`, (response) => {
+        response.resume();
+        response.once("end", resolve);
+      });
+      request.once("socket", () => {
+        setTimeout(() => request.destroy(), 50);
+      });
+      request.once("error", (error) => {
+        if (request.destroyed) {
+          resolve();
+          return;
+        }
+        reject(error);
+      });
+    });
+    for (let index = 0; index < 40 && !upstreamClosed; index += 1) {
+      await delay(25);
+    }
+    assert.equal(upstreamHit, true);
+    assert.equal(upstreamClosed, true);
+  } finally {
+    await closeServer(server);
+    await closeServer(sageStub);
+    if (previousTimeout == null) {
+      delete process.env.SCRIPTARR_MOON_V3_JSON_PROXY_TIMEOUT_MS;
+    } else {
+      process.env.SCRIPTARR_MOON_V3_JSON_PROXY_TIMEOUT_MS = previousTimeout;
+    }
+    process.chdir(cwd);
+  }
+});
+
 test("moon redirects signed-in non-admin sessions away from admin while allowing admin sessions through", async () => {
   const cwd = process.cwd();
   process.chdir(path.join(path.dirname(fileURLToPath(import.meta.url)), ".."));

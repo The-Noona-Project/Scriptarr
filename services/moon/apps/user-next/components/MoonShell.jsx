@@ -155,7 +155,7 @@ export const MoonShell = ({children}) => {
   }, [publicPathname]);
 
   useEffect(() => {
-    if (isLoginRoute || !chrome.loaded || !sessionDelayed) {
+    if (!chrome.loaded || !sessionDelayed) {
       return undefined;
     }
     let cancelled = false;

@@ -66,8 +66,9 @@
   with `/login`. If chrome bootstrap reports a degraded auth-broker read, hold a session-check-delayed state instead
   of forcing another login, keep any already-known signed-in chrome visible, and retry bootstrap with bounded backoff.
 - `/login` is the system front door. It must render without waiting for chrome/bootstrap, use the same-origin Discord
-  start route, run only the bounded allowlisted post-login prep when `prepare=1` for user/profile targets, skip prep for
-  admin return targets, and always expose a continue action.
+  start route, run only the bounded allowlisted post-login prep when `prepare=1` for the exact home, catalogue, or
+  profile target, skip prep for admin and reader return targets, and retry delayed chrome auth before showing another
+  Discord login action.
 - Keep HTML responses uncached and static admin or user assets versioned so publishes invalidate the browser cache
   without relying on manual hard refreshes.
 - User and admin chrome should start from `/api/moon/chrome/bootstrap?returnTo=...`, which returns branding, auth,
@@ -134,10 +135,11 @@
 - The user app has a browser-local return-visit JSON cache in `apps/user-next/lib/persistentJsonCache.js`. Use it only
   through `useMoonJson({persistentCache})` for signed-in home, browse, library, and profile card/preview payloads;
   keep auth, cookies, API keys, requests mutations, title detail, reader state, and admin data live-only.
-- The post-login prep helper may warm only safe signed-in user payloads: home, library type counts, default compact
-  library cards, the exact returned library/browse card URL, and profile only when returning to profile. It must skip
-  admin return targets, admin data, API keys, request mutations, title detail, reader pages, image data, and direct
-  internal service URLs.
+- The post-login prep helper may warm only one safe signed-in user target at a time: home for `/`, the exact returned
+  library/browse card URL, or profile only when returning to profile. It must skip admin and reader return targets,
+  admin data, API keys, request mutations, title detail, reader pages, image data, and direct internal service URLs.
+- Moon v3 JSON proxy requests should abort their Sage upstream request when the browser disconnects or a newer client
+  fetch cancels the old one, so stale home/library refreshes do not keep loading Sage, Vault, or Raven after navigation.
 - `/library` is the canonical catalogue route. `/browse` and `/library/:type` should feed the same catalogue client and
   settle into `/library` URL state. Use `q`, `type`, `letter`, `view`, and `pageSize`, debounce URL replacement, keep
   previously loaded cards or rows visible while new results refresh, remember the user's grid/row view locally, and

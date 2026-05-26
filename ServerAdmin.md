@@ -167,13 +167,15 @@ Scriptarr falls back to the user home page at `/`.
 Signed-out user, reader, and admin HTML navigations redirect to `/login?returnTo=...`. The dedicated login page renders
 the Discord action immediately, then calls Moon's same-origin `/api/moon/auth/discord/start?returnTo=...` route so the
 OAuth state cookie and Discord redirect do not wait for the broader chrome bootstrap. After Discord returns to
-`/login?prepare=1`, Moon runs a two-second-capped warmup for safe user home, compact library card/count, and profile
-payloads before continuing to user/profile destinations; admin return targets skip that user warmup so staff land in
-admin first. The user, reader, and admin client shells repeat this rule for
+`/login?prepare=1`, Moon runs a two-second-capped warmup only for the exact safe user payload the target needs: home
+for `/`, the returned catalogue URL for `/library` or `/browse`, and profile data for `/profile`; admin and reader
+return targets skip that user warmup so staff or readers land on their target first. The login page and the user,
+reader, and admin client shells repeat this rule for
 stale service-worker navigations or client-side transitions, replacing signed-out protected pages with `/login`
 instead of showing in-app sign-in fallback panels. If the auth broker is temporarily slow, Moon keeps any already-known
 signed-in chrome visible, retries bootstrap with bounded backoff, and shows a delayed-session state only when there is
-no trusted signed-in chrome to render. Sage keeps the callback bounded and diagnosable with
+no trusted signed-in chrome to render; `/login` also retries that delayed chrome check instead of offering a second
+Discord login button after a successful callback. Sage keeps the callback bounded and diagnosable with
 phase-level timings for Discord token exchange, Discord profile lookup, Vault user lookup/upsert, Vault session
 creation, and auth-event persistence; if the auth event fails after the session exists, login still completes. Warden
 now passes Sage an explicit `SCRIPTARR_VAULT_AUTH_TIMEOUT_MS` value, defaulting to `8000` ms, so cold Vault/MySQL auth

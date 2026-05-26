@@ -90,18 +90,16 @@ test("login return and prep helpers keep post-login cache warming allowlisted", 
   assert.equal(normalizeLoginReturnTo("/_next/static/app.js"), "/");
 
   assert.deepEqual(resolvePostLoginPrepUrls("/admin/system/api"), []);
-  assert.deepEqual(resolvePostLoginPrepUrls("/reader/webtoon/title/chapter"), [
-    "/api/moon-v3/user/home",
-    "/api/moon-v3/user/library?view=card&pageSize=1",
-    "/api/moon-v3/user/library?view=card&pageSize=72"
+  assert.deepEqual(resolvePostLoginPrepUrls("/"), [
+    "/api/moon-v3/user/home"
   ]);
+  assert.deepEqual(resolvePostLoginPrepUrls("/reader/webtoon/title/chapter"), []);
   assert.deepEqual(resolvePostLoginPrepUrls("/library?type=webtoon&q=moon&view=grid&pageSize=36"), [
-    "/api/moon-v3/user/home",
-    "/api/moon-v3/user/library?view=card&pageSize=1",
-    "/api/moon-v3/user/library?view=card&pageSize=72",
     "/api/moon-v3/user/library?view=card&pageSize=36&q=moon&type=webtoon"
   ]);
-  assert.equal(resolvePostLoginPrepUrls("/profile").at(-1), "/api/moon-v3/user/profile");
+  assert.deepEqual(resolvePostLoginPrepUrls("/profile"), [
+    "/api/moon-v3/user/profile"
+  ]);
 });
 
 test("requestJson preserves 401 Moon auth payloads for signed-out route handling", async () => {

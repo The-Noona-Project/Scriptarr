@@ -19,7 +19,7 @@ import {POST_LOGIN_PREP_TIMEOUT_MS, preloadPostLoginUserData} from "../../lib/lo
  */
 export const LoginPageClient = ({returnTo = "/", prepare = false}) => {
   const router = useRouter();
-  const {auth, branding, loaded} = useMoonChrome();
+  const {auth, authError, bootstrapError, branding, loaded} = useMoonChrome();
   const targetPath = useMemo(() => normalizeLoginReturnTo(returnTo), [returnTo]);
   const shouldPrepare = prepare && !(targetPath === "/admin" || targetPath.startsWith("/admin/"));
   const loginHref = useMemo(() => buildMoonDiscordLoginStartHref(targetPath), [targetPath]);
@@ -64,13 +64,21 @@ export const LoginPageClient = ({returnTo = "/", prepare = false}) => {
 
   const signedIn = Boolean(auth);
   const preparing = signedIn && shouldPrepare && ["waiting", "preparing"].includes(prepState);
+  const sessionDelayed = !signedIn && loaded && Boolean(authError || bootstrapError);
 
   return (
     <section className="moon-login-page" aria-labelledby="moon-login-title">
       <div className="moon-login-panel">
         <div className="moon-kicker">Account</div>
         <h1 id="moon-login-title">{siteName}</h1>
-        {signedIn ? (
+        {sessionDelayed ? (
+          <>
+            <p className="moon-login-copy">Session check is delayed. Retrying.</p>
+            <div className="moon-login-progress" aria-hidden="true">
+              <span />
+            </div>
+          </>
+        ) : signedIn ? (
           <>
             <p className="moon-login-copy">
               {preparing ? "Getting your library ready." : "Opening your library."}

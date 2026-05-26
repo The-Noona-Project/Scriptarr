@@ -12,8 +12,6 @@ import {normalizeLoginReturnTo} from "./loginReturnTo.js";
 export const POST_LOGIN_PREP_TIMEOUT_MS = 2000;
 
 const HOME_PREP_URL = "/api/moon-v3/user/home";
-const LIBRARY_COUNTS_PREP_URL = "/api/moon-v3/user/library?view=card&pageSize=1";
-const DEFAULT_LIBRARY_PREP_URL = "/api/moon-v3/user/library?view=card&pageSize=72";
 const PROFILE_PREP_URL = "/api/moon-v3/user/profile";
 
 const normalizeString = (value) => String(value || "").trim();
@@ -79,13 +77,12 @@ export const resolvePostLoginPrepUrls = (returnTo = "/") => {
   if (parsed.pathname === "/admin" || parsed.pathname.startsWith("/admin/")) {
     return [];
   }
-  const urls = [
-    HOME_PREP_URL,
-    LIBRARY_COUNTS_PREP_URL,
-    DEFAULT_LIBRARY_PREP_URL
-  ];
+  const urls = [];
   const exactLibraryUrl = buildExactLibraryPrepUrl(returnTo);
 
+  if (parsed.pathname === "/") {
+    urls.push(HOME_PREP_URL);
+  }
   if (exactLibraryUrl) {
     urls.push(exactLibraryUrl);
   }
