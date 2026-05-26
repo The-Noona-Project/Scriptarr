@@ -1333,6 +1333,38 @@ def test_alive_keyword_returns_read_only_status_reply_without_llm_call():
     assert invoked["count"] == 0
 
 
+def test_github_update_context_bypasses_status_shortcut():
+    sage = FakeSageClient(
+        settings={
+            "enabled": True,
+            "provider": "openai",
+            "model": "gpt-4.1-mini",
+            "temperature": 0.2
+        },
+        secret="sk-test"
+    )
+    seen = {}
+
+    async def fake_invoke(_runtime, _persona_name, message, context):
+        seen["message"] = message
+        seen["context"] = context
+        return "Noona wrote a public update summary."
+
+    app = create_app(config=build_config(), sage_client=sage, invoke_oracle_fn=fake_invoke)
+
+    with TestClient(app) as client:
+        response = client.post("/api/chat", json={
+            "message": "Write an update about callback loading being available.",
+            "context": {"source": "github-update-check"}
+        })
+
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["reply"] == "Noona wrote a public update summary."
+    assert seen["message"] == "Write an update about callback loading being available."
+    assert seen["context"]["source"] == "github-update-check"
+
+
 def test_structured_assist_returns_bounded_text_without_status_lookup():
     sage = FakeSageClient(
         settings={

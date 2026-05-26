@@ -30,6 +30,8 @@
   `provider_not_localai`, later health, status, model-list, or chat requests should retry embedded startup once the
   resolved runtime says Oracle is enabled with provider `localai`.
 - It should gracefully return disabled or degraded responses when OpenAI or LocalAI is unavailable.
+- Sage-curated GitHub update-summary chat contexts (`source` beginning with `github-update-check`) bypass the broad
+  status/presence shortcut so update prompts that mention callback, health, or availability still reach the LLM.
 - Keep degraded replies provider-specific so OpenAI failures are not reported as LocalAI outages, and keep the
   provider call timeout long enough for CPU-only LocalAI admin tests.
 - Keep `GET /api/models` additive and read-only. It should discover OpenAI models through server-side provider calls

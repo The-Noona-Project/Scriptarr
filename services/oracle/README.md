@@ -30,6 +30,9 @@ Obvious status and presence prompts such as `online`, `connected`, `reachable`, 
 `health` short-circuit to a read-only bounded status reply before any LLM call. When Sage does include curated
 `serviceHealth` or Discord runtime context, Oracle treats those summaries as the current bounded status check and avoids
 claiming it lacks live status.
+Sage-curated GitHub update-summary requests bypass that status shortcut, even when the prompt mentions callback,
+health, or availability wording, so Noona can generate the public update post body instead of receiving a generic
+status reply.
 Sage may also include a small `visualIdentity` context for Noona and Appa appearance questions; Oracle treats those
 descriptions as read-only persona background and does not inspect image files directly.
 

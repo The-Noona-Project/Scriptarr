@@ -87,6 +87,13 @@ def _is_status_prompt(message: str) -> bool:
     return bool(STATUS_PROMPT_PATTERN.search(message or ""))
 
 
+def _should_bypass_status_prompt(context: object) -> bool:
+    if not isinstance(context, dict):
+        return False
+    source = _normalize_string(context.get("source")).lower()
+    return source.startswith("github-update-check")
+
+
 def _build_status_reply(persona_name: str, status_payload: dict[str, object], runtime: object) -> str:
     persona = _normalize_string(persona_name, "Noona")
     stack_text = "The stack responded." if status_payload.get("ok") else "The stack status is currently degraded."
@@ -416,7 +423,7 @@ def create_app(
         )
         maybe_start_embedded_local_ai(runtime)
         # Short-circuit obvious health/status prompts so Oracle can answer without an LLM round trip.
-        if _is_status_prompt(message):
+        if _is_status_prompt(message) and not _should_bypass_status_prompt(context):
             return {
                 "ok": True,
                 "reply": _build_status_reply(persona_name, status_payload, runtime),

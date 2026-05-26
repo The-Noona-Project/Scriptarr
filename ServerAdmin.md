@@ -629,7 +629,9 @@ If an update channel id is configured, Sage checks `The-Noona-Project/Scriptarr`
 inside the scheduled or manual `update-check` task. New commits since the last posted update are summarized by Oracle
 in Noona's voice, stored durably, and posted by Portal with a stable `update:<latestSha>` id. If Oracle is unavailable
 or returns degraded, disabled, fallback, or empty summary text, Sage keeps the commit range pending and retries on the
-next update check instead of posting a weak fallback. Operators can intentionally skip a stuck pending range for
+next update check instead of posting a weak fallback. Curated update-summary prompts bypass Oracle's generic status
+shortcut so words like callback or availability do not turn an update announcement into a health-check reply.
+Operators can intentionally skip a stuck pending range for
 future-only posts; that clears `pending`, records `latestSkipped`, and moves the comparison baseline forward without
 sending a backlog Discord post. The maintenance helper is
 `services/sage/scripts/skip-github-update-digest.mjs --skip-pending-update-digest --reason=future-only --apply`. After
