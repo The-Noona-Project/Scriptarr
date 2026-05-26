@@ -57,8 +57,10 @@
 - Keep Discord login as the only bootstrap and admin sign-in path. Do not reintroduce claim-dev-session behavior.
 - Preserve same-origin login return flow. Moon should pass a sanitized `returnTo` path into Sage's Discord auth URL,
   and the callback relay should send users back to the page where login started whenever that route is still allowed,
-  falling back to `/` otherwise. Keep the browser-bound OAuth-state cookie check in place so callbacks cannot be replayed
-  from another browser session.
+  falling back to `/` otherwise. The callback GET is a small loader only; it strips the OAuth query from the address
+  bar and calls `POST /api/moon/auth/discord/complete` to perform the existing state-cookie validation, Sage proxy,
+  session-cookie set, and redirect decision. Keep the browser-bound OAuth-state cookie check in place so callbacks
+  cannot be replayed from another browser session, and never render or log OAuth code/state values.
 - Signed-out HTML navigations for user, reader, and admin pages should redirect to `/login?returnTo=...`. Exclude
   `/login`, Moon APIs, OAuth callback/start routes, Next assets, icons, the manifest, and the service worker so auth
   redirects never trap assets or broker calls. The user, reader, and admin client shells should enforce the same rule
@@ -69,12 +71,15 @@
   start route, run only the bounded allowlisted post-login prep when `prepare=1` for the exact home, catalogue, or
   profile target, skip prep for admin and reader return targets, and retry delayed chrome auth before showing another
   Discord login action.
+- User, admin, and reader apps share the non-blocking loading-overlay rule: initial auth/page JSON loads may show a
+  small accessible spinner, but the overlay must use `pointer-events: none` and must not appear for lazy images,
+  background live refresh, or WebSocket/SSE fallback churn.
 - Keep HTML responses uncached and static admin or user assets versioned so publishes invalidate the browser cache
   without relying on manual hard refreshes.
 - User and admin chrome should start from `/api/moon/chrome/bootstrap?returnTo=...`, which returns branding, auth,
-  user identity, and first-owner bootstrap status in one Moon-owned response. Do not include a Discord OAuth URL in
-  that payload. Signed-out protected shells should redirect to `/login?returnTo=...`; the login page renders the local
-  `/api/moon/auth/discord/start?returnTo=...` href immediately. That Moon route sets the OAuth state cookie and
+  user identity, and first-owner bootstrap status in one Moon-owned response. Do not include a Discord OAuth URL or raw
+  owner Discord ids in that payload. Signed-out protected shells should redirect to `/login?returnTo=...`; the login
+  page renders the local `/api/moon/auth/discord/start?returnTo=...` href immediately. That Moon route sets the OAuth state cookie and
   redirects to Discord. Keep `/api/moon/auth/discord/url?returnTo=...` available as the JSON compatibility endpoint,
   and keep chrome bootstrap broker calls independently timeout-bounded so a slow branding, auth, or first-owner-status
   response does not block the whole shell. Do not turn temporary Sage/Vault 5xx auth checks into signed-out redirects

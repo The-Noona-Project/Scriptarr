@@ -7,7 +7,9 @@
 import {useEffect} from "react";
 import {usePathname} from "next/navigation";
 import {filterRoutesForUser} from "../lib/access.js";
+import {useGlobalLoadingActivity} from "../lib/loadingActivity.js";
 import {getAdminNavigationGroups, matchAdminRoute} from "../lib/routes.js";
+import GlobalLoadingOverlay from "./GlobalLoadingOverlay.jsx";
 import {useAdminChrome} from "./AdminProviders.jsx";
 
 const toPublicAdminPath = (pathname) => {
@@ -70,6 +72,7 @@ export const AdminShell = ({children}) => {
   const activeNavId = route.id === "library-title" ? "library" : route.id === "settings-database" ? "settings" : route.id;
   const siteName = chrome.branding?.siteName || "Scriptarr";
   const logoUrl = chrome.branding?.logo?.urls?.chrome || "";
+  const loadingActivity = useGlobalLoadingActivity();
 
   useEffect(() => {
     if (!chrome.loading && chrome.user && !chrome.canAccessAdmin) {
@@ -89,6 +92,7 @@ export const AdminShell = ({children}) => {
 
   return (
     <div className="admin-next-shell">
+      <GlobalLoadingOverlay active={loadingActivity.active} label={loadingActivity.label} />
       <aside className="admin-sidebar">
         <a className="admin-brand" href="/admin">
           <span className="admin-brand-mark">{logoUrl ? <img src={logoUrl} alt="" /> : "S"}</span>

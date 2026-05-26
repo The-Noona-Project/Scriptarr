@@ -158,30 +158,33 @@ Example callback shape:
 
 `https://your-scriptarr-host.example.com/api/moon/auth/discord/callback`
 
-Scriptarr's bootstrap surface should also show the configured first-owner Discord id before the first claim. If it does
-not, double-check that `SUPERUSER_ID` was passed into Warden correctly.
+Scriptarr's browser bootstrap surface shows first-owner setup readiness before the first claim without exposing the raw
+owner Discord id. If first-owner setup does not appear ready, double-check that `SUPERUSER_ID` was passed into Warden
+correctly.
 Scriptarr no longer exposes a dev-session claim path, so Discord login is the supported bootstrap and admin sign-in
 flow. When login starts from a same-origin Scriptarr page, Scriptarr now remembers that route and returns the user there
 after Discord OAuth completes. If the original route is missing, invalid, or no longer allowed for the signed-in user,
 Scriptarr falls back to the user home page at `/`.
 Signed-out user, reader, and admin HTML navigations redirect to `/login?returnTo=...`. The dedicated login page renders
 the Discord action immediately, then calls Moon's same-origin `/api/moon/auth/discord/start?returnTo=...` route so the
-OAuth state cookie and Discord redirect do not wait for the broader chrome bootstrap. After Discord returns to
-`/login?prepare=1`, Moon runs a two-second-capped warmup only for the exact safe user payload the target needs: home
-for `/`, the returned catalogue URL for `/library` or `/browse`, and profile data for `/profile`; admin and reader
-return targets skip that user warmup so staff or readers land on their target first. The login page and the user,
-reader, and admin client shells repeat this rule for
+OAuth state cookie and Discord redirect do not wait for the broader chrome bootstrap. Discord returns to Moon's callback
+loader at `/api/moon/auth/discord/callback`; that loader removes the OAuth query from the address bar, calls
+`POST /api/moon/auth/discord/complete` same-origin, and then redirects to the sanitized target after Moon sets the
+HttpOnly session cookie. After Discord returns to `/login?prepare=1`, Moon runs a two-second-capped warmup only for the
+exact safe user payload the target needs: home for `/`, the returned catalogue URL for `/library` or `/browse`, and
+profile data for `/profile`; admin and reader return targets skip that user warmup so staff or readers land on their
+target first. The login page and the user, reader, and admin client shells repeat this rule for
 stale service-worker navigations or client-side transitions, replacing signed-out protected pages with `/login`
 instead of showing in-app sign-in fallback panels. If the auth broker is temporarily slow, Moon keeps any already-known
 signed-in chrome visible, retries bootstrap with bounded backoff, and shows a delayed-session state only when there is
 no trusted signed-in chrome to render; `/login` also retries that delayed chrome check instead of offering a second
-Discord login button after a successful callback. Sage keeps the callback bounded and diagnosable with
-phase-level timings for Discord token exchange, Discord profile lookup, Vault user lookup/upsert, Vault session
-creation, and auth-event persistence; if the auth event fails after the session exists, login still completes. Warden
-now passes Sage an explicit `SCRIPTARR_VAULT_AUTH_TIMEOUT_MS` value, defaulting to `8000` ms, so cold Vault/MySQL auth
-reads have a wider production budget than the old 3-second fallback. Sage also logs redacted `vault-user` substeps for
-bootstrap, existing-user lookup, and owner/member upsert to distinguish first-owner repair issues from session
-creation failures.
+Discord login button after a successful callback. Sage keeps the callback bounded and diagnosable with phase-level
+timings for Discord token exchange, Discord profile lookup, Vault bootstrap, existing-user lookup, profile refresh,
+Vault session creation, and auth-event persistence. Existing users create sessions from the already-loaded Vault user;
+their Discord username/avatar refresh runs fail-soft after the session exists. First-owner claim and new auto-provision
+still block until Vault has created durable user state. Warden now passes Sage an explicit
+`SCRIPTARR_VAULT_AUTH_TIMEOUT_MS` value, defaulting to `8000` ms, so cold Vault/MySQL auth reads have a wider production
+budget than the old 3-second fallback.
 
 ## Network Topology
 
@@ -372,6 +375,9 @@ inferred taste from read history, follows, and the active bookshelf.
 Moon chrome now starts from one same-origin bootstrap call for branding, auth state, user identity, and first-owner
 setup status. Signed-out shells render Moon's local Discord start route immediately, and the individual bootstrap
 broker calls use short timeouts so branding, auth, or first-owner status can degrade separately.
+User, admin, and reader apps show a small non-blocking loading indicator while initial auth or page JSON is in flight.
+It uses `pointer-events: none`, so navigation and settings controls remain clickable while cards or admin payloads
+continue hydrating.
 `/myrequests` is now both the request-creation surface and the personal status page. The top of the page runs the
 metadata-first request wizard, while the list below is split into `Active`, `Completed`, and `Closed` tabs. Readers
 can edit notes or cancel only while the request is still active.

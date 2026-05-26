@@ -6,6 +6,7 @@
 
 import {useCallback, useEffect, useMemo, useRef, useState} from "react";
 import {loadMoonChromeContext, loadMoonLoginUrl, requestJson, useMoonJson} from "../lib/api.js";
+import {useGlobalLoadingActivity} from "../lib/loadingActivity.js";
 import {
   READER_INPUT_ACTIONS,
   createReaderInputState,
@@ -30,6 +31,7 @@ import {buildReaderPath, buildReaderPathForTitle} from "../lib/routes.js";
 import {startReaderLiveInvalidation} from "../lib/live.js";
 import {countDecodedReaderPages, readerTelemetryNow, recordReaderTelemetry} from "../lib/readerTelemetry.js";
 import ReaderControls from "./ReaderControls.jsx";
+import GlobalLoadingOverlay from "./GlobalLoadingOverlay.jsx";
 import ReaderSettings from "./ReaderSettings.jsx";
 import ReaderStage from "./ReaderStage.jsx";
 import {ReaderInitialSkeleton} from "./ReaderSkeleton.jsx";
@@ -258,6 +260,11 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = "", initialSessi
     entry: lastWebtoonEntry
   });
   const webtoonLoadMoreReady = !isPaged && lastWebtoonLoadAction.ready && !lastWebtoonLoadAction.done;
+  const loadingActivity = useGlobalLoadingActivity();
+  const pageMetadataLoading = useMemo(
+    () => Array.from(pageState.values()).some((entry) => Boolean(entry?.loading)),
+    [pageState]
+  );
   const webtoonLoadMoreKey = [
     lastWebtoonChapterId,
     lastWebtoonSession?.pageRevision || "",
@@ -1246,6 +1253,10 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = "", initialSessi
       onPointerDown={onPointerDown}
       onPointerUp={onPointerUp}
     >
+      <GlobalLoadingOverlay
+        active={loadingActivity.active || chapterRowsLoading || pageMetadataLoading}
+        label={loadingActivity.active ? loadingActivity.label : chapterRowsLoading ? "Loading chapters." : "Loading pages."}
+      />
       <div className="reader-tap-zone is-previous" onClick={goVisualPrevious} aria-hidden="true" />
       <div className="reader-tap-zone is-next" onClick={goVisualNext} aria-hidden="true" />
 

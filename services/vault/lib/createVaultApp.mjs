@@ -170,6 +170,25 @@ export const createVaultApp = async ({
     }
   });
 
+  app.patch("/api/service/users/:discordUserId/profile", requireJson, async (req, res) => {
+    try {
+      const user = await store.updateDiscordUserProfile(req.params.discordUserId, {
+        username: req.body?.username,
+        avatarUrl: req.body?.avatarUrl
+      });
+      if (!user) {
+        res.status(404).json({error: "User not found."});
+        return;
+      }
+      res.json(user);
+    } catch (error) {
+      if (sendStoreError(logger, res, error, {discordUserId: req.params.discordUserId})) {
+        return;
+      }
+      throw error;
+    }
+  });
+
   app.get("/api/service/users", async (_req, res) => {
     res.json(await store.listUsers());
   });

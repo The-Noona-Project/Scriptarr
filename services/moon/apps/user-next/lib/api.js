@@ -14,6 +14,7 @@ import {
 } from "./persistentJsonCache.js";
 import {buildMoonLoginPageHref, normalizeLoginReturnTo} from "./loginReturnTo.js";
 import {LIVE_INVALIDATE_EVENT, shouldRefreshUrlForLiveDomains} from "./live.js";
+import {beginGlobalLoadingActivity} from "./loadingActivity.js";
 
 /**
  * Perform a same-origin JSON request against Moon.
@@ -193,41 +194,46 @@ export const useMoonJson = (url, {enabled = true, fallback = /** @type {T} */ (n
     const shouldRefresh = loadedPersistentCache || (keepPreviousData && hasLoadedRef.current);
     setLoading(!shouldRefresh);
     setRefreshing(shouldRefresh);
-    const result = await requestJson(url, {signal: controller.signal});
-    if (requestSeq !== requestSeqRef.current) {
-      return;
-    }
-    if (result.payload?.aborted) {
-      setLoading(false);
-      setRefreshing(false);
-      return;
-    }
-    if (!result.ok) {
-      const failurePersistentCache = resolvePersistentCacheOptions();
-      await clearPersistentMoonJsonCacheForStatus(result.status, failurePersistentCache.userKey);
-      if (loadedPersistentCache && ![401, 403].includes(result.status)) {
-        setStatus(result.status);
+    const endLoadingActivity = shouldRefresh ? () => {} : beginGlobalLoadingActivity("Loading page data.");
+    try {
+      const result = await requestJson(url, {signal: controller.signal});
+      if (requestSeq !== requestSeqRef.current) {
+        return;
+      }
+      if (result.payload?.aborted) {
         setLoading(false);
         setRefreshing(false);
         return;
       }
-      setError(result.payload?.error || "Scriptarr could not finish loading this page.");
-      setStatus(result.status);
-      if ([401, 403].includes(result.status)) {
-        setData(fallbackRef.current);
-        hasLoadedRef.current = false;
+      if (!result.ok) {
+        const failurePersistentCache = resolvePersistentCacheOptions();
+        await clearPersistentMoonJsonCacheForStatus(result.status, failurePersistentCache.userKey);
+        if (loadedPersistentCache && ![401, 403].includes(result.status)) {
+          setStatus(result.status);
+          setLoading(false);
+          setRefreshing(false);
+          return;
+        }
+        setError(result.payload?.error || "Scriptarr could not finish loading this page.");
+        setStatus(result.status);
+        if ([401, 403].includes(result.status)) {
+          setData(fallbackRef.current);
+          hasLoadedRef.current = false;
+        }
+        setLoading(false);
+        setRefreshing(false);
+        return;
       }
+
+      hasLoadedRef.current = true;
+      setData(result.payload);
+      setError("");
+      setStatus(result.status);
       setLoading(false);
       setRefreshing(false);
-      return;
+    } finally {
+      endLoadingActivity();
     }
-
-    hasLoadedRef.current = true;
-    setData(result.payload);
-    setError("");
-    setStatus(result.status);
-    setLoading(false);
-    setRefreshing(false);
   }, [enabled, keepPreviousData, resolvePersistentCacheOptions, url]);
 
   useEffect(() => {

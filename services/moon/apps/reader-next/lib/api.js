@@ -5,6 +5,7 @@
  */
 
 import {useCallback, useEffect, useRef, useState} from "react";
+import {beginGlobalLoadingActivity} from "./loadingActivity.js";
 import {readerTelemetryNow, recordReaderTelemetry} from "./readerTelemetry.js";
 
 /**
@@ -134,33 +135,38 @@ export const useMoonJson = (url, {enabled = true, fallback = /** @type {T} */ (n
     const shouldRefresh = keepPreviousData && hasLoadedRef.current;
     setLoading(!shouldRefresh);
     setRefreshing(shouldRefresh);
-    const result = await requestJson(url, {signal: controller.signal, telemetry: telemetryRef.current});
-    if (requestSeq !== requestSeqRef.current) {
-      return;
-    }
-    if (result.payload?.aborted) {
-      setLoading(false);
-      setRefreshing(false);
-      return;
-    }
-    if (!result.ok) {
-      setError(result.payload?.error || "Scriptarr could not finish loading the reader.");
-      setStatus(result.status);
-      if ([401, 403].includes(result.status)) {
-        setData(fallbackRef.current);
-        hasLoadedRef.current = false;
+    const endLoadingActivity = shouldRefresh ? () => {} : beginGlobalLoadingActivity("Loading reader state.");
+    try {
+      const result = await requestJson(url, {signal: controller.signal, telemetry: telemetryRef.current});
+      if (requestSeq !== requestSeqRef.current) {
+        return;
       }
+      if (result.payload?.aborted) {
+        setLoading(false);
+        setRefreshing(false);
+        return;
+      }
+      if (!result.ok) {
+        setError(result.payload?.error || "Scriptarr could not finish loading the reader.");
+        setStatus(result.status);
+        if ([401, 403].includes(result.status)) {
+          setData(fallbackRef.current);
+          hasLoadedRef.current = false;
+        }
+        setLoading(false);
+        setRefreshing(false);
+        return;
+      }
+
+      hasLoadedRef.current = true;
+      setData(result.payload);
+      setError("");
+      setStatus(result.status);
       setLoading(false);
       setRefreshing(false);
-      return;
+    } finally {
+      endLoadingActivity();
     }
-
-    hasLoadedRef.current = true;
-    setData(result.payload);
-    setError("");
-    setStatus(result.status);
-    setLoading(false);
-    setRefreshing(false);
   }, [enabled, keepPreviousData, url]);
 
   useEffect(() => {

@@ -5,6 +5,7 @@
  */
 
 import {createContext, useCallback, useContext, useEffect, useMemo, useRef, useState} from "react";
+import {beginGlobalLoadingActivity} from "./loadingActivity.js";
 
 /**
  * Perform a Moon admin JSON request.
@@ -189,34 +190,39 @@ export const useAdminJson = (url, {enabled = true, fallback = /** @type {T} */ (
     const requestId = requestIdRef.current + 1;
     requestIdRef.current = requestId;
     controllerRef.current = controller;
+    const endLoadingActivity = initialLoad ? beginGlobalLoadingActivity("Loading admin data.") : () => {};
 
     const isCurrentRequest = () =>
       requestIdRef.current === requestId
       && controllerRef.current === controller
       && !controller.signal.aborted;
 
-    const result = await requestJson(url, {signal: controller.signal});
-    if (!isCurrentRequest()) {
-      return;
-    }
+    try {
+      const result = await requestJson(url, {signal: controller.signal});
+      if (!isCurrentRequest()) {
+        return;
+      }
 
-    controllerRef.current = null;
-    setStatus(result.status);
-    if (!result.ok) {
-      setError(initialLoad ? result.payload?.error || "Moon could not finish loading this admin page." : "");
-      setLastRefreshError(initialLoad ? "" : result.payload?.error || "Moon could not refresh this admin page.");
+      controllerRef.current = null;
+      setStatus(result.status);
+      if (!result.ok) {
+        setError(initialLoad ? result.payload?.error || "Moon could not finish loading this admin page." : "");
+        setLastRefreshError(initialLoad ? "" : result.payload?.error || "Moon could not refresh this admin page.");
+        setLoading(false);
+        setRefreshing(false);
+        return;
+      }
+
+      setData(result.payload);
+      setError("");
+      setLastRefreshError("");
+      setLastLoadedAt(new Date().toISOString());
+      hasLoadedRef.current = true;
       setLoading(false);
       setRefreshing(false);
-      return;
+    } finally {
+      endLoadingActivity();
     }
-
-    setData(result.payload);
-    setError("");
-    setLastRefreshError("");
-    setLastLoadedAt(new Date().toISOString());
-    hasLoadedRef.current = true;
-    setLoading(false);
-    setRefreshing(false);
   }, [enabled, url]);
 
   useEffect(() => {

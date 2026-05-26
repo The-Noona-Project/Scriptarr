@@ -207,7 +207,7 @@ const createVaultReaderTargetFailureProxy = ({targetBaseUrl}) => {
  * Create a Vault proxy that forwards normal calls and fails one selected route.
  *
  * @param {{targetBaseUrl: string, shouldFail: (request: http.IncomingMessage) => boolean}} options
- * @returns {{server: http.Server, calls: {failed: number, forwarded: number, bootstrapStatus: number, upsertDiscordUser: number, getUserByDiscordId: number, createSession: number, events: number}}}
+ * @returns {{server: http.Server, calls: {failed: number, forwarded: number, bootstrapStatus: number, upsertDiscordUser: number, updateDiscordUserProfile: number, getUserByDiscordId: number, createSession: number, events: number}}}
  */
 const createVaultRouteFailureProxy = ({targetBaseUrl, shouldFail}) => {
   const calls = {
@@ -215,6 +215,7 @@ const createVaultRouteFailureProxy = ({targetBaseUrl, shouldFail}) => {
     forwarded: 0,
     bootstrapStatus: 0,
     upsertDiscordUser: 0,
+    updateDiscordUserProfile: 0,
     getUserByDiscordId: 0,
     createSession: 0,
     events: 0
@@ -225,6 +226,9 @@ const createVaultRouteFailureProxy = ({targetBaseUrl, shouldFail}) => {
     }
     if (request.method === "POST" && request.url === "/api/service/users/upsert-discord") {
       calls.upsertDiscordUser += 1;
+    }
+    if (request.method === "PATCH" && request.url?.startsWith("/api/service/users/") && request.url.endsWith("/profile")) {
+      calls.updateDiscordUserProfile += 1;
     }
     if (request.url?.startsWith("/api/service/users/by-discord/")) {
       calls.getUserByDiscordId += 1;
@@ -1683,6 +1687,10 @@ test("sage carries a sanitized returnTo path through Discord OAuth state", async
 
   const ownerClaim = await signInViaDiscord(baseUrl, `state=${encodeURIComponent(state)}`);
   assert.equal(ownerClaim.returnTo, "/browse?q=moon");
+  const bootstrapStatus = await fetch(`${baseUrl}/api/auth/bootstrap-status`).then((response) => response.json());
+  assert.equal(bootstrapStatus.ownerClaimed, true);
+  assert.equal(Object.hasOwn(bootstrapStatus, "superuserId"), false);
+  assert.equal(Object.hasOwn(bootstrapStatus, "ownerDiscordUserId"), false);
   const authEvents = await fetch(`${baseUrl.replace(String(sagePort), String(vaultPort))}/api/service/events?domain=auth`, {
     headers: {"Authorization": "Bearer sage-dev-token"}
   }).then((response) => response.json());
@@ -1804,6 +1812,78 @@ test("sage completes Discord login when auth event persistence fails after sessi
       .filter((entry) => entry.message === "Discord callback vault-user step completed.")
       .map((entry) => entry.payload.step);
     assert.deepEqual(vaultUserSteps, ["vault-bootstrap", "vault-owner-upsert"]);
+  } finally {
+    await closeServer(sageServer);
+    await closeServer(vaultProxy.server);
+    await closeServer(vaultServer);
+  }
+});
+
+test("sage creates existing-user sessions before fail-soft profile refresh", async () => {
+  const {app: vaultApp} = await createVaultApp();
+  const vaultServer = vaultApp.listen(0);
+  const vaultBaseUrl = `http://127.0.0.1:${vaultServer.address().port}`;
+  const vaultProxy = createVaultRouteFailureProxy({
+    targetBaseUrl: vaultBaseUrl,
+    shouldFail: (request) => request.method === "PATCH" && request.url?.startsWith("/api/service/users/") && request.url.endsWith("/profile")
+  });
+  vaultProxy.server.listen(0);
+
+  process.env.SCRIPTARR_VAULT_BASE_URL = `http://127.0.0.1:${vaultProxy.server.address().port}`;
+  process.env.SCRIPTARR_PUBLIC_BASE_URL = "https://pax-kun.com";
+  process.env.SCRIPTARR_DISCORD_CLIENT_ID = "discord-client-id";
+  process.env.SCRIPTARR_DISCORD_CLIENT_SECRET = "discord-client-secret";
+
+  installDiscordFetchStub();
+  const callbackLogs = [];
+  const logger = {
+    info(message, payload) {
+      callbackLogs.push({level: "info", message, payload});
+    },
+    warn(message, payload) {
+      callbackLogs.push({level: "warn", message, payload});
+    },
+    error(message, payload) {
+      callbackLogs.push({level: "error", message, payload});
+    }
+  };
+
+  const {app: sageApp} = await createSageApp({logger});
+  const sageServer = sageApp.listen(0);
+  const baseUrl = `http://127.0.0.1:${sageServer.address().port}`;
+
+  try {
+    const ownerClaim = await signInViaDiscord(baseUrl);
+    assert.ok(ownerClaim.token);
+    assert.equal(ownerClaim.user.role, "owner");
+
+    const existingLogin = await signInViaDiscord(baseUrl);
+    assert.ok(existingLogin.token);
+    assert.equal(existingLogin.user.discordUserId, "owner-1");
+
+    await waitForCondition(() => vaultProxy.calls.updateDiscordUserProfile === 1 && vaultProxy.calls.failed === 1);
+    assert.equal(vaultProxy.calls.upsertDiscordUser, 1);
+    assert.equal(vaultProxy.calls.getUserByDiscordId, 1);
+    assert.equal(vaultProxy.calls.createSession, 2);
+
+    const statusResponse = await fetch(`${baseUrl}/api/auth/status`, {
+      headers: {"Authorization": `Bearer ${existingLogin.token}`}
+    });
+    assert.equal(statusResponse.status, 200);
+
+    const vaultUserSteps = callbackLogs
+      .filter((entry) => entry.message === "Discord callback vault-user step completed.")
+      .map((entry) => entry.payload.step);
+    assert.deepEqual(vaultUserSteps, [
+      "vault-bootstrap",
+      "vault-owner-upsert",
+      "vault-bootstrap",
+      "vault-existing-user"
+    ]);
+    assert.equal(
+      callbackLogs.some((entry) => entry.message === "Discord callback phase failed." && entry.payload.phase === "vault-profile-update"),
+      true
+    );
   } finally {
     await closeServer(sageServer);
     await closeServer(vaultProxy.server);

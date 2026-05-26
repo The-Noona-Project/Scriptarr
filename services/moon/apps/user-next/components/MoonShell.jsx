@@ -9,10 +9,12 @@ import Link from "next/link";
 import {usePathname} from "next/navigation";
 import {buildMoonLoginHref, loadMoonChromeContext, requestJson} from "../lib/api.js";
 import {normalizeBrowseType} from "../lib/browse.js";
+import {useGlobalLoadingActivity} from "../lib/loadingActivity.js";
 import {startUserLiveInvalidation} from "../lib/live.js";
 import {buildLibraryPath, classifyPathname, getLibraryTypes} from "../lib/navigationRoutes.js";
 import {Flex} from "./UiPrimitives.jsx";
 import {DesktopNavigation, MobileNavigation} from "./LocalNavigation.jsx";
+import GlobalLoadingOverlay from "./GlobalLoadingOverlay.jsx";
 import MoonChromeContext from "./MoonChromeContext.jsx";
 import ProfileMenu from "./ProfileMenu.jsx";
 import SiteFooter from "./SiteFooter.jsx";
@@ -259,18 +261,21 @@ export const MoonShell = ({children}) => {
     installAvailable: Boolean(installPrompt),
     promptInstall
   }), [chrome, installPrompt, promptInstall]);
+  const loadingActivity = useGlobalLoadingActivity();
 
   return (
     <MoonChromeContext.Provider value={chromeContextValue}>
       <UserLiveSync enabled={Boolean(chrome.auth)} />
       {isLoginRoute ? (
         <div className="moon-login-shell">
+          <GlobalLoadingOverlay active={!chrome.loaded || loadingActivity.active} label={loadingActivity.active ? loadingActivity.label : "Checking session."} />
           <main className="moon-login-stage">{children}</main>
         </div>
       ) : !chrome.loaded || !chrome.auth ? (
         <AuthResolvingSurface label={sessionDelayed ? "Session check is delayed. Retrying." : chrome.loaded ? "Opening login." : "Checking session."} />
       ) : (
         <div className="moon-app-shell">
+          <GlobalLoadingOverlay active={loadingActivity.active} label={loadingActivity.label} />
           <header className="moon-header">
             <div className="moon-header-top">
               <Link className="moon-brandmark" href="/">

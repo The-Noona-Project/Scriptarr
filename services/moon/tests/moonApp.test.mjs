@@ -1586,7 +1586,7 @@ test("moon binds Discord OAuth callbacks to the browser state cookie", async () 
     assert.equal(urlResponse.status, 200);
     assert.ok(state);
     assert.match(oauthCookie, /scriptarr_session\.oauth_state=sage-nonce/);
-    assert.match(oauthCookie, /Path=\/api\/moon\/auth\/discord\/callback/);
+    assert.match(oauthCookie, /Path=\/api\/moon\/auth\/discord/);
     assert.match(oauthCookie, /HttpOnly/);
     assert.match(oauthCookie, /SameSite=Lax/);
     assert.match(oauthCookie, /Secure/);
@@ -1603,21 +1603,49 @@ test("moon binds Discord OAuth callbacks to the browser state cookie", async () 
     assert.equal(new URL(startLocation).origin, "https://discord.example");
     assert.ok(startState);
     assert.match(startCookie, /scriptarr_session\.oauth_state=sage-nonce/);
-    assert.match(startCookie, /Path=\/api\/moon\/auth\/discord\/callback/);
+    assert.match(startCookie, /Path=\/api\/moon\/auth\/discord/);
     assert.match(startCookie, /HttpOnly/);
     assert.match(startCookie, /SameSite=Lax/);
     assert.match(startCookie, /Secure/);
 
-    const rejected = await fetch(`${baseUrl}/api/moon/auth/discord/callback?code=test-code&state=${encodeURIComponent(state)}`, {
-      headers: {cookie: "scriptarr_session.oauth_state=wrong-nonce", "x-forwarded-proto": "https"}
+    const loader = await fetch(`${baseUrl}/api/moon/auth/discord/callback?code=test-code&state=${encodeURIComponent(state)}`, {
+      headers: {cookie: "scriptarr_session.oauth_state=sage-nonce", "x-forwarded-proto": "https"}
+    });
+    const loaderHtml = await loader.text();
+    assert.equal(loader.status, 200);
+    assert.match(loaderHtml, /Authenticating/);
+    assert.equal(loaderHtml.includes("test-code"), false);
+    assert.equal(loaderHtml.includes(state), false);
+
+    const crossOrigin = await fetch(`${baseUrl}/api/moon/auth/discord/complete`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        cookie: "scriptarr_session.oauth_state=sage-nonce",
+        origin: "https://evil.example",
+        "x-forwarded-proto": "https"
+      },
+      body: JSON.stringify({callbackQuery: `?code=test-code&state=${encodeURIComponent(state)}`})
+    });
+    assert.equal(crossOrigin.status, 403);
+    assert.equal((await crossOrigin.json()).phase, "origin");
+
+    const rejected = await fetch(`${baseUrl}/api/moon/auth/discord/complete`, {
+      method: "POST",
+      headers: {"Content-Type": "application/json", cookie: "scriptarr_session.oauth_state=wrong-nonce", "x-forwarded-proto": "https"},
+      body: JSON.stringify({callbackQuery: `?code=test-code&state=${encodeURIComponent(state)}`})
     });
     assert.equal(rejected.status, 403);
+    assert.equal((await rejected.json()).phase, "state");
 
-    const accepted = await fetch(`${baseUrl}/api/moon/auth/discord/callback?code=test-code&state=${encodeURIComponent(state)}`, {
-      headers: {cookie: "scriptarr_session.oauth_state=sage-nonce", "x-forwarded-proto": "https"}
+    const accepted = await fetch(`${baseUrl}/api/moon/auth/discord/complete`, {
+      method: "POST",
+      headers: {"Content-Type": "application/json", cookie: "scriptarr_session.oauth_state=sage-nonce", "x-forwarded-proto": "https"},
+      body: JSON.stringify({callbackQuery: `?code=test-code&state=${encodeURIComponent(state)}`})
     });
     assert.equal(accepted.status, 200);
     assert.match(accepted.headers.get("set-cookie") || "", /scriptarr_session=member-token/);
+    assert.deepEqual(await accepted.json(), {ok: true, returnTo: "/"});
 
     assert.equal(
       requests.filter((entry) => entry.url?.startsWith("/api/auth/discord/callback")).length,

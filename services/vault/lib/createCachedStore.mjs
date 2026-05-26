@@ -153,6 +153,15 @@ export const createCachedStore = (
       invalidatePrefix("bootstrap:", "session-user:");
       return user;
     },
+    async updateDiscordUserProfile(discordUserId, payload) {
+      const user = await baseStore.updateDiscordUserProfile(discordUserId, payload);
+      invalidate("users:list", `user:${discordUserId}`);
+      invalidatePrefix("session-user:");
+      if (user) {
+        writeEntry(`user:${user.discordUserId}`, user);
+      }
+      return user;
+    },
     async getUserByDiscordId(discordUserId) {
       return readThrough(`user:${discordUserId}`, () => baseStore.getUserByDiscordId(discordUserId));
     },

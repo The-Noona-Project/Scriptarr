@@ -132,6 +132,20 @@ const loadWardenStatus = async (baseUrl) => {
   };
 };
 
+/**
+ * Shape bootstrap readiness for browsers without exposing raw owner ids.
+ *
+ * @param {Record<string, unknown>} [bootstrap]
+ * @param {{discordClientId?: string, discordClientSecret?: string, publicBaseUrl: string}} config
+ * @returns {{ownerClaimed: boolean, superuserIdConfigured: boolean, callbackUrl: string, oauthConfigured: boolean}}
+ */
+const toBrowserBootstrapStatus = (bootstrap = {}, config) => ({
+  ownerClaimed: Boolean(bootstrap.ownerClaimed),
+  superuserIdConfigured: Boolean(bootstrap.superuserIdConfigured),
+  callbackUrl: buildCallbackUrl(config),
+  oauthConfigured: Boolean(config.discordClientId && config.discordClientSecret)
+});
+
 const serviceJson = async (baseUrl, servicePath, options = {}) => {
   const method = options.method || "GET";
   const timeoutMs = Number.isFinite(Number(options.timeoutMs)) && Number(options.timeoutMs) > 0
@@ -1021,11 +1035,7 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
 
   app.get("/api/auth/bootstrap-status", async (_req, res) => {
     const bootstrap = await vaultClient.getBootstrapStatus();
-    res.json({
-      ...bootstrap,
-      callbackUrl: buildCallbackUrl(config),
-      oauthConfigured: Boolean(config.discordClientId && config.discordClientSecret)
-    });
+    res.json(toBrowserBootstrapStatus(bootstrap, config));
   });
 
   app.get("/api/auth/discord/url", (req, res) => {

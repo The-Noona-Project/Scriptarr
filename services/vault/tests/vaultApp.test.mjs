@@ -153,6 +153,73 @@ test("vault exposes bootstrap status and request intake lifecycle", async () => 
   server.close();
 });
 
+test("vault profile-only user update preserves auth fields and requires service auth", async () => {
+  const {app} = await createVaultApp();
+  const server = app.listen(0);
+  const {port} = server.address();
+  const baseUrl = `http://127.0.0.1:${port}`;
+
+  const headers = {
+    "Authorization": "Bearer sage-dev-token",
+    "Content-Type": "application/json"
+  };
+
+  const created = await fetch(`${baseUrl}/api/service/users/upsert-discord`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      discordUserId: "profile-user-1",
+      username: "Before",
+      avatarUrl: "https://cdn.example/before.png",
+      role: "member",
+      permissions: ["create_requests"]
+    })
+  }).then((response) => response.json());
+
+  const session = await fetch(`${baseUrl}/api/service/sessions`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({discordUserId: "profile-user-1"})
+  }).then((response) => response.json());
+  const sessionUserBefore = await fetch(`${baseUrl}/api/service/sessions/${encodeURIComponent(session.token)}`, {
+    headers
+  }).then((response) => response.json());
+  assert.equal(sessionUserBefore.username, "Before");
+
+  const rejected = await fetch(`${baseUrl}/api/service/users/profile-user-1/profile`, {
+    method: "PATCH",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({username: "Nope", avatarUrl: null})
+  });
+  assert.equal(rejected.status, 401);
+
+  const updated = await fetch(`${baseUrl}/api/service/users/profile-user-1/profile`, {
+    method: "PATCH",
+    headers,
+    body: JSON.stringify({
+      username: "After",
+      avatarUrl: "https://cdn.example/after.png",
+      role: "owner",
+      permissions: ["admin"],
+      groups: ["owner"]
+    })
+  }).then((response) => response.json());
+
+  assert.equal(created.role, "member");
+  assert.equal(updated.username, "After");
+  assert.equal(updated.avatarUrl, "https://cdn.example/after.png");
+  assert.equal(updated.role, "member");
+  assert.deepEqual(updated.permissions, created.permissions);
+
+  const sessionUser = await fetch(`${baseUrl}/api/service/sessions/${encodeURIComponent(session.token)}`, {
+    headers
+  }).then((response) => response.json());
+  assert.equal(sessionUser.username, "After");
+  assert.equal(sessionUser.role, "member");
+
+  server.close();
+});
+
 test("vault deletes persisted Raven download tasks", async () => {
   const {app} = await createVaultApp();
   const server = app.listen(0);

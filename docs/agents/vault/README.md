@@ -13,6 +13,9 @@
 - Vault is the only first-party service allowed to touch MySQL.
 - Sage is the supported caller for Vault's HTTP API. Other first-party services should use Sage's internal broker
   routes instead of calling Vault directly.
+- Vault exposes `PATCH /api/service/users/:discordUserId/profile` for Sage's Discord login refresh path. Keep it
+  service-token only and profile-only: it may update `username`, `avatar_url`, and `updated_at`, then refresh user and
+  session-user caches; it must not alter role, permission groups, legacy permissions, sessions, or owner state.
 - Raven VPN settings and Oracle credentials live here in 3.0.
 - Keep exactly one default onboarding permission group at all times. New or returning Discord users should land on that
   group automatically when they do not already have assignments. `Member-AI` is the seeded default and includes

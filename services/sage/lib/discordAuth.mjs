@@ -127,19 +127,23 @@ const runTimedPhase = async ({phase, timeoutMs, logger, failSoft = false, timing
   }
 };
 
-const runVaultUserStep = async (step, logger, operation) => {
+const runVaultUserStep = async (step, logger, operation, timings = null) => {
   const startedAt = Date.now();
   try {
     const result = await operation();
+    const durationMs = Date.now() - startedAt;
+    timings?.push?.({phase: step, status: "ok", durationMs});
     logger?.info?.("Discord callback vault-user step completed.", {
       step,
-      durationMs: Date.now() - startedAt
+      durationMs
     });
     return result;
   } catch (error) {
+    const durationMs = Date.now() - startedAt;
+    timings?.push?.({phase: step, status: "failed", durationMs});
     logger?.warn?.("Discord callback vault-user step failed.", {
       step,
-      durationMs: Date.now() - startedAt,
+      durationMs,
       error: error instanceof Error ? error.message : String(error)
     });
     throw error;
@@ -342,13 +346,13 @@ export const exchangeDiscordCode = async (config, code, {timeoutMs = config.disc
 };
 
 /**
- * Upsert a Vault user from a Discord OAuth identity using the already-loaded
+ * Resolve the Vault user for a Discord OAuth identity using the already-loaded
  * bootstrap state for this callback.
  *
- * @param {{vaultClient: ReturnType<import("./vaultClient.mjs").createVaultClient>, config: {superuserId?: string, autoProvisionDiscordUsers?: boolean, vaultAuthTimeoutMs?: number}, identity: {discordUserId: string, username: string, avatarUrl: string | null}, bootstrap: {ownerClaimed?: boolean} | null, vaultOptions?: {timeoutMs?: number, retries?: number, retryDelayMs?: number}, logger?: {info?: Function, warn?: Function}}} options
- * @returns {Promise<any>}
+ * @param {{vaultClient: ReturnType<import("./vaultClient.mjs").createVaultClient>, config: {superuserId?: string, autoProvisionDiscordUsers?: boolean, vaultAuthTimeoutMs?: number}, identity: {discordUserId: string, username: string, avatarUrl: string | null}, bootstrap: {ownerClaimed?: boolean} | null, vaultOptions?: {timeoutMs?: number, retries?: number, retryDelayMs?: number}, logger?: {info?: Function, warn?: Function}, timings?: Array<{phase: string, status: string, durationMs: number}> | null}} options
+ * @returns {Promise<{user: any, profileUpdateDeferred: boolean}>}
  */
-export const upsertUserFromDiscord = async ({vaultClient, config, identity, bootstrap, vaultOptions = {}, logger}) => {
+export const loadUserFromDiscordIdentity = async ({vaultClient, config, identity, bootstrap, vaultOptions = {}, logger, timings = null}) => {
   const timeoutMs = normalizePositiveInteger(config.vaultAuthTimeoutMs, DEFAULT_VAULT_AUTH_TIMEOUT_MS);
   const requestOptions = {
     timeoutMs,
@@ -365,32 +369,69 @@ export const upsertUserFromDiscord = async ({vaultClient, config, identity, boot
       throw new Error("This Discord account is not allowed to claim the first admin session.");
     }
 
-    return runVaultUserStep("vault-owner-upsert", logger, () => vaultClient.upsertDiscordUser({
+    const user = await runVaultUserStep("vault-owner-upsert", logger, () => vaultClient.upsertDiscordUser({
       ...identity,
       role: "owner",
       claimOwner: true
-    }, {...requestOptions, throwOnError: true}));
+    }, {...requestOptions, throwOnError: true}), timings);
+    return {user, profileUpdateDeferred: false};
   }
 
-  const existing = await runVaultUserStep("vault-existing-user", logger, () =>
-    vaultClient.getUserByDiscordId(identity.discordUserId, requestOptions)
+  const existing = await runVaultUserStep(
+    "vault-existing-user",
+    logger,
+    () => vaultClient.getUserByDiscordId(identity.discordUserId, requestOptions),
+    timings
   );
   if (existing) {
-    return runVaultUserStep("vault-existing-user-upsert", logger, () => vaultClient.upsertDiscordUser({
-      ...identity,
-      role: existing.role,
-      permissions: existing.permissions
-    }, {...requestOptions, throwOnError: true}));
+    return {user: existing, profileUpdateDeferred: true};
   }
 
   if (!config.autoProvisionDiscordUsers) {
     throw new Error("This Discord account is not provisioned for Scriptarr.");
   }
 
-  return runVaultUserStep("vault-member-upsert", logger, () => vaultClient.upsertDiscordUser({
+  const user = await runVaultUserStep("vault-member-upsert", logger, () => vaultClient.upsertDiscordUser({
     ...identity,
     role: "member"
-  }, {...requestOptions, throwOnError: true}));
+  }, {...requestOptions, throwOnError: true}), timings);
+  return {user, profileUpdateDeferred: false};
+};
+
+/**
+ * Upsert a Vault user from Discord and return the resulting user. This remains
+ * exported for focused tests and callers that only need the user object.
+ *
+ * @param {Parameters<typeof loadUserFromDiscordIdentity>[0]} options
+ * @returns {Promise<any>}
+ */
+export const upsertUserFromDiscord = async (options) =>
+  (await loadUserFromDiscordIdentity(options)).user;
+
+/**
+ * Refresh Discord profile fields after an existing-user session is already valid.
+ *
+ * @param {{vaultClient: ReturnType<import("./vaultClient.mjs").createVaultClient>, config: {vaultAuthTimeoutMs?: number}, identity: {discordUserId: string, username: string, avatarUrl: string | null}, logger?: {info?: Function, warn?: Function}, timings: Array<{phase: string, status: string, durationMs: number}>}} options
+ * @returns {void}
+ */
+const scheduleProfileUpdate = ({vaultClient, config, identity, logger, timings}) => {
+  const timeoutMs = normalizePositiveInteger(config.vaultAuthTimeoutMs, DEFAULT_VAULT_AUTH_TIMEOUT_MS);
+  const vaultRequestOptions = {
+    timeoutMs,
+    retries: DEFAULT_VAULT_AUTH_RETRIES,
+    retryDelayMs: DEFAULT_VAULT_AUTH_RETRY_DELAY_MS,
+    throwOnError: true
+  };
+  void runTimedPhase({
+    phase: "vault-profile-update",
+    timeoutMs,
+    logger,
+    failSoft: true,
+    timings
+  }, () => vaultClient.updateDiscordUserProfile(identity.discordUserId, {
+    username: identity.username,
+    avatarUrl: identity.avatarUrl
+  }, vaultRequestOptions));
 };
 
 /**
@@ -421,17 +462,28 @@ export const completeDiscordCallbackLogin = async ({config, vaultClient, code, a
     logger,
     timings
   }, () => fetchDiscordUser(token.accessToken, {timeoutMs: discordTimeoutMs}));
-  const {bootstrap, user} = await runTimedPhase({
+  const {bootstrap, user, profileUpdateDeferred} = await runTimedPhase({
     phase: "vault-user",
     timeoutMs: vaultTimeoutMs,
     logger,
     timings
   }, async () => {
-    const bootstrap = await runVaultUserStep("vault-bootstrap", logger, () =>
-      vaultClient.getBootstrapStatus(vaultRequestOptions)
+    const bootstrap = await runVaultUserStep(
+      "vault-bootstrap",
+      logger,
+      () => vaultClient.getBootstrapStatus(vaultRequestOptions),
+      timings
     );
-    const user = await upsertUserFromDiscord({vaultClient, config, identity, bootstrap, vaultOptions: vaultRequestOptions, logger});
-    return {bootstrap, user};
+    const {user, profileUpdateDeferred} = await loadUserFromDiscordIdentity({
+      vaultClient,
+      config,
+      identity,
+      bootstrap,
+      vaultOptions: vaultRequestOptions,
+      logger,
+      timings
+    });
+    return {bootstrap, user, profileUpdateDeferred};
   });
   const session = await runTimedPhase({
     phase: "vault-session",
@@ -442,6 +494,10 @@ export const completeDiscordCallbackLogin = async ({config, vaultClient, code, a
 
   if (!session?.token) {
     throw new DiscordCallbackPhaseError("vault-session", new Error("Vault session response did not include a token."), timings);
+  }
+
+  if (profileUpdateDeferred) {
+    scheduleProfileUpdate({vaultClient, config, identity, logger, timings});
   }
 
   await runTimedPhase({

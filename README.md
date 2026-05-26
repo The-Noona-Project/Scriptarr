@@ -86,16 +86,19 @@ optional Appa admin/reviewer settings, and Portal runtime visibility without exp
 Scriptarr's user app now runs as an embedded Next.js App Router frontend with a megamenu header, avatar profile
 controls, and a simple footer, while the fullscreen reader runs as its own embedded `/reader` Next app.
 Signed-out browser navigations now land on the dedicated Moon `/login` front door first, with the original route kept
-in `returnTo`. The login page starts Discord OAuth through Moon's same-origin start route, then runs a bounded
-post-login warmup only for the exact safe user payload the target needs: home for `/`, the returned catalogue URL for
-`/library` or `/browse`, and profile data for `/profile`;
+in `returnTo`. Discord returns to a small Moon callback loader, which completes the session through a same-origin POST
+before redirecting; the page does not render OAuth codes, state, cookies, or session tokens. The login page starts
+Discord OAuth through Moon's same-origin start route, then runs a bounded post-login warmup only for the exact safe user
+payload the target needs: home for `/`, the returned catalogue URL for `/library` or `/browse`, and profile data for `/profile`;
 admin return targets skip that user-data warmup so staff do not wait on home shelves before reaching admin.
 Moon keeps protected and personalized HTML out of service-worker caches; only versioned static assets and revisioned
 reader page/chunk responses are cached. User, reader, and admin client shells also redirect stale signed-out client
 navigations back to `/login` instead of rendering protected app chrome or in-app sign-in cards. Temporary auth-broker
 delays keep any already-known signed-in chrome visible, retry bootstrap with bounded backoff, and surface a delayed
 session state instead of forcing another login. The login page follows that same retry rule, so a fresh post-callback
-session is not treated as signed out just because one chrome auth check was slow.
+session is not treated as signed out just because one chrome auth check was slow. Existing Discord users get their
+Vault session from the already-loaded user record; profile freshness updates run fail-soft afterward so a slow avatar or
+username write cannot bounce a valid login.
 That reader supports webtoon, single-page, double-page, and manga-double layouts, LTR/RTL direction, page-fit controls,
 keyboard/touch/controller navigation, and still persists Moon-native progress plus bookmarks behind the same typed
 reader routes.
@@ -150,9 +153,9 @@ For end-to-end Docker verification, use:
 5. Watch the Warden logs while it reconciles the sibling containers. First boot now surfaces when Docker is creating or
    downloading the managed images.
    Docker health checks now report `healthy` for Warden plus the managed services once each container settles.
-6. Open the Scriptarr web app, confirm `/login` shows the configured first owner id once bootstrap data arrives, and
-   use Discord login to claim the first owner session. The visible sign-in action is rendered by `/login` immediately
-   and then uses Moon's same-origin `/api/moon/auth/discord/start` route.
+6. Open the Scriptarr web app, confirm `/login` shows first-owner setup readiness once bootstrap data arrives, and use
+   Discord login to claim the first owner session. The visible sign-in action is rendered by `/login` immediately and
+   then uses Moon's same-origin `/api/moon/auth/discord/start` route.
 7. Copy the callback URL surfaced by the stack into the Discord developer portal.
 8. Finish branding, logo, notification, integrations, library, metadata, download-provider, VPN, Oracle, moderation,
    and managed-service update settings in the admin app.

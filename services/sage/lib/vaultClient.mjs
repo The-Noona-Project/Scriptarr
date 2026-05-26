@@ -98,6 +98,7 @@ const requestJson = async (
  * @returns {{
  *   getBootstrapStatus: (options?: {timeoutMs?: number, retries?: number, retryDelayMs?: number}) => Promise<any>,
  *   upsertDiscordUser: (payload: Record<string, unknown>, options?: {timeoutMs?: number, throwOnError?: boolean, retries?: number, retryDelayMs?: number}) => Promise<any>,
+ *   updateDiscordUserProfile: (discordUserId: string, payload: {username?: string, avatarUrl?: string | null}, options?: {timeoutMs?: number, throwOnError?: boolean, retries?: number, retryDelayMs?: number}) => Promise<any>,
  *   getUserByDiscordId: (discordUserId: string, options?: {timeoutMs?: number, retries?: number, retryDelayMs?: number}) => Promise<any>,
  *   listUsers: () => Promise<any>,
  *   getAccessOverview: () => Promise<any>,
@@ -163,6 +164,21 @@ export const createVaultClient = (config) => {
         retryDelayMs,
         allowStatuses: throwOnError ? [] : [400, 401, 403, 404, 409, 500, 502, 503, 504],
         context: "Failed to upsert Discord user in Vault"
+      });
+      return response.payload;
+    },
+    async updateDiscordUserProfile(discordUserId, payload, {timeoutMs = authTimeoutMs, throwOnError = false, retries = 1, retryDelayMs = 0} = {}) {
+      const response = await requestJson(baseUrl, headers, `/api/service/users/${encodeURIComponent(discordUserId)}/profile`, {
+        method: "PATCH",
+        body: {
+          username: payload?.username,
+          avatarUrl: payload?.avatarUrl ?? null
+        },
+        timeoutMs,
+        retries,
+        retryDelayMs,
+        allowStatuses: throwOnError ? [] : [400, 401, 403, 404, 409, 500, 502, 503, 504],
+        context: "Failed to update Discord user profile in Vault"
       });
       return response.payload;
     },

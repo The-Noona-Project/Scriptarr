@@ -1494,6 +1494,19 @@ const createMemoryStore = (options = {}) => {
       }
       return refreshMemoryUserAccess(discordUserId);
     },
+    async updateDiscordUserProfile(discordUserId, {username, avatarUrl} = {}) {
+      const existing = state.users.get(discordUserId);
+      if (!existing) {
+        return null;
+      }
+      state.users.set(discordUserId, {
+        ...existing,
+        username: normalizeString(username, existing.username || discordUserId),
+        avatarUrl: avatarUrl || null,
+        updatedAt: nowIso()
+      });
+      return refreshMemoryUserAccess(discordUserId);
+    },
     async getUserByDiscordId(discordUserId) {
       const user = state.users.get(discordUserId);
       return user ? refreshMemoryUserAccess(discordUserId) : null;
@@ -3261,6 +3274,26 @@ const createMysqlStore = (config) => {
         }
       });
       return this.getUserByDiscordId(discordUserId);
+    },
+    async updateDiscordUserProfile(discordUserId, {username, avatarUrl} = {}) {
+      return withTransaction(async (connection) => {
+        const [existingRows] = await connection.query("SELECT * FROM users WHERE discord_user_id = ? LIMIT 1 FOR UPDATE", [discordUserId]);
+        const existing = existingRows[0];
+        if (!existing) {
+          return null;
+        }
+        await connection.query(`
+          UPDATE users
+          SET username = ?, avatar_url = ?, updated_at = NOW()
+          WHERE discord_user_id = ?
+        `, [
+          normalizeString(username, existing.username || discordUserId),
+          avatarUrl || null,
+          discordUserId
+        ]);
+        const [rows] = await connection.query("SELECT * FROM users WHERE discord_user_id = ? LIMIT 1", [discordUserId]);
+        return rows[0] ? hydrateUserRow(connection, rows[0]) : null;
+      });
     },
     async getUserByDiscordId(discordUserId) {
       const [rows] = await pool.query("SELECT * FROM users WHERE discord_user_id = ? LIMIT 1", [discordUserId]);
