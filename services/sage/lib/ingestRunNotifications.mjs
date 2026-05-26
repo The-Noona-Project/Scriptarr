@@ -9,6 +9,7 @@ const INGEST_RUN_OWNER_SERVICE = "scriptarr-raven";
 const INGEST_RUN_KIND = "raven-library-ingest";
 const INGEST_RUN_MILESTONES = Object.freeze([25, 50, 75]);
 const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled", "canceled"]);
+const DISCORD_SNOWFLAKE_PATTERN = /^\d{17,20}$/;
 const PLACEHOLDER_REQUESTERS = new Set([
   "scriptarr-admin",
   "scriptarr-portal",
@@ -42,7 +43,7 @@ const normalizeAckedIds = (value) =>
 
 const resolveRequesterDiscordId = (job = {}, fallbackDiscordUserId = "") => {
   const requestedBy = normalizeString(job.requestedBy);
-  if (requestedBy && !PLACEHOLDER_REQUESTERS.has(requestedBy.toLowerCase())) {
+  if (DISCORD_SNOWFLAKE_PATTERN.test(requestedBy) && !PLACEHOLDER_REQUESTERS.has(requestedBy.toLowerCase())) {
     return requestedBy;
   }
   return normalizeString(fallbackDiscordUserId);

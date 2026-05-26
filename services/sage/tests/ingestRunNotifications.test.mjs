@@ -15,7 +15,7 @@ const ingestJob = (overrides = {}) => ({
   kind: "raven-library-ingest",
   ownerService: "scriptarr-raven",
   status: "running",
-  requestedBy: "admin-1",
+  requestedBy: "111111111111111111",
   payload: {
     libraryTypeSlug: "manga",
     libraryTypeLabel: "Manga",
@@ -46,7 +46,7 @@ test("ingest run notification builder emits crossed milestones once", () => {
   });
 
   assert.deepEqual(notifications.map((entry) => entry.id), ["ingest:ingestrun_1:50"]);
-  assert.equal(notifications[0].discordUserId, "admin-1");
+  assert.equal(notifications[0].discordUserId, "111111111111111111");
   assert.equal(notifications[0].percent, 62);
   assert.equal(notifications[0].libraryTypeLabel, "Manga");
 });
@@ -91,7 +91,7 @@ test("ingest run notification builder reports partial failures in final notifica
   assert.match(notifications[0].message, /failed title/);
 });
 
-test("ingest run notification builder falls back to owner DM for placeholder requesters", () => {
+test("ingest run notification builder falls back to owner DM for placeholder and non-snowflake requesters", () => {
   const notifications = buildIngestRunNotifications({
     jobs: [
       ingestJob({
@@ -101,14 +101,26 @@ test("ingest run notification builder falls back to owner DM for placeholder req
       ingestJob({
         jobId: "ingestrun_owner_placeholder",
         requestedBy: "scriptarr-admin"
+      }),
+      ingestJob({
+        jobId: "ingestrun_owner_automation",
+        requestedBy: "codex-prod-clean-restart"
       })
     ],
     state: {},
-    fallbackDiscordUserId: "owner-1"
+    fallbackDiscordUserId: "222222222222222222"
   });
 
-  assert.deepEqual(notifications.map((entry) => entry.discordUserId), ["owner-1", "owner-1"]);
-  assert.deepEqual(notifications.map((entry) => entry.requestedBy), ["owner-1", "owner-1"]);
+  assert.deepEqual(notifications.map((entry) => entry.discordUserId), [
+    "222222222222222222",
+    "222222222222222222",
+    "222222222222222222"
+  ]);
+  assert.deepEqual(notifications.map((entry) => entry.requestedBy), [
+    "222222222222222222",
+    "222222222222222222",
+    "222222222222222222"
+  ]);
 });
 
 test("ingest run notification ack state is bounded and deduplicated", () => {
