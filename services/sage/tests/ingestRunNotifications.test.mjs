@@ -91,6 +91,26 @@ test("ingest run notification builder reports partial failures in final notifica
   assert.match(notifications[0].message, /failed title/);
 });
 
+test("ingest run notification builder falls back to owner DM for placeholder requesters", () => {
+  const notifications = buildIngestRunNotifications({
+    jobs: [
+      ingestJob({
+        jobId: "ingestrun_owner_missing",
+        requestedBy: ""
+      }),
+      ingestJob({
+        jobId: "ingestrun_owner_placeholder",
+        requestedBy: "scriptarr-admin"
+      })
+    ],
+    state: {},
+    fallbackDiscordUserId: "owner-1"
+  });
+
+  assert.deepEqual(notifications.map((entry) => entry.discordUserId), ["owner-1", "owner-1"]);
+  assert.deepEqual(notifications.map((entry) => entry.requestedBy), ["owner-1", "owner-1"]);
+});
+
 test("ingest run notification ack state is bounded and deduplicated", () => {
   const state = normalizeIngestRunNotificationState({
     ackedIds: Array.from({length: 1002}, (_, index) => `ingest:old:${index}`)

@@ -784,6 +784,14 @@ export const registerMoonV3Routes = (app, {
     }
     return result.payload;
   };
+  const readOwnerDiscordId = async () => {
+    const settings = await readPortalDiscordSettings().catch(() => ({}));
+    return normalizeString(settings.superuserId);
+  };
+  const resolveIngestRunRequestedBy = async (user = {}) =>
+    normalizeString(user?.discordUserId)
+    || await readOwnerDiscordId()
+    || normalizeString(user?.username, "scriptarr-admin");
 
   const loadUserIndex = async () => {
     const users = normalizeArray(await vaultClient.listUsers());
@@ -2348,7 +2356,7 @@ export const registerMoonV3Routes = (app, {
   }));
 
   app.post("/api/moon-v3/admin/ingest/retry-all", requireImportWrite(async (req, res) => {
-    const requestedBy = normalizeString(req.user?.discordUserId || req.user?.username, "scriptarr-admin");
+    const requestedBy = await resolveIngestRunRequestedBy(req.user);
     const result = await serviceJson(config.ravenBaseUrl, "/v1/ingest/runs/clean-restart", {
       method: "POST",
       body: {requestedBy}
@@ -2399,7 +2407,7 @@ export const registerMoonV3Routes = (app, {
   app.post("/api/moon-v3/admin/ingest/runs/clean-restart", requireImportWrite(async (req, res) => {
     const result = await serviceJson(config.ravenBaseUrl, "/v1/ingest/runs/clean-restart", {
       method: "POST",
-      body: {requestedBy: normalizeString(req.user?.discordUserId || req.user?.username, "scriptarr-admin")}
+      body: {requestedBy: await resolveIngestRunRequestedBy(req.user)}
     });
     if (!result.ok) {
       res.status(result.status || 502).json({error: result.payload?.error || "Raven could not clean-restart AVIF runs."});
@@ -2414,7 +2422,7 @@ export const registerMoonV3Routes = (app, {
   app.post("/api/moon-v3/admin/ingest/runs/restart-active", requireImportWrite(async (req, res) => {
     const result = await serviceJson(config.ravenBaseUrl, "/v1/ingest/runs/restart-active", {
       method: "POST",
-      body: {requestedBy: normalizeString(req.user?.discordUserId || req.user?.username, "scriptarr-admin")}
+      body: {requestedBy: await resolveIngestRunRequestedBy(req.user)}
     });
     if (!result.ok) {
       res.status(result.status || 502).json({error: result.payload?.error || "Raven could not restart AVIF runs."});
@@ -2430,7 +2438,7 @@ export const registerMoonV3Routes = (app, {
     const runId = normalizeString(req.params.runId);
     const result = await serviceJson(config.ravenBaseUrl, `/v1/ingest/runs/${encodeURIComponent(runId)}/${action}`, {
       method: "POST",
-      body: {requestedBy: normalizeString(req.user?.discordUserId || req.user?.username, "scriptarr-admin")}
+      body: {requestedBy: await resolveIngestRunRequestedBy(req.user)}
     });
     if (!result.ok) {
       res.status(result.status || 502).json({error: result.payload?.error || `Raven could not ${action} that AVIF run.`});

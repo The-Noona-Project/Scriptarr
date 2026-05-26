@@ -130,6 +130,42 @@ class LibraryIngestRunServiceTest {
     }
 
     /**
+     * Verify Raven startup recovery collapses duplicate active ingest runs for
+     * one library type before the fair scheduler can run both.
+     *
+     * @param tempDir temporary Raven data root
+     * @throws Exception when the fixture cannot be prepared
+     */
+    @Test
+    void startupRecoverySupersedesDuplicateActiveRunsForSameType(@TempDir Path tempDir) throws Exception {
+        FakeRavenBrokerClient brokerClient = new FakeRavenBrokerClient();
+        TestLogger logger = new TestLogger(tempDir);
+        BlockingTranscoder transcoder = new BlockingTranscoder();
+        LibraryService libraryService = libraryService(brokerClient, logger, transcoder);
+        LibraryTitle title = recordTitle(libraryService, tempDir, "Duplicate Run Title", "Manhua", "001.png");
+        String firstRunId = "ingestrun_duplicate_active_a";
+        String secondRunId = "ingestrun_duplicate_active_b";
+        seedIngestRunJob(brokerClient, firstRunId, "running", "manhua", 1, 0, 0);
+        seedIngestRunJob(brokerClient, secondRunId, "queued", "manhua", 1, 0, 0);
+        seedIngestRunTask(brokerClient, firstRunId, title, "queued", 0);
+        seedIngestRunTask(brokerClient, secondRunId, title, "queued", 0);
+        LibraryIngestRunService runService = new LibraryIngestRunService(libraryService, brokerClient, logger);
+
+        runService.resumeInterruptedRuns();
+        assertTrue(transcoder.started.await(2, TimeUnit.SECONDS));
+
+        List<Map<String, Object>> statuses = List.of(runService.status(firstRunId), runService.status(secondRunId));
+        assertEquals(1, statuses.stream().filter((status) -> Boolean.TRUE.equals(status.get("active"))).count());
+        assertEquals(1, statuses.stream().filter((status) -> "superseded".equals(status.get("status"))).count());
+        assertEquals(1, runService.listRunSummaries("active").stream()
+            .filter((run) -> "manhua".equals(run.get("libraryTypeSlug")))
+            .count());
+
+        transcoder.release.countDown();
+        runService.shutdown();
+    }
+
+    /**
      * Verify the balanced fair scheduler can use a second title lane instead
      * of reporting all other library types as fake waiting work.
      *
@@ -240,6 +276,7 @@ class LibraryIngestRunServiceTest {
         recordTitle(libraryService, tempDir, "Waiting Title", "Manga", "001.png");
         seedIngestRunJob(brokerClient, "ingestrun_recent_failed", "failed", "manhwa", 3, 2, 1);
         seedIngestRunJob(brokerClient, "ingestrun_recent_done", "completed", "oel", 2, 2, 0);
+        seedIngestRunJob(brokerClient, "ingestrun_recent_superseded", "superseded", "manga", 2, 0, 0);
         LibraryIngestRunService runService = new LibraryIngestRunService(libraryService, brokerClient, logger);
 
         Map<String, Object> created = runService.createRun(Map.of("libraryTypeSlug", "manga"));
@@ -262,6 +299,7 @@ class LibraryIngestRunServiceTest {
         List<Map<String, Object>> recent = runService.listRunSummaries("recent");
         List<String> recentRunIds = recent.stream().map((run) -> String.valueOf(run.get("runId"))).toList();
         assertTrue(recentRunIds.containsAll(List.of("ingestrun_recent_done", "ingestrun_recent_failed")));
+        assertFalse(recentRunIds.contains("ingestrun_recent_superseded"));
         assertTrue(recent.stream().noneMatch((run) -> run.containsKey("tasks")));
 
         transcoder.release.countDown();

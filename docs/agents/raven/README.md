@@ -36,7 +36,8 @@
   return the existing run id when the same type already has a queued or running rebuild. Startup recovery and duplicate
   same-type requests must reattach detached queued/running runs, preserve already failed title tasks, and continue only
   unfinished queued or stale-running tasks. Legacy WebP-format active runs should be marked `superseded` before the
-  AVIF run starts.
+  AVIF run starts. If duplicate active same-type durable runs are found at startup or scheduling time, keep the
+  preferred run and mark the rest `superseded` before any title work can run for both.
 - Keep type-wide AVIF rebuilds on bounded fair title lanes (`SCRIPTARR_RAVEN_AVIF_TITLE_LANES`, default `2`, max `3`).
   Only leased run/tasks should be marked `running`; unfinished runs beyond the lane count should remain queued or
   waiting with a bounded queue position. Summaries may expose scheduler state, current title text, last progress, and

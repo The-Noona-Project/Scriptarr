@@ -514,6 +514,8 @@ a {
 }
 
 .moon-title-card-media {
+  position: relative;
+  z-index: 0;
   display: block;
   aspect-ratio: 0.74;
   width: 100%;
@@ -529,6 +531,7 @@ a {
   height: 100%;
   object-fit: cover;
   display: block;
+  pointer-events: none;
 }
 
 .moon-title-card-media img {
@@ -551,6 +554,8 @@ a {
 }
 
 .moon-title-card-copy {
+  position: relative;
+  z-index: 1;
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -2060,6 +2065,7 @@ a {
 .moon-home-art-card-art {
   position: absolute;
   inset: 0;
+  z-index: 0;
   display: block;
   color: inherit;
   text-decoration: none;
@@ -2070,6 +2076,7 @@ a {
   width: 100%;
   height: 100%;
   display: block;
+  pointer-events: none;
 }
 
 .moon-home-art-card img {
@@ -2089,6 +2096,7 @@ a {
 .moon-home-art-card-shade {
   position: absolute;
   inset: 0;
+  pointer-events: none;
   background:
     linear-gradient(180deg, transparent 0%, rgba(7, 10, 16, 0.14) 38%, rgba(7, 10, 16, 0.96) 100%),
     radial-gradient(circle at top left, rgba(255, 143, 92, 0.2), transparent 32%);
@@ -2097,24 +2105,23 @@ a {
 .moon-home-art-card-copy {
   position: absolute;
   inset: auto 0 0;
-  z-index: 1;
+  z-index: 2;
   display: grid;
   gap: 6px;
   padding: 18px;
-  pointer-events: none;
-}
-
-.moon-home-art-card-copy a {
   color: rgba(255, 248, 240, 0.98);
   text-decoration: none;
-  font-size: 1.05rem;
-  font-weight: 800;
-  line-height: 1.2;
   pointer-events: auto;
 }
 
-.moon-home-art-card-copy a:hover,
-.moon-home-art-card-copy a:focus-visible {
+.moon-home-art-card-title {
+  font-size: 1.05rem;
+  font-weight: 800;
+  line-height: 1.2;
+}
+
+.moon-home-art-card-copy:hover .moon-home-art-card-title,
+.moon-home-art-card-copy:focus-visible .moon-home-art-card-title {
   color: rgba(255, 196, 156, 0.96);
 }
 

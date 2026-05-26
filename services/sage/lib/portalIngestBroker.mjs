@@ -121,16 +121,16 @@ export const buildPortalIngestPreview = (ravenPayload, {libraryTypeSlug}) => {
  * Build the Raven ingest-run request body from Portal's brokered request.
  *
  * @param {unknown} body
- * @param {{libraryTypeSlug: string}} options
+ * @param {{libraryTypeSlug: string, fallbackRequestedBy?: string}} options
  * @returns {Record<string, unknown>}
  */
-export const buildPortalIngestRunPayload = (body, {libraryTypeSlug}) => {
+export const buildPortalIngestRunPayload = (body, {libraryTypeSlug, fallbackRequestedBy = ""}) => {
   const source = normalizeObject(body, {}) || {};
   const normalizedType = normalizePortalIngestTypeSlug(libraryTypeSlug);
   return {
     ...source,
     type: normalizedType,
     libraryTypeSlug: normalizedType,
-    requestedBy: normalizeString(source.requestedBy, "scriptarr-portal")
+    requestedBy: normalizeString(source.requestedBy, normalizeString(fallbackRequestedBy, "scriptarr-portal"))
   };
 };

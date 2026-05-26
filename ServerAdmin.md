@@ -426,7 +426,8 @@ other backlogs can all make progress. Restart-all may briefly show a run as prep
 title-task list in the background; after that, the run moves into the normal waiting/running fair-scheduler states. The
 page also shows active and recent durable type-run summaries with state labels, current title, queue position, last
 progress, title counts, resume/cancel controls, and ETA when Raven has enough data, without loading every child title
-task into the browser.
+task into the browser. If Raven recovers duplicate active durable runs for the same library type, it keeps the preferred
+run and marks the others superseded before the scheduler can work both.
 Appa can also start a type-wide AVIF rebuild from Discord with
 `/ingest type:<manga|manhwa|manhua|webtoon|comic|oel>`. The command previews title count from Raven's compact
 title-card projection plus Raven hardware state,
@@ -434,7 +435,8 @@ requires a confirm button within five minutes, and then Sage asks Raven to creat
 The run rebuilds derived AVIF pages from existing canonical CBZ archives without redownloading chapters or changing
 metadata. Raven's NVIDIA runtime needs the `video` driver capability so FFmpeg `av1_nvenc` can load the host encode
 library. Appa DMs the confirming admin at 25%, 50%, 75%, and final completion or failure; missed milestones are not
-replayed once the run is already terminal. If Discord says the saved requester can no longer receive DMs, Portal marks
+replayed once the run is already terminal. If a run was created without a saved Discord requester, Sage falls back to
+the configured owner DM for those updates. If Discord says the saved requester can no longer receive DMs, Portal marks
 that specific notification undeliverable instead of retrying it every poll. If Raven restarts or temporarily loses the
 Sage/Vault broker during a type-wide rebuild, Raven reattaches the durable run, keeps already failed title tasks failed,
 resets stale running tasks, and continues unfinished title tasks instead of starting a duplicate run. Waiting runs are

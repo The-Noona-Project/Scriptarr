@@ -9,6 +9,13 @@ const INGEST_RUN_OWNER_SERVICE = "scriptarr-raven";
 const INGEST_RUN_KIND = "raven-library-ingest";
 const INGEST_RUN_MILESTONES = Object.freeze([25, 50, 75]);
 const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled", "canceled"]);
+const PLACEHOLDER_REQUESTERS = new Set([
+  "scriptarr-admin",
+  "scriptarr-portal",
+  "scriptarr-raven",
+  "scriptarr-sage",
+  "scriptarr-system"
+]);
 
 const normalizeString = (value, fallback = "") => {
   const normalized = typeof value === "string" ? value.trim() : "";
@@ -32,6 +39,14 @@ const normalizeAckedIds = (value) =>
     .map((entry) => normalizeString(entry))
     .filter(Boolean)
     .slice(-MAX_ACKED_INGEST_NOTIFICATIONS);
+
+const resolveRequesterDiscordId = (job = {}, fallbackDiscordUserId = "") => {
+  const requestedBy = normalizeString(job.requestedBy);
+  if (requestedBy && !PLACEHOLDER_REQUESTERS.has(requestedBy.toLowerCase())) {
+    return requestedBy;
+  }
+  return normalizeString(fallbackDiscordUserId);
+};
 
 /**
  * Normalize the Vault setting that stores already-delivered ingest run
@@ -90,17 +105,18 @@ const resolveIngestRunCounts = (job = {}) => {
   };
 };
 
-const toNotificationBase = (job = {}, counts = {}) => {
+const toNotificationBase = (job = {}, counts = {}, options = {}) => {
   const payload = normalizeObject(job.payload, {}) || {};
   const libraryTypeSlug = normalizeString(payload.libraryTypeSlug || payload.type || job.libraryTypeSlug, "library");
   const libraryTypeLabel = normalizeLibraryTypeLabel(payload.libraryTypeLabel || payload.typeLabel, libraryTypeSlug);
   const runId = normalizeString(job.jobId || job.runId || job.id);
   const status = normalizeString(job.status, "running").toLowerCase();
+  const requestedBy = resolveRequesterDiscordId(job, options.fallbackDiscordUserId);
   return {
     runId,
     jobId: runId,
-    requestedBy: normalizeString(job.requestedBy),
-    discordUserId: normalizeString(job.requestedBy),
+    requestedBy,
+    discordUserId: requestedBy,
     status,
     libraryTypeSlug,
     libraryTypeLabel,
@@ -117,8 +133,8 @@ const toNotificationBase = (job = {}, counts = {}) => {
   };
 };
 
-const buildMilestoneNotification = (job, counts, milestone) => {
-  const base = toNotificationBase(job, counts);
+const buildMilestoneNotification = (job, counts, milestone, options = {}) => {
+  const base = toNotificationBase(job, counts, options);
   return {
     ...base,
     id: `ingest:${base.runId}:${milestone}`,
@@ -128,8 +144,8 @@ const buildMilestoneNotification = (job, counts, milestone) => {
   };
 };
 
-const buildTerminalNotification = (job, counts) => {
-  const base = toNotificationBase(job, counts);
+const buildTerminalNotification = (job, counts, options = {}) => {
+  const base = toNotificationBase(job, counts, options);
   const failed = base.status === "failed" || counts.failedTitles > 0;
   return {
     ...base,
@@ -146,18 +162,19 @@ const buildTerminalNotification = (job, counts) => {
 /**
  * Build pending Portal DM notifications from durable Raven ingest jobs.
  *
- * @param {{jobs?: unknown[], state?: unknown}} options
+ * @param {{jobs?: unknown[], state?: unknown, fallbackDiscordUserId?: string}} options
  * @returns {Array<Record<string, unknown>>}
  */
-export const buildIngestRunNotifications = ({jobs = [], state = {}} = {}) => {
+export const buildIngestRunNotifications = ({jobs = [], state = {}, fallbackDiscordUserId = ""} = {}) => {
   const ackedIds = new Set(normalizeIngestRunNotificationState(state).ackedIds);
   const notifications = [];
   for (const job of normalizeArray(jobs)) {
     const normalizedJob = normalizeObject(job, {}) || {};
+    const requestedBy = resolveRequesterDiscordId(normalizedJob, fallbackDiscordUserId);
     if (
       normalizeString(normalizedJob.ownerService) !== INGEST_RUN_OWNER_SERVICE
       || normalizeString(normalizedJob.kind) !== INGEST_RUN_KIND
-      || !normalizeString(normalizedJob.requestedBy)
+      || !requestedBy
     ) {
       continue;
     }
@@ -169,10 +186,10 @@ export const buildIngestRunNotifications = ({jobs = [], state = {}} = {}) => {
     const status = normalizeString(normalizedJob.status).toLowerCase();
     const counts = resolveIngestRunCounts(normalizedJob);
     const candidates = TERMINAL_STATUSES.has(status)
-      ? [buildTerminalNotification(normalizedJob, counts)]
+      ? [buildTerminalNotification(normalizedJob, counts, {fallbackDiscordUserId})]
       : INGEST_RUN_MILESTONES
         .filter((milestone) => counts.percent >= milestone)
-        .map((milestone) => buildMilestoneNotification(normalizedJob, counts, milestone));
+        .map((milestone) => buildMilestoneNotification(normalizedJob, counts, milestone, {fallbackDiscordUserId}));
 
     notifications.push(...candidates.filter((notification) => !ackedIds.has(notification.id)));
   }

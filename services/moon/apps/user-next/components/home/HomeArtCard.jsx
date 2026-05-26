@@ -66,26 +66,27 @@ const resolveMetaLine = (item, shelfKind) => {
 export const HomeArtCard = ({item, shelfKind}) => {
   const artHref = resolveArtHref(item, shelfKind);
   const titleHref = resolveTitleHref(item);
+  const titleText = item?.title || "Untitled";
   const tags = Array.isArray(item?.tags) ? item.tags.filter(Boolean).slice(0, 3) : [];
 
   return (
     <HoverCard
       trigger={(
         <article className="moon-home-art-card">
-          <Link href={artHref} className="moon-home-art-card-art" aria-label={`Read ${item?.title || "title"}`}>
+          <Link href={artHref} className="moon-home-art-card-art" aria-label={`Read ${titleText}`}>
             <CoverImage
-              title={item?.title || "Title"}
+              title={titleText}
               coverUrl={item?.coverUrl || ""}
               coverThumbUrl={item?.coverThumbUrl || ""}
               fallbackClassName="moon-home-art-card-fallback"
             />
             <div className="moon-home-art-card-shade" />
           </Link>
-          <div className="moon-home-art-card-copy">
+          <Link href={titleHref} className="moon-home-art-card-copy" aria-label={`Open ${titleText} title page`}>
             <span className="moon-home-art-card-status">{resolveStatusLine(item, shelfKind)}</span>
-            <Link href={titleHref}>{item?.title || "Untitled"}</Link>
+            <strong className="moon-home-art-card-title">{titleText}</strong>
             <span>{resolveMetaLine(item, shelfKind)}</span>
-          </div>
+          </Link>
         </article>
       )}
       className="moon-home-hover-card"
@@ -100,7 +101,7 @@ export const HomeArtCard = ({item, shelfKind}) => {
       radius="xl"
     >
       <span className="moon-kicker">{item?.libraryTypeLabel || item?.mediaType || "Title"}</span>
-      <h3>{item?.title || "Untitled"}</h3>
+      <h3>{titleText}</h3>
       <p>{item?.summary || "A richer summary is still being gathered for this title."}</p>
       <div className="moon-home-hover-meta">
         <span>{resolveStatusLine(item, shelfKind)}</span>

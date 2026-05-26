@@ -510,11 +510,14 @@ public final class LibraryIngestRunService {
     @PostConstruct
     public void resumeInterruptedRuns() {
         try {
-            for (Map<String, Object> job : loadRunJobs()) {
+            List<Map<String, Object>> jobs = loadRunJobs();
+            for (Map<String, Object> job : jobs) {
                 if (isLegacyActiveRun(job)) {
                     supersedeRun(job, "Superseded by AVIF reader-page migration.");
-                    continue;
                 }
+            }
+            jobs = collapseDuplicateActiveRuns(loadRunJobs());
+            for (Map<String, Object> job : jobs) {
                 reconcileRun(job);
             }
         } catch (IllegalStateException error) {
@@ -655,7 +658,7 @@ public final class LibraryIngestRunService {
 
     private Map<String, Object> nextRunnableJob() {
         List<Map<String, Object>> candidates = new ArrayList<>();
-        for (Map<String, Object> job : loadRunJobs()) {
+        for (Map<String, Object> job : collapseDuplicateActiveRuns(loadRunJobs())) {
             String runId = stringValue(job.get("jobId"));
             if (runId.isBlank() || !isDurableActive(job) || isLegacyActiveRun(job)) {
                 continue;
@@ -1087,7 +1090,7 @@ public final class LibraryIngestRunService {
                 activeRuns.add(job);
             }
         }
-        activeRuns.sort(this::compareRunnableRuns);
+        activeRuns.sort(this::compareDuplicateActiveRuns);
         for (int index = 1; index < activeRuns.size(); index += 1) {
             supersedeRun(activeRuns.get(index), "Superseded duplicate active AVIF rebuild for " + libraryTypeSlug + ".");
         }
@@ -1179,13 +1182,80 @@ public final class LibraryIngestRunService {
         if ("recent".equals(filter)) {
             return STATUS_COMPLETED.equals(status)
                 || STATUS_FAILED.equals(status)
-                || STATUS_CANCELLED.equals(status)
-                || STATUS_SUPERSEDED.equals(status);
+                || STATUS_CANCELLED.equals(status);
         }
         if ("active".equals(filter)) {
             return isDurableActive(job);
         }
         return filter.equals(status);
+    }
+
+    private List<Map<String, Object>> collapseDuplicateActiveRuns(List<Map<String, Object>> jobs) {
+        Map<String, List<Map<String, Object>>> runsByType = new LinkedHashMap<>();
+        for (Map<String, Object> job : Optional.ofNullable(jobs).orElse(List.of())) {
+            if (!isDurableActive(job) || isLegacyActiveRun(job)) {
+                continue;
+            }
+            String type = stringValue(normalizeMap(job.get("payload")).get("libraryTypeSlug")).toLowerCase(Locale.ROOT);
+            if (type.isBlank()) {
+                continue;
+            }
+            runsByType.computeIfAbsent(type, ignored -> new ArrayList<>()).add(job);
+        }
+
+        int supersededCount = 0;
+        for (Map.Entry<String, List<Map<String, Object>>> entry : runsByType.entrySet()) {
+            List<Map<String, Object>> activeRuns = entry.getValue();
+            if (activeRuns.size() <= 1) {
+                continue;
+            }
+            activeRuns.sort(this::compareDuplicateActiveRuns);
+            for (int index = 1; index < activeRuns.size(); index += 1) {
+                supersedeRun(activeRuns.get(index), "Superseded duplicate active AVIF rebuild for " + entry.getKey() + ".");
+                supersededCount += 1;
+            }
+        }
+        if (supersededCount > 0) {
+            logger.warn(
+                "LIBRARY",
+                "Raven superseded duplicate active AVIF ingest runs.",
+                "count=" + supersededCount
+            );
+            return loadRunJobs();
+        }
+        return Optional.ofNullable(jobs).orElse(List.of());
+    }
+
+    private int compareDuplicateActiveRuns(Map<String, Object> left, Map<String, Object> right) {
+        String leftId = stringValue(left.get("jobId"));
+        String rightId = stringValue(right.get("jobId"));
+        int workerActive = Boolean.compare(activeRunIds.contains(rightId), activeRunIds.contains(leftId));
+        if (workerActive != 0) {
+            return workerActive;
+        }
+        int updated = Long.compare(runOrderTimestamp(right), runOrderTimestamp(left));
+        if (updated != 0) {
+            return updated;
+        }
+        int status = Integer.compare(activeDuplicateStatusRank(left), activeDuplicateStatusRank(right));
+        if (status != 0) {
+            return status;
+        }
+        return leftId.compareTo(rightId);
+    }
+
+    private int activeDuplicateStatusRank(Map<String, Object> job) {
+        String status = stringValue(job.get("status")).toLowerCase(Locale.ROOT);
+        if (STATUS_RUNNING.equals(status)) {
+            return 0;
+        }
+        if (STATUS_QUEUED.equals(status)) {
+            return 1;
+        }
+        if (STATUS_PREPARING.equals(status)) {
+            return 2;
+        }
+        return 3;
     }
 
     private Map<String, Object> runSummaryRow(Map<String, Object> job, Map<String, Integer> positions) {

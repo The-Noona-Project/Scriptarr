@@ -113,7 +113,8 @@ Raven keeps CBZ chapters canonical under `downloaded/<type>/...` and now require
 and can retry ingest for titles that are not reader-ready. `/admin/ingest` and `/admin/activity/queue` also show
 bounded durable AVIF type-run summaries so large background rebuilds are visible without loading every child title task.
 The admin `Start / rebuild all` action is an ingest-only clean restart: it supersedes active AVIF runs, keeps catalog
-and CBZ data intact, and starts fresh runs OEL-first with balanced Raven title lanes.
+and CBZ data intact, starts fresh runs OEL-first with balanced Raven title lanes, and collapses duplicate active
+same-type AVIF runs back to one visible survivor after recovery.
 Moon admin also exposes `/admin/system/api` for trusted automation settings, system-level API keys with assigned
 permission groups, personal-key audit, and same-origin Swagger or OpenAPI links. Signed-in readers can create their
 own user-level API keys from `/profile` when they want external readers or trackers to sync only their account data.

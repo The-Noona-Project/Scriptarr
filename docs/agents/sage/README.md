@@ -79,7 +79,9 @@
   Raven's `/v1/ingest/runs` durable AVIF rebuild API. Portal should disable empty previews and acknowledge confirm
   interactions before calling this route. Expose `/api/internal/portal/notifications/ingest-runs` and ack routes from
   durable `scriptarr-raven` `raven-library-ingest` jobs, using stable milestone ids and the bounded
-  `portal.ingestRunNotifications` setting.
+  `portal.ingestRunNotifications` setting. When an ingest run has no real Discord requester or only a service
+  placeholder such as `scriptarr-admin`, resolve notification delivery to the configured owner/superuser DM instead of
+  dropping the update.
 - Queue retry code must treat `raven-ingest` tasks as ingest retries from the existing CBZ. Do not send those through
   normal download retry or delete canonical CBZ files from queue cleanup.
 - Raven chapter checkpoint writes are brokered through

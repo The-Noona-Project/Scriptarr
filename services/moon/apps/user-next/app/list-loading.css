@@ -71,6 +71,8 @@
 }
 
 .moon-library-title-cover {
+  position: relative;
+  z-index: 0;
   display: block;
   width: 72px;
   aspect-ratio: 0.74;
@@ -86,9 +88,12 @@
   width: 100%;
   height: 100%;
   object-fit: cover;
+  pointer-events: none;
 }
 
 .moon-library-title-main {
+  position: relative;
+  z-index: 1;
   display: grid;
   min-width: 0;
   gap: 8px;

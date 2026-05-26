@@ -760,14 +760,15 @@ const buildUpdateNotifications = async ({vaultClient}) => {
 };
 
 const buildPortalIngestRunNotifications = async ({vaultClient}) => {
-  const [jobs, state] = await Promise.all([
+  const [jobs, state, discordSettings] = await Promise.all([
     vaultClient.listJobs({
       ownerService: "scriptarr-raven",
       kind: RAVEN_LIBRARY_INGEST_JOB_KIND
     }),
-    readIngestRunNotificationState(vaultClient)
+    readIngestRunNotificationState(vaultClient),
+    readPortalDiscordSettings(vaultClient).catch(() => ({}))
   ]);
-  return buildIngestRunNotifications({jobs, state});
+  return buildIngestRunNotifications({jobs, state, fallbackDiscordUserId: normalizeString(discordSettings.superuserId)});
 };
 
 const buildRequestNotifications = async ({config, vaultClient, serviceJson}) => {
@@ -2102,10 +2103,14 @@ export const registerInternalBrokerRoutes = (app, {
     if (!validatePortalIngestType(res, libraryTypeSlug)) {
       return;
     }
+    const discordSettings = await readPortalDiscordSettings(vaultClient).catch(() => ({}));
 
     await proxyResult(res, serviceJson(config.ravenBaseUrl, "/v1/ingest/runs", {
       method: "POST",
-      body: buildPortalIngestRunPayload(req.body, {libraryTypeSlug})
+      body: buildPortalIngestRunPayload(req.body, {
+        libraryTypeSlug,
+        fallbackRequestedBy: normalizeString(discordSettings.superuserId)
+      })
     }));
   }));
 
