@@ -265,7 +265,7 @@ public final class LibraryIngestRunService {
                 if (!type.isBlank()) {
                     libraryTypes.add(type);
                 }
-                supersedeRun(job, "Superseded by clean AVIF ingest restart.");
+                supersedeRunJobOnly(job, "Superseded by clean AVIF ingest restart.");
                 supersededCount += 1;
             } else if (STATUS_SUPERSEDED.equals(stringValue(job.get("status")).toLowerCase(Locale.ROOT))) {
                 compactedCount += compactSupersededRun(job);
@@ -1092,7 +1092,7 @@ public final class LibraryIngestRunService {
         }
         activeRuns.sort(this::compareDuplicateActiveRuns);
         for (int index = 1; index < activeRuns.size(); index += 1) {
-            supersedeRun(activeRuns.get(index), "Superseded duplicate active AVIF rebuild for " + libraryTypeSlug + ".");
+            supersedeRunJobOnly(activeRuns.get(index), "Superseded duplicate active AVIF rebuild for " + libraryTypeSlug + ".");
         }
         return activeRuns.isEmpty() ? Map.of() : activeRuns.getFirst();
     }
@@ -1211,7 +1211,7 @@ public final class LibraryIngestRunService {
             }
             activeRuns.sort(this::compareDuplicateActiveRuns);
             for (int index = 1; index < activeRuns.size(); index += 1) {
-                supersedeRun(activeRuns.get(index), "Superseded duplicate active AVIF rebuild for " + entry.getKey() + ".");
+                supersedeRunJobOnly(activeRuns.get(index), "Superseded duplicate active AVIF rebuild for " + entry.getKey() + ".");
                 supersededCount += 1;
             }
         }

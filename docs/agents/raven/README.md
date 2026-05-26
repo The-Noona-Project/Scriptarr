@@ -43,7 +43,8 @@
   waiting with a bounded queue position. Summaries may expose scheduler state, current title text, last progress, and
   ETA, but never full child task arrays or storage paths. Resume, cancel, restart-active, and clean-restart controls
   should change durable run state without creating duplicate active runs. Clean restart must be ingest-only: supersede
-  AVIF runs, compact superseded run noise, and start fresh runs OEL-first without deleting catalog rows or CBZ archives.
+  AVIF run jobs quickly, hide superseded run noise from normal summaries, and start fresh runs OEL-first without
+  deleting catalog rows, child task history, or CBZ archives.
   Restart actions should return bounded preparing run summaries quickly and materialize large per-title task sets in
   the background before queueing them onto the fair scheduler.
 - If the canonical title set changes because Vault merged duplicate catalog rows, a same-type ingest request should

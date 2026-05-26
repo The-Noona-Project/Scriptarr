@@ -418,7 +418,8 @@ the Raven downloads mount, confirm title and chapter metadata, and Raven copies 
 `/admin/ingest` is the AVIF backlog and recovery surface. It shows Raven's per-title ingest status, hardware state,
 completion counts, and retry controls. Failed ingest keeps the CBZ in place and appears as retryable work instead of
 making the title readable. Its `Start / rebuild all` action asks Raven for a clean ingest restart: active AVIF runs are
-superseded, old superseded run noise is compacted, and fresh runs start in OEL, Manhua, Manhwa, Manga, Webtoon, Comic
+superseded quickly, old superseded run noise is hidden from normal summaries, and fresh runs start in OEL, Manhua,
+Manhwa, Manga, Webtoon, Comic
 order without deleting catalog rows, CBZ archives, requests, read state, follows, bookmarks, or user data. Raven uses
 balanced fair title lanes for those type runs (`SCRIPTARR_RAVEN_AVIF_TITLE_LANES`, default `2`, max `3`): one title per
 leased library type converts at a time, then the scheduler rotates to the next active type so OEL, manga, manhwa, and
