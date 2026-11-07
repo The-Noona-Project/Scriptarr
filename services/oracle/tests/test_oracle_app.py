@@ -217,6 +217,17 @@ def build_config() -> OracleConfig:
     )
 
 
+def test_lan_api_requires_service_token_but_health_remains_available():
+    config = replace(build_config(), require_service_auth=True, service_token="oracle-private")
+    app = create_app(config=config, sage_client=FakeSageClient())
+    with TestClient(app) as client:
+        assert client.get("/health").status_code == 200
+        assert client.get("/api/status").status_code == 401
+        assert client.post("/api/chat", json={"message": "hello"}).status_code == 401
+        assert client.get("/api/status", headers={"Authorization": "Bearer wrong"}).status_code == 401
+        assert client.get("/api/status", headers={"Authorization": "Bearer oracle-private"}).status_code == 200
+
+
 def build_embedded_config() -> OracleConfig:
     return replace(
         build_config(),

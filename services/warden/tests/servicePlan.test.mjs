@@ -30,7 +30,7 @@ test("service plan exposes the fixed Scriptarr network and selfhost mysql by def
   assert.equal(plan.services.find((service) => service.name === "scriptarr-raven").env.SCRIPTARR_RAVEN_LOG_DIR, "/app/logs");
   assert.equal(plan.services.find((service) => service.name === "scriptarr-raven").env.SCRIPTARR_SAGE_BASE_URL, "http://scriptarr-sage:3004");
   assert.equal(plan.services.find((service) => service.name === "scriptarr-raven").env.SCRIPTARR_RAVEN_DERIVED_IMAGE_FORMAT, "avif");
-  assert.equal(plan.services.find((service) => service.name === "scriptarr-raven").env.SCRIPTARR_RAVEN_AVIF_REQUIRE_NVIDIA, "true");
+  assert.equal(plan.services.find((service) => service.name === "scriptarr-raven").env.SCRIPTARR_RAVEN_AVIF_REQUIRE_NVIDIA, "false");
   assert.deepEqual(plan.services.find((service) => service.name === "scriptarr-raven").extraArgs, ["--cap-add", "NET_ADMIN", "--device", "/dev/net/tun"]);
   assert.equal(plan.services.find((service) => service.name === "scriptarr-portal").env.SCRIPTARR_SAGE_BASE_URL, "http://scriptarr-sage:3004");
   assert.equal(plan.services.find((service) => service.name === "scriptarr-sage").env.SCRIPTARR_APPA_DISCORD_TOKEN, "appa-token");
@@ -67,6 +67,20 @@ test("service plan passes explicit Sage Vault auth timeout overrides", () => {
   });
 
   assert.equal(plan.services.find((service) => service.name === "scriptarr-sage").env.SCRIPTARR_VAULT_AUTH_TIMEOUT_MS, "12000");
+});
+
+test("managed MySQL can pin the preserved database engine image by digest", () => {
+  const image = "mysql@sha256:b3b90af2a6552ae30c266fdb7d5dd55f3afb72404bb78d37fe8a23eb857fd3fb";
+  const plan = resolveServicePlan({env: {SCRIPTARR_MYSQL_IMAGE: image, SCRIPTARR_MYSQL_DATABASE: "s75_noona", SCRIPTARR_GPU_HINT: "cpu"}});
+  assert.equal(plan.services.find((service) => service.name === "scriptarr-mysql").image, image);
+  assert.equal(plan.services.find((service) => service.name === "scriptarr-mysql").env.MYSQL_DATABASE, "s75_noona");
+});
+
+test("first-party service image pins override namespace and tag defaults", () => {
+  const image = "docker.darkmatterservers.com/the-noona-project/scriptarr-oracle@sha256:0123456789abcdef";
+  const plan = resolveServicePlan({env: {SCRIPTARR_IMAGE_NAMESPACE: "ignored", SCRIPTARR_IMAGE_TAG: "ignored", SCRIPTARR_ORACLE_IMAGE: image, SCRIPTARR_GPU_HINT: "cpu"}});
+  assert.equal(plan.services.find((service) => service.name === "scriptarr-oracle").image, image);
+  assert.equal(plan.services.find((service) => service.name === "scriptarr-moon").image, "ignored/scriptarr-moon:ignored");
 });
 
 test("service plan gives embedded Oracle LocalAI NVIDIA runtime args when hinted", () => {
@@ -106,9 +120,18 @@ test("service plan gives Raven ingest NVIDIA runtime args when hinted", () => {
     "--gpus", "all"
   ]);
   assert.equal(raven.env.SCRIPTARR_RAVEN_INGEST_GPU_PROFILE, "nvidia");
-  assert.equal(raven.env.SCRIPTARR_RAVEN_INGEST_REQUIRE_NVIDIA, "true");
+  assert.equal(raven.env.SCRIPTARR_RAVEN_INGEST_REQUIRE_NVIDIA, "false");
   assert.equal(raven.env.NVIDIA_VISIBLE_DEVICES, "all");
   assert.equal(raven.env.NVIDIA_DRIVER_CAPABILITIES, "compute,utility,video");
+});
+
+test("strict NVENC selects the NVIDIA runtime without requiring a separate GPU hint", () => {
+  const plan = resolveServicePlan({env: {SCRIPTARR_RAVEN_AVIF_ENCODER: "nvenc", SCRIPTARR_GPU_HINT: "cpu"}});
+  const raven = plan.services.find((service) => service.name === "scriptarr-raven");
+  assert.equal(raven.extraArgs.includes("--gpus"), true);
+  assert.equal(raven.env.SCRIPTARR_RAVEN_AVIF_REQUIRE_NVIDIA, "true");
+  assert.equal(raven.env.SCRIPTARR_RAVEN_INGEST_REQUIRE_NVIDIA, "true");
+  assert.throws(() => resolveServicePlan({env: {SCRIPTARR_RAVEN_AVIF_ENCODER: "nvenc", SCRIPTARR_RAVEN_INGEST_GPU_PROFILE: "cpu"}}), /requires the NVIDIA/);
 });
 
 test("service plan preserves Raven NVENC video capability when NVIDIA caps are overridden", () => {
@@ -147,7 +170,7 @@ test("service plan gives Oracle and Raven NVIDIA runtime args when Docker expose
   assert.equal(oracle.env.SCRIPTARR_ORACLE_LOCALAI_GPU_PROFILE, "nvidia");
   assert.equal(raven.env.NVIDIA_VISIBLE_DEVICES, "all");
   assert.equal(raven.env.SCRIPTARR_RAVEN_DERIVED_IMAGE_FORMAT, "avif");
-  assert.equal(raven.env.SCRIPTARR_RAVEN_AVIF_REQUIRE_NVIDIA, "true");
+  assert.equal(raven.env.SCRIPTARR_RAVEN_AVIF_REQUIRE_NVIDIA, "false");
 });
 
 test("service plan can explicitly disable Raven VPN runtime devices", () => {

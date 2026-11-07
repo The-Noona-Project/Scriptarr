@@ -30,6 +30,8 @@ export const resolveImageTag = ({env = process.env} = {}) =>
  * @param {{env?: NodeJS.ProcessEnv}} [options]
  * @returns {string}
  */
-export const resolveServiceImage = (serviceName, {env = process.env} = {}) =>
-  `${resolveImageNamespace({env})}/${serviceName}:${resolveImageTag({env})}`;
+export const resolveServiceImage = (serviceName, {env = process.env} = {}) => {
+  const overrideKey = `${String(serviceName).toUpperCase().replace(/-/g, "_")}_IMAGE`;
+  return normalizeString(env[overrideKey]) || `${resolveImageNamespace({env})}/${serviceName}:${resolveImageTag({env})}`;
+};
 

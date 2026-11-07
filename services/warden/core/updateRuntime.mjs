@@ -82,6 +82,7 @@ export const createUpdateRuntime = ({
     pullDockerImage
   }
 }) => {
+  const hostId = normalizeString(env.SCRIPTARR_WARDEN_HOST_ID);
   const state = {
     checkedAt: null,
     job: null
@@ -144,7 +145,9 @@ export const createUpdateRuntime = ({
         ownerService: "scriptarr-warden",
         kind: "service-update"
       });
-      const latest = Array.isArray(jobs) ? jobs[0] : null;
+      const latest = Array.isArray(jobs)
+        ? jobs.find((job) => !hostId || job.payload?.hostId === hostId || job.jobId?.startsWith(`update_${hostId}_`))
+        : null;
       return latest ? hydrateJob(latest) : null;
     } catch (error) {
       logger.warn("Failed to load the latest persisted Warden update job.", {
@@ -217,7 +220,7 @@ export const createUpdateRuntime = ({
 
     const selected = normalizeRequestedServices(requestedServices);
     const job = {
-      jobId: `update_${Date.now().toString(36)}`,
+      jobId: `update_${normalizeString(env.SCRIPTARR_WARDEN_HOST_ID) ? `${normalizeString(env.SCRIPTARR_WARDEN_HOST_ID)}_` : ""}${Date.now().toString(36)}`,
       kind: "service-update",
       ownerService: "scriptarr-warden",
       status: "running",
@@ -227,7 +230,8 @@ export const createUpdateRuntime = ({
       servicesToRestart: [],
       tasks: [],
       payload: {
-        requestedServices: selected
+        requestedServices: selected,
+        ...(hostId ? {hostId} : {})
       },
       result: {},
       startedAt: new Date().toISOString(),

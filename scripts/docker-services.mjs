@@ -8,7 +8,7 @@ export const DEFAULT_NAMESPACE = (process.env.SCRIPTARR_DOCKER_NAMESPACE || `${D
 export const DEFAULT_TAG = process.env.SCRIPTARR_DOCKER_TAG || "latest";
 export const DEFAULT_PROGRESS = (process.env.SCRIPTARR_DOCKER_PROGRESS || "plain").toLowerCase();
 export const DEFAULT_LOGIN_USERNAME = process.env.SCRIPTARR_DOCKER_USERNAME || "robot$noona-builder";
-export const DEFAULT_LOGIN_PASSWORD = process.env.SCRIPTARR_DOCKER_PASSWORD || "yUKTTk8NulwFmPyt4NC38MJjcjHMONOg";
+export const DEFAULT_LOGIN_PASSWORD = process.env.SCRIPTARR_DOCKER_PASSWORD || "";
 
 export const ROOT = resolve(".");
 
@@ -172,12 +172,15 @@ export const ensureDockerfile = (entry) => {
 };
 
 /**
- * Log into the configured Docker registry using the legacy bot account.
+ * Log in with an explicitly supplied password, or use existing Docker authentication.
  *
  * @param {string} namespace
  * @returns {Promise<void>}
  */
 export const ensureRegistryLogin = async (namespace) => {
+  if (!DEFAULT_LOGIN_PASSWORD) {
+    return;
+  }
   const registry = namespace.split("/")[0];
   await runDocker(["login", registry, "--username", DEFAULT_LOGIN_USERNAME, "--password-stdin"], {
     stdinText: `${DEFAULT_LOGIN_PASSWORD}\n`

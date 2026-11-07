@@ -1,5 +1,9 @@
 # Portal
 
+Cross-host deployments set `SCRIPTARR_REQUIRE_SERVICE_AUTH=true`. In this mode every `/api` route requires a valid
+service bearer token, including read routes; `/health` remains available for bounded private-network probes. Keep the
+published port restricted to the core host. Sage supplies the destination token for its brokered requests.
+
 Portal handles Discord onboarding, requests, notifications, subscriptions, Noona trivia, public Noona mention chat,
 optional Appa admin/reviewer chat, and Oracle chat routing through Sage.
 

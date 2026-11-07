@@ -1,0 +1,17 @@
+[Unit]
+Description=Verify retained encrypted Scriptarr recovery objects
+
+[Service]
+Type=oneshot
+User=scriptarr-backup
+Group=scriptarr-backup
+UMask=0077
+ExecStart=/snap/node/current/bin/node /home/scriptarr-backup/bin/backup-receiver.mjs /home/scriptarr-backup/store scriptarr-backup verify
+ExecStart=/snap/node/current/bin/node /home/scriptarr-backup/bin/backup-receiver.mjs /home/scriptarr-backup/ai-store scriptarr-backup verify
+TimeoutStartSec=12h
+Nice=15
+IOSchedulingClass=idle
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/home/scriptarr-backup/store /home/scriptarr-backup/ai-store

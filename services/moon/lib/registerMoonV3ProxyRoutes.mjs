@@ -454,6 +454,58 @@ export const registerMoonV3ProxyRoutes = (app, {config, getSessionToken, logger}
     ...(req.get("X-Scriptarr-Api-Key") ? {"X-Scriptarr-Api-Key": req.get("X-Scriptarr-Api-Key")} : {})
   });
 
+  /**
+   * Recheck the exact reader page through Sage before serving shared cached
+   * bytes. A warm cache must not bypass revoked sessions or page-level denial.
+   *
+   * @param {import("express").Request} req browser request
+   * @param {import("express").Response} res browser response
+   * @param {string} targetPath normalized reader image route
+   * @param {string} query serialized browser query
+   * @returns {Promise<boolean>} whether cached bytes may be served
+   */
+  const authorizeReaderCacheHit = async (req, res, targetPath, query) => {
+    res.setHeader("Cache-Control", "no-store");
+    if (!getSessionToken(req) && !req.get("X-Scriptarr-Api-Key")) {
+      res.status(401).json({error: "A signed-in reader session is required."});
+      return false;
+    }
+    try {
+      const checked = await proxyRequestWithResponseAbort(res, {
+        baseUrl: config.sageBaseUrl,
+        path: `/api/moon-v3/${targetPath}/status${query ? `?${query}` : ""}`,
+        method: "GET",
+        sessionToken: getSessionToken(req),
+        headers: forwardedHeaders(req)
+      }, {timeoutMs: Math.min(jsonProxyTimeoutMs, 5000)});
+      if (!checked) {
+        return false;
+      }
+      let payload = null;
+      try {
+        payload = JSON.parse(checked.body.toString("utf8"));
+      } catch {
+        payload = null;
+      }
+      if (checked.status === 200 && payload?.ok === true && payload?.status === 200) {
+        return true;
+      }
+      const deniedStatus = checked.status >= 400 && checked.status < 500
+        ? checked.status
+        : Number.isInteger(payload?.status) && payload.status >= 400 && payload.status < 500
+          ? payload.status : 503;
+      res.status(deniedStatus).json({error: deniedStatus === 503
+        ? "Reader authorization is temporarily unavailable."
+        : "This reader page is not available for the current session."});
+      return false;
+    } catch {
+      if (!res.headersSent && !res.destroyed) {
+        res.status(503).json({error: "Reader authorization is temporarily unavailable."});
+      }
+      return false;
+    }
+  };
+
   const handleMoonV3Proxy = async (req, res) => {
     const targetPath = normalizeSplat(req.params.splat);
     const query = toQueryString(req.query);
@@ -485,6 +537,9 @@ export const registerMoonV3ProxyRoutes = (app, {config, getSessionToken, logger}
       const cacheFiles = resolveReaderPageCacheFiles(config, targetPath, req.query);
       const cached = await readReaderPageCacheEntry(cacheFiles);
       if (cached) {
+        if (!await authorizeReaderCacheHit(req, res, targetPath, query)) {
+          return;
+        }
         sendReaderPageCacheHit(res, cacheFiles, cached);
         return;
       }

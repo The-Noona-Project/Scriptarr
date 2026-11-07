@@ -84,6 +84,80 @@ hydration, so reloads should show real reader content instead of waiting on an e
 
 ## Install Shape
 
+### Distributed placement and authenticated agents
+
+The default remains a single-host installation. Distributed mode uses one local Warden per participating application
+host and one shared `SCRIPTARR_WARDEN_TOPOLOGY` JSON value. Each Warden sets its own `SCRIPTARR_WARDEN_HOST_ID`,
+reconciles only the assigned services, and leaves containers on other hosts alone. The primary aggregates runtime
+status and forwards update requests to the owning host. A remote host outage must not prevent the core host from
+serving the reader.
+
+Example placement:
+
+```json
+{
+  "primaryHostId": "core",
+  "hosts": [
+    {
+      "id": "core",
+      "address": "192.168.50.6",
+      "agentUrl": "https://192.168.50.6:4401",
+      "services": ["scriptarr-mysql", "scriptarr-vault", "scriptarr-sage", "scriptarr-moon", "scriptarr-raven"]
+    },
+    {
+      "id": "ai",
+      "address": "192.168.50.7",
+      "agentUrl": "https://192.168.50.7:4401",
+      "services": ["scriptarr-oracle", "scriptarr-portal"]
+    }
+  ]
+}
+```
+
+Both hosts receive the same topology. Keep Warden's HTTP port `4001` on its local Docker bridge; `/api` requests use
+`SCRIPTARR_WARDEN_SERVICE_TOKEN`. The separate agent listener uses TLS certificates from
+`SCRIPTARR_WARDEN_TLS_CA_FILE`, `SCRIPTARR_WARDEN_TLS_CERT_FILE`, and `SCRIPTARR_WARDEN_TLS_KEY_FILE`. Certificates
+must contain the host id as the subject common name and the host address as an IP subject alternative name. The
+worker accepts only the primary's trusted certificate and configured peer address. Bind the agent port `4401` to
+the intended host address and restrict it to the primary. Never publish an unauthenticated Docker API.
+
+The core publishes Sage `3004` to the private LAN for Portal/Oracle calls. The AI host publishes Portal `3003` and
+Oracle `3001` only for the core host. These APIs require service bearer tokens in distributed mode. MySQL and Vault
+remain on the core's local Docker network. Only Moon is a public first-party surface. Each service keeps local
+storage: core database/library/caches on the core host; Oracle models/runtime on the AI host.
+
+For the example AI host, start with `SCRIPTARR_ORACLE_CPUS=4`, `SCRIPTARR_ORACLE_MEMORY=8g`, one quantized model fitting
+the available VRAM, a 4096-token context, and `SCRIPTARR_ORACLE_MAX_CONCURRENT_GENERATIONS=1`. Resource limits are
+initial budgets; verify them alongside existing game and CI workloads. Oracle's embedded LocalAI readiness gate
+still requires an installed model and a successful generation probe.
+
+With a topology configured, manage LocalAI through Oracle's embedded runtime in Moon admin. Warden's legacy
+standalone LocalAI configuration, install, start, and remove controls return HTTP `409`; they cannot create a sidecar
+outside the declared service ownership. Read-only diagnostics and legacy single-host controls remain available.
+
+### Software AVIF ingest
+
+Use `SCRIPTARR_RAVEN_AVIF_ENCODER=cpu` on a host whose GPU does not encode AV1. `auto` tests usable NVIDIA AV1 encoding
+before choosing software; `nvenc` is strict and does not silently fall back. CPU mode does not require NVIDIA devices
+or driver capabilities. Start with `SCRIPTARR_RAVEN_AVIF_ENCODER_SLOTS=1`,
+`SCRIPTARR_RAVEN_AVIF_PAGE_CONCURRENCY=1`, and `SCRIPTARR_RAVEN_AVIF_THREADS=2`.
+
+The Raven image must include the software AV1 encoder and AVIF muxer and pass a real encode/decode check. Encoder
+selection affects background ingest speed, not a separate encoding operation per reader. Existing AVIF files remain
+readable, and changing the encoder must not trigger an immediate whole-library rebuild.
+
+### Migrating and preserving an existing installation
+
+Before replacing an older split-host installation, preserve its stopped MySQL datadir, private deployment settings,
+container metadata, and image references. Start an isolated copy with the matching MySQL version and test the new
+Vault schema against that copy. Set `SCRIPTARR_MYSQL_DATABASE` to the preserved schema name when it differs from the
+default. Do not infer compatibility from image version numbers or reuse old worker environment flags as a topology.
+
+Keep encrypted database/configuration recovery points and canonical CBZ backups on a different host. The operations
+helpers under `scripts/operations` support verified recovery data and independent monitoring. Retain seven daily and
+four weekly recovery points and test restoration in an isolated environment. A second host holding backups is recovery
+capacity, not automatic database failover; keep one writable production MySQL instance.
+
 Warden now boots an almost full Scriptarr stack on first install:
 
 - MySQL

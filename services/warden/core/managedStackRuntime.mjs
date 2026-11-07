@@ -23,6 +23,8 @@ import {
   waitForMySqlReady
 } from "../docker/dockerCli.mjs";
 import {toDockerDesktopHostPath} from "../filesystem/storageLayout.mjs";
+import {resolveClusterTopology} from "../config/clusterTopology.mjs";
+import {resolveMysqlConfig} from "../config/mysqlConfig.mjs";
 
 const normalizeString = (value) => String(value ?? "").trim();
 
@@ -60,14 +62,14 @@ const actualMountsFor = (inspect) =>
 
 const desiredPortsFor = (ports) =>
   (ports || [])
-    .map((entry) => `${entry.hostPort}:${entry.containerPort}`)
+    .map((entry) => `${entry.hostIp || "*"}:${entry.hostPort}:${entry.containerPort}`)
     .sort();
 
 const actualPortsFor = (inspect) => {
   const bindings = inspect?.HostConfig?.PortBindings || {};
   return Object.entries(bindings)
     .flatMap(([containerPort, hostBindings]) =>
-      (hostBindings || []).map((binding) => `${binding.HostPort}:${containerPort.replace(/\/tcp$/, "")}`)
+      (hostBindings || []).map((binding) => `${!binding.HostIp || binding.HostIp === "0.0.0.0" || binding.HostIp === "::" ? "*" : binding.HostIp}:${binding.HostPort}:${containerPort.replace(/\/tcp$/, "")}`)
     )
     .sort();
 };
@@ -105,6 +107,26 @@ const valuesForOption = (extraArgs = [], option) => {
 };
 
 const normalizeLinuxCapability = (value) => normalizeString(value).toUpperCase().replace(/^CAP_/, "");
+
+/**
+ * Compare explicit CPU and memory ceilings with Docker's normalized configuration.
+ *
+ * @param {string[]} extraArgs Docker CLI resource arguments
+ * @param {object} inspect Docker inspect record
+ * @returns {boolean} whether configured resource ceilings match
+ */
+export const resourceLimitsMatchExtraArgs = (extraArgs = [], inspect = {}) => {
+  const cpus = valuesForOption(extraArgs, "--cpus")[0];
+  if (cpus && Math.round(Number(cpus) * 1e9) !== Number(inspect.HostConfig?.NanoCpus || 0)) return false;
+  const memory = valuesForOption(extraArgs, "--memory")[0];
+  if (memory) {
+    const match = /^([\d.]+)([bkmg])?b?$/i.exec(memory);
+    if (!match) return false;
+    const multiplier = {b: 1, k: 1024, m: 1024 ** 2, g: 1024 ** 3}[String(match[2] || "b").toLowerCase()];
+    if (Math.round(Number(match[1]) * multiplier) !== Number(inspect.HostConfig?.Memory || 0)) return false;
+  }
+  return true;
+};
 
 /**
  * Resolve desired Linux capabilities from descriptor extra Docker arguments.
@@ -357,6 +379,16 @@ const managedLabelsFor = ({serviceName, stackMode, stackId}) => ({
 });
 
 /**
+ * Limit pruning to services explicitly assigned to this local steward.
+ *
+ * @param {object} topology validated host placement
+ * @param {Record<string, string>} labels container ownership labels
+ * @returns {boolean} whether this host may prune the container
+ */
+export const ownsManagedContainer = (topology, labels = {}) => !topology.enabled
+  || (labels["scriptarr.host-id"] === topology.hostId && topology.owners[labels["scriptarr.service"]] === topology.hostId);
+
+/**
  * Build a normalized runtime status object from Docker inspect data.
  *
  * @param {{
@@ -398,7 +430,9 @@ const buildServiceStatus = ({
  *
  * @param {{
  *   env?: NodeJS.ProcessEnv,
- *   logger: {info: Function, warn: Function, error: Function}
+ *   logger: {info: Function, warn: Function, error: Function},
+ *   resolvePlan?: typeof resolveServicePlan,
+ *   dockerOps?: object
  * }} options
  * @returns {{
  *   initialize: () => Promise<void>,
@@ -406,9 +440,20 @@ const buildServiceStatus = ({
  *   getStatusSnapshot: () => {warden: Record<string, unknown>, managedServices: Array<Record<string, unknown>>}
  * }}
  */
-export const createManagedStackRuntime = ({env = process.env, logger}) => {
+export const createManagedStackRuntime = ({env = process.env, logger, resolvePlan = resolveServicePlan, dockerOps = {
+  connectContainerToNetwork, disconnectContainerFromNetwork, dockerSocketAvailable, ensureDockerNetwork,
+  inspectDockerContainer, listContainersByLabel, removeDockerContainer, runDetachedContainer,
+  startDockerContainer, waitForContainerHealthy, waitForMySqlReady
+}}) => {
+  const {
+    connectContainerToNetwork, disconnectContainerFromNetwork, dockerSocketAvailable, ensureDockerNetwork,
+    inspectDockerContainer, listContainersByLabel, removeDockerContainer, runDetachedContainer,
+    startDockerContainer, waitForContainerHealthy, waitForMySqlReady
+  } = dockerOps;
   const stackMode = resolveStackMode({env});
   const stackId = normalizeString(env.SCRIPTARR_STACK_ID) || DEFAULT_STACK_ID;
+  const topology = resolveClusterTopology({env});
+  const mysql = resolveMysqlConfig({env});
   const managedNetworkName = resolveManagedNetworkName({env});
   const dataRoot = normalizeString(env.SCRIPTARR_DATA_ROOT);
   const selfContainerName = normalizeString(env.SCRIPTARR_WARDEN_CONTAINER_NAME) || DEFAULT_WARDEN_CONTAINER_NAME;
@@ -424,6 +469,17 @@ export const createManagedStackRuntime = ({env = process.env, logger}) => {
     selfContainerRef,
     dockerSocketPath: DEFAULT_DOCKER_SOCKET_PATH,
     managedServices: []
+  };
+
+  const ownershipConflict = (inspect) => {
+    const labels = inspect?.Config?.Labels || {};
+    if (labels["scriptarr.managed-by"] !== DEFAULT_WARDEN_NETWORK_ALIAS) {
+      return "A container with the managed service name already exists but is not Warden-managed.";
+    }
+    if (topology.enabled && labels["scriptarr.host-id"] !== topology.hostId) {
+      return "The existing container is not explicitly owned by this Warden host.";
+    }
+    return null;
   };
 
   const refreshSelfStatus = async () => {
@@ -472,7 +528,8 @@ export const createManagedStackRuntime = ({env = process.env, logger}) => {
         serviceName: service.name,
         stackMode,
         stackId
-      })
+      }),
+      ...(topology.enabled ? {"scriptarr.host-id": topology.hostId} : {})
     }
   });
 
@@ -531,6 +588,9 @@ export const createManagedStackRuntime = ({env = process.env, logger}) => {
 
     if (!gpuRequestsMatchExtraArgs(descriptor.extraArgs, inspect)) {
       reasons.push("gpus");
+    }
+    if (!resourceLimitsMatchExtraArgs(descriptor.extraArgs, inspect)) {
+      reasons.push("resourceLimits");
     }
 
     if (normalizeString(inspect?.HostConfig?.RestartPolicy?.Name || "no") !== resolveRestartPolicy(descriptor)) {
@@ -618,8 +678,8 @@ export const createManagedStackRuntime = ({env = process.env, logger}) => {
       });
     }
 
-    const labels = inspect?.Config?.Labels || {};
-    if (labels["scriptarr.managed-by"] !== DEFAULT_WARDEN_NETWORK_ALIAS) {
+    const conflict = ownershipConflict(inspect);
+    if (conflict) {
       logger.warn("Managed service name is already occupied by an unmanaged container.", {
         service: descriptor.name,
         container: descriptor.containerName
@@ -627,7 +687,7 @@ export const createManagedStackRuntime = ({env = process.env, logger}) => {
       return buildServiceStatus({
         descriptor,
         inspect,
-        conflict: "A container with the managed service name already exists but is not Warden-managed."
+        conflict
       });
     }
 
@@ -689,6 +749,9 @@ export const createManagedStackRuntime = ({env = process.env, logger}) => {
   const removeStaleManagedContainers = async (plannedNames) => {
     const managed = await listContainersByLabel("scriptarr.managed-by", DEFAULT_WARDEN_NETWORK_ALIAS);
     for (const container of managed) {
+      if (!ownsManagedContainer(topology, container.labels)) {
+        continue;
+      }
       if (container.labels["scriptarr.stack-id"] !== stackId) {
         continue;
       }
@@ -703,6 +766,13 @@ export const createManagedStackRuntime = ({env = process.env, logger}) => {
   };
 
   const recreateDescriptor = async (descriptor) => {
+    const inspect = await inspectDockerContainer(descriptor.containerName);
+    if (inspect) {
+      const conflict = ownershipConflict(inspect);
+      if (conflict) {
+        throw new Error(conflict);
+      }
+    }
     logger.info("Recreating managed container to apply an updated image.", {
       service: descriptor.name,
       container: descriptor.containerName,
@@ -731,7 +801,7 @@ export const createManagedStackRuntime = ({env = process.env, logger}) => {
   };
 
   const reconcileSelectedServices = async (serviceNames = [], {forceRecreate = false} = {}) => {
-    const plan = resolveServicePlan({env});
+    const plan = resolvePlan({env});
     const requested = new Set((serviceNames || []).map((entry) => normalizeString(entry)).filter(Boolean));
     const descriptors = plan.services
       .filter((service) => requested.has(service.name))
@@ -744,7 +814,7 @@ export const createManagedStackRuntime = ({env = process.env, logger}) => {
       if (descriptor.name === "scriptarr-mysql" && plan.mysql.mode === "selfhost") {
         await waitForMySqlReady({
           containerName: descriptor.containerName,
-          password: plan.mysql.password
+          password: mysql.password
         });
       }
     }
@@ -763,7 +833,7 @@ export const createManagedStackRuntime = ({env = process.env, logger}) => {
       };
     }
 
-    const plan = resolveServicePlan({env});
+    const plan = resolvePlan({env});
     const descriptors = plan.services.map(desiredDescriptorFor);
     const managedServices = await Promise.all(descriptors.map(async (descriptor) => {
       const inspect = await inspectDockerContainer(descriptor.containerName);
@@ -795,7 +865,7 @@ export const createManagedStackRuntime = ({env = process.env, logger}) => {
       return;
     }
 
-    const plan = resolveServicePlan({env});
+    const plan = resolvePlan({env});
     const descriptors = plan.services.map(desiredDescriptorFor);
 
     try {
@@ -817,7 +887,7 @@ export const createManagedStackRuntime = ({env = process.env, logger}) => {
         if (descriptor.name === "scriptarr-mysql" && plan.mysql.mode === "selfhost") {
           await waitForMySqlReady({
             containerName: descriptor.containerName,
-            password: plan.mysql.password
+            password: mysql.password
           });
           logger.info("Managed MySQL is ready.", {
             container: descriptor.containerName

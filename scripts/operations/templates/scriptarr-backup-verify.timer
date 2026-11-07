@@ -1,0 +1,11 @@
+[Unit]
+Description=Weekly Scriptarr backup ciphertext integrity scrub
+
+[Timer]
+OnCalendar=Sun *-*-* 04:30:00 America/Los_Angeles
+Persistent=true
+RandomizedDelaySec=300
+Unit=scriptarr-backup-verify.service
+
+[Install]
+WantedBy=timers.target

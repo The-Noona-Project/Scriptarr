@@ -27,13 +27,22 @@ count, and a manifest path before Moon can serve it.
 Before Raven creates or catalogs a title, it resolves the logical catalog identity of library type plus normalized title
 against Vault's compact title-card projection. Downloads, manual imports, startup rescans, and AVIF ingest setup should
 therefore reuse the canonical title id even when the same title appears under a different source or filesystem folder.
-The v1 AVIF encoder is FFmpeg `av1_nvenc`. Raven converts pages with a bounded per-chapter window
-(`SCRIPTARR_RAVEN_AVIF_PAGE_CONCURRENCY`, default `4`, max `8`) and a shared global encoder pool
-(`SCRIPTARR_RAVEN_AVIF_ENCODER_SLOTS`, default `6`, max `8`) so multiple titles can keep the NVIDIA encoder busy
-without spawning unbounded FFmpeg processes. Raven requires NVIDIA runtime access for AVIF ingest when
-`SCRIPTARR_RAVEN_AVIF_REQUIRE_NVIDIA=true`, `SCRIPTARR_RAVEN_INGEST_GPU_PROFILE=nvidia`, or
-`SCRIPTARR_RAVEN_INGEST_REQUIRE_NVIDIA=true`; missing hardware reports `hardware_missing` for admin attention without
-making Raven's whole health fail.
+Raven supports FFmpeg NVIDIA AV1 and software AVIF encoding. Set `SCRIPTARR_RAVEN_AVIF_ENCODER` to:
+
+- `auto` (default): encode a real test page with `av1_nvenc`, then use `libaom-av1` when NVIDIA AV1 encoding is unavailable.
+- `nvenc`: require a working NVIDIA AV1 encoder; unsupported GPUs and driver failures block ingest with an actionable status.
+- `cpu`: use `libaom-av1` without requiring NVIDIA hardware or drivers.
+
+The selected backend stays fixed until Raven restarts, so a chapter never changes encoder halfway through conversion.
+Changing the encoder does not invalidate already-ready AVIF chapters whose source archive has not changed. New manifests
+record the actual encoder and keep the existing AVIF filenames and reader contract. Ingest status reports `cpu-avif` or
+`nvidia-avif`; unavailable encoders block ingest without making Raven's overall health fail. Legacy NVIDIA-required flags
+do not override the explicit encoder policy.
+
+Raven converts pages with a bounded per-chapter window (`SCRIPTARR_RAVEN_AVIF_PAGE_CONCURRENCY`, default `4`, max `8`)
+and a shared global encoder pool (`SCRIPTARR_RAVEN_AVIF_ENCODER_SLOTS`, default `6`, max `8`). For CPU encoding on a
+shared media server, set both concurrency values to `1` and use `SCRIPTARR_RAVEN_AVIF_THREADS=2` (default `2`, range
+`1`–`16`). The image build verifies CPU encoding and decoding of JPEG, PNG, odd-sized, and tall pages; it does not require a GPU.
 
 Raven stores dynamic library type labels and slugs from the source when available, uses opaque durable title ids for
 new catalog entries, and keeps route shapes stable for Moon. The current metadata set includes MangaDex, AniList,

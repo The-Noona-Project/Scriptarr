@@ -110,11 +110,11 @@ export const toAbsoluteHostPath = (value, {cwd = process.cwd()} = {}) => {
 const resolveWindowsScriptarrDataRoot = (env = process.env) => {
   const appData = normalizeString(env.APPDATA);
   if (appData) {
-    return path.join(appData, "scriptarr");
+    return path.win32.join(appData, "scriptarr");
   }
 
   const homeDir = normalizeString(env.USERPROFILE) || os.homedir();
-  return path.join(homeDir, "AppData", "Roaming", "scriptarr");
+  return path.win32.join(homeDir, "AppData", "Roaming", "scriptarr");
 };
 
 /**

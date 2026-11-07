@@ -124,7 +124,7 @@ const createSageStub = ({requests = [], streamProbe = null, delays = {}} = {}) =
     response.end(JSON.stringify({
       titleId: "dan-da-dan",
       coverRevision: "rev-1",
-      coverUrl: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+      coverUrl: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAADUlEQVR4nGP4////fwAJ+wP9KobjigAAAABJRU5ErkJggg=="
     }));
     return;
   }
@@ -1122,7 +1122,7 @@ test("moon serves branded split entry documents, typed routes, PWA assets, and M
   assert.equal(discordV3Payload.settings.notifications.updateChannelId, "updates-1");
 
   const tinyPng = Buffer.from(
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAADUlEQVR4nGP4////fwAJ+wP9KobjigAAAABJRU5ErkJggg==",
     "base64"
   );
   const logoUploadResponse = await fetch(`${baseUrl}/api/moon/v3/admin/settings/branding/logo`, {
@@ -1202,7 +1202,7 @@ test("moon serves branded split entry documents, typed routes, PWA assets, and M
   });
   assert.equal(denyResponse.status, 200);
 
-  const pageResponse = await fetch(`${baseUrl}/api/moon/v3/user/reader/title/dan-da-dan/chapter/chapter-1/page/0?rev=rev-1`);
+  const pageResponse = await fetch(`${baseUrl}/api/moon/v3/user/reader/title/dan-da-dan/chapter/chapter-1/page/0?rev=rev-1`, {headers: memberPageHeaders});
   assert.equal(pageResponse.status, 200);
   assert.match(pageResponse.headers.get("content-type") || "", /image\/avif/);
   assert.match(pageResponse.headers.get("cache-control") || "", /max-age=604800/);
@@ -1211,7 +1211,7 @@ test("moon serves branded split entry documents, typed routes, PWA assets, and M
   assert.match(await pageResponse.text(), /reader-page-avif/);
 
   await new Promise((resolve) => setTimeout(resolve, 75));
-  const cachedPageResponse = await fetch(`${baseUrl}/api/moon/v3/user/reader/title/dan-da-dan/chapter/chapter-1/page/0?rev=rev-1`);
+  const cachedPageResponse = await fetch(`${baseUrl}/api/moon/v3/user/reader/title/dan-da-dan/chapter/chapter-1/page/0?rev=rev-1`, {headers: memberPageHeaders});
   assert.equal(cachedPageResponse.status, 200);
   assert.equal(cachedPageResponse.headers.get("x-scriptarr-reader-cache"), "hit");
   assert.match(cachedPageResponse.headers.get("content-type") || "", /image\/avif/);

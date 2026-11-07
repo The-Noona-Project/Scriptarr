@@ -44,6 +44,24 @@ public interface PageTranscoder {
     Readiness readiness();
 
     /**
+     * Return the selected runtime profile for ingest diagnostics.
+     *
+     * @return runtime profile key
+     */
+    default String runtimeProfile() {
+        return format();
+    }
+
+    /**
+     * Report whether the selected backend requires NVIDIA runtime access.
+     *
+     * @return whether NVIDIA runtime is required
+     */
+    default boolean requiresNvidiaRuntime() {
+        return false;
+    }
+
+    /**
      * Convert one source page into a derived reader page.
      *
      * @param inputBytes source image bytes

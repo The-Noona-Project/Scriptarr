@@ -6,6 +6,24 @@ import assert from "node:assert/strict";
 
 import {createUpdateRuntime} from "../core/updateRuntime.mjs";
 
+test("a worker restart hydrates only its own durable update job", async () => {
+  const runtime = createUpdateRuntime({
+    env: {SCRIPTARR_WARDEN_HOST_ID: "ai"},
+    logger: {info() {}, warn() {}, error() {}},
+    managedStack: {refreshStatus: async () => ({})},
+    resolvePlan: () => ({services: []}),
+    brokerClient: {
+      listJobs: async () => [
+        {jobId: "update_core_newer", payload: {hostId: "core"}, status: "completed"},
+        {jobId: "update_ai_older", payload: {hostId: "ai"}, status: "failed"}
+      ],
+      listJobTasks: async () => []
+    },
+    dockerOps: {}
+  });
+  assert.equal((await runtime.getStatus()).job.jobId, "update_ai_older");
+});
+
 test("update runtime marks a service as update-available after pulling a newer local image", async () => {
   const images = new Map([
     ["scriptarr-moon:latest", {Id: "sha256:new-image"}]

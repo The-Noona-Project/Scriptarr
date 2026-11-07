@@ -8,6 +8,7 @@ import {createLogTailRuntime} from "./logTailRuntime.mjs";
 import {createLocalAiRuntime} from "./localAiRuntime.mjs";
 import {createManagedStackRuntime} from "./managedStackRuntime.mjs";
 import {createUpdateRuntime} from "./updateRuntime.mjs";
+import {createClusterRuntime} from "./clusterRuntime.mjs";
 
 /**
  * Assemble the Warden runtime object shared by the API routes and the repo
@@ -79,7 +80,7 @@ export const createWardenRuntime = ({
 
   const getRuntime = async () => sanitizeWardenRuntimeSnapshot(await buildRuntimeSnapshot());
 
-  return {
+  const local = {
     config,
     logger,
     initialize: async () => {
@@ -108,7 +109,7 @@ export const createWardenRuntime = ({
         discordTokenConfigured: runtime.discordTokenConfigured,
         mysql: runtime.mysql,
         localAi: runtime.localAi,
-        services: runtime.services.map((service) => ({
+        services: (runtime.allServices || runtime.services).map((service) => ({
           name: service.name,
           image: service.image,
           containerName: service.containerName
@@ -144,5 +145,6 @@ export const createWardenRuntime = ({
     tailLogs: (filters) => logTails.tailLogs(filters),
     getDiscordCallbackUrl: () => resolveDiscordCallbackUrl({env})
   };
+  return createClusterRuntime({env, local});
 };
 

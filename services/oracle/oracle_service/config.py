@@ -63,6 +63,8 @@ class OracleConfig:
     local_ai_context_size: int = 4096
     local_ai_gpu_layers: str = "auto"
     huggingface_token: str = ""
+    require_service_auth: bool = False
+    max_concurrent_generations: int = 1
 
 
 def resolve_oracle_config() -> OracleConfig:
@@ -104,5 +106,7 @@ def resolve_oracle_config() -> OracleConfig:
         local_ai_backend=os.getenv("SCRIPTARR_LOCALAI_BACKEND", "llama-cpp"),
         local_ai_context_size=_parse_int(os.getenv("SCRIPTARR_LOCALAI_CONTEXT_SIZE"), 4096),
         local_ai_gpu_layers=os.getenv("SCRIPTARR_LOCALAI_GPU_LAYERS", "auto"),
-        huggingface_token=os.getenv("SCRIPTARR_HUGGINGFACE_TOKEN", "")
+        huggingface_token=os.getenv("SCRIPTARR_HUGGINGFACE_TOKEN", ""),
+        require_service_auth=_parse_bool(os.getenv("SCRIPTARR_REQUIRE_SERVICE_AUTH"), False),
+        max_concurrent_generations=max(1, min(4, _parse_int(os.getenv("SCRIPTARR_ORACLE_MAX_CONCURRENT_GENERATIONS"), 1)))
     )

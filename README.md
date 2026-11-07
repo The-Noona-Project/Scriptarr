@@ -28,6 +28,17 @@ cleanly instead of retaining stale memory or file handles.
 
 ## Docker Images
 
+### Multi-host installations
+
+Warden can assign services to explicitly configured hosts instead of assuming that every service is a local sibling.
+Keep Moon, Sage, Vault, MySQL, and Raven together when minimizing reader traffic is the priority. Oracle and Portal can
+run on a GPU host with a local Warden agent, while the primary Warden aggregates status and routes service updates.
+Remote control uses mutually authenticated TLS and an explicit host allowlist; Docker sockets remain local.
+
+Raven supports software AVIF ingest on hosts without NVIDIA AV1 encoding. A Quadro P2000 does not provide AV1 hardware
+encoding; choose the CPU encoder profile on that host and use conservative background concurrency. The reader still
+receives the same AVIF format. See [ServerAdmin.md](ServerAdmin.md) for placement, certificates, CPU ingest, and recovery.
+
 Scriptarr no longer ships a compose-based deployment path in this repo. Each first-party service has its own
 `Dockerfile`, and the supported helper scripts are:
 

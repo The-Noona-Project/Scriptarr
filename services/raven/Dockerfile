@@ -23,6 +23,11 @@ RUN apt-get update \
   && apt-get install -y --no-install-recommends curl ffmpeg openvpn iproute2 unzip \
   && rm -rf /var/lib/apt/lists/*
 
+COPY services/raven/scripts/verify-avif.sh /usr/local/bin/scriptarr-verify-avif
+RUN sed -i 's/\r$//' /usr/local/bin/scriptarr-verify-avif \
+  && chmod +x /usr/local/bin/scriptarr-verify-avif \
+  && /usr/local/bin/scriptarr-verify-avif
+
 ENV SERVER_PORT=8080
 ENV SCRIPTARR_RAVEN_DATA_ROOT=/downloads
 

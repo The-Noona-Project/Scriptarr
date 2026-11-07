@@ -33,6 +33,17 @@ test("build test stack environment uses selfhost mysql and an isolated network b
   assert.equal(result.wardenContainerName, "scriptarr-test-demo-warden");
 });
 
+test("test stacks cannot inherit production cluster placement or public bind addresses", () => {
+  const result = buildTestStackEnvironment({env: {
+    SCRIPTARR_WARDEN_TOPOLOGY: "production-placement",
+    SCRIPTARR_WARDEN_HOST_ID: "core",
+    SCRIPTARR_PUBLISH_HOST: "192.168.50.6"
+  }});
+  assert.equal(result.env.SCRIPTARR_WARDEN_TOPOLOGY, "");
+  assert.equal(result.env.SCRIPTARR_WARDEN_HOST_ID, "");
+  assert.equal(result.env.SCRIPTARR_PUBLISH_HOST, "127.0.0.1");
+});
+
 test("containerized test stack manager persists warden container state and tears it down", async () => {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "scriptarr-warden-test-manager-"));
   const dataRoot = path.join(tempRoot, "data");

@@ -1,0 +1,11 @@
+[Unit]
+Description=Check Scriptarr independently every five minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=30s
+Unit=scriptarr-network-monitor.service
+
+[Install]
+WantedBy=timers.target

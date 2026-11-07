@@ -56,6 +56,13 @@ export const createPortalApp = async ({
   });
   const app = express();
   app.use(express.json());
+  app.use("/api", (req, res, next) => {
+    if (config.requireServiceAuth && !isAuthorizedServiceRequest(req, config)) {
+      res.status(401).json({error: "Missing or invalid service token."});
+      return;
+    }
+    next();
+  });
 
   const runtimeStatePayload = () => {
     const state = runtime.getState();

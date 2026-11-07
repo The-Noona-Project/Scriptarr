@@ -20,6 +20,7 @@ import {
 import {resolveServiceImage} from "./images.mjs";
 import {resolveLocalAiProfile} from "./localAiProfiles.mjs";
 import {resolveMysqlConfig, toInternalMysqlEnv} from "./mysqlConfig.mjs";
+import {resolveClusterServiceUrl, resolveClusterTopology} from "./clusterTopology.mjs";
 import {buildScriptarrStorageLayout, resolveScriptarrDataRoot} from "../filesystem/storageLayout.mjs";
 
 const normalizeString = (value) => String(value ?? "").trim();
@@ -223,6 +224,7 @@ export const resolveStackMode = ({env = process.env} = {}) =>
  * }}
  */
 export const resolveServicePlan = ({env = process.env, containerNamePrefix = ""} = {}) => {
+  const topology = resolveClusterTopology({env});
   const mysql = resolveMysqlConfig({env});
   const stackMode = resolveStackMode({env});
   const managedNetworkName = resolveManagedNetworkName({env});
@@ -239,6 +241,7 @@ export const resolveServicePlan = ({env = process.env, containerNamePrefix = ""}
   const portalPort = resolvePort(env.SCRIPTARR_PORTAL_PORT, DEFAULT_PORTAL_PORT);
   const oraclePort = resolvePort(env.SCRIPTARR_ORACLE_PORT, DEFAULT_ORACLE_PORT);
   const ravenPort = resolvePort(env.SCRIPTARR_RAVEN_PORT, DEFAULT_RAVEN_PORT);
+  const serviceUrl = (name, port) => resolveClusterServiceUrl(topology, name, port);
   const wardenBaseUrlForServices = normalizeString(env.SCRIPTARR_WARDEN_BASE_URL) || DEFAULT_WARDEN_SERVICE_BASE_URL;
   const oracleEmbeddedLocalAi = normalizeString(env.SCRIPTARR_LOCALAI_EMBEDDED) || "true";
   const oracleLocalAiBaseUrl = normalizeString(env.SCRIPTARR_ORACLE_LOCALAI_BASE_URL)
@@ -257,16 +260,25 @@ export const resolveServicePlan = ({env = process.env, containerNamePrefix = ""}
       NVIDIA_DRIVER_CAPABILITIES: env.NVIDIA_DRIVER_CAPABILITIES || "compute,utility"
     }
     : {};
+  const ravenEncoderPolicy = normalizeString(env.SCRIPTARR_RAVEN_AVIF_ENCODER).toLowerCase() || "auto";
+  if (!["auto", "nvenc", "cpu"].includes(ravenEncoderPolicy)) {
+    throw new Error("SCRIPTARR_RAVEN_AVIF_ENCODER must be auto, nvenc or cpu.");
+  }
+  const explicitRavenGpuProfile = normalizeString(env.SCRIPTARR_RAVEN_INGEST_GPU_PROFILE).toLowerCase();
+  if (ravenEncoderPolicy === "nvenc" && explicitRavenGpuProfile && explicitRavenGpuProfile !== "nvidia") {
+    throw new Error("Strict NVENC encoding requires the NVIDIA Raven ingest profile.");
+  }
   const ravenIngestGpuProfile = resolveLocalAiProfile({
     env: {
       ...env,
-      SCRIPTARR_GPU_HINT: normalizeString(env.SCRIPTARR_RAVEN_INGEST_GPU_PROFILE || env.SCRIPTARR_GPU_HINT)
+      SCRIPTARR_GPU_HINT: ravenEncoderPolicy === "cpu" ? "cpu" : ravenEncoderPolicy === "nvenc" ? "nvidia"
+        : normalizeString(env.SCRIPTARR_RAVEN_INGEST_GPU_PROFILE || env.SCRIPTARR_GPU_HINT)
     }
   });
   const ravenGpuEnv = ravenIngestGpuProfile.key === "nvidia"
     ? {
       SCRIPTARR_RAVEN_INGEST_GPU_PROFILE: "nvidia",
-      SCRIPTARR_RAVEN_INGEST_REQUIRE_NVIDIA: "true",
+      SCRIPTARR_RAVEN_INGEST_REQUIRE_NVIDIA: ravenEncoderPolicy === "nvenc" ? "true" : "false",
       NVIDIA_VISIBLE_DEVICES: env.NVIDIA_VISIBLE_DEVICES || "all",
       NVIDIA_DRIVER_CAPABILITIES: withRequiredNvidiaCapabilities(
         env.SCRIPTARR_RAVEN_NVIDIA_DRIVER_CAPABILITIES || env.NVIDIA_DRIVER_CAPABILITIES || "compute,utility",
@@ -289,7 +301,7 @@ export const resolveServicePlan = ({env = process.env, containerNamePrefix = ""}
     services.push({
       name: "scriptarr-mysql",
       containerName: resolveContainerName("scriptarr-mysql", resolvedContainerNamePrefix),
-      image: "mysql:8.4",
+      image: normalizeString(env.SCRIPTARR_MYSQL_IMAGE) || "mysql:8.4",
       env: {
         MYSQL_ROOT_PASSWORD: mysql.password,
         MYSQL_DATABASE: mysql.database,
@@ -327,11 +339,12 @@ export const resolveServicePlan = ({env = process.env, containerNamePrefix = ""}
     containerName: resolveContainerName("scriptarr-sage", resolvedContainerNamePrefix),
     image: resolveServiceImage("scriptarr-sage", {env}),
     env: {
-      SCRIPTARR_VAULT_BASE_URL: `http://scriptarr-vault:${vaultPort}`,
+      SCRIPTARR_VAULT_BASE_URL: serviceUrl("scriptarr-vault", vaultPort),
       SCRIPTARR_WARDEN_BASE_URL: wardenBaseUrlForServices,
-      SCRIPTARR_PORTAL_BASE_URL: `http://scriptarr-portal:${portalPort}`,
-      SCRIPTARR_ORACLE_BASE_URL: `http://scriptarr-oracle:${oraclePort}`,
-      SCRIPTARR_RAVEN_BASE_URL: `http://scriptarr-raven:${ravenPort}`,
+      SCRIPTARR_WARDEN_SERVICE_TOKEN: serviceTokens["scriptarr-warden"],
+      SCRIPTARR_PORTAL_BASE_URL: serviceUrl("scriptarr-portal", portalPort),
+      SCRIPTARR_ORACLE_BASE_URL: serviceUrl("scriptarr-oracle", oraclePort),
+      SCRIPTARR_RAVEN_BASE_URL: serviceUrl("scriptarr-raven", ravenPort),
       SCRIPTARR_PUBLIC_BASE_URL: publicBaseUrl,
       SCRIPTARR_SERVICE_TOKEN: serviceTokens["scriptarr-sage"],
       SCRIPTARR_SERVICE_TOKENS: JSON.stringify(serviceTokens),
@@ -359,7 +372,7 @@ export const resolveServicePlan = ({env = process.env, containerNamePrefix = ""}
     containerName: resolveContainerName("scriptarr-moon", resolvedContainerNamePrefix),
     image: resolveServiceImage("scriptarr-moon", {env}),
     env: {
-      SCRIPTARR_SAGE_BASE_URL: `http://scriptarr-sage:${sagePort}`,
+      SCRIPTARR_SAGE_BASE_URL: serviceUrl("scriptarr-sage", sagePort),
       SCRIPTARR_SERVICE_TOKEN: serviceTokens["scriptarr-moon"],
       SCRIPTARR_PUBLIC_BASE_URL: publicBaseUrl,
       SCRIPTARR_MOON_PORT: String(moonPort),
@@ -378,12 +391,17 @@ export const resolveServicePlan = ({env = process.env, containerNamePrefix = ""}
     containerName: resolveContainerName("scriptarr-raven", resolvedContainerNamePrefix),
     image: resolveServiceImage("scriptarr-raven", {env}),
     env: {
-      SCRIPTARR_SAGE_BASE_URL: `http://scriptarr-sage:${sagePort}`,
+      SCRIPTARR_SAGE_BASE_URL: serviceUrl("scriptarr-sage", sagePort),
       SCRIPTARR_SERVICE_TOKEN: serviceTokens["scriptarr-raven"],
       SCRIPTARR_RAVEN_DATA_ROOT: "/downloads",
       SCRIPTARR_RAVEN_LOG_DIR: "/app/logs",
       SCRIPTARR_RAVEN_DERIVED_IMAGE_FORMAT: "avif",
-      SCRIPTARR_RAVEN_AVIF_REQUIRE_NVIDIA: "true",
+      SCRIPTARR_RAVEN_AVIF_ENCODER: ravenEncoderPolicy,
+      SCRIPTARR_RAVEN_AVIF_REQUIRE_NVIDIA: ravenEncoderPolicy === "nvenc" ? "true" : "false",
+      SCRIPTARR_RAVEN_INGEST_REQUIRE_NVIDIA: ravenEncoderPolicy === "nvenc" ? "true" : "false",
+      SCRIPTARR_RAVEN_AVIF_THREADS: normalizeString(env.SCRIPTARR_RAVEN_AVIF_THREADS) || "2",
+      SCRIPTARR_RAVEN_AVIF_ENCODER_SLOTS: normalizeString(env.SCRIPTARR_RAVEN_AVIF_ENCODER_SLOTS) || (ravenIngestGpuProfile.key === "nvidia" ? "6" : "1"),
+      SCRIPTARR_RAVEN_AVIF_PAGE_CONCURRENCY: normalizeString(env.SCRIPTARR_RAVEN_AVIF_PAGE_CONCURRENCY) || (ravenIngestGpuProfile.key === "nvidia" ? "4" : "1"),
       ...ravenGpuEnv
     },
     mounts: resolveFolderMounts(storageLayout, "scriptarr-raven", ["downloads", "logs"]),
@@ -399,11 +417,12 @@ export const resolveServicePlan = ({env = process.env, containerNamePrefix = ""}
     containerName: resolveContainerName("scriptarr-portal", resolvedContainerNamePrefix),
     image: resolveServiceImage("scriptarr-portal", {env}),
     env: {
-      SCRIPTARR_SAGE_BASE_URL: `http://scriptarr-sage:${sagePort}`,
+      SCRIPTARR_SAGE_BASE_URL: serviceUrl("scriptarr-sage", sagePort),
       SCRIPTARR_SERVICE_TOKEN: serviceTokens["scriptarr-portal"],
       SCRIPTARR_SERVICE_TOKENS: JSON.stringify(serviceTokens),
       SCRIPTARR_PUBLIC_BASE_URL: publicBaseUrl,
       SCRIPTARR_PORTAL_PORT: String(portalPort),
+      ...(topology.enabled ? {SCRIPTARR_REQUIRE_SERVICE_AUTH: "true"} : {}),
       SCRIPTARR_DISCORD_CLIENT_ID: env.SCRIPTARR_DISCORD_CLIENT_ID || "",
       SCRIPTARR_DISCORD_TOKEN: env.DISCORD_TOKEN || "",
       SCRIPTARR_APPA_DISCORD_TOKEN: env.SCRIPTARR_APPA_DISCORD_TOKEN || "",
@@ -424,7 +443,7 @@ export const resolveServicePlan = ({env = process.env, containerNamePrefix = ""}
     containerName: resolveContainerName("scriptarr-oracle", resolvedContainerNamePrefix),
     image: resolveServiceImage("scriptarr-oracle", {env}),
     env: {
-      SCRIPTARR_SAGE_BASE_URL: `http://scriptarr-sage:${sagePort}`,
+      SCRIPTARR_SAGE_BASE_URL: serviceUrl("scriptarr-sage", sagePort),
       SCRIPTARR_SERVICE_TOKEN: serviceTokens["scriptarr-oracle"],
       SCRIPTARR_LOCALAI_BASE_URL: oracleLocalAiBaseUrl,
       SCRIPTARR_LOCALAI_EMBEDDED: oracleEmbeddedLocalAi,
@@ -439,11 +458,15 @@ export const resolveServicePlan = ({env = process.env, containerNamePrefix = ""}
       SCRIPTARR_LOCALAI_UPLOAD_PATH: "/data/upload",
       SCRIPTARR_ORACLE_LOCALAI_GPU_PROFILE: oracleLocalAiProfile.key,
       SCRIPTARR_LOCALAI_GPU_LAYERS: env.SCRIPTARR_LOCALAI_GPU_LAYERS || "auto",
+      SCRIPTARR_LOCALAI_CONTEXT_SIZE: env.SCRIPTARR_LOCALAI_CONTEXT_SIZE || "4096",
+      SCRIPTARR_LOCALAI_BACKEND: env.SCRIPTARR_LOCALAI_BACKEND || "llama-cpp",
+      SCRIPTARR_ORACLE_MAX_CONCURRENT_GENERATIONS: env.SCRIPTARR_ORACLE_MAX_CONCURRENT_GENERATIONS || "1",
       SCRIPTARR_LOCALAI_DEFAULT_MODEL: env.SCRIPTARR_LOCALAI_DEFAULT_MODEL
         || "huggingface://bartowski/Hermes-3-Llama-3.1-8B-GGUF/Hermes-3-Llama-3.1-8B-Q4_K_S.gguf",
       SCRIPTARR_LOCALAI_ALTERNATE_MODELS: env.SCRIPTARR_LOCALAI_ALTERNATE_MODELS
         || "huggingface://bartowski/Hermes-3-Llama-3.1-8B-GGUF/Hermes-3-Llama-3.1-8B-Q4_K_M.gguf,huggingface://Qwen/Qwen3-8B-GGUF/Qwen3-8B-Q4_K_M.gguf",
       SCRIPTARR_ORACLE_PORT: String(oraclePort),
+      ...(topology.enabled ? {SCRIPTARR_REQUIRE_SERVICE_AUTH: "true"} : {}),
       SCRIPTARR_NOONA_PERSONA_NAME: env.SCRIPTARR_NOONA_PERSONA_NAME || DEFAULT_NOONA_PERSONA_NAME,
       ...oracleGpuEnv
     },
@@ -453,10 +476,26 @@ export const resolveServicePlan = ({env = process.env, containerNamePrefix = ""}
     ],
     networkAliases: ["scriptarr-oracle"],
     publishedPorts: [],
-    extraArgs: oracleLocalAiProfile.runtimeArgs || [],
+    extraArgs: [...(oracleLocalAiProfile.runtimeArgs || []),
+      ...(env.SCRIPTARR_ORACLE_CPUS ? ["--cpus", String(env.SCRIPTARR_ORACLE_CPUS)] : []),
+      ...(env.SCRIPTARR_ORACLE_MEMORY ? ["--memory", String(env.SCRIPTARR_ORACLE_MEMORY)] : [])],
     healthCheck: buildPythonHttpHealthCheck(oraclePort),
     containerPort: oraclePort
   });
+
+  for (const service of services) {
+    service.hostId = topology.enabled ? topology.owners[service.name] : "local";
+    if (topology.enabled && !service.hostId) {
+      throw new Error(`The topology does not assign ${service.name}.`);
+    }
+    if (topology.enabled && ["scriptarr-sage", "scriptarr-portal", "scriptarr-oracle"].includes(service.name)) {
+      const owner = topology.hosts.find((host) => host.id === service.hostId);
+      service.publishedPorts = [{hostIp: owner.address, hostPort: service.containerPort, containerPort: service.containerPort}];
+    }
+    if (service.name === "scriptarr-moon" && normalizeString(env.SCRIPTARR_PUBLISH_HOST)) {
+      service.publishedPorts = service.publishedPorts.map((port) => ({...port, hostIp: normalizeString(env.SCRIPTARR_PUBLISH_HOST)}));
+    }
+  }
 
   return {
     installMode: "default-bootstrap",
@@ -479,7 +518,9 @@ export const resolveServicePlan = ({env = process.env, containerNamePrefix = ""}
       managedServiceName: mysql.managedServiceName
     },
     serviceTokens,
-    services,
+    topology,
+    allServices: services,
+    services: topology.enabled ? services.filter((service) => service.hostId === topology.hostId) : services,
     storageLayout
   };
 };
