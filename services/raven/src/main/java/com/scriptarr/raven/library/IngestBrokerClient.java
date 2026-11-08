@@ -17,9 +17,12 @@ import java.security.KeyStore;
 import java.security.cert.CertificateFactory;
 import java.time.Duration;
 import java.util.Map;
+import java.util.function.Function;
 
 /** Narrow authenticated Sage client shared by coordinator and isolated conversion worker. */
 public final class IngestBrokerClient {
+    private static final Duration CONTROL_TIMEOUT = Duration.ofSeconds(120);
+    private static final Duration BINARY_TIMEOUT = Duration.ofMinutes(15);
     private final URI base;
     private final String token;
     private final HttpClient http;
@@ -30,6 +33,15 @@ public final class IngestBrokerClient {
      * @param env process configuration
      */
     public IngestBrokerClient(Map<String, String> env) {
+        this(env, HttpClient.Builder::build);
+    }
+
+    /**
+     * Configure the production builder with an injectable transport for request-level verification.
+     * @param env process configuration
+     * @param transportFactory factory receiving the fully configured HTTP builder
+     */
+    IngestBrokerClient(Map<String, String> env, Function<HttpClient.Builder, HttpClient> transportFactory) {
         try {
             base = URI.create(env.getOrDefault("SCRIPTARR_SAGE_BASE_URL", "http://scriptarr-sage:3004"));
             if (base.getUserInfo() != null || base.getQuery() != null || base.getFragment() != null) throw new IllegalArgumentException("Invalid broker origin.");
@@ -44,7 +56,7 @@ public final class IngestBrokerClient {
                 TrustManagerFactory trust = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm()); trust.init(store);
                 SSLContext context = SSLContext.getInstance("TLS"); context.init(null, trust.getTrustManagers(), null); builder.sslContext(context);
             }
-            http = builder.build();
+            http = transportFactory.apply(builder);
         } catch (Exception error) { throw new IllegalArgumentException("Could not configure the ingest broker transport.", error); }
     }
 
@@ -60,7 +72,7 @@ public final class IngestBrokerClient {
      */
     public JsonNode json(String method, String path, Object body, String leaseToken) throws IOException, InterruptedException {
         HttpRequest.BodyPublisher publisher = body == null ? HttpRequest.BodyPublishers.noBody() : HttpRequest.BodyPublishers.ofByteArray(json.writeValueAsBytes(body));
-        HttpResponse<byte[]> response = http.send(request(path, leaseToken).header("Content-Type", "application/json").method(method, publisher).build(), HttpResponse.BodyHandlers.ofByteArray());
+        HttpResponse<byte[]> response = http.send(request(path, leaseToken, CONTROL_TIMEOUT).header("Content-Type", "application/json").method(method, publisher).build(), HttpResponse.BodyHandlers.ofByteArray());
         requireSuccess(response.statusCode());
         return response.statusCode() == 204 || response.body().length == 0 ? null : json.readTree(response.body());
     }
@@ -76,7 +88,7 @@ public final class IngestBrokerClient {
      */
     public void download(String path, Path target, String leaseToken, long expectedSize) throws IOException, InterruptedException {
         if (expectedSize <= 0 || expectedSize > 21_474_836_480L) throw new IOException("Assigned input exceeds the chapter transfer budget.");
-        HttpResponse<InputStream> response = http.send(request(path, leaseToken).GET().build(), HttpResponse.BodyHandlers.ofInputStream());
+        HttpResponse<InputStream> response = http.send(request(path, leaseToken, BINARY_TIMEOUT).GET().build(), HttpResponse.BodyHandlers.ofInputStream());
         try (InputStream input = response.body()) {
             requireSuccess(response.statusCode());
             WebpChapterEncoder.copyBounded(input, target, expectedSize, 21_474_836_480L);
@@ -93,15 +105,15 @@ public final class IngestBrokerClient {
      * @throws InterruptedException when lease cancellation interrupts upload
      */
     public JsonNode upload(String path, Path artifact, String leaseToken) throws IOException, InterruptedException {
-        HttpResponse<byte[]> response = http.send(request(path, leaseToken).header("Content-Type", "application/zip").header("X-Scriptarr-Artifact-Sha256", WebpChapterEncoder.sha256(artifact))
+        HttpResponse<byte[]> response = http.send(request(path, leaseToken, BINARY_TIMEOUT).header("Content-Type", "application/zip").header("X-Scriptarr-Artifact-Sha256", WebpChapterEncoder.sha256(artifact))
             .POST(HttpRequest.BodyPublishers.ofFile(artifact)).build(), HttpResponse.BodyHandlers.ofByteArray());
         requireSuccess(response.statusCode()); return json.readTree(response.body());
     }
 
-    /** @param path ingest-relative route @param lease optional lease secret @return authenticated request builder */
-    private HttpRequest.Builder request(String path, String lease) {
+    /** @param path ingest-relative route @param lease optional lease secret @param timeout operation deadline @return authenticated request builder */
+    private HttpRequest.Builder request(String path, String lease, Duration timeout) {
         if (!path.startsWith("/") || path.contains("..")) throw new IllegalArgumentException("Invalid ingest broker route.");
-        HttpRequest.Builder request = HttpRequest.newBuilder(base.resolve("/api/internal/raven-ingest" + path)).timeout(Duration.ofSeconds(120)).header("Authorization", "Bearer " + token);
+        HttpRequest.Builder request = HttpRequest.newBuilder(base.resolve("/api/internal/raven-ingest" + path)).timeout(timeout).header("Authorization", "Bearer " + token);
         if (lease != null && !lease.isBlank()) request.header("X-Scriptarr-Lease-Token", lease);
         return request;
     }

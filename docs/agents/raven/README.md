@@ -71,6 +71,9 @@
   snapshots all flow through Sage's internal broker routes.
 - Raven's internal Sage broker client should use plain HTTP/1.1. Do not let Java's default HTTP version negotiation
   stall Raven-to-Sage calls against Sage's Node HTTP server.
+- The ingest broker keeps a ten-second connection deadline and 120-second JSON/control request deadline. Binary input
+  downloads and artifact uploads use fifteen-minute request deadlines to match Sage's stream budget, including the
+  upload's coordinator-validation response. Preserve verified TLS, lease/cancellation fences and stream byte limits.
 - Launch defaults keep MangaDex enabled first, Anime-Planet enabled ahead of MangaUpdates for scrape-based enrichment,
   and AniList, MyAnimeList, and ComicVine following the configured priority and credential gates.
 - Download-provider selection is now explicit. Raven intake should search enabled metadata providers first, expand

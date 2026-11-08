@@ -163,6 +163,7 @@ unchanged. Never disable certificate verification or share the coordinator token
 Apply the current `scripts/deployment/lan-policy.sh core` policy before publishing the new listener: TCP 3444 on the
 primary LAN address accepts only the assigned worker host. The existing 3004 and 4401 rules remain in place; the
 worker publishes no inbound port.
+Chapter and result transfers have a 15-minute window; control requests retain their shorter two-minute limit.
 
 WebP's dimension limit is handled by lossless geometric segmentation, not shrinking text: oversized images become
 ordered WebP tiles, with the original logical page index retained for bookmarks and reading progress. All tiles must

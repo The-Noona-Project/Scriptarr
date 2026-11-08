@@ -441,6 +441,7 @@ a {
 }
 
 .reader-spread .reader-page-frame {
+  grid-template-columns: minmax(0, 1fr);
   max-width: min(50vw, 760px);
   max-height: calc(100vh - 170px);
   align-content: center;

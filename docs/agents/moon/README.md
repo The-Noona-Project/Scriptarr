@@ -63,6 +63,8 @@
   Never use that frame's cyclic `100%` as an intrinsic minimum: absolutely positioned tiles contribute no intrinsic
   width and can collapse the whole page to zero. Preserve source aspect ratio, segment geometry, frame caps and
   `max-width: 100%`; verify actual positive DOM rectangles in every reader layout, not only successful image decoding.
+  Keep the paged frame's single grid track at `minmax(0, 1fr)` so a wide composite's percentage maximum resolves to the
+  capped frame instead of an oversized implicit min-content track. Every segment must remain inside the visible frame.
 - Keep Discord login as the only bootstrap and admin sign-in path. Do not reintroduce claim-dev-session behavior.
 - Preserve same-origin login return flow. Moon should pass a sanitized `returnTo` path into Sage's Discord auth URL,
   and the callback relay should send users back to the page where login started whenever that route is still allowed,

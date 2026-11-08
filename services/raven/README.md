@@ -37,6 +37,8 @@ assigned worker. `SCRIPTARR_RAVEN_REMOTE_INGEST_REQUIRED=true` also selects that
 and never falls back to local encoding. The worker uses FFmpeg WebP quality `85`, method `4`, two encoder threads, one
 page at a time and one chapter at a time. Its container is limited to two CPUs and 4 GiB; the durable pool permits one
 active encoding lease across all workers. The worker has disposable scratch only and reaches Sage over verified TLS.
+Chapter input and result-upload requests use Sage's fifteen-minute binary transfer budget, including result validation.
+Control requests retain their two-minute deadline; lease expiry and cancellation still stop stale work.
 
 Source images are split into exact two-dimensional WebP segments, each at most 16383 pixels per side and 64 Mi pixels.
 Native header and sequential region processing avoid decoding the full oversized image in Java or passing an image
