@@ -410,6 +410,10 @@ export const createDiscordClient = async ({
     registerCommands,
     sendChannelMessage,
     sendDirectMessage,
+    async fetchDirectMessage(channelId, messageId) {
+      const channel = await fetchChannel(channelId);
+      return channel.messages.fetch(messageId);
+    },
     waitUntilReady: () => ready,
     requestedIntents,
     requestedPartials,

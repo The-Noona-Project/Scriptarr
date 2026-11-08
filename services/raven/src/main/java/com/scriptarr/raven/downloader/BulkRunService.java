@@ -3,11 +3,14 @@ package com.scriptarr.raven.downloader;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.scriptarr.raven.settings.RavenBrokerClient;
 import com.scriptarr.raven.support.ScriptarrLogger;
-import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
+import java.time.Clock;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -21,7 +24,9 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Durable owner-only bulk downloadall run orchestration for Raven.
@@ -42,7 +47,7 @@ public class BulkRunService {
     private static final int MAX_BATCHES_PER_APPROVAL = 25;
     private static final Duration POLL_DELAY = Duration.ofSeconds(2);
     private static final Duration TITLE_PROGRESS_TIMEOUT = Duration.ofMinutes(45);
-    private static final Duration BATCH_PROGRESS_TIMEOUT = Duration.ofMinutes(90);
+    private static final Duration RETRY_WIND_DOWN_TIMEOUT = Duration.ofMinutes(2);
     private static final List<String> BULK_TYPES = List.of("Manga", "Manhwa", "Manhua", "OEL");
     private static final List<String> TITLE_GROUPS = List.of(
         "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M",
@@ -52,6 +57,15 @@ public class BulkRunService {
     private final DownloaderService downloaderService;
     private final RavenBrokerClient brokerClient;
     private final ScriptarrLogger logger;
+    private final BulkRunGateway gateway;
+    private final Clock clock;
+    private final Duration pollDelay;
+    private final ScheduledExecutorService recoveryWorker = Executors.newSingleThreadScheduledExecutor((runnable) -> {
+        Thread thread = new Thread(runnable, "raven-bulk-recovery");
+        thread.setDaemon(true);
+        return thread;
+    });
+    private final AtomicBoolean recoveryStarted = new AtomicBoolean();
     private final ExecutorService worker = Executors.newSingleThreadExecutor((runnable) -> {
         Thread thread = new Thread(runnable, "raven-bulk-downloadall-runner");
         thread.setDaemon(true);
@@ -59,6 +73,7 @@ public class BulkRunService {
     });
     private final Set<String> activeRunIds = ConcurrentHashMap.newKeySet();
     private final Set<String> cancelledRunIds = ConcurrentHashMap.newKeySet();
+    private final Set<String> pendingRunIds = ConcurrentHashMap.newKeySet();
 
     /**
      * Create the durable Raven bulk-run orchestrator.
@@ -67,10 +82,29 @@ public class BulkRunService {
      * @param brokerClient Sage-backed broker client for durable jobs
      * @param logger shared Raven logger
      */
+    @Autowired
     public BulkRunService(DownloaderService downloaderService, RavenBrokerClient brokerClient, ScriptarrLogger logger) {
+        this(downloaderService, brokerClient, logger, downloaderService.bulkRunGateway(), Clock.systemUTC(), POLL_DELAY);
+    }
+
+    /**
+     * Supply deterministic time and a bulk gateway for isolated orchestration tests.
+     *
+     * @param downloaderService title retry and cancellation controls
+     * @param brokerClient durable job storage
+     * @param logger service logger
+     * @param gateway durable discovery and ownership boundary
+     * @param clock progress clock
+     * @param pollDelay delay between title polls
+     */
+    BulkRunService(DownloaderService downloaderService, RavenBrokerClient brokerClient, ScriptarrLogger logger,
+                   BulkRunGateway gateway, Clock clock, Duration pollDelay) {
         this.downloaderService = downloaderService;
         this.brokerClient = brokerClient;
         this.logger = logger;
+        this.gateway = gateway;
+        this.clock = clock;
+        this.pollDelay = pollDelay;
     }
 
     /**
@@ -93,8 +127,20 @@ public class BulkRunService {
         List<String> types = resolveTypes(typeFilter);
         List<String> groups = resolveTitleGroups(groupFilter);
         boolean nsfw = booleanValue(request.get("nsfw"));
-        String runId = "bulkrun_" + UUID.randomUUID().toString().replace("-", "");
-        String now = Instant.now().toString();
+        int batchesPerApproval = resolveBatchesPerApproval(request.get("batchesPerApproval"), request.get("groupsize"));
+        String requestId = BulkRunIdentity.requestId(request.get("requestId"));
+        String fingerprint = BulkRunIdentity.fingerprint(normalizeRunTypeFilter(typeFilter), normalizeRunGroupFilter(groupFilter),
+            nsfw, batchesPerApproval, requestedBy);
+        String runId = BulkRunIdentity.runId(requestId);
+        String now = now();
+        Map<String, Object> existing = findRun(runId);
+        if (existing != null) {
+            if (!fingerprint.equals(stringValue(normalizeMap(existing.get("payload")).get("fingerprint")))) {
+                throw new BulkRunConflictException("requestId was already used for different downloadall options or owner.");
+            }
+            repairManifest(existing);
+            return status(runId);
+        }
 
         Map<String, Object> runPayload = new LinkedHashMap<>();
         runPayload.put("providerId", PROVIDER_ID);
@@ -102,7 +148,16 @@ public class BulkRunService {
         runPayload.put("titlegroup", normalizeRunGroupFilter(groupFilter));
         runPayload.put("nsfw", nsfw);
         runPayload.put("batchCount", groups.size() * types.size());
-        runPayload.put("batchesPerApproval", resolveBatchesPerApproval(request.get("batchesPerApproval"), request.get("groupsize")));
+        runPayload.put("batchesPerApproval", batchesPerApproval);
+        runPayload.put("requestId", requestId);
+        runPayload.put("fingerprint", fingerprint);
+        runPayload.put("schemaVersion", 2);
+        runPayload.put("startRequested", !Boolean.FALSE.equals(request.get("start")));
+        runPayload.put("manifestComplete", false);
+        runPayload.put("approvalId", newApprovalId());
+        runPayload.put("approvalGeneration", 0);
+        runPayload.put("approvalBatchCount", 0);
+        runPayload.put("decisionReceipts", Map.of());
 
         Map<String, Object> job = new LinkedHashMap<>();
         job.put("jobId", runId);
@@ -119,13 +174,7 @@ public class BulkRunService {
         job.put("updatedAt", now);
         putJob(runId, job);
 
-        int sortOrder = 0;
-        for (String group : groups) {
-            for (String type : types) {
-                putBatchTask(runId, buildBatchTask(runId, requestedBy, type, group, nsfw, sortOrder, now));
-                sortOrder++;
-            }
-        }
+        repairManifest(job);
 
         if (Boolean.FALSE.equals(request.get("start"))) {
             return status(runId);
@@ -140,7 +189,20 @@ public class BulkRunService {
      * @return durable run status payload
      */
     public synchronized Map<String, Object> startRun(String runId) {
-        return scheduleRun(runId, false);
+        Map<String, Object> job = requireRun(runId);
+        if (STATUS_PAUSED.equals(stringValue(job.get("status")))) {
+            return resumeRun(runId);
+        }
+        if (isRunTerminal(stringValue(job.get("status")))) {
+            return status(runId);
+        }
+        Map<String, Object> payload = new LinkedHashMap<>(normalizeMap(job.get("payload")));
+        payload.put("startRequested", true);
+        job.put("payload", payload);
+        putJob(runId, job);
+        repairManifest(job);
+        tryScheduleRunWorker(runId);
+        return status(runId);
     }
 
     /**
@@ -150,7 +212,19 @@ public class BulkRunService {
      * @return durable run status payload
      */
     public synchronized Map<String, Object> resumeRun(String runId) {
-        return scheduleRun(runId, true);
+        return decide(runId, "continue", "", "", false);
+    }
+
+    /**
+     * Continue one captured approval window, idempotently across HTTP retries.
+     *
+     * @param runId durable run id
+     * @param expectedApprovalId captured state token
+     * @param requestId stable caller decision id
+     * @return stable accepted receipt, or the full snapshot for legacy callers
+     */
+    public synchronized Map<String, Object> resumeRun(String runId, String expectedApprovalId, String requestId) {
+        return decide(runId, "continue", expectedApprovalId, requestId, !stringValue(expectedApprovalId).isBlank());
     }
 
     /**
@@ -162,8 +236,6 @@ public class BulkRunService {
     public Map<String, Object> status(String runId) {
         String normalizedRunId = normalizeRunId(runId);
         Map<String, Object> job = requireRun(normalizedRunId);
-        maybeScheduleDetachedRunningRun(normalizedRunId, job);
-        job = requireRun(normalizedRunId);
         List<Map<String, Object>> batches = loadBatchTasks(normalizedRunId);
         Map<String, Object> response = new LinkedHashMap<>();
         response.put("runId", normalizedRunId);
@@ -171,7 +243,10 @@ public class BulkRunService {
         response.put("message", stringValue(job.get("message")));
         response.put("requestedBy", stringValue(job.get("requestedBy")));
         response.put("active", activeRunIds.contains(normalizedRunId));
-        response.put("filters", normalizeMap(job.get("payload")));
+        response.put("filters", publicFilters(job));
+        response.put("approvalId", approvalId(job));
+        response.put("recoveryReady", restoreReady());
+        response.put("recoveryError", restoreFailure());
         Map<String, Object> summary = buildRunSummary(batches);
         response.put("summary", summary);
         response.put("counts", summary);
@@ -191,47 +266,65 @@ public class BulkRunService {
      * @return durable run status payload
      */
     public synchronized Map<String, Object> cancelRun(String runId) {
-        String normalizedRunId = normalizeRunId(runId);
-        Map<String, Object> job = requireRun(normalizedRunId);
-        cancelledRunIds.add(normalizedRunId);
-        updateRunStatus(job, STATUS_CANCELLED, "Cancelled by owner.", buildRunSummary(loadBatchTasks(normalizedRunId)));
+        return decide(runId, "cancel", "", "", false);
+    }
 
-        Map<String, Map<String, Object>> snapshotsByTaskId = titleTasksById();
-        for (Map<String, Object> batch : loadBatchTasks(normalizedRunId)) {
-            for (String taskId : stringList(normalizeMap(batch.get("result")).get("taskIds"))) {
-                Map<String, Object> task = snapshotsByTaskId.get(taskId);
-                String status = stringValue(task == null ? "" : task.get("status")).toLowerCase(Locale.ROOT);
-                if ("queued".equals(status) || "running".equals(status)) {
-                    try {
-                        downloaderService.cancelTask(taskId);
-                    } catch (IllegalStateException ignored) {
-                        logger.warn("DOWNLOAD", "Bulk run could not cancel an owned title task.", "taskId=" + taskId);
-                    }
-                }
-            }
-            if (!isBatchTerminal(stringValue(batch.get("status")))) {
-                putBatchTask(normalizedRunId, withBatchStatus(batch, STATUS_CANCELLED, "Cancelled by owner.", 100));
-            }
-        }
-        activeRunIds.remove(normalizedRunId);
-        return status(normalizedRunId);
+    /**
+     * Cancel a captured state without allowing an older reaction to cancel a newer window.
+     *
+     * @param runId durable run id
+     * @param expectedApprovalId captured state token
+     * @param requestId stable caller decision id
+     * @return stable accepted receipt, or the full snapshot for legacy callers
+     */
+    public synchronized Map<String, Object> cancelRun(String runId, String expectedApprovalId, String requestId) {
+        return decide(runId, "cancel", expectedApprovalId, requestId, !stringValue(expectedApprovalId).isBlank());
     }
 
     /**
      * Resume interrupted runs after Raven restarts. Paused runs intentionally
      * stay paused until the owner explicitly continues them.
      */
-    @PostConstruct
+    @EventListener(ApplicationReadyEvent.class)
     public void resumeInterruptedRuns() {
+        if (recoveryStarted.compareAndSet(false, true)) {
+            recoveryWorker.scheduleWithFixedDelay(this::reconcileInterruptedRuns, 0, 30, TimeUnit.SECONDS);
+        }
+    }
+
+    /**
+     * Reconcile only explicitly started runs after the complete downloader restore barrier.
+     * Status reads never call this lifecycle operation.
+     */
+    public synchronized void reconcileInterruptedRuns() {
         try {
+            boolean restored = restoreReady();
+            String restoreError = restoreFailure();
+            if (!restored && restoreError.isBlank()) return;
             for (Map<String, Object> job : loadRunJobs()) {
-                String runId = stringValue(job.get("jobId"));
-                String status = stringValue(job.get("status")).toLowerCase(Locale.ROOT);
-                if (STATUS_RUNNING.equals(status)) {
-                    tryScheduleRunWorker(runId);
+                try {
+                    String runId = stringValue(job.get("jobId"));
+                    String status = stringValue(job.get("status")).toLowerCase(Locale.ROOT);
+                    Map<String, Object> payload = normalizeMap(job.get("payload"));
+                    if (!restored) {
+                        if (STATUS_RUNNING.equals(status) || (STATUS_QUEUED.equals(status)
+                            && booleanValue(payload.get("startRequested")))) {
+                            updateRunStatus(job, STATUS_PAUSED, "Downloader restoration failed: " + restoreError,
+                                buildRunSummary(loadBatchTasks(runId)));
+                        }
+                    } else if (STATUS_CANCELLED.equals(status) && booleanValue(payload.get("cancellationPending"))) {
+                        finishCancellation(runId);
+                    } else if (STATUS_RUNNING.equals(status)
+                        || (STATUS_QUEUED.equals(status) && booleanValue(payload.get("startRequested")))) {
+                        repairManifest(job);
+                        tryScheduleRunWorker(runId);
+                    }
+                } catch (RuntimeException error) {
+                    logger.warn("DOWNLOAD", "Bulk recovery could not reconcile one durable run.",
+                        "runId=" + stringValue(job.get("jobId")) + " error=" + error.getMessage());
                 }
             }
-        } catch (IllegalStateException error) {
+        } catch (RuntimeException error) {
             logger.warn("DOWNLOAD", "Raven could not inspect durable bulk runs during startup.", error.getMessage());
         }
     }
@@ -241,37 +334,157 @@ public class BulkRunService {
      */
     @PreDestroy
     public void shutdown() {
+        recoveryWorker.shutdownNow();
         worker.shutdownNow();
     }
 
-    private Map<String, Object> scheduleRun(String runId, boolean allowRecoverableFailedRun) {
+    private Map<String, Object> decide(String runId, String action, String expectedApprovalId,
+                                      String decisionRequestId, boolean tokened) {
         String normalizedRunId = normalizeRunId(runId);
         Map<String, Object> job = requireRun(normalizedRunId);
-        String status = stringValue(job.get("status")).toLowerCase(Locale.ROOT);
-        boolean recoverableFailedRun = STATUS_FAILED.equals(status)
-            && allowRecoverableFailedRun
-            && isRecoverableFailedRun(normalizedRunId);
-        if (STATUS_CANCELLED.equals(status) || STATUS_COMPLETED.equals(status) || (STATUS_FAILED.equals(status) && !recoverableFailedRun)) {
+        Map<String, Object> payload = new LinkedHashMap<>(normalizeMap(job.get("payload")));
+        String requestId = BulkRunIdentity.requestId(decisionRequestId);
+        String expected = stringValue(expectedApprovalId);
+        Map<String, Object> receipts = new LinkedHashMap<>(normalizeMap(payload.get("decisionReceipts")));
+        for (Map.Entry<String, Object> entry : receipts.entrySet()) {
+            Map<String, Object> receipt = normalizeMap(entry.getValue());
+            if ((!expected.isBlank() && expected.equals(entry.getKey()))
+                || (!requestId.isBlank() && requestId.equals(stringValue(receipt.get("requestId"))))) {
+                if (!action.equals(stringValue(receipt.get("action")))
+                    || (!expected.isBlank() && !expected.equals(entry.getKey()))) {
+                    throw new BulkRunConflictException("This decision was already accepted for a different action or approval window.");
+                }
+                return new LinkedHashMap<>(normalizeMap(receipt.get("response")));
+            }
+        }
+        String currentToken = approvalId(job);
+        if (!expected.isBlank() && !expected.equals(currentToken)) {
+            throw new BulkRunConflictException("This approval window is no longer current. Refresh the run before deciding again.");
+        }
+        String currentStatus = stringValue(job.get("status"));
+        if (STATUS_COMPLETED.equals(currentStatus) || STATUS_CANCELLED.equals(currentStatus)) {
+            if (tokened) {
+                throw new BulkRunConflictException("The bulk run is already " + currentStatus + ".");
+            }
             return status(normalizedRunId);
         }
-        if (recoverableFailedRun) {
-            updateRunStatus(
-                job,
-                STATUS_RUNNING,
-                "Recovering interrupted Raven mega downloadall run.",
-                buildRunSummary(loadBatchTasks(normalizedRunId))
-            );
+        if ("continue".equals(action) && STATUS_RUNNING.equals(currentStatus)) {
+            if (tokened) {
+                throw new BulkRunConflictException("The bulk run is already running.");
+            }
+            tryScheduleRunWorker(normalizedRunId);
+            return status(normalizedRunId);
         }
-        tryScheduleRunWorker(normalizedRunId);
-        return status(normalizedRunId);
+        payload.put("approvalId", newApprovalId());
+        payload.put("startRequested", true);
+        if ("continue".equals(action)) {
+            payload.put("approvalGeneration", toInt(payload.get("approvalGeneration"), 0) + 1);
+            payload.put("approvalBatchCount", 0);
+            job.put("status", STATUS_RUNNING);
+            job.put("message", "Owner approved unresolved work and the next batch window.");
+        } else {
+            cancelledRunIds.add(normalizedRunId);
+            payload.put("cancellationPending", true);
+            job.put("status", STATUS_CANCELLED);
+            job.put("message", "Cancelled by owner.");
+            job.put("finishedAt", now());
+        }
+        job.put("updatedAt", now());
+        job.put("payload", payload);
+        Map<String, Object> accepted = decisionReceipt(job, action, requestId, currentToken);
+        receipts.put(currentToken, Map.of("action", action, "requestId", requestId, "response", accepted));
+        payload.put("decisionReceipts", receipts);
+        putJob(normalizedRunId, job);
+        if ("continue".equals(action)) {
+            repairManifest(job);
+            if (activeRunIds.contains(normalizedRunId)) {
+                pendingRunIds.add(normalizedRunId);
+            } else {
+                tryScheduleRunWorker(normalizedRunId);
+            }
+        } else {
+            finishCancellation(normalizedRunId);
+        }
+        return tokened || !requestId.isBlank() ? accepted : status(normalizedRunId);
+    }
+
+    private Map<String, Object> decisionReceipt(Map<String, Object> job, String action, String requestId, String consumedToken) {
+        String runId = stringValue(job.get("jobId"));
+        List<Map<String, Object>> batches = loadBatchTasks(runId);
+        Map<String, Object> receipt = new LinkedHashMap<>();
+        receipt.put("runId", runId);
+        receipt.put("status", stringValue(job.get("status")));
+        receipt.put("message", stringValue(job.get("message")));
+        receipt.put("requestedBy", stringValue(job.get("requestedBy")));
+        receipt.put("filters", publicFilters(job));
+        Map<String, Object> summary = compactReceiptSummary(buildRunSummary(batches));
+        receipt.put("summary", summary);
+        receipt.put("counts", summary);
+        receipt.put("currentBatch", currentBatchPayload(batches));
+        receipt.put("approvalId", approvalId(job));
+        receipt.put("acceptedApprovalId", consumedToken);
+        receipt.put("decision", action);
+        receipt.put("requestId", requestId);
+        receipt.put("accepted", true);
+        for (String field : List.of("createdAt", "startedAt", "finishedAt", "updatedAt")) {
+            receipt.put(field, stringValue(job.get(field)));
+        }
+        return receipt;
+    }
+
+    /**
+     * Keep replay receipts bounded instead of duplicating every owned task id per approval.
+     *
+     * @param fullSummary current run counters and ownership projection
+     * @return numeric counters and bounded batch metadata only
+     */
+    private Map<String, Object> compactReceiptSummary(Map<String, Object> fullSummary) {
+        Map<String, Object> compact = new LinkedHashMap<>();
+        fullSummary.forEach((key, value) -> {
+            if (value instanceof Number || "lastCompletedBatch".equals(key) || "nextBatch".equals(key)) {
+                compact.put(key, value);
+            }
+        });
+        return compact;
+    }
+
+    private synchronized void finishCancellation(String runId) {
+        pendingRunIds.remove(runId);
+        try {
+            gateway.cancelRun(runId);
+            for (Map<String, Object> batch : loadBatchTasks(runId)) {
+                if (!STATUS_COMPLETED.equals(stringValue(batch.get("status")))) {
+                    putBatchTask(runId, withBatchStatus(batch, STATUS_CANCELLED, "Cancelled by owner.", toInt(batch.get("percent"), 0)));
+                }
+            }
+            Map<String, Object> job = requireRun(runId);
+            Map<String, Object> payload = new LinkedHashMap<>(normalizeMap(job.get("payload")));
+            payload.put("cancellationPending", activeRunIds.contains(runId));
+            job.put("payload", payload);
+            putJob(runId, job);
+            if (!activeRunIds.contains(runId)) {
+                cancelledRunIds.remove(runId);
+            }
+        } catch (Exception error) {
+            logger.warn("DOWNLOAD", "Bulk cancellation will retry owned-task cleanup.", error.getMessage());
+        }
     }
 
     private void processRun(String runId) {
         try {
-            Map<String, Object> job = requireRun(runId);
-            updateRunStatus(job, STATUS_RUNNING, "Raven mega downloadall is running.", buildRunSummary(loadBatchTasks(runId)));
-            int batchesPerApproval = resolveBatchesPerApproval(normalizeMap(job.get("payload")).get("batchesPerApproval"));
-            int processedBatches = 0;
+            Map<String, Object> job = beginWorker(runId);
+            if (job == null) {
+                return;
+            }
+            Map<String, Object> payload = normalizeMap(job.get("payload"));
+            int generation = toInt(payload.get("approvalGeneration"), 0);
+            int batchesPerApproval = resolveBatchesPerApproval(payload.get("batchesPerApproval"));
+            int completedInGeneration = (int) loadBatchTasks(runId).stream()
+                .filter(batch -> STATUS_COMPLETED.equals(stringValue(batch.get("status"))))
+                .filter(batch -> toInt(normalizeMap(batch.get("result")).get("approvalGeneration"), -1) == generation)
+                .count();
+            // A batch checkpoint can survive a crash before the separate parent counter write.
+            int processedBatches = Math.max(toInt(payload.get("approvalBatchCount"), 0), completedInGeneration);
             while (processedBatches < batchesPerApproval) {
                 Map<String, Object> batch = nextRunnableBatch(runId);
                 if (batch == null) {
@@ -282,6 +495,7 @@ public class BulkRunService {
                 throwIfRunCancelled(runId);
                 processBatch(runId, batch);
                 processedBatches++;
+                checkpointApprovalBudget(runId, generation, processedBatches);
             }
             Map<String, Object> refreshedJob = requireRun(runId);
             if (nextRunnableBatch(runId) == null) {
@@ -309,13 +523,10 @@ public class BulkRunService {
             );
         } catch (Exception error) {
             logger.error("DOWNLOAD", "Raven mega downloadall run failed.", error);
-            boolean brokerFailure = isDurableBrokerFailure(error);
             safelyUpdateRunAfterFailure(
                 runId,
-                brokerFailure ? STATUS_PAUSED : STATUS_FAILED,
-                brokerFailure
-                    ? firstNonBlank(error.getMessage(), "Raven paused downloadall after a durable broker error. Continue to retry.")
-                    : firstNonBlank(error.getMessage(), "Raven mega downloadall failed."),
+                STATUS_PAUSED,
+                firstNonBlank(error.getMessage(), "Raven paused downloadall. Continue after resolving the reported failure."),
                 error
             );
         }
@@ -324,22 +535,15 @@ public class BulkRunService {
     private Map<String, Object> nextRunnableBatch(String runId) {
         for (Map<String, Object> batch : loadBatchTasks(runId)) {
             String status = stringValue(batch.get("status")).toLowerCase(Locale.ROOT);
-            if (!isBatchTerminal(status)) {
+            if (!STATUS_COMPLETED.equals(status) || hasUnresolvedBatch(normalizeMap(batch.get("result")))) {
                 return batch;
             }
         }
         return null;
     }
 
-    private void maybeScheduleDetachedRunningRun(String runId, Map<String, Object> job) {
-        String status = stringValue(job.get("status")).toLowerCase(Locale.ROOT);
-        if (STATUS_RUNNING.equals(status) && !activeRunIds.contains(runId)) {
-            tryScheduleRunWorker(runId);
-        }
-    }
-
     private boolean tryScheduleRunWorker(String runId) {
-        if (worker.isShutdown() || !activeRunIds.add(runId)) {
+        if (worker.isShutdown() || !restoreReady() || !activeRunIds.add(runId)) {
             return false;
         }
         cancelledRunIds.remove(runId);
@@ -349,6 +553,18 @@ public class BulkRunService {
                     processRun(runId);
                 } finally {
                     activeRunIds.remove(runId);
+                    try {
+                        if (runCancelled(runId)) {
+                            // Reconcile a checkpoint that crossed the cancellation write before its callback returned.
+                            finishCancellation(runId);
+                        }
+                    } catch (Exception error) {
+                        logger.warn("DOWNLOAD", "Bulk worker could not finish cancellation cleanup.", error.getMessage());
+                    }
+                    cancelledRunIds.remove(runId);
+                    if (pendingRunIds.remove(runId)) {
+                        tryScheduleRunWorker(runId);
+                    }
                 }
             });
             return true;
@@ -359,221 +575,289 @@ public class BulkRunService {
         }
     }
 
-    private boolean isRecoverableFailedRun(String runId) {
-        boolean hasRunnableBatch = false;
-        for (Map<String, Object> batch : loadBatchTasks(runId)) {
-            String status = stringValue(batch.get("status")).toLowerCase(Locale.ROOT);
-            if (STATUS_FAILED.equals(status) || STATUS_CANCELLED.equals(status)) {
-                return false;
-            }
-            if (!isBatchTerminal(status)) {
-                hasRunnableBatch = true;
-            }
+    private synchronized Map<String, Object> beginWorker(String runId) {
+        Map<String, Object> job = requireRun(runId);
+        String status = stringValue(job.get("status"));
+        if (!restoreReady() || isRunTerminal(status) || STATUS_PAUSED.equals(status)
+            || (STATUS_QUEUED.equals(status) && !booleanValue(normalizeMap(job.get("payload")).get("startRequested")))) {
+            return null;
         }
-        return hasRunnableBatch;
+        updateRunStatus(job, STATUS_RUNNING, "Raven mega downloadall is running.", buildRunSummary(loadBatchTasks(runId)));
+        return requireRun(runId);
+    }
+
+    private synchronized void checkpointApprovalBudget(String runId, int generation, int completedBatches) {
+        throwIfRunCancelled(runId);
+        Map<String, Object> job = requireRun(runId);
+        Map<String, Object> payload = new LinkedHashMap<>(normalizeMap(job.get("payload")));
+        if (toInt(payload.get("approvalGeneration"), 0) != generation) {
+            throw new BulkRunNeedsAdminRecoveryException("The approval window changed while its worker was finishing.");
+        }
+        payload.put("approvalBatchCount", completedBatches);
+        job.put("payload", payload);
+        putJob(runId, job);
     }
 
     private void processBatch(String runId, Map<String, Object> batch) throws InterruptedException {
-        Map<String, Object> currentBatch = new LinkedHashMap<>(batch);
-        Map<String, Object> result = normalizeMap(currentBatch.get("result"));
-        List<String> taskIds = stringList(result.get("taskIds"));
-        if (taskIds.isEmpty()) {
-            currentBatch = queueBatch(runId, currentBatch);
-            result = normalizeMap(currentBatch.get("result"));
-            taskIds = stringList(result.get("taskIds"));
-            if (taskIds.isEmpty() || STATUS_COMPLETED.equals(stringValue(currentBatch.get("status")))) {
-                return;
-            }
-        } else {
-            currentBatch = withBatchStatus(currentBatch, STATUS_RUNNING, "Waiting for run-owned title tasks.", 25);
-            putBatchTask(runId, currentBatch);
+        Map<String, Object> current = new LinkedHashMap<>(batch);
+        Map<String, Object> result = new LinkedHashMap<>(normalizeMap(current.get("result")));
+        int generation = toInt(normalizeMap(requireRun(runId).get("payload")).get("approvalGeneration"), 0);
+        if (toInt(result.get("approvalGeneration"), -1) != generation) {
+            result.put("approvalAttempts", Map.of());
+            Map<String, Object> retryBlockedSince = new LinkedHashMap<>();
+            normalizeMap(result.get("retryBlockedSince")).keySet().forEach(taskId -> retryBlockedSince.put(taskId, now()));
+            result.put("retryBlockedSince", retryBlockedSince);
+            result.put("approvalGeneration", generation);
         }
-        waitForBatchTasks(runId, currentBatch, taskIds);
+        current.put("result", result);
+        current = withBatchStatus(current, STATUS_RUNNING, "Discovering or reconciling owned title work.", 5);
+        putBatchTask(runId, current);
+        current = queueBatch(runId, current);
+        waitForBatchTasks(runId, current);
     }
 
-    private Map<String, Object> queueBatch(String runId, Map<String, Object> batch) {
+    private Map<String, Object> queueBatch(String runId, Map<String, Object> batch) throws InterruptedException {
         Map<String, Object> payload = normalizeMap(batch.get("payload"));
-        String type = stringValue(payload.get("type"));
-        String titleGroup = stringValue(payload.get("titleGroup"));
-        boolean nsfw = booleanValue(payload.get("nsfw"));
-        batch = withBatchStatus(batch, STATUS_RUNNING, "Queueing " + titleGroup + " " + type + ".", 5);
-        putBatchTask(runId, batch);
-
-        BulkQueueDownloadResult bulkResult = downloaderService.bulkQueueDownload(
-            PROVIDER_ID,
-            type,
-            nsfw,
-            titleGroup,
-            stringValue(payload.get("requestedBy"))
-        );
-        Map<String, Object> result = bulkResultToMap(bulkResult);
-        if (BulkQueueDownloadResult.STATUS_INVALID_REQUEST.equals(bulkResult.status())) {
-            batch.put("result", result);
-            batch = withBatchStatus(batch, STATUS_FAILED, bulkResult.message(), 100);
-            putBatchTask(runId, batch);
-            throw new IllegalStateException(bulkResult.message());
+        Map<String, Object> current = new LinkedHashMap<>(batch);
+        try {
+            BulkQueueDownloadResult bulkResult = gateway.queueBatch(
+                runId, stringValue(batch.get("taskId")), PROVIDER_ID,
+                stringValue(payload.get("type")), booleanValue(payload.get("nsfw")),
+                stringValue(payload.get("titleGroup")), stringValue(payload.get("requestedBy")),
+                () -> runCancelled(runId), (checkpoint) -> {
+                    throwIfRunCancelled(runId);
+                    current.put("result", mergeCheckpoint(normalizeMap(current.get("result")), checkpoint));
+                    putBatchTask(runId, current);
+                });
+            throwIfRunCancelled(runId);
+            Map<String, Object> result = mergeCheckpoint(normalizeMap(current.get("result")), bulkResultToMap(bulkResult));
+            result.put("discoveryComplete", !BulkQueueDownloadResult.STATUS_INVALID_REQUEST.equals(bulkResult.status()));
+            if (BulkQueueDownloadResult.STATUS_INVALID_REQUEST.equals(bulkResult.status())) {
+                result.put("discoveryError", bulkResult.message());
+            } else {
+                result.remove("discoveryError");
+            }
+            Map<String, Object> attempts = new LinkedHashMap<>(normalizeMap(result.get("attempts")));
+            Map<String, Object> approvalAttempts = new LinkedHashMap<>(normalizeMap(result.get("approvalAttempts")));
+            for (String taskId : stringList(result.get("taskIds"))) {
+                if (!attempts.containsKey(taskId)) {
+                    attempts.put(taskId, 1);
+                    approvalAttempts.put(taskId, 1);
+                }
+            }
+            result.put("attempts", attempts);
+            result.put("approvalAttempts", approvalAttempts);
+            current.put("result", result);
+            Map<String, Object> waiting = withBatchStatus(current, STATUS_RUNNING, "Waiting for owned title tasks.", 25);
+            putBatchTask(runId, waiting);
+            return waiting;
+        } catch (BulkRunCancelledException | java.util.concurrent.CancellationException cancelled) {
+            throw new BulkRunCancelledException();
+        } catch (Exception error) {
+            if (Thread.currentThread().isInterrupted()) {
+                throw new InterruptedException("Raven interrupted bulk discovery.");
+            }
+            throwIfRunCancelled(runId);
+            Map<String, Object> result = new LinkedHashMap<>(normalizeMap(current.get("result")));
+            result.put("discoveryComplete", false);
+            result.put("discoveryError", firstNonBlank(error.getMessage(), "Bulk discovery could not finish."));
+            if (error instanceof BulkDiscoveryException discovery) {
+                result.put("errorCode", discovery.code());
+                result.put("pagesScanned", discovery.pagesScanned());
+            }
+            current.put("result", result);
+            pauseBatch(runId, current, "Bulk discovery did not finish. Continue to retry unresolved discovery.", List.of());
+            throw new IllegalStateException("Unreachable discovery recovery path.");
         }
-
-        if (bulkResult.queuedTaskIds().isEmpty()) {
-            batch.put("result", result);
-            batch = withBatchStatus(batch, STATUS_COMPLETED, bulkResult.message(), 100);
-            putBatchTask(runId, batch);
-            return batch;
-        }
-
-        Map<String, Object> attempts = new LinkedHashMap<>();
-        for (String taskId : bulkResult.queuedTaskIds()) {
-            attempts.put(taskId, 1);
-        }
-        result.put("attempts", attempts);
-        batch.put("result", result);
-        batch = withBatchStatus(batch, STATUS_RUNNING, "Waiting for run-owned title tasks.", 25);
-        putBatchTask(runId, batch);
-        return batch;
     }
 
-    private void waitForBatchTasks(String runId, Map<String, Object> batch, List<String> taskIds) throws InterruptedException {
-        Map<String, Object> mutableBatch = new LinkedHashMap<>(batch);
+    private Map<String, Object> mergeCheckpoint(Map<String, Object> previous, Map<String, Object> checkpoint) {
+        Map<String, Object> result = new LinkedHashMap<>(previous);
+        Set<String> protectedFields = Set.of("attempts", "approvalAttempts", "approvalGeneration", "terminalOutcomes",
+            "completedTaskIds", "failedTaskIds", "removedTaskIds", "missingTaskIds", "staleTaskIds", "retryBlockedSince");
+        for (Map.Entry<String, Object> entry : checkpoint.entrySet()) {
+            if (!protectedFields.contains(entry.getKey()) && !"taskIds".equals(entry.getKey()) && !"queuedTaskIds".equals(entry.getKey())) {
+                result.put(entry.getKey(), entry.getValue());
+            }
+        }
+        Set<String> taskIds = new LinkedHashSet<>(stringList(previous.get("taskIds")));
+        taskIds.addAll(stringList(checkpoint.get("taskIds")));
+        taskIds.addAll(stringList(checkpoint.get("queuedTaskIds")));
+        result.put("taskIds", List.copyOf(taskIds));
+        result.put("queuedTaskIds", List.copyOf(taskIds));
+        return result;
+    }
+
+    private void waitForBatchTasks(String runId, Map<String, Object> batch) throws InterruptedException {
+        Map<String, Object> current = new LinkedHashMap<>(batch);
         while (true) {
             throwIfRunCancelled(runId);
-            Map<String, Object> result = new LinkedHashMap<>(normalizeMap(mutableBatch.get("result")));
+            Map<String, Object> result = new LinkedHashMap<>(normalizeMap(current.get("result")));
             Map<String, Object> attempts = new LinkedHashMap<>(normalizeMap(result.get("attempts")));
-            Map<String, Object> observedStatuses = new LinkedHashMap<>();
-            Set<String> completedTaskIds = new LinkedHashSet<>(stringList(result.get("completedTaskIds")));
-            Set<String> failedTaskIds = new LinkedHashSet<>(stringList(result.get("failedTaskIds")));
-            Set<String> removedTaskIds = new LinkedHashSet<>(stringList(result.get("removedTaskIds")));
-            Set<String> missingTaskIds = new LinkedHashSet<>(stringList(result.get("missingTaskIds")));
-            Set<String> staleTaskIds = new LinkedHashSet<>(stringList(result.get("staleTaskIds")));
-            boolean allDone = true;
-            boolean changed = false;
-            boolean anyRunning = false;
-            Map<String, Map<String, Object>> snapshotsByTaskId = titleTasksById();
-
+            Map<String, Object> approvalAttempts = new LinkedHashMap<>(normalizeMap(result.get("approvalAttempts")));
+            Map<String, Object> blockedSince = new LinkedHashMap<>(normalizeMap(result.get("retryBlockedSince")));
+            Map<String, Object> terminals = new LinkedHashMap<>(normalizeMap(result.get("terminalOutcomes")));
+            Set<String> completed = new LinkedHashSet<>(stringList(result.get("completedTaskIds")));
+            Set<String> failed = new LinkedHashSet<>();
+            Set<String> missing = new LinkedHashSet<>();
+            Set<String> stale = new LinkedHashSet<>(stringList(result.get("staleTaskIds")));
+            Map<String, Map<String, Object>> snapshots = new LinkedHashMap<>();
+            for (Map<String, Object> task : gateway.ownedTasks(runId, stringValue(batch.get("taskId")))) {
+                snapshots.put(stringValue(task.get("taskId")), task);
+            }
+            Set<String> taskIds = new LinkedHashSet<>(stringList(result.get("taskIds")));
+            taskIds.addAll(snapshots.keySet());
+            taskIds.addAll(terminals.keySet());
+            Map<String, Object> observed = new LinkedHashMap<>();
+            boolean pending = false;
             for (String taskId : taskIds) {
-                if (removedTaskIds.contains(taskId) || missingTaskIds.contains(taskId)) {
+                if (completed.contains(taskId) || STATUS_COMPLETED.equals(stringValue(normalizeMap(terminals.get(taskId)).get("status")))) {
+                    completed.add(taskId);
+                    observed.put(taskId, STATUS_COMPLETED);
                     continue;
                 }
-                Map<String, Object> task = snapshotsByTaskId.get(taskId);
-                String status = stringValue(task == null ? "" : task.get("status")).toLowerCase(Locale.ROOT);
-                observedStatuses.put(taskId, status.isBlank() ? "missing" : status);
+                Map<String, Object> task = snapshots.get(taskId);
                 if (task == null) {
-                    missingTaskIds.add(taskId);
-                    changed = true;
+                    missing.add(taskId);
+                    observed.put(taskId, "missing");
                     continue;
                 }
-                if (STATUS_RUNNING.equals(status) && isTitleTaskStale(task)) {
-                    safeCancelTask(taskId);
-                    task = titleTasksById().get(taskId);
-                    status = stringValue(task == null ? "" : task.get("status")).toLowerCase(Locale.ROOT);
-                    observedStatuses.put(taskId, status.isBlank() ? "missing" : status);
-                    staleTaskIds.add(taskId);
-                    changed = true;
-                    if (STATUS_RUNNING.equals(status)) {
-                        pauseBatchForManualRecovery(runId, mutableBatch, result, staleTaskIds, taskId);
+                String status = stringValue(task.get("status")).toLowerCase(Locale.ROOT);
+                observed.put(taskId, status);
+                Map<String, Object> acceptedRetry = acceptedRetry(task);
+                if (!attempts.containsKey(taskId)) {
+                    attempts.put(taskId, 1);
+                    if (acceptedRetry.isEmpty()
+                        || toInt(acceptedRetry.get("approvalGeneration"), -1) == toInt(result.get("approvalGeneration"), 0)) {
+                        approvalAttempts.put(taskId, 1);
                     }
-                    if (task == null) {
-                        missingTaskIds.add(taskId);
+                }
+                if (!acceptedRetry.isEmpty()) {
+                    int acceptedCumulative = toInt(acceptedRetry.get("cumulativeAttempt"), 0);
+                    boolean newlyAccepted = acceptedCumulative > toInt(attempts.get(taskId), 0);
+                    attempts.put(taskId, Math.max(toInt(attempts.get(taskId), 0), acceptedCumulative));
+                    if (toInt(acceptedRetry.get("approvalGeneration"), -1) == toInt(result.get("approvalGeneration"), 0)) {
+                        newlyAccepted |= toInt(acceptedRetry.get("approvalAttempt"), 0) > toInt(approvalAttempts.get(taskId), 0);
+                        approvalAttempts.put(taskId, Math.max(toInt(approvalAttempts.get(taskId), 0), toInt(acceptedRetry.get("approvalAttempt"), 0)));
+                    }
+                    if (isNonProgressingQueuedTask(status) && (blockedSince.containsKey(taskId) || newlyAccepted)) {
+                        // A durable acceptance can survive a lost response before a local executor was attached.
+                        if (!safeRetryTask(runId, stringValue(batch.get("taskId")), taskId, acceptedRetry)) {
+                            blockedSince.putIfAbsent(taskId, now());
+                            failed.add(taskId);
+                            continue;
+                        }
+                        blockedSince.remove(taskId);
+                        pending = true;
                         continue;
                     }
+                    if (newlyAccepted) blockedSince.remove(taskId);
                 }
-                if (STATUS_RUNNING.equals(status)) {
-                    anyRunning = true;
-                }
-                if (STATUS_COMPLETED.equals(status)) {
-                    changed = completedTaskIds.add(taskId) || changed;
+                if (!stringValue(task.get("persistenceError")).isBlank()) {
+                    failed.add(taskId);
                     continue;
                 }
-                if (STATUS_CANCELLED.equals(status)) {
-                    safeRemoveTask(taskId);
-                    removedTaskIds.add(taskId);
-                    failedTaskIds.add(taskId);
-                    staleTaskIds.add(taskId);
-                    changed = true;
+                if (STATUS_COMPLETED.equals(status)) {
+                    completed.add(taskId);
+                    stale.remove(taskId);
+                    terminals.put(taskId, Map.of("status", STATUS_COMPLETED, "observedAt", now(),
+                        "titleId", stringValue(task.get("titleId"))));
+                    continue;
+                }
+                if (STATUS_RUNNING.equals(status)) {
+                    if (isTitleTaskStale(task)) {
+                        safeCancelTask(taskId);
+                        stale.add(taskId);
+                        failed.add(taskId);
+                    } else {
+                        pending = true;
+                    }
+                    continue;
+                }
+                if (isNonProgressingQueuedTask(status)) {
+                    pending = true;
                     continue;
                 }
                 if (STATUS_FAILED.equals(status)) {
-                    int attemptsUsed = Math.max(1, toInt(attempts.get(taskId), 1));
-                    if (attemptsUsed < MAX_TITLE_ATTEMPTS) {
-                        if (safeRetryTask(taskId)) {
-                            attempts.put(taskId, attemptsUsed + 1);
-                            changed = true;
-                        }
-                        allDone = false;
+                    int used = toInt(approvalAttempts.get(taskId), 0);
+                    boolean explicitlyCancelled = stringValue(task.get("message")).toLowerCase(Locale.ROOT).startsWith("cancelled")
+                        || "cancelled".equals(stringValue(task.get("failureCode")));
+                    if (used >= MAX_TITLE_ATTEMPTS || (explicitlyCancelled && used > 0)) {
+                        failed.add(taskId);
+                    } else if (safeRetryTask(runId, stringValue(batch.get("taskId")), taskId,
+                        retryAttempt(runId, stringValue(batch.get("taskId")), taskId, toInt(attempts.get(taskId), 0) + 1,
+                            toInt(result.get("approvalGeneration"), 0), used + 1))) {
+                        attempts.put(taskId, toInt(attempts.get(taskId), 0) + 1);
+                        approvalAttempts.put(taskId, used + 1);
+                        blockedSince.remove(taskId);
+                        pending = true;
                     } else {
-                        safeRemoveTask(taskId);
-                        removedTaskIds.add(taskId);
-                        failedTaskIds.add(taskId);
-                        changed = true;
+                        blockedSince.putIfAbsent(taskId, now());
+                        if (olderThan(stringValue(blockedSince.get(taskId)), RETRY_WIND_DOWN_TIMEOUT)) {
+                            failed.add(taskId);
+                        } else {
+                            pending = true;
+                        }
                     }
                     continue;
                 }
-                if (isNonProgressingQueuedTask(status) && isTitleTaskStale(task)) {
-                    safeRemoveTask(taskId);
-                    removedTaskIds.add(taskId);
-                    failedTaskIds.add(taskId);
-                    staleTaskIds.add(taskId);
-                    changed = true;
-                    continue;
-                }
-                allDone = false;
+                // Unknown, cancelled and superseded identities need explicit reconciliation, never silent success.
+                failed.add(taskId);
             }
-
-            int finishedCount = completedTaskIds.size() + removedTaskIds.size() + missingTaskIds.size();
-            int previousFinishedCount = toInt(result.get("lastFinishedCount"), 0);
-            if (changed || finishedCount > previousFinishedCount || stringValue(result.get("lastProgressAt")).isBlank()) {
-                result.put("lastProgressAt", Instant.now().toString());
-            }
+            result.put("taskIds", List.copyOf(taskIds));
+            result.put("queuedTaskIds", List.copyOf(taskIds));
             result.put("attempts", attempts);
-            result.put("observedStatuses", observedStatuses);
-            result.put("completedTaskIds", List.copyOf(completedTaskIds));
-            result.put("failedTaskIds", List.copyOf(failedTaskIds));
-            result.put("removedTaskIds", List.copyOf(removedTaskIds));
-            result.put("missingTaskIds", List.copyOf(missingTaskIds));
-            result.put("staleTaskIds", List.copyOf(staleTaskIds));
-            result.put("lastFinishedCount", finishedCount);
-            result.put("terminalCounts", Map.of(
-                "completed", completedTaskIds.size(),
-                "failed", failedTaskIds.size(),
-                "removed", removedTaskIds.size(),
-                "missing", missingTaskIds.size(),
-                "stale", staleTaskIds.size()
-            ));
-            mutableBatch.put("result", result);
-            int percent = taskIds.isEmpty() ? 100 : Math.min(99, 25 + (int) Math.floor((finishedCount / (double) taskIds.size()) * 70));
-            if (allDone) {
-                mutableBatch = withBatchStatus(mutableBatch, STATUS_COMPLETED, "Batch completed.", 100);
-                putBatchTask(runId, mutableBatch);
+            result.put("approvalAttempts", approvalAttempts);
+            result.put("retryBlockedSince", blockedSince);
+            result.put("terminalOutcomes", terminals);
+            result.put("observedStatuses", observed);
+            result.put("completedTaskIds", List.copyOf(completed));
+            result.put("failedTaskIds", List.copyOf(failed));
+            result.put("missingTaskIds", List.copyOf(missing));
+            result.put("removedTaskIds", List.of());
+            result.put("staleTaskIds", List.copyOf(stale));
+            result.put("lastFinishedCount", completed.size());
+            result.put("terminalCounts", Map.of("completed", completed.size(), "failed", failed.size(), "missing", missing.size(),
+                "removed", 0, "stale", stale.size()));
+            current.put("result", result);
+            if (!failed.isEmpty() || !missing.isEmpty() || hasUnresolvedDiscovery(result)) {
+                Set<String> unresolved = new LinkedHashSet<>(failed);
+                unresolved.addAll(missing);
+                pauseBatch(runId, current, "Some owned title work needs recovery. Continue retries only unresolved work.", List.copyOf(unresolved));
+            }
+            if (!pending && completed.size() == taskIds.size()) {
+                result.remove("recoveryAction");
+                current.put("result", result);
+                putBatchTask(runId, withBatchStatus(current, STATUS_COMPLETED, "Batch completed.", 100));
                 return;
             }
-            if (!anyRunning && isBatchProgressStale(result)) {
-                for (String taskId : taskIds) {
-                    if (completedTaskIds.contains(taskId) || removedTaskIds.contains(taskId) || missingTaskIds.contains(taskId)) {
-                        continue;
-                    }
-                    safeRemoveTask(taskId);
-                    removedTaskIds.add(taskId);
-                    failedTaskIds.add(taskId);
-                    staleTaskIds.add(taskId);
-                }
-                result.put("failedTaskIds", List.copyOf(failedTaskIds));
-                result.put("removedTaskIds", List.copyOf(removedTaskIds));
-                result.put("staleTaskIds", List.copyOf(staleTaskIds));
-                result.put("lastFinishedCount", completedTaskIds.size() + removedTaskIds.size() + missingTaskIds.size());
-                result.put("lastProgressAt", Instant.now().toString());
-                mutableBatch.put("result", result);
-                mutableBatch = withBatchStatus(mutableBatch, STATUS_COMPLETED, "Batch completed with stale title task failures.", 100);
-                putBatchTask(runId, mutableBatch);
-                return;
-            }
-            if (changed) {
-                mutableBatch = withBatchStatus(mutableBatch, STATUS_RUNNING, "Waiting for run-owned title tasks.", percent);
-                putBatchTask(runId, mutableBatch);
-                continue;
-            }
-            mutableBatch = withBatchStatus(mutableBatch, STATUS_RUNNING, "Waiting for run-owned title tasks.", percent);
-            putBatchTask(runId, mutableBatch);
+            int percent = taskIds.isEmpty() ? 25 : Math.min(98, 25 + (int) Math.floor(completed.size() * 70.0 / taskIds.size()));
+            current = withBatchStatus(current, STATUS_RUNNING, "Waiting for owned title tasks.", percent);
+            putBatchTask(runId, current);
             sleepBeforeNextPoll();
         }
+    }
+
+    private boolean hasUnresolvedDiscovery(Map<String, Object> result) {
+        return Boolean.FALSE.equals(result.get("discoveryComplete"))
+            || toInt(result.get("failedCount"), 0) > 0 || toInt(result.get("invalidSourceCount"), 0) > 0
+            || !stringList(result.get("unresolvedPlanIds")).isEmpty();
+    }
+
+    private boolean hasUnresolvedBatch(Map<String, Object> result) {
+        return hasUnresolvedDiscovery(result) || !stringList(result.get("failedTaskIds")).isEmpty()
+            || !stringList(result.get("missingTaskIds")).isEmpty() || !stringList(result.get("removedTaskIds")).isEmpty();
+    }
+
+    private void pauseBatch(String runId, Map<String, Object> batch, String message, List<String> taskIds) {
+        Map<String, Object> result = new LinkedHashMap<>(normalizeMap(batch.get("result")));
+        result.put("recoveryAction", Map.of("type", "unresolved-bulk-work", "runId", runId,
+            "batchId", stringValue(batch.get("taskId")), "taskIds", taskIds,
+            "planIds", stringList(result.get("unresolvedPlanIds")), "adminPath", "/admin/activity/queue",
+            "followUp", "Resolve the reported source or task error, then continue this run.", "message", message));
+        batch.put("result", result);
+        putBatchTask(runId, withBatchStatus(batch, STATUS_PAUSED, message, Math.min(98, toInt(batch.get("percent"), 25))));
+        throw new BulkRunNeedsAdminRecoveryException(message);
     }
 
     private Map<String, Object> buildBatchTask(String runId, String requestedBy, String type, String titleGroup, boolean nsfw, int sortOrder, String now) {
@@ -721,6 +1005,9 @@ public class BulkRunService {
         result.put("lastFinishedCount", 0);
         result.put("observedStatuses", Map.of());
         result.put("attempts", Map.of());
+        result.put("approvalAttempts", Map.of());
+        result.put("terminalOutcomes", Map.of());
+        result.put("discoveryComplete", false);
         return result;
     }
 
@@ -819,11 +1106,19 @@ public class BulkRunService {
         values.put(key, toInt(values.get(key), 0) + amount);
     }
 
-    private void updateRunStatus(Map<String, Object> job, String status, String message, Map<String, Object> summary) {
-        Map<String, Object> updated = new LinkedHashMap<>(job);
+    private synchronized void updateRunStatus(Map<String, Object> job, String status, String message, Map<String, Object> summary) {
+        Map<String, Object> updated = new LinkedHashMap<>(requireRun(stringValue(job.get("jobId"))));
         String previousStatus = stringValue(updated.get("status"));
         String runId = stringValue(updated.get("jobId"));
-        String now = Instant.now().toString();
+        if (STATUS_CANCELLED.equals(previousStatus) && !STATUS_CANCELLED.equals(status)) {
+            throw new BulkRunCancelledException();
+        }
+        String now = now();
+        if (STATUS_PAUSED.equals(status) && !STATUS_PAUSED.equals(previousStatus)) {
+            Map<String, Object> payload = new LinkedHashMap<>(normalizeMap(updated.get("payload")));
+            payload.put("approvalId", newApprovalId());
+            updated.put("payload", payload);
+        }
         updated.put("status", status);
         updated.put("message", firstNonBlank(message, status));
         updated.put("result", summary == null ? Map.of() : summary);
@@ -835,7 +1130,7 @@ public class BulkRunService {
         }
         updated.put("updatedAt", now);
         putJob(runId, updated);
-        if (isRunTerminal(status)) {
+        if (STATUS_COMPLETED.equals(status) || STATUS_FAILED.equals(status)) {
             cancelledRunIds.remove(runId);
         }
     }
@@ -887,6 +1182,79 @@ public class BulkRunService {
         }
     }
 
+    private boolean runCancelled(String runId) {
+        return cancelledRunIds.contains(runId) || STATUS_CANCELLED.equals(stringValue(requireRun(runId).get("status")));
+    }
+
+    private boolean restoreReady() {
+        return gateway.restoreCompletion().isDone() && !gateway.restoreCompletion().isCompletedExceptionally()
+            && !gateway.restoreCompletion().isCancelled();
+    }
+
+    private String restoreFailure() {
+        if (!gateway.restoreCompletion().isCompletedExceptionally()) {
+            return "";
+        }
+        try {
+            gateway.restoreCompletion().join();
+            return "";
+        } catch (RuntimeException error) {
+            Throwable cause = error.getCause() == null ? error : error.getCause();
+            String message = firstNonBlank(cause.getMessage(), cause.getClass().getSimpleName());
+            return message.substring(0, Math.min(500, message.length()));
+        }
+    }
+
+    private String now() {
+        return clock.instant().toString();
+    }
+
+    private String newApprovalId() {
+        return "approval_" + UUID.randomUUID().toString().replace("-", "");
+    }
+
+    private String approvalId(Map<String, Object> job) {
+        String saved = stringValue(normalizeMap(job.get("payload")).get("approvalId"));
+        return saved.isBlank() ? "approval_legacy_" + BulkRunIdentity.digest(List.of(stringValue(job.get("jobId")),
+            stringValue(job.get("status")), stringValue(job.get("updatedAt")))) : saved;
+    }
+
+    private Map<String, Object> publicFilters(Map<String, Object> job) {
+        Map<String, Object> payload = normalizeMap(job.get("payload"));
+        Map<String, Object> filters = new LinkedHashMap<>();
+        for (String key : List.of("providerId", "type", "titlegroup", "nsfw", "batchCount", "batchesPerApproval")) {
+            if (payload.containsKey(key)) {
+                filters.put(key, payload.get(key));
+            }
+        }
+        return filters;
+    }
+
+    private synchronized void repairManifest(Map<String, Object> job) {
+        String runId = stringValue(job.get("jobId"));
+        Map<String, Object> payload = normalizeMap(job.get("payload"));
+        Set<String> existingIds = new LinkedHashSet<>();
+        loadBatchTasks(runId).forEach((batch) -> existingIds.add(stringValue(batch.get("taskId"))));
+        int sortOrder = 0;
+        for (String group : resolveTitleGroups(stringValue(payload.get("titlegroup")))) {
+            for (String type : resolveTypes(stringValue(payload.get("type")))) {
+                String taskId = batchTaskId(runId, type, group);
+                if (!existingIds.contains(taskId)) {
+                    putBatchTask(runId, buildBatchTask(runId, stringValue(job.get("requestedBy")), type, group,
+                        booleanValue(payload.get("nsfw")), sortOrder, now()));
+                }
+                sortOrder++;
+            }
+        }
+        if (!booleanValue(payload.get("manifestComplete"))) {
+            Map<String, Object> current = requireRun(runId);
+            Map<String, Object> updatedPayload = new LinkedHashMap<>(normalizeMap(current.get("payload")));
+            updatedPayload.put("manifestComplete", true);
+            current.put("payload", updatedPayload);
+            putJob(runId, current);
+        }
+    }
+
     private List<String> resolveTypes(String value) {
         String normalized = stringValue(value).toLowerCase(Locale.ROOT);
         if (normalized.isBlank() || "all".equals(normalized)) {
@@ -928,69 +1296,27 @@ public class BulkRunService {
             : resolveTitleGroups(value).getFirst();
     }
 
-    private Map<String, Map<String, Object>> titleTasksById() {
-        Map<String, Map<String, Object>> byId = new LinkedHashMap<>();
-        for (Map<String, Object> task : downloaderService.snapshot()) {
-            byId.put(stringValue(task.get("taskId")), task);
-        }
-        return byId;
-    }
-
     private boolean isTitleTaskStale(Map<String, Object> task) {
-        String updatedAt = firstNonBlank(stringValue(task.get("updatedAt")), stringValue(task.get("queuedAt")));
-        if (updatedAt.isBlank()) {
+        if ("waiting-for-encoder".equals(stringValue(task.get("stage")))) {
             return false;
         }
-        try {
-            return Instant.parse(updatedAt).isBefore(Instant.now().minus(TITLE_PROGRESS_TIMEOUT));
-        } catch (Exception ignored) {
-            return false;
-        }
+        return olderThan(firstNonBlank(stringValue(task.get("actualProgressAt")),
+            stringValue(task.get("updatedAt")), stringValue(task.get("queuedAt"))), TITLE_PROGRESS_TIMEOUT);
     }
 
-    private boolean isBatchProgressStale(Map<String, Object> result) {
-        String lastProgressAt = stringValue(result.get("lastProgressAt"));
-        if (lastProgressAt.isBlank()) {
+    private boolean olderThan(String timestamp, Duration duration) {
+        if (timestamp.isBlank()) {
             return false;
         }
         try {
-            return Instant.parse(lastProgressAt).isBefore(Instant.now().minus(BATCH_PROGRESS_TIMEOUT));
+            return Instant.parse(timestamp).isBefore(clock.instant().minus(duration));
         } catch (Exception ignored) {
             return false;
         }
     }
 
     private boolean isNonProgressingQueuedTask(String status) {
-        return STATUS_QUEUED.equals(status) || status.isBlank() || "pending".equals(status);
-    }
-
-    private void pauseBatchForManualRecovery(
-        String runId,
-        Map<String, Object> batch,
-        Map<String, Object> result,
-        Set<String> staleTaskIds,
-        String taskId
-    ) {
-        String message = "Stale Raven title task " + taskId
-            + " is still running after Raven requested cancellation. Open /admin/activity/queue, cancel that task, "
-            + "then continue bulk run " + runId + ".";
-        Map<String, Object> updatedResult = new LinkedHashMap<>(result);
-        updatedResult.put("staleTaskIds", List.copyOf(staleTaskIds));
-        updatedResult.put("recoveryAction", Map.of(
-            "type", "stale-running-title-task",
-            "runId", runId,
-            "batchId", stringValue(batch.get("taskId")),
-            "taskIds", List.of(taskId),
-            "adminPath", "/admin/activity/queue",
-            "taskAction", "cancel",
-            "followUp", "Continue the bulk run after the title task leaves Running.",
-            "message", message
-        ));
-        Map<String, Object> pausedBatch = new LinkedHashMap<>(batch);
-        pausedBatch.put("result", updatedResult);
-        pausedBatch = withBatchStatus(pausedBatch, STATUS_PAUSED, message, Math.max(25, toInt(batch.get("percent"), 25)));
-        putBatchTask(runId, pausedBatch);
-        throw new BulkRunNeedsAdminRecoveryException(message);
+        return STATUS_QUEUED.equals(status) || "pending".equals(status);
     }
 
     private void safeCancelTask(String taskId) {
@@ -1001,21 +1327,28 @@ public class BulkRunService {
         }
     }
 
-    private boolean safeRetryTask(String taskId) {
+    private Map<String, Object> acceptedRetry(Map<String, Object> task) {
+        BulkRetryAttemptReceipt receipt = BulkRetryAttemptReceipt.from(task);
+        return receipt == null ? Map.of() : receipt.payload();
+    }
+
+    private Map<String, Object> retryAttempt(String runId, String batchId, String taskId, int cumulativeAttempt,
+                                           int approvalGeneration, int approvalAttempt) {
+        String id = "bulk_retry_" + BulkRunIdentity.digest(List.of(runId, batchId, taskId,
+            String.valueOf(cumulativeAttempt), String.valueOf(approvalGeneration), String.valueOf(approvalAttempt)));
+        return Map.of("attemptId", id, "cumulativeAttempt", cumulativeAttempt,
+            "approvalGeneration", approvalGeneration, "approvalAttempt", approvalAttempt);
+    }
+
+    private boolean safeRetryTask(String runId, String batchId, String taskId, Map<String, Object> attempt) {
         try {
-            downloaderService.retryTask(taskId);
+            downloaderService.retryBulkTask(taskId, runId, batchId, stringValue(attempt.get("attemptId")),
+                toInt(attempt.get("cumulativeAttempt"), 0), toInt(attempt.get("approvalGeneration"), 0),
+                toInt(attempt.get("approvalAttempt"), 0));
             return true;
         } catch (Exception error) {
             logger.warn("DOWNLOAD", "Bulk run could not retry a failed title task.", "taskId=" + taskId + " error=" + error.getMessage());
             return false;
-        }
-    }
-
-    private void safeRemoveTask(String taskId) {
-        try {
-            downloaderService.removeTask(taskId);
-        } catch (Exception error) {
-            logger.warn("DOWNLOAD", "Bulk run could not remove a failed title task.", "taskId=" + taskId + " error=" + error.getMessage());
         }
     }
 
@@ -1031,12 +1364,20 @@ public class BulkRunService {
 
     private Map<String, Object> requireRun(String runId) {
         String normalizedRunId = normalizeRunId(runId);
+        Map<String, Object> found = findRun(normalizedRunId);
+        if (found != null) {
+            return found;
+        }
+        throw new IllegalStateException("Bulk run not found.");
+    }
+
+    private Map<String, Object> findRun(String normalizedRunId) {
         for (Map<String, Object> job : loadRunJobs()) {
             if (normalizedRunId.equals(stringValue(job.get("jobId")))) {
                 return job;
             }
         }
-        throw new IllegalStateException("Bulk run not found.");
+        return null;
     }
 
     private List<Map<String, Object>> loadRunJobs() {
@@ -1060,7 +1401,12 @@ public class BulkRunService {
                 return List.of();
             }
             List<Map<String, Object>> batches = new ArrayList<>();
-            payload.forEach((node) -> batches.add(jsonToMap(node)));
+            payload.forEach((node) -> {
+                String kind = node.path("payload").path("kind").asText("");
+                if (!"bulk-title-plan".equals(kind) && !"bulk-discovery-plan".equals(kind)) {
+                    batches.add(jsonToMap(node));
+                }
+            });
             batches.sort(Comparator
                 .comparingInt((Map<String, Object> batch) -> toInt(batch.get("sortOrder"), Integer.MAX_VALUE))
                 .thenComparing((batch) -> stringValue(batch.get("taskId"))));
@@ -1087,7 +1433,7 @@ public class BulkRunService {
     }
 
     private void sleepBeforeNextPoll() throws InterruptedException {
-        TimeUnit.MILLISECONDS.sleep(POLL_DELAY.toMillis());
+        TimeUnit.MILLISECONDS.sleep(Math.max(1, pollDelay.toMillis()));
     }
 
     private String batchTaskId(String runId, String type, String titleGroup) {

@@ -25,6 +25,29 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
  * Tests backend capability selection, stable output, and failure cleanup.
  */
 class FfmpegAvifTranscoderTest {
+    /** Verify an explicitly blank encoder setting uses the documented automatic default. */
+    @Test
+    void blankEncoderPolicyUsesAuto() {
+        FfmpegAvifTranscoder transcoder = new FfmpegAvifTranscoder(Map.of("SCRIPTARR_RAVEN_AVIF_ENCODER", "  "), command -> writeAvif(command));
+        assertTrue(transcoder.readiness().ready());
+        assertEquals("ffmpeg/av1_nvenc", transcoder.encoderName());
+    }
+
+    /** Verify cancelling the initial capability check does not poison subsequent healthy checks. */
+    @Test
+    void interruptedFirstProbeIsNotPermanentlyCached() {
+        AtomicInteger attempts = new AtomicInteger();
+        FfmpegAvifTranscoder transcoder = new FfmpegAvifTranscoder(Map.of(), command -> {
+            if (attempts.incrementAndGet() == 1) throw new InterruptedException("Cancelled probe.");
+            writeAvif(command);
+        });
+        try {
+            assertFalse(transcoder.readiness().ready());
+            assertTrue(Thread.currentThread().isInterrupted());
+        } finally { Thread.interrupted(); }
+        assertTrue(transcoder.readiness().ready());
+        assertEquals(2, attempts.get());
+    }
     /**
      * Verify an unsupported NVIDIA AV1 encoder selects and retains CPU mode.
      *

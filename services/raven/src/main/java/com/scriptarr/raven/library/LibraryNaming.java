@@ -15,7 +15,8 @@ import java.util.regex.Pattern;
  */
 public final class LibraryNaming {
     private static final Pattern TOKEN_PATTERN = Pattern.compile("\\{([a-z_]+)}");
-    private static final Pattern CHAPTER_PATTERN = Pattern.compile("(?i)(?:chapter|c|_c)\\s*([0-9]+(?:\\.[0-9]+)?)");
+    private static final Pattern CHAPTER_PATTERN = Pattern.compile("(?i)(?<![\\p{L}\\p{N}])(?:chapter|c)\\s*([0-9]+(?:\\.[0-9]+)?)(?![\\p{L}\\p{N}]|\\.[0-9])");
+    private static final Pattern DEFAULT_CHAPTER_PATTERN = Pattern.compile("(?i)^(?:.*\\s)?c([0-9]+(?:\\.[0-9]+)?)(?:\\s+\\(v[0-9]+(?:\\.[0-9]+)?\\))?\\s+\\[Scriptarr]\\.cbz$");
     private static final Pattern ANY_NUMBER_PATTERN = Pattern.compile("([0-9]+(?:\\.[0-9]+)?)");
 
     private LibraryNaming() {
@@ -243,9 +244,14 @@ public final class LibraryNaming {
      */
     public static String extractChapterNumber(String fileName, RavenNamingSettings settings, String rawType) {
         String normalized = Optional.ofNullable(fileName).orElse("");
+        String template = normalizedSettings(settings).profileForType(rawType).chapterTemplate();
+        if (RavenNamingSettings.DEFAULT_CHAPTER_TEMPLATE.equals(template)) {
+            Matcher builtIn = DEFAULT_CHAPTER_PATTERN.matcher(normalized);
+            if (builtIn.matches()) return normalizeChapterToken(builtIn.group(1));
+        }
         String templateMatch = extractTemplateNumber(
             normalized,
-            normalizedSettings(settings).profileForType(rawType).chapterTemplate(),
+            template,
             "chapter"
         );
         if (!templateMatch.isBlank()) {
@@ -253,9 +259,9 @@ public final class LibraryNaming {
         }
 
         Matcher chapterMatcher = CHAPTER_PATTERN.matcher(normalized);
-        if (chapterMatcher.find()) {
-            return normalizeChapterToken(chapterMatcher.group(1));
-        }
+        String explicitChapter = "";
+        while (chapterMatcher.find()) explicitChapter = chapterMatcher.group(1);
+        if (!explicitChapter.isBlank()) return normalizeChapterToken(explicitChapter);
 
         Matcher fallback = ANY_NUMBER_PATTERN.matcher(normalized);
         return fallback.find()

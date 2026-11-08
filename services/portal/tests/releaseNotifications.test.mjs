@@ -87,6 +87,7 @@ test("downloadall payload uses compact content and grouped embed fields", () => 
   const payload = buildDownloadAllDirectMessagePayload({
     status: "paused",
     runId: "bulkrun_cae17f4559204bb1bdc449632596bda0",
+    approvalId: "approval-test-1",
     batchesPerApproval: 5,
     linkUrl: "https://pax-kun.com/admin/activity/queue",
     summary: {

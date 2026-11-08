@@ -1,6 +1,7 @@
 /**
  * @file Scriptarr Sage module: services/sage/lib/registerInternalBrokerRoutes.mjs.
  */
+import {createDownloadAllBroker, downloadAllRequestIdError, registerDownloadAllNotificationRoutes} from "./downloadAllBroker.mjs";
 import {appendDurableEvent, buildServiceActor} from "./adminEvents.mjs";
 import {knownPortalDiscordCommands, readPortalDiscordSettings} from "./portalDiscordSettings.mjs";
 import {createPortalTriviaService} from "./portalTrivia.mjs";
@@ -156,11 +157,8 @@ const safeServiceJson = async (promise) => {
 const FOLLOW_NOTIFICATION_ACK_PREFIX = "portal.followNotifications";
 const REQUEST_NOTIFICATION_ACK_PREFIX = "portal.requestNotifications";
 const SYSTEM_NOTIFICATION_ACK_KEY = "portal.systemNotifications.localaiLifecycle";
-const DOWNLOADALL_NOTIFICATION_ACK_KEY = "portal.downloadAllNotifications";
-const DOWNLOADALL_DECISION_PROMPT_KEY = "portal.downloadAllDecisionPrompts";
 const LOCALAI_JOB_KIND = "localai-lifecycle";
 const RAVEN_LIBRARY_INGEST_JOB_KIND = "raven-library-ingest";
-const DOWNLOADALL_PROMPT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 const normalizeTitleKey = (value) => normalizeString(value)
   .toLowerCase()
@@ -297,42 +295,11 @@ const writeAckedSystemNotifications = async (vaultClient, notificationIds) =>
     .map((entry) => normalizeString(entry))
     .filter(Boolean));
 
-const readAckedDownloadAllNotifications = async (vaultClient) =>
-  normalizeArray((await vaultClient.getSetting(DOWNLOADALL_NOTIFICATION_ACK_KEY))?.value)
-    .map((entry) => normalizeString(entry))
-    .filter(Boolean);
-
-const writeAckedDownloadAllNotifications = async (vaultClient, notificationIds) =>
-  vaultClient.setSetting(DOWNLOADALL_NOTIFICATION_ACK_KEY, normalizeArray(notificationIds)
-    .map((entry) => normalizeString(entry))
-    .filter(Boolean)
-    .slice(-500));
-
-const readDownloadAllDecisionPrompts = async (vaultClient) =>
-  normalizeArray((await vaultClient.getSetting(DOWNLOADALL_DECISION_PROMPT_KEY))?.value)
-    .map((entry) => normalizeObject(entry, {}) || {})
-    .filter((entry) => normalizeString(entry.messageId) && normalizeString(entry.runId));
-
-const writeDownloadAllDecisionPrompts = async (vaultClient, prompts) =>
-  vaultClient.setSetting(DOWNLOADALL_DECISION_PROMPT_KEY, normalizeArray(prompts)
-    .map((entry) => normalizeObject(entry, {}) || {})
-    .filter((entry) => normalizeString(entry.messageId) && normalizeString(entry.runId))
-    .slice(-500));
-
 const readIngestRunNotificationState = async (vaultClient) =>
   normalizeIngestRunNotificationState((await vaultClient.getSetting(INGEST_RUN_NOTIFICATION_ACK_KEY))?.value);
 
 const writeIngestRunNotificationState = async (vaultClient, state) =>
   vaultClient.setSetting(INGEST_RUN_NOTIFICATION_ACK_KEY, normalizeIngestRunNotificationState(state));
-
-const isPromptExpired = (prompt = {}) => {
-  const createdAt = normalizeString(prompt.createdAt);
-  if (!createdAt) {
-    return true;
-  }
-  const timestamp = Date.parse(createdAt);
-  return Number.isNaN(timestamp) || timestamp < Date.now() - DOWNLOADALL_PROMPT_TTL_MS;
-};
 
 const readRequestNotificationState = async (vaultClient, requestId) =>
   normalizeObject((await vaultClient.getSetting(`${REQUEST_NOTIFICATION_ACK_PREFIX}.${requestId}`))?.value, {}) || {};
@@ -503,7 +470,8 @@ const buildPortalBulkDownloadPayload = (body = {}) => {
     titlePrefix: titleGroup,
     groupsize: batchesPerApproval,
     batchesPerApproval,
-    requestedBy: normalizeString(body?.requestedBy, "scriptarr-portal")
+    requestedBy: normalizeString(body?.requestedBy, "scriptarr-portal"),
+    ...(body?.requestId ? {requestId: body.requestId} : {})
   };
 };
 
@@ -1084,109 +1052,6 @@ const buildSystemNotifications = async ({config, vaultClient}) => {
     .slice(0, 50);
 };
 
-const buildDownloadAllNotifications = async ({config, vaultClient}) => {
-  const [jobs, ackedIds] = await Promise.all([
-    vaultClient.listJobs({
-      ownerService: "scriptarr-raven",
-      kind: "raven-bulk-downloadall"
-    }),
-    readAckedDownloadAllNotifications(vaultClient)
-  ]);
-  const acked = new Set(ackedIds);
-  const publicBase = normalizeString(config.publicBaseUrl).replace(/\/+$/g, "");
-  const notifications = [];
-  for (const job of normalizeArray(jobs)) {
-    const status = normalizeString(job?.status).toLowerCase();
-    if (!["paused", "completed", "failed", "cancelled"].includes(status)) {
-      continue;
-    }
-    const runId = normalizeString(job?.jobId);
-    const discordUserId = normalizeScalarString(job?.requestedBy);
-    if (!runId || !discordUserId) {
-      continue;
-    }
-    const batches = normalizeArray(await vaultClient.listJobTasks(runId));
-    const completedBatches = batches
-      .filter((batch) => normalizeString(batch?.status).toLowerCase() === "completed")
-      .sort((left, right) => Number(right.sortOrder || 0) - Number(left.sortOrder || 0));
-    const currentBatch = completedBatches[0] || batches.find((batch) => !["completed", "failed", "cancelled"].includes(normalizeString(batch?.status).toLowerCase())) || {};
-    const batchId = normalizeString(currentBatch.taskId, status);
-    const id = `downloadall:${runId}:${batchId}:${status}`;
-    if (acked.has(id)) {
-      continue;
-    }
-    const result = normalizeObject(job?.result, {}) || {};
-    const queued = Number.parseInt(String(result.queuedCount || 0), 10) || 0;
-    const appended = Number.parseInt(String(result.appendedCount || 0), 10) || 0;
-    const completedTitles = Number.parseInt(String(result.completedTitleTaskCount || 0), 10) || 0;
-    const failedTitles = Number.parseInt(String(result.failedTitleTaskCount || 0), 10) || 0;
-    const staleTitles = Number.parseInt(String(result.staleTitleTaskCount || 0), 10) || 0;
-    const skippedCompleted = Number.parseInt(String(result.skippedCompletedCount || 0), 10) || 0;
-    const skippedCurrent = Number.parseInt(String(result.skippedCurrentCount || 0), 10) || 0;
-    const filters = normalizeObject(job?.payload, {}) || {};
-    const batchesPerApproval = Number.parseInt(String(filters.batchesPerApproval || 1), 10) || 1;
-    const remainingBatches = Math.max(0, batches.length - completedBatches.length);
-    const currentBatchPayload = normalizeObject(currentBatch?.payload, {}) || {};
-    const currentBatchLabel = normalizeString(currentBatch?.label)
-      || [
-        normalizeString(currentBatchPayload.titlePrefix || currentBatchPayload.titlegroup),
-        normalizeString(currentBatchPayload.type)
-      ].filter(Boolean).join(" ")
-      || normalizeString(currentBatch?.taskKey || currentBatch?.taskId);
-    const message = status === "paused"
-      ? `Downloadall paused after ${completedBatches.length} batch(es).`
-      : `Downloadall ${status}. ${completedTitles} title task(s) completed.`;
-    notifications.push({
-      id,
-      type: "downloadall",
-      decisionType: status,
-      discordUserId,
-      titleName: "Scriptarr downloadall",
-      status,
-      runId,
-      batchId,
-      batchesPerApproval,
-      jobId: runId,
-      linkUrl: publicBase ? `${publicBase}/admin/activity/queue` : "",
-      message,
-      filters,
-      counts: {
-        completedBatches: completedBatches.length,
-        remainingBatches,
-        queuedCount: queued,
-        appendedCount: appended,
-        completedTitleTaskCount: completedTitles,
-        failedTitleTaskCount: failedTitles,
-        staleTitleTaskCount: staleTitles,
-        skippedCompletedCount: skippedCompleted,
-        skippedCurrentCount: skippedCurrent
-      },
-      summary: {
-        batchesPerApproval,
-        completedBatches: completedBatches.length,
-        remainingBatches,
-        completedTitles,
-        queued,
-        appended,
-        skippedCompleted,
-        skippedCurrent,
-        failedTitles,
-        staleTitles,
-        currentBatchLabel
-      },
-      currentBatch: currentBatch ? {
-        taskId: normalizeString(currentBatch.taskId),
-        status: normalizeString(currentBatch.status),
-        label: currentBatchLabel,
-        type: normalizeString(currentBatchPayload.type),
-        titlePrefix: normalizeString(currentBatchPayload.titlePrefix || currentBatchPayload.titlegroup)
-      } : null,
-      completedAt: normalizeString(job?.finishedAt, normalizeString(job?.updatedAt))
-    });
-  }
-  return notifications.slice(0, 50);
-};
-
 /**
  * Register Sage's token-authenticated internal broker routes. These routes are
  * for first-party service-to-service traffic only; browser clients should
@@ -1210,6 +1075,7 @@ export const registerInternalBrokerRoutes = (app, {
   serviceJson,
   logger
 }) => {
+  const downloadAllBroker = createDownloadAllBroker({config, vaultClient, serviceJson});
   const triviaService = createPortalTriviaService({
     config,
     vaultClient,
@@ -2323,6 +2189,8 @@ export const registerInternalBrokerRoutes = (app, {
   }));
 
   app.post("/api/internal/portal/downloads/bulk-runs", withService(requireService, ["scriptarr-portal"], async (req, res) => {
+    const requestIdError = downloadAllRequestIdError(req.body?.requestId);
+    if (requestIdError) { res.status(400).json({error: requestIdError}); return; }
     const providerError = validatePortalBulkQueueProvider(req.body?.providerId);
     if (providerError) {
       res.status(400).json({error: providerError});
@@ -2339,30 +2207,24 @@ export const registerInternalBrokerRoutes = (app, {
   }));
 
   app.post("/api/internal/portal/downloads/bulk-runs/:runId/continue", withService(requireService, ["scriptarr-portal"], async (req, res) => {
-    await proxyResult(res, serviceJson(config.ravenBaseUrl, `/v1/downloads/bulk-runs/${encodeURIComponent(req.params.runId)}/continue`, {
-      method: "POST",
-      body: {
-        requestedBy: normalizeString(req.body?.requestedBy, "scriptarr-portal")
-      }
-    }));
+    try {
+      const result = await downloadAllBroker.actOnRun(req.params.runId, "continue", req.body || {});
+      res.status(result.status).json(result.payload);
+    } catch (error) { res.status(error.status || 503).json({error: error.message}); }
   }));
 
   app.post("/api/internal/portal/downloads/bulk-runs/:runId/resume", withService(requireService, ["scriptarr-portal"], async (req, res) => {
-    await proxyResult(res, serviceJson(config.ravenBaseUrl, `/v1/downloads/bulk-runs/${encodeURIComponent(req.params.runId)}/continue`, {
-      method: "POST",
-      body: {
-        requestedBy: normalizeString(req.body?.requestedBy, "scriptarr-portal")
-      }
-    }));
+    try {
+      const result = await downloadAllBroker.actOnRun(req.params.runId, "continue", req.body || {});
+      res.status(result.status).json(result.payload);
+    } catch (error) { res.status(error.status || 503).json({error: error.message}); }
   }));
 
   app.post("/api/internal/portal/downloads/bulk-runs/:runId/cancel", withService(requireService, ["scriptarr-portal"], async (req, res) => {
-    await proxyResult(res, serviceJson(config.ravenBaseUrl, `/v1/downloads/bulk-runs/${encodeURIComponent(req.params.runId)}/cancel`, {
-      method: "POST",
-      body: {
-        requestedBy: normalizeString(req.body?.requestedBy, "scriptarr-portal")
-      }
-    }));
+    try {
+      const result = await downloadAllBroker.actOnRun(req.params.runId, "cancel", req.body || {});
+      res.status(result.status).json(result.payload);
+    } catch (error) { res.status(error.status || 503).json({error: error.message}); }
   }));
 
   app.get("/api/internal/portal/notifications/follows", withService(requireService, ["scriptarr-portal"], async (_req, res) => {
@@ -2537,125 +2399,10 @@ export const registerInternalBrokerRoutes = (app, {
     });
   }));
 
-  app.get("/api/internal/portal/notifications/downloadall", withService(requireService, ["scriptarr-portal"], async (_req, res) => {
-    res.json({
-      notifications: await buildDownloadAllNotifications({config, vaultClient})
-    });
-  }));
-
-  app.post("/api/internal/portal/notifications/downloadall/:notificationId/ack", withService(requireService, ["scriptarr-portal"], async (req, res) => {
-    const notificationId = normalizeString(req.params.notificationId);
-    if (!notificationId.startsWith("downloadall:")) {
-      res.status(400).json({error: "A valid downloadall notification id is required."});
-      return;
-    }
-    const current = await readAckedDownloadAllNotifications(vaultClient);
-    if (!current.includes(notificationId)) {
-      await writeAckedDownloadAllNotifications(vaultClient, [...current, notificationId]);
-    }
-    res.json({
-      ok: true,
-      notificationId
-    });
-  }));
-
-  app.post("/api/internal/portal/notifications/downloadall/:notificationId/prompt", withService(requireService, ["scriptarr-portal"], async (req, res) => {
-    const notificationId = normalizeString(req.params.notificationId);
-    const messageId = normalizeString(req.body?.messageId);
-    const runId = normalizeString(req.body?.runId);
-    const ownerDiscordUserId = normalizeScalarString(req.body?.ownerDiscordUserId);
-    if (!notificationId.startsWith("downloadall:") || !messageId || !runId || !ownerDiscordUserId) {
-      res.status(400).json({error: "notificationId, messageId, runId, and ownerDiscordUserId are required."});
-      return;
-    }
-    const current = (await readDownloadAllDecisionPrompts(vaultClient)).filter((prompt) =>
-      normalizeString(prompt.messageId) !== messageId
-      && !isPromptExpired(prompt)
-    );
-    const prompt = {
-      notificationId,
-      messageId,
-      channelId: normalizeString(req.body?.channelId),
-      ownerDiscordUserId,
-      runId,
-      batchId: normalizeString(req.body?.batchId),
-      batchesPerApproval: Number.parseInt(String(req.body?.batchesPerApproval || 1), 10) || 1,
-      status: "pending",
-      notificationStatus: normalizeString(req.body?.status),
-      createdAt: new Date().toISOString(),
-      decidedAt: ""
-    };
-    await writeDownloadAllDecisionPrompts(vaultClient, [...current, prompt]);
-    res.json({ok: true, prompt});
-  }));
-
-  app.post("/api/internal/portal/downloads/bulk-runs/decision", withService(requireService, ["scriptarr-portal"], async (req, res) => {
-    const messageId = normalizeString(req.body?.messageId);
-    const userId = normalizeScalarString(req.body?.userId);
-    const emoji = normalizeString(req.body?.emoji);
-    const prompts = await readDownloadAllDecisionPrompts(vaultClient);
-    const prompt = prompts.find((entry) => normalizeString(entry.messageId) === messageId);
-    if (!prompt) {
-      res.status(404).json({error: "Downloadall decision prompt not found.", status: "missing"});
-      return;
-    }
-    if (normalizeScalarString(prompt.ownerDiscordUserId) !== userId) {
-      res.status(403).json({error: "Only the configured owner can decide this downloadall prompt.", status: "denied"});
-      return;
-    }
-    const expired = isPromptExpired(prompt);
-    if (normalizeString(prompt.status) !== "pending" || expired) {
-      const status = expired ? "expired" : normalizeString(prompt.status, "handled");
-      res.json({
-        ok: true,
-        status,
-        message: `That downloadall prompt was already ${status}.`
-      });
-      return;
-    }
-    const action = emoji === "✅" ? "continue" : emoji === "❌" ? "cancel" : "";
-    if (!action) {
-      res.status(400).json({error: "Unsupported downloadall decision reaction.", status: "unsupported"});
-      return;
-    }
-    const runId = normalizeString(prompt.runId);
-    const batchesPerApproval = Number.parseInt(String(prompt.batchesPerApproval || 1), 10) || 1;
-    const ravenPath = action === "continue"
-      ? `/v1/downloads/bulk-runs/${encodeURIComponent(runId)}/continue`
-      : `/v1/downloads/bulk-runs/${encodeURIComponent(runId)}/cancel`;
-    const result = await safeServiceJson(serviceJson(config.ravenBaseUrl, ravenPath, {
-      method: "POST",
-      body: {requestedBy: userId}
-    }));
-    const decidedAt = new Date().toISOString();
-    const nextPrompt = {
-      ...prompt,
-      status: result.ok ? action : "failed",
-      decidedAt,
-      decisionEmoji: emoji,
-      decisionUserId: userId,
-      resultStatus: result.status
-    };
-    await writeDownloadAllDecisionPrompts(vaultClient, prompts.map((entry) =>
-      normalizeString(entry.messageId) === messageId ? nextPrompt : entry
-    ));
-    if (!result.ok) {
-      res.status(result.status).json({
-        error: result.payload?.error || `Raven returned ${result.status}.`,
-        status: "failed"
-      });
-      return;
-    }
-    res.json({
-      ok: true,
-      status: action,
-      runId,
-      payload: result.payload,
-      message: action === "continue"
-        ? `Continuing the next ${batchesPerApproval} downloadall batch(es).`
-        : "Cancelled the remaining downloadall batches."
-    });
-  }));
+  registerDownloadAllNotificationRoutes(app, {
+    broker: downloadAllBroker,
+    wrap: (handler) => withService(requireService, ["scriptarr-portal"], handler)
+  });
 };
 
 export default registerInternalBrokerRoutes;

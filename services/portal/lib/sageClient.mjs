@@ -107,6 +107,7 @@ const requestJson = async (baseUrl, headers, path, options = {}) => {
 };
 
 export const createSageClient = (config) => {
+  const downloadAllTimeoutMs = Number.isInteger(config.downloadAllNotificationTimeoutMs) ? config.downloadAllNotificationTimeoutMs : 15000;
   const authHeader = {
     "Authorization": `Bearer ${config.serviceToken}`
   };
@@ -325,7 +326,17 @@ export const createSageClient = (config) => {
       );
     },
     listDownloadAllNotifications() {
-      return requestJson(config.sageBaseUrl, authHeader, "/api/internal/portal/notifications/downloadall");
+      return requestJson(config.sageBaseUrl, authHeader, "/api/internal/portal/notifications/downloadall", {timeoutMs: downloadAllTimeoutMs});
+    },
+    beginDownloadAllDelivery(notificationId, payload) {
+      return requestJson(config.sageBaseUrl, jsonHeaders,
+        `/api/internal/portal/notifications/downloadall/${encodeURIComponent(notificationId)}/begin`,
+        {method: "POST", body: payload, timeoutMs: downloadAllTimeoutMs});
+    },
+    recordDownloadAllDelivery(notificationId, payload) {
+      return requestJson(config.sageBaseUrl, jsonHeaders,
+        `/api/internal/portal/notifications/downloadall/${encodeURIComponent(notificationId)}/delivery`,
+        {method: "POST", body: payload, timeoutMs: downloadAllTimeoutMs});
     },
     acknowledgeDownloadAllNotification(notificationId) {
       return requestJson(
@@ -334,7 +345,8 @@ export const createSageClient = (config) => {
         `/api/internal/portal/notifications/downloadall/${encodeURIComponent(notificationId)}/ack`,
         {
           method: "POST",
-          body: {}
+          body: {},
+          timeoutMs: downloadAllTimeoutMs
         }
       );
     },
@@ -345,14 +357,16 @@ export const createSageClient = (config) => {
         `/api/internal/portal/notifications/downloadall/${encodeURIComponent(notificationId)}/prompt`,
         {
           method: "POST",
-          body: payload
+          body: payload,
+          timeoutMs: downloadAllTimeoutMs
         }
       );
     },
     decideDownloadAllPrompt(payload = {}) {
       return requestJson(config.sageBaseUrl, jsonHeaders, "/api/internal/portal/downloads/bulk-runs/decision", {
         method: "POST",
-        body: payload
+        body: payload,
+        timeoutMs: downloadAllTimeoutMs
       });
     },
     chat(payload, options = {}) {

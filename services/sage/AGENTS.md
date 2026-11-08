@@ -37,6 +37,16 @@ HTTP broker.
   acknowledgment state, and should tolerate completed Raven tasks that no longer match a library title.
 - Portal-facing downloadall notifications should use stable ack ids and only acknowledge after Portal confirms the
   requester DM was sent.
+- Downloadall delivery, prompt, and action receipts live in dedicated Sage-owned generic Vault jobs. Retain per-id
+  acknowledgement tombstones rather than evicting old ids from a bounded array. Serialize per-prompt claims within
+  the single Sage runtime and persist them before calling Raven; Raven's durable `approvalId` consumption is the
+  authority across retries and restarts. Generic job upserts are not distributed compare-and-swap. Preserve handled
+  prompt state on registration retries, and capture an action's approval token only once per stable `requestId`.
+  Only `taskKey: "bulk-batch"` tasks count as notification batches; durable discovery/title plans are recovery records.
+  Ambiguous deliveries remain blocked jobs and are counted by the notification queue's `reconciliationRequired` field.
+  After verifying the original bot's actual message, an operator can submit its `messageId` and `channelId` to the
+  Portal-authenticated notification `/delivery` route; subsequent polls finish prompt/ack phases using that receipt.
+  Never reset an unknown outcome to sending merely to clear the blocked state.
 - Portal-facing GitHub update notifications should use stable `update:<latestSha>` ids and only acknowledge after
   Portal confirms the channel post was sent.
 - Keep Moon's trusted public API brokered here. Sage should hash stored API keys, issue short-lived selection tokens,

@@ -1,0 +1,131 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import {createDownloadAllDelivery} from "../lib/downloadAllDelivery.mjs";
+import {createDownloadAllCommand} from "../lib/discord/commands/downloadAllCommand.mjs";
+import {createDirectMessageHandler} from "../lib/discord/directMessageRouter.mjs";
+import {formatBulkRunSummary} from "../lib/discord/downloadAllShared.mjs";
+import {buildDownloadAllDirectMessagePayload} from "../lib/followNotifier.mjs";
+
+const fixture = () => {
+  const notification = {id: "downloadall:run:window:paused", status: "paused", approvalId: "window", runId: "run", discordUserId: "owner"};
+  let delivery = {phase: "sending", nonce: "123456789012345678901234"};
+  const counts = {send: 0, prompt: 0, ack: 0, receipt: 0, reaction: 0};
+  const message = {id: "message", channelId: "channel", react: async () => { counts.reaction++; }};
+  const ok = (payload = {}) => ({ok: true, status: 200, payload});
+  const sage = {
+    listDownloadAllNotifications: async () => ok({notifications: delivery.phase === "acknowledged" ? [] : [notification]}),
+    beginDownloadAllDelivery: async () => ok({delivery: structuredClone(delivery)}),
+    recordDownloadAllDelivery: async (_id, body) => { counts.receipt++; delivery = {...delivery, ...body, phase: "sent"}; return ok({delivery: structuredClone(delivery)}); },
+    recordDownloadAllDecisionPrompt: async () => { counts.prompt++; delivery.promptReady = true; return ok(); },
+    acknowledgeDownloadAllNotification: async () => { counts.ack++; delivery.phase = "acknowledged"; return ok(); }
+  };
+  const discord = {
+    sendDirectMessage: async (_user, payload) => { counts.send++; assert.equal(payload.enforceNonce, true); assert.ok(payload.nonce.length <= 25); return message; },
+    fetchDirectMessage: async (channelId, messageId) => { assert.equal(channelId, "channel"); assert.equal(messageId, "message"); return message; }
+  };
+  const create = () => createDownloadAllDelivery({sage, discord, botIdentity: "noona"});
+  return {sage, discord, counts, message, create, notification, setDelivery: (value) => { delivery = value; }};
+};
+const payload = async () => ({content: "paused summary"});
+
+test("slash and DM summaries distinguish completed title tasks from every policy skip", () => {
+  const counts = {completedTitleTaskCount: 0, queuedCount: 0, skippedActiveCount: 2, skippedAdultContentCount: 3,
+    skippedNoMetadataCount: 4, skippedAmbiguousMetadataCount: 5, invalidSourceCount: 6};
+  const result = {runId: "run", status: "completed", counts};
+  const slash = formatBulkRunSummary(result);
+  assert.match(slash, /Title tasks completed: 0/);
+  for (const [label, count] of [["Already active", 2], ["Adult or unverified content", 3], ["No metadata match", 4], ["Ambiguous metadata", 5], ["Invalid source rows", 6]]) {
+    assert.ok(slash.includes(`${label}: ${count}`));
+  }
+  const dm = buildDownloadAllDirectMessagePayload(result);
+  assert.match(dm.content, /0 title task\(s\) completed/);
+  const skipped = dm.embeds[0].fields.find(field => field.name === "Skipped").value;
+  for (const [label, count] of [["Already active", 2], ["Adult or unverified content", 3], ["No metadata match", 4], ["Ambiguous metadata", 5], ["Invalid source rows", 6]]) {
+    assert.ok(skipped.includes(`${label}: **${count}**`));
+  }
+});
+
+test("prompt HTTP failures retry the accepted message after process restart", async () => {
+  const f = fixture(); const record = f.sage.recordDownloadAllDecisionPrompt; let attempts = 0;
+  f.sage.recordDownloadAllDecisionPrompt = async (...args) => ++attempts === 1 ? {ok: false, status: 503} : record(...args);
+  await f.create().poll(payload);
+  assert.equal(f.counts.send, 1); assert.equal(f.counts.ack, 0);
+  await f.create().poll(payload);
+  assert.equal(f.counts.send, 1); assert.equal(f.counts.prompt, 1); assert.equal(f.counts.ack, 1); assert.equal(f.counts.reaction, 2);
+});
+
+test("ack HTTP failure retries only acknowledgement and never resends", async () => {
+  const f = fixture(); const ack = f.sage.acknowledgeDownloadAllNotification; let attempts = 0;
+  f.sage.acknowledgeDownloadAllNotification = async (...args) => ++attempts === 1 ? {ok: false, status: 500} : ack(...args);
+  await f.create().poll(payload); await f.create().poll(payload);
+  assert.equal(attempts, 2); assert.equal(f.counts.send, 1); assert.equal(f.counts.prompt, 1);
+});
+
+test("an accepted prompt with a lost response still exposes reactions on retry", async () => {
+  const f = fixture(); const record = f.sage.recordDownloadAllDecisionPrompt; let attempts = 0;
+  f.sage.recordDownloadAllDecisionPrompt = async (...args) => {
+    const response = await record(...args);
+    if (++attempts === 1) throw new Error("prompt response lost");
+    return response;
+  };
+  await f.create().poll(payload); await f.create().poll(payload);
+  assert.equal(f.counts.send, 1); assert.equal(f.counts.prompt, 1); assert.equal(f.counts.reaction, 2); assert.equal(f.counts.ack, 1);
+});
+
+test("a failed receipt retains the known accepted message for retry", async () => {
+  const f = fixture(); const record = f.sage.recordDownloadAllDelivery; let attempts = 0;
+  f.sage.recordDownloadAllDelivery = async (...args) => ++attempts === 1 ? {ok: false, status: 503} : record(...args);
+  const delivery = f.create(); await delivery.poll(payload); await delivery.poll(payload);
+  assert.equal(f.counts.send, 1); assert.equal(f.counts.receipt, 1); assert.equal(f.counts.ack, 1);
+});
+
+test("lost Discord response retries the same enforced nonce rather than a second physical message", async () => {
+  const f = fixture(); const nonces = new Set(); let attempts = 0;
+  f.discord.sendDirectMessage = async (_user, body) => {
+    assert.equal(body.enforceNonce, true); nonces.add(body.nonce);
+    if (++attempts === 1) throw new Error("accepted but response lost");
+    return f.message;
+  };
+  await f.create().poll(payload); await f.create().poll(payload);
+  assert.equal(attempts, 2); assert.equal(nonces.size, 1); assert.equal(f.counts.ack, 1);
+});
+
+test("an old ambiguous send is left for reconciliation without sending or acknowledging", async () => {
+  const f = fixture(); f.setDelivery({phase: "ambiguous", nonce: "old"});
+  await f.create().poll(payload);
+  assert.equal(f.counts.send, 0); assert.equal(f.counts.ack, 0);
+});
+
+test("stopping during Discord send still records the accepted identity", async () => {
+  const f = fixture(); let active = true;
+  f.discord.sendDirectMessage = async () => { active = false; return f.message; };
+  await f.create().poll(payload, () => active);
+  assert.equal(f.counts.receipt, 1);
+});
+
+test("slash run and action propagate stable original interaction identifiers", async () => {
+  const forwarded = [], actions = [];
+  const command = createDownloadAllCommand({getSettings: () => ({superuserId: "owner"}), sage: {
+    createBulkRun: async (body) => { forwarded.push(body); return {ok: true, payload: {runId: "run", status: "running"}}; },
+    continueBulkRun: async (id, body) => { actions.push({id, body}); return {ok: true, payload: {runId: id, status: "running"}}; }
+  }});
+  let action = "run";
+  const interaction = {id: "original-interaction", user: {id: "owner"}, deferred: true,
+    options: {getSubcommand: () => action, getString: (name) => ({type: "Manhua", titlegroup: "t", runid: "run"})[name], getBoolean: () => false, getInteger: () => 20},
+    deferReply: async () => {}, editReply: async () => {}};
+  await command.execute(interaction); await command.execute(interaction);
+  assert.deepEqual(forwarded[0], forwarded[1]);
+  assert.deepEqual(forwarded[0], {providerId: "weebcentral", type: "Manhua", nsfw: false, titlePrefix: "t", groupsize: 20, batchesPerApproval: 20, requestedBy: "owner", requestId: "discord:interaction:original-interaction"});
+  action = "continue"; await command.execute(interaction);
+  assert.equal(actions[0].body.requestId, "discord:interaction:original-interaction");
+});
+
+test("legacy DM creation uses the original message identifier", async () => {
+  const bodies = [];
+  const handler = createDirectMessageHandler({getSettings: () => ({superuserId: "owner"}), sage: {
+    createBulkRun: async (body) => { bodies.push(body); return {ok: true, payload: {runId: "run"}}; }
+  }});
+  await handler({id: "original-message", content: "downloadall type:Manhua nsfw:False titlegroup:t groupsize:20", author: {id: "owner"}, reply: async () => ({})});
+  assert.equal(bodies[0].requestId, "discord:message:original-message");
+  assert.equal(bodies[0].nsfw, false);
+});

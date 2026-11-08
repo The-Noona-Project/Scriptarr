@@ -85,12 +85,18 @@
   DM summary. When the requester uses `nsfw:false`, Raven must require an explicit WeebCentral `Adult Content: No`
   before queueing.
 - Portal should poll Sage's downloadall notification queue, DM the requester for paused/completed/failed/cancelled
-  run batches with stable `downloadall:<runId>:<batchId>:<status>` ids, and acknowledge only after Discord accepts
-  the DM.
+  runs with stable `downloadall:<runId>:<batchId-or-approvalId>:<status>` ids, and report completed title tasks and each
+  policy-skip category separately. `lib/downloadAllDelivery.mjs` uses Sage-backed delivery phases; persist the accepted
+  message/channel IDs before registering a prompt or acknowledging. Retry these phases against the existing message.
+  Sends use a stable nonce of at most 25 characters and `enforceNonce`; outcomes older than two minutes require
+  reconciliation instead of automatic resend. Keep acknowledgment tombstones beyond the legacy 500-ID history.
 - Paused downloadall DMs should add check/cross decision reactions and persist the DM message mapping through Sage
   before acknowledging the notification. Only the configured owner can decide; check continues the run and cross
   cancels remaining work. Completed, failed, and cancelled summaries are informational and should not create decision
   prompts.
+- Derive creation/action `requestId` from the Discord interaction ID, or message ID for the legacy text path, and
+  preserve it through Sage. Prompt decisions bind the current durable `approvalId`; repeated registration cannot reset
+  a handled decision, and a stale reaction cannot approve another batch. Continue retries only unresolved work.
 - Preserve `groupsize` across slash-command and legacy DM parsing as `batchesPerApproval` with bounds `1-25`.
 - Appa `/ingest type:<manga|manhwa|manhua|webtoon|comic|oel>` is admin-facing and role-managed through
   `portal.discord.appa.commands.ingest`. Preview must not mutate, confirm buttons expire after 5 minutes, only the

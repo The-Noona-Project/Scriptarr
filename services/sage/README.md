@@ -88,9 +88,14 @@ Sage exposes a Portal notification queue for paused, completed, failed, or cance
 notifications only after Portal confirms the requester DM. Paused downloadall DMs can persist reaction decision
 prompts through Sage so the owner can continue with a check reaction or cancel with a cross reaction; duplicate or
 expired prompt decisions are idempotent.
+Retries of the same Discord command reuse its original run. Approval retries stay attached to the batch window the
+owner approved, even when the run has since advanced. Delivery retries reuse the accepted Discord message; a delivery
+whose outcome cannot be confirmed is held for administrator reconciliation instead of sending another message.
+Run notifications retain separate completion and policy-skip counts, so a finished scan with no eligible titles does
+not imply that a title was downloaded.
 Sage's allowlisted `stale-queue-cleanup` task now checks Raven title tasks and durable Raven bulk runs together. It
-asks Raven for current bulk-run status so detached `running` runs can reattach when Raven can recover them, and it
-persists exact recovery actions when a stale title task or paused bulk run still needs admin follow-up.
+reads current bulk-run status without starting work, and persists exact recovery actions when a stale title task or
+paused bulk run still needs admin follow-up. Raven recovers durable running work independently of status reads.
 Sage also brokers compact paginated Moon library card reads from Vault's card projection, passing `q`, `type`,
 `letter`, `cursor`, `pageSize`, `sort`, and optional exact `ids` through without looping through Raven and back into
 Sage/Vault.

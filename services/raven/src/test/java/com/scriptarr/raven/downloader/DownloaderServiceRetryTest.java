@@ -269,13 +269,13 @@ class DownloaderServiceRetryTest {
     }
 
     /**
-     * Verify Raven can recover a completed download after a title-persist
-     * failure even when the failed task never stored its final download root.
+     * Verify an unverified folder cannot turn a failed persistence task into
+     * a completed download or an invented catalog title.
      *
      * @throws Exception when the temporary downloads root cannot be staged
      */
     @Test
-    void restorePersistedTasksRecoversCompletedFolderWithoutStoredDownloadRoot() throws Exception {
+    void restoreDoesNotCompleteFromAnUnverifiedFolder() throws Exception {
         FakeRavenBrokerClient brokerClient = new FakeRavenBrokerClient();
         brokerClient.setSetting("raven.download.providers", Map.of(
             "providers", List.of(Map.of(
@@ -333,10 +333,9 @@ class DownloaderServiceRetryTest {
         service.restorePersistedTasks();
 
         Map<String, Object> task = service.snapshot().getFirst();
-        assertEquals("completed", task.get("status"));
-        assertEquals(100, task.get("percent"));
-        assertEquals(1, libraryService.listTitles().size());
-        assertEquals(completedRoot.toString(), libraryService.listTitles().getFirst().downloadRoot());
+        assertEquals("failed", task.get("status"));
+        assertTrue(((Number) task.get("percent")).intValue() < 100);
+        assertTrue(libraryService.listTitles().isEmpty());
     }
 
     /**

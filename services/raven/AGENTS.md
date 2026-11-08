@@ -28,9 +28,26 @@ Raven is Scriptarr's Java download, library, metadata, and VPN-aware download en
 - Raven download tasks must not hit `100%` until file promotion, brokered catalog persistence, and AVIF ingest all
   succeed. If persistence or ingest fails, fail the task with the real error instead of leaving it hanging at `90%`.
 - `/downloadall` must skip completed catalog titles, append only missing/new chapters for existing non-completed
-  titles, reject invalid provider URLs, and create durable runs that cannot stall forever on a stale title task. If a
-  stale running title cannot be cancelled into retryable work, persist a paused batch/run recovery action with the
-  exact task id and admin follow-up.
+  titles, reject invalid provider URLs, and persist discovery/title plans before owned enqueue. Incomplete browse
+  results and unresolved owned work must pause with durable task/plan identities; never silently mark them completed
+  or remove failed work to advance a run. Each explicit approval gives unresolved titles three attempts, while
+  cumulative attempts and completed outcomes survive restarts and local terminal-history pruning.
+- Owned retries must persist their attempt identity and cumulative/current-approval counters before dispatch. Reconcile
+  those durable child counters before allocating another retry; replays must not execute a terminal attempt again,
+  and an accepted queued attempt must reattach a missing local executor without spending another allowance.
+- Bulk status reads must be pure. Lifecycle recovery runs after the complete downloader restore barrier and every
+  30 seconds; only running runs or queued runs with persisted `startRequested: true` may recover automatically.
+  Deliberately unstarted, legacy queued, paused, and cancelled runs must not start from monitoring.
+- Bulk creation `requestId` is optional for legacy callers and bounded to 200 printable characters. Keyed creation
+  uses a deterministic run identity and canonical owner/filter fingerprint; conflicting reuse returns HTTP 409.
+  Repair absent deterministic batch rows without overwriting existing progress.
+- Bulk `approvalId` is a state-window token. Tokened continue/cancel consumes it durably before scheduling, rotates
+  the current state token, and retains a compact accepted receipt. Same-action retries return that original receipt;
+  unknown stale or opposite decisions return HTTP 409. GET retains full batches; tokened action POSTs return compact
+  stable status receipts. Keep legacy explicit internal action overloads compatible.
+- Never expire a queued title merely because it has waited a long time. Active-stall detection uses actual work
+  progress and respects encoder wait. Keep title downloads below 100% until their planned chapter set, canonical
+  archives, catalog state, and AVIF manifests have been verified; an existing title row is not completion evidence.
 - Page-level source damage should become catalog quality data, not a whole-title dead end: refresh page lists after
   image 404s, generate Scriptarr missing-page placeholders when needed, and mark partial, missing-content, or
   bad-source quality states deterministically.

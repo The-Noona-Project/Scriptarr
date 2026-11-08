@@ -1463,7 +1463,8 @@ const createDependencyStub = ({
       response.end(JSON.stringify({
         runId: "bulk-run-1",
         status: "paused",
-        message: "Waiting for owner continuation."
+        message: "Waiting for owner continuation.",
+        approvalId: "approval-test-1"
       }));
       return;
     }

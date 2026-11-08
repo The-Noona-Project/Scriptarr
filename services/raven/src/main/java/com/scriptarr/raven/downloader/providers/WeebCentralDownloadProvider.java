@@ -10,6 +10,8 @@ import java.net.URI;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.function.BooleanSupplier;
+import java.util.function.IntConsumer;
 
 /**
  * WeebCentral download provider implementation.
@@ -61,6 +63,12 @@ public class WeebCentralDownloadProvider implements DownloadProvider {
     @Override
     public BulkBrowseResult browseTitlesAlphabetically(String type, boolean adultContent, String titlePrefix) {
         return titleScraper.browseTitlesAlphabetically(type, adultContent, titlePrefix);
+    }
+
+    @Override
+    public BulkBrowseResult browseTitlesAlphabetically(String type, boolean adultContent, String titlePrefix,
+        BooleanSupplier cancelled, IntConsumer progress) {
+        return titleScraper.browseTitlesAlphabetically(type, adultContent, titlePrefix, cancelled, progress);
     }
 
     @Override

@@ -35,6 +35,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BooleanSupplier;
+import java.util.function.Consumer;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
@@ -121,6 +122,20 @@ public final class LibraryIngestService {
      * @return successful ingest result
      */
     public LibraryIngestResult ingestChapter(LibraryTitle title, LibraryChapter chapter, BooleanSupplier cancelled) {
+        return ingestChapter(title, chapter, cancelled, progress -> { });
+    }
+
+    /**
+     * Convert a chapter while reporting actual page completion and encoder waits.
+     *
+     * @param title owning title
+     * @param chapter source chapter
+     * @param cancelled cancellation predicate
+     * @param progress actual ingest progress callback
+     * @return ready reader-page result
+     */
+    public LibraryIngestResult ingestChapter(LibraryTitle title, LibraryChapter chapter, BooleanSupplier cancelled,
+        Consumer<IngestProgress> progress) {
         assertHardwareReady();
         throwIfCancelled(cancelled);
         Path archivePath = resolveArchivePath(chapter);
@@ -137,7 +152,7 @@ public final class LibraryIngestService {
 
         try {
             Files.createDirectories(stageRoot);
-            List<PageManifestEntry> pages = transcodeArchivePages(title, archivePath, stageRoot, cancelled == null ? () -> false : cancelled);
+            List<PageManifestEntry> pages = transcodeArchivePages(title, archivePath, stageRoot, cancelled == null ? () -> false : cancelled, progress == null ? value -> { } : progress);
             if (pages.isEmpty()) {
                 throw new LibraryIngestException("empty_archive", "CBZ archive did not contain readable image pages.");
             }
@@ -200,7 +215,7 @@ public final class LibraryIngestService {
         Map<String, Object> status = new LinkedHashMap<>();
         status.put("profile", transcoder.runtimeProfile());
         status.put("required", required);
-        status.put("state", encoder.ready() ? "ready" : encoder.code());
+        status.put("state", encoder.ready() ? "ready" : required ? "hardware_missing" : encoder.code());
         status.put("encoder", transcoder.encoderName());
         status.put("format", transcoder.format());
         status.put("mediaType", transcoder.mediaType());
@@ -232,7 +247,8 @@ public final class LibraryIngestService {
         LibraryTitle title,
         Path archivePath,
         Path stageRoot,
-        BooleanSupplier cancelled
+        BooleanSupplier cancelled,
+        Consumer<IngestProgress> progress
     )
         throws IOException, InterruptedException {
         RavenNamingSettings namingSettings = settingsService.getNamingSettings();
@@ -253,6 +269,7 @@ public final class LibraryIngestService {
             Files.createDirectories(sourceRoot);
             List<PageManifestEntry> pages = new ArrayList<>();
             int collected = 0;
+            progress.accept(new IngestProgress("waiting-for-encoder", 0, entries.size(), 0, 1, false));
             for (int index = 0; index < entries.size(); index++) {
                 throwIfCancelled(cancelled);
                 ZipEntry entry = entries.get(index);
@@ -263,15 +280,18 @@ public final class LibraryIngestService {
                 try (InputStream stream = zipFile.getInputStream(entry)) {
                     Files.copy(stream, sourcePath, StandardCopyOption.REPLACE_EXISTING);
                 }
+                progress.accept(new IngestProgress("waiting-for-encoder", collected, entries.size(), 0, 1, false));
                 futures.add(submitPageTranscode(new PageTranscodeInput(index, slug, mediaType, sourcePath, outputPath), cancelled));
                 while (futures.size() - collected >= pageConcurrency) {
                     pages.add(readPageFuture(futures.get(collected), cancelled));
                     collected += 1;
+                    progress.accept(new IngestProgress("ingesting", collected, entries.size(), 0, 1, true));
                 }
             }
             while (collected < futures.size()) {
                 pages.add(readPageFuture(futures.get(collected), cancelled));
                 collected += 1;
+                progress.accept(new IngestProgress("ingesting", collected, entries.size(), 0, 1, true));
             }
             pages.sort(Comparator.comparingInt(PageManifestEntry::index));
             return pages;
@@ -498,15 +518,7 @@ public final class LibraryIngestService {
         return transcoder.format() + "-" + HexFormat.of().formatHex(digest.digest()).substring(0, 16);
     }
 
-    private boolean isImageEntry(String name) {
-        String normalized = Optional.ofNullable(name).orElse("").toLowerCase(Locale.ROOT);
-        return normalized.endsWith(".jpg")
-            || normalized.endsWith(".jpeg")
-            || normalized.endsWith(".png")
-            || normalized.endsWith(".gif")
-            || normalized.endsWith(".webp")
-            || normalized.endsWith(".avif");
-    }
+    private boolean isImageEntry(String name) { return ArchiveImageEntries.isImage(name); }
 
     private String mediaTypeForArchiveEntry(String name) {
         String normalized = Optional.ofNullable(name).orElse("").toLowerCase(Locale.ROOT);
@@ -545,14 +557,7 @@ public final class LibraryIngestService {
         return ".jpg";
     }
 
-    private int countArchivePages(Path archivePath) throws IOException {
-        try (ZipFile zipFile = new ZipFile(archivePath.toFile())) {
-            return (int) zipFile.stream()
-                .filter((entry) -> !entry.isDirectory())
-                .filter((entry) -> isImageEntry(entry.getName()))
-                .count();
-        }
-    }
+    private int countArchivePages(Path archivePath) throws IOException { return ArchiveImageEntries.count(archivePath); }
 
     private String safeSegment(String value, String fallback) {
         String segment = LibraryNaming.slugifySegment(firstNonBlank(value, fallback));

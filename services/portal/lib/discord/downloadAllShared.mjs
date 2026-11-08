@@ -193,8 +193,14 @@ export const formatBulkRunSummary = (result = {}) => {
   const remainingBatches = toCount(counts.remainingBatches ?? result?.remainingBatches, 0);
   const queued = toCount(counts.queuedCount ?? result?.queuedCount, 0);
   const appended = toCount(counts.appendedCount ?? result?.appendedCount, 0);
+  const completedTitles = toCount(counts.completedTitleTaskCount ?? result?.completedTitleTaskCount, 0);
   const skippedCompleted = toCount(counts.skippedCompletedCount ?? result?.skippedCompletedCount, 0);
   const skippedCurrent = toCount(counts.skippedCurrentCount ?? result?.skippedCurrentCount, 0);
+  const skippedActive = toCount(counts.skippedActiveCount ?? result?.skippedActiveCount, 0);
+  const skippedAdult = toCount(counts.skippedAdultContentCount ?? result?.skippedAdultContentCount, 0);
+  const skippedNoMetadata = toCount(counts.skippedNoMetadataCount ?? result?.skippedNoMetadataCount, 0);
+  const skippedAmbiguous = toCount(counts.skippedAmbiguousMetadataCount ?? result?.skippedAmbiguousMetadataCount, 0);
+  const invalidSource = toCount(counts.invalidSourceCount ?? result?.invalidSourceCount, 0);
   const failedTitles = toCount(counts.failedTitleTaskCount ?? result?.failedTitleTaskCount, 0);
   const staleTitles = toCount(counts.staleTitleTaskCount ?? result?.staleTitleTaskCount, 0);
   const lines = [
@@ -211,12 +217,18 @@ export const formatBulkRunSummary = (result = {}) => {
     "",
     "Progress",
     `- Batches: ${completedBatches} done / ${remainingBatches} remaining`,
+    `- Title tasks completed: ${completedTitles}`,
     `- Queued titles: ${queued}`,
     `- Append updates: ${appended}`,
     "",
     "Skipped",
     `- Completed titles: ${skippedCompleted}`,
     `- Already current: ${skippedCurrent}`,
+    `- Already active: ${skippedActive}`,
+    `- Adult or unverified content: ${skippedAdult}`,
+    `- No metadata match: ${skippedNoMetadata}`,
+    `- Ambiguous metadata: ${skippedAmbiguous}`,
+    `- Invalid source rows: ${invalidSource}`,
     "",
     "Needs attention",
     `- Failed title tasks: ${failedTitles}`,
@@ -295,6 +307,7 @@ export const executeDownloadAll = async ({
   logger,
   onRuntimeEvent,
   requestedBy,
+  requestId,
   filters,
   source = "unknown"
 } = {}) => {
@@ -329,7 +342,8 @@ export const executeDownloadAll = async ({
       providerId: "weebcentral",
       ...filters,
       groupsize: filters?.batchesPerApproval,
-      requestedBy: normalizeString(requestedBy)
+      requestedBy: normalizeString(requestedBy),
+      ...(requestId ? {requestId} : {})
     };
     const result = await sage.createBulkRun(payload);
     const failure = resolveBulkQueueFailure(result);
@@ -370,6 +384,7 @@ export const executeDownloadAllRunAction = async ({
   getSettings,
   sage,
   requestedBy,
+  requestId,
   runId,
   action = "status"
 } = {}) => {
@@ -392,10 +407,10 @@ export const executeDownloadAllRunAction = async ({
   }
 
   if (action === "continue" || action === "resume") {
-    return sage.continueBulkRun(normalizedRunId, {requestedBy: normalizeString(requestedBy)});
+    return sage.continueBulkRun(normalizedRunId, {requestedBy: normalizeString(requestedBy), ...(requestId ? {requestId} : {})});
   }
   if (action === "cancel") {
-    return sage.cancelBulkRun(normalizedRunId, {requestedBy: normalizeString(requestedBy)});
+    return sage.cancelBulkRun(normalizedRunId, {requestedBy: normalizeString(requestedBy), ...(requestId ? {requestId} : {})});
   }
   return sage.getBulkRunStatus(normalizedRunId);
 };

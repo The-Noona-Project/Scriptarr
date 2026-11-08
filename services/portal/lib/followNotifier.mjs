@@ -1,4 +1,5 @@
 import {FOLLOW_NOTIFICATION_POLL_MS} from "./discord/constants.mjs";
+import {createDownloadAllDelivery} from "./downloadAllDelivery.mjs";
 
 const normalizeArray = (value) => Array.isArray(value) ? value : [];
 const normalizeString = (value, fallback = "") => {
@@ -44,18 +45,6 @@ const escapeMarkdownLinkText = (value) => normalizeString(value)
   .replace(/\]/g, "\\]");
 const DOWNLOADALL_APPROVE_REACTION = "✅";
 const DOWNLOADALL_DENY_REACTION = "❌";
-
-const addDownloadAllDecisionReactions = async (message, logger) => {
-  if (!message || typeof message.react !== "function") {
-    return;
-  }
-  try {
-    await message.react(DOWNLOADALL_APPROVE_REACTION);
-    await message.react(DOWNLOADALL_DENY_REACTION);
-  } catch (error) {
-    logger?.warn?.("Portal could not add downloadall decision reactions.", {error});
-  }
-};
 
 const resolveRequestEventType = (notification = {}) => {
   const normalized = normalizeString(
@@ -166,12 +155,18 @@ export const buildDownloadAllDirectMessagePayload = (notification = {}, publicBa
   const appended = toCount(summary.appended ?? counts.appendedCount ?? notification.appendedCount, 0);
   const skippedCompleted = toCount(summary.skippedCompleted ?? counts.skippedCompletedCount ?? notification.skippedCompletedCount, 0);
   const skippedCurrent = toCount(summary.skippedCurrent ?? counts.skippedCurrentCount ?? notification.skippedCurrentCount, 0);
+  const skippedActive = toCount(summary.skippedActive ?? counts.skippedActiveCount ?? notification.skippedActiveCount, 0);
+  const skippedAdult = toCount(summary.skippedAdultContent ?? counts.skippedAdultContentCount ?? notification.skippedAdultContentCount, 0);
+  const skippedNoMetadata = toCount(summary.skippedNoMetadata ?? counts.skippedNoMetadataCount ?? notification.skippedNoMetadataCount, 0);
+  const skippedAmbiguous = toCount(summary.skippedAmbiguousMetadata ?? counts.skippedAmbiguousMetadataCount ?? notification.skippedAmbiguousMetadataCount, 0);
+  const invalidSource = toCount(summary.invalidSource ?? counts.invalidSourceCount ?? notification.invalidSourceCount, 0);
   const failedTitles = toCount(summary.failedTitles ?? counts.failedTitleTaskCount ?? notification.failedTitleTaskCount, 0);
   const staleTitles = toCount(summary.staleTitles ?? counts.staleTitleTaskCount ?? notification.staleTitleTaskCount, 0);
   const displayRunId = compactRunId(runId);
-  const actionLine = status === "paused"
+  const hasApproval = Boolean(normalizeString(notification.approvalId));
+  const actionLine = status === "paused" && hasApproval
     ? `React ${DOWNLOADALL_APPROVE_REACTION} to run the next ${batchesPerApproval} batch(es), or ${DOWNLOADALL_DENY_REACTION} to cancel.`
-    : `Run ${displayRunId || "unknown"} is ${status}.`;
+    : status === "paused" ? "Use the continue slash command to approve the next batch window." : `Run ${displayRunId || "unknown"} is ${status}.`;
   const fallbackCommand = runId ? `\`/downloadall continue runid:${runId}\`` : "`/downloadall continue runid:<id>`";
   const currentBatchLabel = normalizeString(
     summary.currentBatchLabel
@@ -220,7 +215,12 @@ export const buildDownloadAllDirectMessagePayload = (notification = {}, publicBa
           name: "Skipped",
           value: [
             `Completed titles: **${skippedCompleted}**`,
-            `Already current: **${skippedCurrent}**`
+            `Already current: **${skippedCurrent}**`,
+            `Already active: **${skippedActive}**`,
+            `Adult or unverified content: **${skippedAdult}**`,
+            `No metadata match: **${skippedNoMetadata}**`,
+            `Ambiguous metadata: **${skippedAmbiguous}**`,
+            `Invalid source rows: **${invalidSource}**`
           ].join("\n"),
           inline: true
         },
@@ -237,8 +237,7 @@ export const buildDownloadAllDirectMessagePayload = (notification = {}, publicBa
         status === "paused" ? {
           name: "Next action",
           value: [
-            `${DOWNLOADALL_APPROVE_REACTION} Continue next **${batchesPerApproval}** batch(es)`,
-            `${DOWNLOADALL_DENY_REACTION} Cancel remaining run`,
+            ...(hasApproval ? [`${DOWNLOADALL_APPROVE_REACTION} Continue next **${batchesPerApproval}** batch(es)`, `${DOWNLOADALL_DENY_REACTION} Cancel remaining run`] : []),
             `Fallback: ${fallbackCommand}`
           ].join("\n"),
           inline: false
@@ -249,7 +248,7 @@ export const buildDownloadAllDirectMessagePayload = (notification = {}, publicBa
           inline: false
         } : null
       ].filter(Boolean),
-      footer: status === "paused"
+      footer: status === "paused" && hasApproval
         ? {text: "React once. Duplicate or late decisions are ignored."}
         : undefined
     }]
@@ -620,20 +619,6 @@ const deliverNotifications = async ({
       if (!shouldContinue()) {
         return;
       }
-      if (kind === "downloadall" && normalizeString(notification.status) === "paused") {
-        await addDownloadAllDecisionReactions(sentMessage, logger);
-        if (notificationId && typeof sage?.recordDownloadAllDecisionPrompt === "function") {
-          await sage.recordDownloadAllDecisionPrompt(notificationId, {
-            messageId: normalizeString(sentMessage?.id),
-            channelId: normalizeString(sentMessage?.channelId || sentMessage?.channel?.id),
-            ownerDiscordUserId: normalizeString(notification.discordUserId),
-            runId: normalizeString(notification.jobId || notification.runId),
-            batchId: normalizeString(notification.batchId),
-            batchesPerApproval: toCount(notification.batchesPerApproval, 1),
-            status: normalizeString(notification.status)
-          });
-        }
-      }
       if (notificationId) {
         deliveredIds.add(notificationId);
         await acknowledge(notificationId);
@@ -820,6 +805,8 @@ export const createFollowNotifier = ({
   let inFlight = false;
   let inFlightPromise = null;
   let generation = 0;
+  const downloadAllDelivery = createDownloadAllDelivery({sage, discord: adminDiscord || discord,
+    botIdentity: adminDiscord ? "appa" : "noona", logger});
 
   const shouldContinue = (pollGeneration = generation) => active && pollGeneration === generation;
 
@@ -914,17 +901,8 @@ export const createFollowNotifier = ({
       if (!canContinue()) {
         return;
       }
-      await deliverNotifications({
-        list: () => sage?.listDownloadAllNotifications?.(),
-        acknowledge: (id) => sage?.acknowledgeDownloadAllNotification?.(id),
-        kind: "downloadall",
-        discord: adminDiscord || discord,
-        sage,
-        logger,
-        publicBaseUrl,
-        getBrandName,
-        shouldContinue: canContinue
-      });
+      await downloadAllDelivery.poll((notification) => appendAiMessageContext({sage, kind: "downloadall", notification,
+        payload: buildDirectMessagePayload(notification, "downloadall", publicBaseUrl, requestCommand, getBrandName?.() || "Scriptarr"), logger}), canContinue);
     } catch (error) {
       logger?.error?.("Portal notifier poll failed.", {error});
     } finally {

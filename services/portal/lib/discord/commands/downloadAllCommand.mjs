@@ -117,6 +117,7 @@ export const createDownloadAllCommand = ({
           getSettings,
           sage,
           requestedBy,
+          requestId: interaction.id ? `discord:interaction:${interaction.id}` : undefined,
           runId: interaction.options?.getString?.("runid"),
           action: subcommandName
         });
@@ -153,6 +154,7 @@ export const createDownloadAllCommand = ({
         logger,
         onRuntimeEvent,
         requestedBy,
+        requestId: interaction.id ? `discord:interaction:${interaction.id}` : undefined,
         filters,
         source: "dm-slash"
       });

@@ -278,7 +278,7 @@ class TitleScraperRetryTest {
                             <strong>Type:</strong><span>Manga</span>
                           </article>
                           <article class="bg-base-300">
-                            <a href="/series/a-certain/A Certain Scientific Accelerator" class="line-clamp-1 link link-hover">A Certain Scientific Accelerator</a>
+                            <a href="/series/a-certain/A-Certain-Scientific-Accelerator" class="line-clamp-1 link link-hover">A Certain Scientific Accelerator</a>
                             <strong>Type:</strong><span>Manga</span>
                           </article>
                           <button hx-get="/search/data?limit=32&amp;offset=64&amp;sort=Alphabet&amp;order=Ascending&amp;official=Any&amp;anime=Any&amp;adult=False&amp;included_type=Manga&amp;display_mode=Full+Display"></button>
@@ -295,11 +295,11 @@ class TitleScraperRetryTest {
                 """
                     <html><body>
                       <article class="bg-base-300">
-                        <a href="/series/brave-story/Brave Story" class="line-clamp-1 link link-hover">Brave Story</a>
+                        <a href="/series/brave-story/Brave-Story" class="line-clamp-1 link link-hover">Brave Story</a>
                         <strong>Type:</strong><span>Manga</span>
                       </article>
                       <article class="bg-base-300">
-                        <a href="/series/blue-lock/Blue Lock" class="line-clamp-1 link link-hover">Blue Lock</a>
+                        <a href="/series/blue-lock/Blue-Lock" class="line-clamp-1 link link-hover">Blue Lock</a>
                         <strong>Type:</strong><span>Manga</span>
                       </article>
                       <div id="query-text">%s</div>

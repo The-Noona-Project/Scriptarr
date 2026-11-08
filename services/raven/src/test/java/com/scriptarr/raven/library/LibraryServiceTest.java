@@ -35,6 +35,104 @@ import static org.mockito.Mockito.when;
  * Unit tests for Raven's durable library projection behavior.
  */
 class LibraryServiceTest {
+    /** Numeric title tokens must never collapse distinct canonical chapter paths during startup scanning. */
+    @Test
+    void rescanKeepsExplicitChapterSuffixesForNumericSeriesNames(@TempDir Path root) throws Exception {
+        FakeRavenBrokerClient broker = new FakeRavenBrokerClient();
+        ScriptarrLogger logger = mock(ScriptarrLogger.class);
+        when(logger.getDownloadsRoot()).thenReturn(root);
+        RavenSettingsService settings = new RavenSettingsService(broker, logger, List.of());
+        LibraryService service = new LibraryService(broker, settings, logger);
+        String name = "Scriptarr Bulk QA Synthetic 3483bbd434cb mw76wri9";
+        Path folder = root.resolve("downloaded/manga").resolve(LibraryNaming.sanitizeTitleFolder(name));
+        java.util.ArrayList<LibraryChapter> chapters = new java.util.ArrayList<>();
+        for (String number : List.of("1", "2")) {
+            Path archive = writeArchive(folder.resolve(LibraryNaming.buildChapterArchiveName(settings.getNamingSettings(), name, "Manga", number, "", 1, "manual-import")), Map.of("page.png", pngPage(80)));
+            chapters.add(new LibraryChapter("", "Chapter " + number, number, 1, "", true, archive.toString(), "", null));
+        }
+        LibraryTitle title = service.recordDownloadedTitle(name, "Manga", "", "", null, chapters, null, folder);
+        title = service.ingestTitle(title.id(), "qa");
+        LibraryChapter ready = title.chapters().stream().filter(chapter -> chapter.chapterNumber().equals("1")).findFirst().orElseThrow();
+        Path manifest = Path.of(ready.ingestManifestPath());
+        byte[] before = Files.readAllBytes(manifest);
+        var modified = Files.getLastModifiedTime(manifest);
+        service.rescanDownloadedFiles();
+        LibraryTitle scanned = service.findTitle(title.id());
+        assertEquals(List.of("1", "2"), scanned.chapters().stream().map(LibraryChapter::chapterNumber).sorted().toList());
+        assertEquals(ready.ingestRevision(), scanned.chapters().stream().filter(chapter -> chapter.chapterNumber().equals("1")).findFirst().orElseThrow().ingestRevision());
+        assertArrayEquals(before, Files.readAllBytes(manifest));
+        assertEquals(modified, Files.getLastModifiedTime(manifest));
+    }
+
+    /** Files first discovered after promotion must retain both chapter suffixes without a prior catalog row. */
+    @Test
+    void rescanDiscoversNumericSeriesWithNoExistingCatalog(@TempDir Path root) throws Exception {
+        FakeRavenBrokerClient broker = new FakeRavenBrokerClient();
+        ScriptarrLogger logger = mock(ScriptarrLogger.class);
+        when(logger.getDownloadsRoot()).thenReturn(root);
+        RavenSettingsService settings = new RavenSettingsService(broker, logger, List.of());
+        LibraryService service = new LibraryService(broker, settings, logger);
+        String name = "Scriptarr Bulk QA Synthetic 3483bbd434cb mw76wri9";
+        Path folder = root.resolve("downloaded/manga").resolve(LibraryNaming.sanitizeTitleFolder(name));
+        for (String number : List.of("1", "2")) writeArchive(folder.resolve(LibraryNaming.buildChapterArchiveName(settings.getNamingSettings(), name, "Manga", number, "", 1, "source")));
+        service.rescanDownloadedFiles();
+        assertEquals(1, service.listTitles().size());
+        assertEquals(List.of("1", "2"), service.listTitles().getFirst().chapters().stream().map(LibraryChapter::chapterNumber).sorted().toList());
+    }
+
+    /** A metadata-only page-count repair during scan must retain valid reader output and quality evidence. */
+    @Test
+    void rescanCorrectsLegacyMetadataEntryCountsWithoutReencoding(@TempDir Path root) throws Exception {
+        legacyArchivePageCountRecovery(root, true);
+    }
+
+    /** Explicit ingest reuse must checkpoint legacy inflated counts without rewriting ready AVIF pages. */
+    @Test
+    void ingestCorrectsLegacyMetadataEntryCountsWithoutReencoding(@TempDir Path root) throws Exception {
+        legacyArchivePageCountRecovery(root, false);
+    }
+
+    private void legacyArchivePageCountRecovery(Path root, boolean scan) throws Exception {
+        FakeRavenBrokerClient broker = new FakeRavenBrokerClient();
+        ScriptarrLogger logger = mock(ScriptarrLogger.class);
+        when(logger.getDownloadsRoot()).thenReturn(root);
+        LibraryService service = new LibraryService(broker, new RavenSettingsService(broker, logger, List.of()), logger);
+        Path folder = root.resolve("downloaded/manga/Metadata_Series");
+        Path archive = writeArchive(folder.resolve("Metadata Series c001 [Scriptarr].cbz"), Map.of("001.png", pngPage(40), "ComicInfo.xml", "<ComicInfo/>".getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        LibraryTitle title = service.recordDownloadedTitle("Metadata Series", "Manga", "", "", null,
+            List.of(new LibraryChapter("", "Chapter 1", "1", 2, "", true, archive.toString(), "", "partial", 9, 1, List.of(9), List.of("Prior quality evidence."), null)),
+            root.resolve("downloading/manga/Metadata_Series"), folder);
+        title = service.ingestTitle(title.id(), "qa");
+        assertEquals(1, title.chapters().getFirst().pageCount());
+        LibraryChapter ready = title.chapters().getFirst();
+        LibraryChapter legacy = new LibraryChapter(ready.id(), ready.label(), "1", 2, ready.releaseDate(), true, ready.archivePath(), ready.sourceUrl(),
+            ready.qualityStatus(), ready.expectedPageCount(), ready.missingPageCount(), ready.missingPages(), ready.qualityNotes(), "ready",
+            ready.ingestRevision(), ready.ingestedPageCount(), ready.ingestedAt(), ready.ingestError(), ready.ingestManifestPath(), ready.updatedAt());
+        broker.putLibraryChapters(title.id(), Map.of("chapters", List.of(legacy)));
+        assertTrue(service.isReaderReadyChapter(legacy));
+        Path manifest = Path.of(ready.ingestManifestPath());
+        Map<Path, byte[]> bytes = new java.util.LinkedHashMap<>();
+        Map<Path, java.nio.file.attribute.FileTime> times = new java.util.LinkedHashMap<>();
+        try (var files = Files.list(manifest.getParent())) {
+            for (Path file : files.filter(Files::isRegularFile).toList()) {bytes.put(file, Files.readAllBytes(file)); times.put(file, Files.getLastModifiedTime(file));}
+        }
+        byte[] archiveBytes = Files.readAllBytes(archive);
+        var archiveTime = Files.getLastModifiedTime(archive);
+        if (scan) service.rescanDownloadedFiles();
+        else service.ingestTitle(title.id(), "qa");
+        LibraryChapter corrected = service.findTitle(title.id()).chapters().getFirst();
+        assertEquals(1, corrected.pageCount());
+        assertEquals(1, corrected.ingestedPageCount());
+        assertEquals(ready.ingestRevision(), corrected.ingestRevision());
+        assertEquals(ready.ingestedAt(), corrected.ingestedAt());
+        assertEquals(ready.qualityNotes(), corrected.qualityNotes());
+        assertEquals(9, corrected.expectedPageCount());
+        assertEquals(List.of(9), corrected.missingPages());
+        for (Path file : bytes.keySet()) {assertArrayEquals(bytes.get(file), Files.readAllBytes(file)); assertEquals(times.get(file), Files.getLastModifiedTime(file));}
+        assertArrayEquals(archiveBytes, Files.readAllBytes(archive));
+        assertEquals(archiveTime, Files.getLastModifiedTime(archive));
+    }
+
     /**
      * A full startup rescan can take minutes on a large catalog when the
      * broker is cold, so it must not hold the same monitor that title ingest
