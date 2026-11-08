@@ -68,6 +68,9 @@ export const resolveClusterTopology = ({env = process.env} = {}) => {
   if (owners["scriptarr-sage"] !== primaryHostId) {
     throw new Error("Sage must be assigned to the primary Warden host.");
   }
+  if (["scriptarr-vault", "scriptarr-raven"].some((service) => owners[service] !== primaryHostId)) {
+    throw new Error("Vault and Raven must share Sage's primary host because their ports remain private to its Docker network.");
+  }
   if (owners["scriptarr-mysql"] && owners["scriptarr-mysql"] !== owners["scriptarr-vault"]) {
     throw new Error("Managed MySQL must be assigned to the same host as Vault.");
   }

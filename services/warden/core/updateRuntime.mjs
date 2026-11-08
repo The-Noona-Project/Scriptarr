@@ -67,6 +67,7 @@ const normalizeRequestedServices = (requestedServices) => {
  * @returns {{
  *   getStatus: () => Promise<{services: Array<Record<string, unknown>>, job: Record<string, unknown> | null, checkedAt: string | null}>,
  *   checkForUpdates: (requestedServices?: string[]) => Promise<{services: Array<Record<string, unknown>>, job: Record<string, unknown> | null, checkedAt: string}>,
+ *   startCheck: (requestedServices?: string[]) => Promise<{job: Record<string, unknown>, services: Array<Record<string, unknown>>, checkedAt: string | null}>,
  *   installUpdates: (requestedServices?: string[]) => Promise<{job: Record<string, unknown>, services: Array<Record<string, unknown>>, checkedAt: string | null}>
  * }}
  */
@@ -209,7 +210,7 @@ export const createUpdateRuntime = ({
     };
   };
 
-  const installUpdates = async (requestedServices = []) => {
+  const installUpdates = async (requestedServices = [], {checkOnly = false} = {}) => {
     if (state.job?.status === "running") {
       return {
         job: state.job,
@@ -224,13 +225,14 @@ export const createUpdateRuntime = ({
       kind: "service-update",
       ownerService: "scriptarr-warden",
       status: "running",
-      label: "Managed service update",
+      label: checkOnly ? "Managed service update check" : "Managed service update",
       requestedBy: "moon-admin",
       requestedServices: selected,
       servicesToRestart: [],
       tasks: [],
       payload: {
         requestedServices: selected,
+        action: checkOnly ? "check" : "install",
         ...(hostId ? {hostId} : {})
       },
       result: {},
@@ -300,7 +302,7 @@ export const createUpdateRuntime = ({
           }
         });
 
-        if (!servicesToRestart.length) {
+        if (checkOnly || !servicesToRestart.length) {
           job.status = "completed";
           job.finishedAt = nowIso();
           await saveJob();
@@ -376,6 +378,7 @@ export const createUpdateRuntime = ({
       job: state.job ? await hydrateJob(state.job) : await loadPersistedLatestJob(),
       checkedAt: state.checkedAt
     }),
+    startCheck: (requestedServices) => installUpdates(requestedServices, {checkOnly: true}),
     checkForUpdates,
     installUpdates
   };

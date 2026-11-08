@@ -59,3 +59,17 @@ test("ambiguous ownership and insecure remote agent addresses fail before planni
   assert.throws(() => resolveClusterTopology({env: {...environment("core"), SCRIPTARR_WARDEN_TOPOLOGY: JSON.stringify(insecure)}}), /must be HTTPS/);
   assert.throws(() => resolveClusterTopology({env: {...environment("core"), SCRIPTARR_WARDEN_HOST_ID: "unknown"}}), /local\/primary/);
 });
+
+test("private Vault and Raven placements must remain with Sage", () => {
+  for (const service of ["scriptarr-vault", "scriptarr-raven"]) {
+    const remote = structuredClone(topology);
+    const moved = service === "scriptarr-vault" ? [service, "scriptarr-mysql"] : [service];
+    remote.hosts[0].services = remote.hosts[0].services.filter((name) => !moved.includes(name));
+    remote.hosts[1].services.push(...moved);
+    for (const hostId of ["core", "ai"]) {
+      assert.throws(() => resolveServicePlan({env: {
+        ...environment(hostId), SCRIPTARR_WARDEN_TOPOLOGY: JSON.stringify(remote)
+      }}), /Vault and Raven must share Sage's primary host/);
+    }
+  }
+});

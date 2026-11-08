@@ -66,7 +66,7 @@ Warden also ships the Docker-backed test stack used by repo contributors:
 - `/api/runtime`: Warden self status plus live managed-service runtime details, with sensitive env values redacted
 - `/api/logs`: allowlisted, server-redacted Docker log tails for Warden and managed Scriptarr services
 - `/api/updates`: current managed-service image state plus the latest broker-backed update job snapshot
-- `/api/updates/check`: pull-first update check for the managed sibling services
+- `/api/updates/check`: asynchronous pull-first check; HTTP 202 returns a job to poll through `/api/updates`
 - `/api/updates/install`: asynchronous managed-service install or restart flow for the sibling services
 - `/api/localai/*`: legacy standalone LocalAI sidecar controls kept for single-host compatibility only; multi-host
   deployments reject configuration/install/start/remove with HTTP 409 and retain read diagnostics. Moon's current AI
@@ -91,6 +91,8 @@ Set the same `SCRIPTARR_WARDEN_TOPOLOGY` JSON on each participating Warden and s
 `SCRIPTARR_WARDEN_HOST_ID`. A topology assigns every service to exactly one host. `primaryHostId` identifies the host
 that owns Sage and aggregates remote status and updates. Each Warden reconciles only its assigned containers through
 its local Docker socket; Docker bridge DNS and sockets are never stretched across servers.
+Vault and Raven must remain on Sage's primary host because their service ports stay private to that Docker bridge.
+Unsupported remote placements are rejected before container planning.
 
 ```json
 {
@@ -122,6 +124,8 @@ control bearer token. A worker cannot issue control requests to the primary or a
 `SCRIPTARR_WARDEN_AGENT_PORT` and `SCRIPTARR_WARDEN_AGENT_HOST` override the HTTPS listener bind. The agent URL in
 the shared topology must match the published port. Agent requests have bounded response sizes and timeouts
 (`SCRIPTARR_WARDEN_AGENT_TIMEOUT_MS`, default 4000, maximum 15000).
+Image update checks run as background jobs, so image pulls can continue beyond this short control-request deadline.
+Poll `/api/updates` for the job outcome and refreshed image availability; checking does not restart containers.
 
 In this topology Sage port 3004 is published on the core LAN IP, and Portal/Oracle ports 3003/3001 are published on
 the AI LAN IP. Restrict those LAN ports to the peer host; Portal and Oracle receive required service authorization.

@@ -79,7 +79,7 @@ test("warden initialize refreshes the LocalAI runtime after stack reconciliation
       async getStatus() {
         return {};
       },
-      async checkForUpdates() {
+      async startCheck() {
         return {};
       },
       async installUpdates() {

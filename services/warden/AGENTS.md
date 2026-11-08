@@ -29,6 +29,8 @@ managed services.
 - A multi-host topology is authoritative and immutable for a deployment: reconcile/prune only locally assigned
   services, use authenticated mTLS for primary-to-worker control, and never expose a remote Docker socket. Keep
   remote AI/Portal failures separate from core reader health.
+- Vault and Raven must share Sage's primary host while their ports are bridge-private. Public update checks must
+  return background jobs; reserve synchronous image comparison for the update worker itself.
 - Multi-host mode must reject legacy standalone LocalAI mutations on both hosts. Oracle owns its embedded backend;
   retain legacy Warden LocalAI read diagnostics and single-host compatibility only.
 - CPU AVIF mode must omit NVIDIA runtime requirements; Oracle GPU planning remains independent of Raven encoding.

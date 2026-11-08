@@ -50,7 +50,7 @@ export const registerRuntimeRoutes = (app, runtime) => {
 
   app.post("/api/updates/check", async (req, res) => {
     const result = await runtime.checkUpdates(req.body?.services);
-    res.status(result.ok === false ? 503 : 200).json(result);
+    res.status(result.ok === false ? 503 : result.job?.status === "running" ? 202 : 200).json(result);
   });
 
   app.post("/api/updates/install", async (req, res) => {
