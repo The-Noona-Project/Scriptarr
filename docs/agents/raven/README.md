@@ -29,6 +29,13 @@
   summary only, leaves chapter/AVIF state untouched, and never replaces nonblank catalog art. Metadata application
   may also fill missing art. Bulk append plans use already-browsed cover URLs only when earlier selected download or
   metadata art is absent; do not change frozen requests during status reads or recovery.
+- `LibraryService.upsertTitle` serializes blank-cover checkpoints with artwork repairs and uses only the existing
+  exact-id compact-card lookup (`ids`, `pageSize=1`). `LibraryCoverCheckpoint` accepts complete zero-row responses for
+  new titles and retains stored art from one correctly scoped card. Vault resolves aliases and echoes canonical ids
+  in `filters.ids`; validate card ownership against that scope rather than rejecting a legitimate renamed identity.
+  Failed, malformed or incomplete lookups must not reach the title PUT. Do not use `findTitleById` for this decision:
+  its reader-friendly error handling returns null on broker failures. Nonblank incoming covers bypass preservation,
+  and chapter checkpoint APIs remain unchanged.
 - Keep full JavaDoc on Raven main and test Java sources and let `gradlew check` fail when doc coverage regresses.
 - Fresh installs must not reintroduce demo titles; Raven's default library state is empty until real ingest exists.
 - Raven library storage now uses dynamic source-backed type labels and the managed folder lifecycle:

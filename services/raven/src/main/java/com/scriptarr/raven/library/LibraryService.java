@@ -305,19 +305,27 @@ public final class LibraryService {
     }
 
     /**
-     * Upsert a title summary into Raven's durable catalog.
+     * Upsert a title summary, retaining stored artwork when an older checkpoint has none.
      *
      * @param title title payload to store
      * @return updated title payload
      */
     public synchronized LibraryTitle upsertTitle(LibraryTitle title) {
         try {
+            if (title.id() == null || title.id().isBlank() || title.id().contains(",")) {
+                throw new IllegalArgumentException("One nonblank title identity is required for a title checkpoint.");
+            }
+            if (stringValue(title.coverUrl()).isBlank()) {
+                title = LibraryCoverCheckpoint.preserve(title,
+                    brokerClient.listLibraryTitleCards(Map.of("ids", title.id(), "pageSize", "1")));
+            }
             Map<String, Object> titlePayload = objectMapper.convertValue(title, new TypeReference<>() {
             });
             titlePayload.remove("chapters");
             JsonNode payload = brokerClient.putLibraryTitle(title.id(), titlePayload);
             return objectMapper.treeToValue(payload, LibraryTitle.class);
         } catch (Exception error) {
+            if (error instanceof InterruptedException) Thread.currentThread().interrupt();
             logger.warn("LIBRARY", "Failed to persist Raven title.", error.getMessage());
             throw new IllegalStateException("Failed to persist Raven title.", error);
         }

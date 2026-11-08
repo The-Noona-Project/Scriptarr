@@ -70,6 +70,10 @@ Raven is Scriptarr's Java download, library, metadata, and VPN-aware download en
 - Preserve saved cover URLs through both canonical-ingest and already-ready completion recovery, independently of
   metadata-provider availability. Fill only missing catalog artwork with title-summary writes; never replace chapter
   rows or ready pages for a cover repair. Append plans retain browsed art only after existing selected cover sources.
+- A blank-cover title checkpoint must check the exact compact catalog identity under `upsertTitle`'s class lock and
+  preserve newly retained art. Treat successful empty pages as genuine absence; transport or malformed lookup results
+  must suppress the write. Validate the returned card against Vault's canonical `filters.ids` alias scope. Explicit
+  nonblank artwork updates keep their existing behavior.
 - Keep full JavaDoc on Raven main and test Java sources. `gradlew check` is the expected enforcement path.
 
 ## Coding Map
