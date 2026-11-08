@@ -112,7 +112,9 @@ public final class RemoteChapterProcessor {
                 JsonNode bundle = json.readTree(directory.resolve("bundle.json").toFile());
                 if (!WebpChapterEncoder.sha256(archive).equals(hash)) throw new IOException("Canonical input changed while conversion was pending.");
                 if (!"completed".equals(status)) client.json("POST", "/jobs/" + id + "/publish", Map.of("epoch", epoch, "artifactSha256", artifact.path("sha256").asText()), null);
-                return new Result(id, epoch, artifact.path("sha256").asText(), directory, bundle);
+                JsonNode completedChapter = "completed".equals(status) ? job.path("result").path("chapter") : null;
+                if (completedChapter != null && !completedChapter.isObject()) throw new IOException("Completed conversion has no original chapter receipt.");
+                return new Result(id, epoch, artifact.path("sha256").asText(), directory, bundle, completedChapter == null ? null : completedChapter.deepCopy());
             }
             Thread.sleep(1000); job = unwrap(client.json("GET", "/jobs/" + id, null, null));
         }
@@ -303,5 +305,8 @@ public final class RemoteChapterProcessor {
     private static JsonNode unwrap(JsonNode value) { return value != null && value.has("job") ? value.path("job") : value; }
 
     /** Accepted worker output awaiting coordinator publication and atomic catalog completion. */
-    public record Result(String jobId, long epoch, String artifactSha256, Path directory, JsonNode bundle) { }
+    public record Result(String jobId, long epoch, String artifactSha256, Path directory, JsonNode bundle, JsonNode completedChapter) {
+        /** @param jobId immutable job @param epoch transport fence @param artifactSha256 accepted transfer digest @param directory private accepted files @param bundle validated artifact metadata */
+        public Result(String jobId, long epoch, String artifactSha256, Path directory, JsonNode bundle) { this(jobId, epoch, artifactSha256, directory, bundle, null); }
+    }
 }

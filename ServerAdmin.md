@@ -591,6 +591,8 @@ If a saved reader image disappears, its logical page is recorded in the chapter'
 segments also leave a failed ingest that can be retried from the canonical CBZ in `/admin/ingest`.
 Retries can reuse a validated completed conversion artifact. The catalog repair preserves quality history and requires
 the same source, chapter and saved output identity; superseded content remains a diagnosed recovery condition.
+This also repairs a missing saved manifest while retaining validated page files. Damaged older reader files do not
+block an append or import from reaching its ingest repair stage.
 `/admin/calendar` is a month or agenda release view fed by Sage's calendar payload. Completed titles appear through
 dated chapter entries when available and get one title-level completion marker when Raven only has title or chapter
 update timestamps. Titles with no usable date are counted as undated completed instead of being dropped.

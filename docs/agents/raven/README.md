@@ -28,6 +28,13 @@
 - WebP revisions use source SHA/profile, never CBZ mtime. Immutable output lives under
   `ingested/<type>/<title>/<chapter>/<webp-revision>/`. Identical content in a new transfer epoch retains its files and
   manifest. Different page/profile hashes cannot overwrite it. Existing AVIF identity and reads remain supported.
+- Complete chapter validation parses one validated manifest snapshot for all logical pages, segments and completion
+  counters; do not reopen the full manifest inside a per-page or per-tile loop. Reader byte delivery still verifies all
+  siblings of the selected logical page and keeps selector/symlink checks.
+- Missing-manifest publication validates every retained entry against the staged accepted artifact before writing.
+  Install only absent expected files using private-stage temporary copies and ordinary moves without replacement,
+  then install the manifest last under the title/maintenance lease. Retain valid file identities and reuse the already
+  completed job's exact chapter timestamp; never rewrite its completion receipt or accept foreign/differing paths.
 - Logical pages retain source count/index. Segmentation profile2 bounds every native raster to 64Mi pixels and ≤16383
   per side; row width=min(width,16383), row height=min(16383,floor(64Mi/rowWidth)). Keep profile1 geometry/revisions
   readable, and create distinct profile2 content jobs/revisions instead of overwriting older immutable output.

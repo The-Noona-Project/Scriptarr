@@ -281,6 +281,7 @@ public final class LibraryIngestService {
                 .resolve(safeSegment(title.id(), "title")).resolve(safeSegment(chapter.id(), "chapter"));
             Path destination = chapterRoot.resolve(revision), manifest = destination.resolve("manifest.json");
             String ingestedAt;
+            if (Files.isSymbolicLink(destination) || Files.isSymbolicLink(manifest)) throw new IOException("Immutable reader publication must not follow a link.");
             if (Files.isRegularFile(manifest)) {
                 var saved = objectMapper.readTree(manifest.toFile());
                 if (!result.jobId().equals(saved.path("conversionJobId").asText()) || !revision.equals(saved.path("revision").asText())
@@ -302,21 +303,42 @@ public final class LibraryIngestService {
                     .resolve(safeSegment(chapter.id(), "chapter") + "-" + result.epoch() + "-" + System.nanoTime());
                 Files.createDirectories(stage);
                 try (var files = Files.list(result.directory())) { for (Path file : files.filter(p -> p.getFileName().toString().endsWith(".webp")).toList()) Files.copy(file, stage.resolve(file.getFileName())); }
-                ingestedAt = Instant.now().toString(); Map<String, Object> metadata = objectMapper.convertValue(bundle, new com.fasterxml.jackson.core.type.TypeReference<>() { });
+                ingestedAt = publicationTimestamp(result, chapter, archive, revision, manifest, count); Map<String, Object> metadata = objectMapper.convertValue(bundle, new com.fasterxml.jackson.core.type.TypeReference<>() { });
                 metadata.putAll(Map.of("titleId", title.id(), "chapterId", chapter.id(), "libraryTypeSlug", title.libraryTypeSlug(), "sourceArchivePath", archive.toString(),
                     "quality", 85, "method", 4, "segmentationVersion", version, "revision", revision, "ingestedAt", ingestedAt));
                 metadata.put("conversionJobId", result.jobId()); metadata.put("conversionEpoch", result.epoch()); metadata.put("artifactSha256", result.artifactSha256());
                 metadata.put("derivedFileCount", bundle.path("pages").findValues("segments").stream().mapToInt(com.fasterxml.jackson.databind.JsonNode::size).sum());
                 objectMapper.writerWithDefaultPrettyPrinter().writeValue(stage.resolve("manifest.json").toFile(), metadata);
                 throwIfCancelled(cancelled); Files.createDirectories(chapterRoot);
-                try { Files.move(stage, destination, StandardCopyOption.ATOMIC_MOVE); }
-                catch (java.nio.file.AtomicMoveNotSupportedException unsupported) { Files.move(stage, destination); }
-                stage = null;
+                if (Files.exists(destination, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+                    ImmutableManifestRecovery.restore(stage, destination, resolveDataRoot().resolve(INGESTED_FOLDER_NAME), cancelled);
+                } else {
+                    try { Files.move(stage, destination, StandardCopyOption.ATOMIC_MOVE); }
+                    catch (java.nio.file.AtomicMoveNotSupportedException unsupported) { Files.move(stage, destination); }
+                    stage = null;
+                }
             }
             return new LibraryIngestResult("ready", revision, count, ingestedAt, manifest.toString(), List.of(), result.jobId(), result.epoch(), result.artifactSha256());
         } catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); throw new LibraryIngestException("ingest_cancelled", "Reader processing was cancelled."); }
         catch (Exception failure) { throw new LibraryIngestException("remote_ingest_failed", "Remote reader processing could not be committed: " + sanitizeError(failure.getMessage())); }
         finally { deleteTreeQuietly(stage); }
+    }
+
+    /** @param result accepted immutable output and optional original completed receipt @param chapter owning checkpoint @param archive validated canonical source @param revision derived content identity @param manifest exact destination @param count logical pages @return original completed timestamp or a new unpublished timestamp @throws IOException when completed identity differs */
+    private String publicationTimestamp(RemoteChapterProcessor.Result result, LibraryChapter chapter, Path archive, String revision, Path manifest, int count) throws IOException {
+        var original = result.completedChapter();
+        if (original == null) return Instant.now().toString();
+        int segments = 0; for (var page : result.bundle().path("pages")) segments += page.path("segments").size();
+        if (!chapter.id().equals(original.path("id").asText()) || !"ready".equals(original.path("ingestStatus").asText())
+            || !revision.equals(original.path("ingestRevision").asText()) || !original.path("available").asBoolean()
+            || original.path("pageCount").asInt() != count || original.path("sourcePageCount").asInt() != count || original.path("ingestedPageCount").asInt() != count
+            || original.path("expectedSegmentCount").asInt() != segments || original.path("ingestedSegmentCount").asInt() != segments || !original.path("segmentsReady").asBoolean()
+            || !archive.toAbsolutePath().normalize().equals(Path.of(original.path("archivePath").asText()).toAbsolutePath().normalize())
+            || !manifest.toAbsolutePath().normalize().equals(Path.of(original.path("ingestManifestPath").asText()).toAbsolutePath().normalize())) throw new IOException("Original completion does not match the immutable reader revision.");
+        String saved = original.path("ingestedAt").asText();
+        try { Instant.parse(saved); }
+        catch (java.time.format.DateTimeParseException invalid) { throw new IOException("Original completion timestamp is unavailable."); }
+        return saved;
     }
 
     /**

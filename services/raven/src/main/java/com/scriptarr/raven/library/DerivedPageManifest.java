@@ -27,7 +27,7 @@ public final class DerivedPageManifest {
         if (chapter == null || !chapter.ingestRevision().startsWith("webp-") || !"ready".equals(chapter.ingestStatus())) return Map.of();
         JsonNode manifest = read(chapter); int count = 0;
         for (JsonNode page : manifest.path("pages")) count += page.path("segments").size();
-        if (count < chapter.ingestedPageCount() || !reusable(chapter)) throw new IOException("All logical WebP segments must be ready before catalog completion.");
+        if (count < chapter.ingestedPageCount() || !reusable(chapter, manifest)) throw new IOException("All logical WebP segments must be ready before catalog completion.");
         return Map.of("sourcePageCount", chapter.pageCount(), "expectedSegmentCount", count, "ingestedSegmentCount", count, "segmentsReady", true);
     }
 
@@ -58,10 +58,15 @@ public final class DerivedPageManifest {
      * @throws IOException when any selector or file is invalid
      */
     public static Path page(LibraryChapter chapter, int pageIndex, Integer segmentIndex, boolean thumbnail) throws IOException {
-        JsonNode manifest = read(chapter), pages = manifest.path("pages");
+        return page(chapter, read(chapter), pageIndex, segmentIndex, thumbnail, true);
+    }
+
+    /** @param chapter saved chapter @param manifest validated request snapshot @param pageIndex logical source index @param segmentIndex exact optional tile @param thumbnail whole-page selector @param verifySiblings whether reader delivery requires every sibling tile @return exact scoped file @throws IOException when selectors or saved files differ */
+    private static Path page(LibraryChapter chapter, JsonNode manifest, int pageIndex, Integer segmentIndex, boolean thumbnail, boolean verifySiblings) throws IOException {
+        JsonNode pages = manifest.path("pages");
         if (pageIndex < 0 || pageIndex >= pages.size()) throw new IOException("Logical page is unavailable.");
         JsonNode page = pages.get(pageIndex); String slug;
-        if (page.path("segments").isArray()) for (JsonNode part : page.path("segments")) {
+        if (verifySiblings && page.path("segments").isArray()) for (JsonNode part : page.path("segments")) {
             Path component = scopedFile(Path.of(chapter.ingestManifestPath()).getParent(), part.path("slug").asText());
             if (Files.size(component) != part.path("size").asLong()) throw new IOException("Logical page has an unavailable segment.");
         }
@@ -96,8 +101,15 @@ public final class DerivedPageManifest {
      */
     public static boolean reusable(LibraryChapter chapter) {
         if (chapter == null || !chapter.available() || !"ready".equals(chapter.ingestStatus())) return false;
+        try { return reusable(chapter, read(chapter)); }
+        catch (Exception unavailable) { return false; }
+    }
+
+    /** @param chapter ready saved checkpoint @param manifest validated immutable snapshot @return whether all source, geometry, hash and file evidence matches that one snapshot */
+    private static boolean reusable(LibraryChapter chapter, JsonNode manifest) {
+        if (chapter == null || !chapter.available() || !"ready".equals(chapter.ingestStatus())) return false;
         try {
-            JsonNode manifest = read(chapter); Path archive = Path.of(chapter.archivePath()); int count = ArchiveImageEntries.count(archive);
+            Path archive = Path.of(chapter.archivePath()); int count = ArchiveImageEntries.count(archive);
             String format = manifest.path("format").asText(), encoder = manifest.path("encoder").asText(); int quality = "webp".equals(format) ? 85 : 50;
             int version = "webp".equals(format) ? manifest.path("segmentationVersion").asInt() : 1;
             if (count <= 0 || count != chapter.ingestedPageCount() || encoder.isBlank() || manifest.path("quality").asInt() != quality
@@ -105,7 +117,7 @@ public final class DerivedPageManifest {
             JsonNode pages = manifest.path("pages"); if (!pages.isArray() || pages.size() != count) return false;
             for (int index = 0; index < count; index++) {
                 JsonNode page = pages.get(index); if (page.path("index").asInt(-1) != index) return false;
-                if ("avif".equals(format)) { page(chapter, index, null, false); continue; }
+                if ("avif".equals(format)) { page(chapter, manifest, index, null, false, false); continue; }
                 if (manifest.path("method").asInt() != 4 || !List.of(1, 2).contains(version)) return false;
                 List<WebpSegmentation.Rectangle> expected = WebpSegmentation.split(page.path("width").asInt(), page.path("height").asInt(), version);
                 JsonNode segments = page.path("segments"); if (!segments.isArray() || segments.size() != expected.size()) return false;
@@ -114,11 +126,11 @@ public final class DerivedPageManifest {
                     if (segment.path("index").asInt(-1) != rectangle.index() || segment.path("x").asInt(-1) != rectangle.x()
                         || segment.path("y").asInt(-1) != rectangle.y() || segment.path("width").asInt() != rectangle.width()
                         || segment.path("height").asInt() != rectangle.height()) return false;
-                    Path file = page(chapter, index, rectangle.index(), false);
+                    Path file = page(chapter, manifest, index, rectangle.index(), false, false);
                     if (Files.size(file) != segment.path("size").asLong() || !WebpChapterEncoder.sha256(file).equals(segment.path("sha256").asText())) return false;
                 }
                 if (index == 0) {
-                    JsonNode thumbnail = page.path("thumbnail"); Path file = page(chapter, 0, null, true);
+                    JsonNode thumbnail = page.path("thumbnail"); Path file = page(chapter, manifest, 0, null, true, false);
                     if (thumbnail.path("width").asInt() <= 0 || thumbnail.path("width").asInt() > 512 || thumbnail.path("height").asInt() <= 0 || thumbnail.path("height").asInt() > 768
                         || Files.size(file) != thumbnail.path("size").asLong() || !WebpChapterEncoder.sha256(file).equals(thumbnail.path("sha256").asText())) return false;
                 }

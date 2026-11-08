@@ -26,6 +26,8 @@ A chapter needs acknowledged ready metadata, its logical page count, and a compl
 Existing AVIF chapters remain readable while new WebP pages are prepared.
 Retrying a damaged WebP chapter can restore its validated completed artifact from the canonical CBZ workflow without
 encoding again. The catalog repair is fenced to the unchanged current chapter and keeps source-quality history.
+A lost chapter manifest can be restored from that accepted artifact while retaining matching reader files and the
+original completion time. Recovery rejects foreign, linked, or differing retained files instead of replacing them.
 Before Raven creates or catalogs a title, it resolves the logical catalog identity of library type plus normalized title
 against Vault's compact title-card projection. Downloads, manual imports, startup rescans, and AVIF ingest setup should
 therefore reuse the canonical title id even when the same title appears under a different source or filesystem folder.

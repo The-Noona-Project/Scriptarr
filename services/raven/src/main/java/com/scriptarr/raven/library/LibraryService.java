@@ -360,8 +360,13 @@ public final class LibraryService {
      */
     public synchronized List<LibraryChapter> replaceChapters(String titleId, List<LibraryChapter> chapters) {
         try {
+            Map<String, LibraryChapter> previous = chapterCheckpointSnapshot(titleId, chapters);
             List<Map<String, Object>> rows = new ArrayList<>();
-            for (LibraryChapter chapter : chapters) { Map<String, Object> row = objectMapper.convertValue(chapter, new TypeReference<>() { }); row.putAll(DerivedPageManifest.catalogFields(chapter)); rows.add(row); }
+            for (LibraryChapter chapter : chapters) {
+                Map<String, Object> row = objectMapper.convertValue(chapter, new TypeReference<>() { });
+                row.putAll(LibraryChapterCatalogCheckpoint.fields(chapter, previous.get(chapter.id())));
+                rows.add(row);
+            }
             JsonNode payload = brokerClient.putLibraryChapters(titleId, Map.of("chapters", rows));
             if (payload == null || !payload.isArray()) {
                 return chapters;
@@ -382,7 +387,9 @@ public final class LibraryService {
      */
     private LibraryChapter upsertChapter(String titleId, LibraryChapter chapter) {
         try {
-            Map<String, Object> row = objectMapper.convertValue(chapter, new TypeReference<>() { }); row.putAll(DerivedPageManifest.catalogFields(chapter));
+            Map<String, LibraryChapter> previous = chapterCheckpointSnapshot(titleId, List.of(chapter));
+            Map<String, Object> row = objectMapper.convertValue(chapter, new TypeReference<>() { });
+            row.putAll(LibraryChapterCatalogCheckpoint.fields(chapter, previous.get(chapter.id())));
             JsonNode payload = brokerClient.putLibraryChapter(titleId, chapter.id(), Map.of("chapter", row));
             if (payload == null || payload.isMissingNode() || payload.path("error").isTextual()) {
                 return chapter;
@@ -395,6 +402,24 @@ public final class LibraryService {
             logger.warn("LIBRARY", "Failed to persist Raven chapter checkpoint.", error.getMessage());
             throw new IllegalStateException("Could not save reader-page progress. Retry reader-page ingest from the admin queue.", error);
         }
+    }
+
+    /**
+     * Read at most one durable chapter list for an ordinary write; non-ready quality checkpoints need no extra read.
+     * @param titleId exact durable title identity
+     * @param chapters requested ordinary writes
+     * @return current durable chapters keyed by identity
+     * @throws Exception when a required durable snapshot cannot be read or decoded
+     */
+    private Map<String, LibraryChapter> chapterCheckpointSnapshot(String titleId, List<LibraryChapter> chapters) throws Exception {
+        Map<String, LibraryChapter> previous = new LinkedHashMap<>();
+        if (chapters.stream().noneMatch(LibraryChapterCatalogCheckpoint::needsSnapshot)) return previous;
+        JsonNode payload = brokerClient.getLibraryTitle(titleId);
+        if (payload == null || payload.isMissingNode() || payload.path("error").isTextual()) return previous;
+        JsonNode rows = payload.path("chapters");
+        if (!rows.isArray()) throw new IOException("The durable chapter checkpoint snapshot is unavailable.");
+        for (LibraryChapter chapter : objectMapper.convertValue(rows, CHAPTER_LIST_TYPE)) previous.put(chapter.id(), chapter);
+        return previous;
     }
 
     /**

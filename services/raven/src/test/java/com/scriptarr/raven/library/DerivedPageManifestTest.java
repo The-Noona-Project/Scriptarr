@@ -12,9 +12,27 @@ import java.util.Map;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
 
 /** Saved-format identities, complete logical geometry and full-first-page cover invariants. */
 class DerivedPageManifestTest {
+    /** Complete validation must parse one snapshot rather than reading the full manifest for every physical tile. */
+    @Test void reusableUsesOneValidatedManifestSnapshot(@TempDir Path root) throws Exception {
+        LibraryChapter chapter = chapter(root);
+        try (var saved = mockStatic(DerivedPageManifest.class, CALLS_REAL_METHODS)) {
+            assertTrue(DerivedPageManifest.reusable(chapter));
+            saved.verify(() -> DerivedPageManifest.read(chapter), times(1));
+        }
+    }
+
+    /** Catalog readiness reuses that same snapshot for counts and complete validation. */
+    @Test void catalogFieldsUsesOneValidatedManifestSnapshot(@TempDir Path root) throws Exception {
+        LibraryChapter chapter = chapter(root);
+        try (var saved = mockStatic(DerivedPageManifest.class, CALLS_REAL_METHODS)) {
+            assertEquals(2, DerivedPageManifest.catalogFields(chapter).get("expectedSegmentCount"));
+            saved.verify(() -> DerivedPageManifest.read(chapter), times(1));
+        }
+    }
     /** Touching a CBZ does not invalidate content-addressed WebP, while changed bytes do. */
     @Test void webpRevisionUsesContentRatherThanTimestamp(@TempDir Path root) throws Exception {
         Path source = source(root); String first = DerivedPageManifest.revision(source, 1, "webp", "ffmpeg/libwebp", 85);
