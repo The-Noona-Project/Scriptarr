@@ -164,6 +164,43 @@ class BulkTaskTerminalRecoveryTest {
         assertFalse(BulkTaskTerminalRecovery.writableShadow(local, durable));
     }
 
+    /** Default SQL rounding and explicit truncation both retain the same fractional queued execution across a minute. */
+    @Test
+    void fractionalSqlRoundAndTruncateAreBothRecognizedWithoutChangingTheAttempt() {
+        Map<String, Object> local = task("fractional", "failed");
+        local.put("queuedAt", "2026-11-08T04:00:59.750999999Z");
+        local.put("updatedAt", "2026-11-08T04:01:59.750999999Z");
+        details(local).put("startedAt", "2026-11-08T04:01:01.123456789Z");
+        for (String[] persisted : List.of(new String[]{"2026-11-08T04:01:00Z", "2026-11-08T04:02:00Z"},
+            new String[]{"2026-11-08T04:00:59Z", "2026-11-08T04:01:59Z"},
+            new String[]{"2026-11-08T04:00:59.750Z", "2026-11-08T04:01:59.750Z"})) {
+            Map<String, Object> durable = copy(local); durable.put("status", "running");
+            durable.put("queuedAt", persisted[0]); durable.put("updatedAt", persisted[1]);
+            assertTrue(BulkTaskTerminalRecovery.writableShadow(local, durable));
+            details(durable).put("startedAt", "2026-11-08T04:01:02.123456789Z");
+            assertFalse(BulkTaskTerminalRecovery.writableShadow(local, durable));
+        }
+    }
+
+    /** Only exact serialization results may look newer; unrelated queued seconds or later checkpoints still reject. */
+    @Test
+    void roundingDoesNotPermitANewerExecutionOrLaterFractionalCheckpoint() {
+        Map<String, Object> local = task("fractional", "failed");
+        local.put("queuedAt", "2026-11-08T04:00:00.750Z"); local.put("updatedAt", "2026-11-08T04:01:02.750Z");
+        Map<String, Object> durable = copy(local); durable.put("status", "queued"); details(durable).put("startedAt", "");
+        durable.put("queuedAt", "2026-11-08T04:00:01Z"); durable.put("updatedAt", "2026-11-08T04:01:03Z");
+        assertTrue(BulkTaskTerminalRecovery.writableShadow(local, durable));
+        for (String newer : List.of("2026-11-08T04:01:03.001Z", "2026-11-08T04:01:04Z", "2026-11-08T04:01:02.900Z")) {
+            durable.put("updatedAt", newer); assertFalse(BulkTaskTerminalRecovery.writableShadow(local, durable));
+        }
+        durable.put("updatedAt", "2026-11-08T04:01:03Z"); durable.put("queuedAt", "2026-11-08T04:00:02Z");
+        assertFalse(BulkTaskTerminalRecovery.writableShadow(local, durable));
+        local.put("queuedAt", "2026-11-08T04:00:00.499999999Z"); durable.put("queuedAt", "2026-11-08T04:00:01Z");
+        assertFalse(BulkTaskTerminalRecovery.writableShadow(local, durable));
+        local.put("queuedAt", "2026-11-08T04:00:59.999999999Z"); durable.put("queuedAt", "2026-11-08T04:01:00Z");
+        assertTrue(BulkTaskTerminalRecovery.writableShadow(local, durable));
+    }
+
     /** UI history pruning cannot discard the only dirty terminal snapshot beyond the two-hundred-row cap. */
     @Test
     void dirtyFailuresSurviveTerminalHistoryPruning(@TempDir Path root) {
@@ -174,6 +211,7 @@ class BulkTaskTerminalRecoveryTest {
         }
     }
 
+    /** Build one known execution with nanosecond live timestamps and a dirty terminal checkpoint. */
     private static Map<String, Object> task(String id, String status) {
         Map<String, Object> task = new ConcurrentHashMap<>();
         task.putAll(Map.of("taskId", id, "jobId", id, "status", status, "percent", 90, "message", "Broker interrupted execution.", "queuedAt", QUEUED, "updatedAt", FAILED));
@@ -183,9 +221,11 @@ class BulkTaskTerminalRecoveryTest {
         return task;
     }
 
+    /** Access mutable fixture details before they are flattened into the real queue representation. */
     @SuppressWarnings("unchecked")
     private static Map<String, Object> details(Map<String, Object> task) { return (Map<String, Object>) task.get("details"); }
 
+    /** Simulate a broker JSON roundtrip without sharing mutable local task state. */
     @SuppressWarnings("unchecked")
     private static Map<String, Object> copy(Map<String, Object> task) { return JSON.convertValue(JSON.valueToTree(task), Map.class); }
 
@@ -205,6 +245,7 @@ class BulkTaskTerminalRecoveryTest {
             if (failDownload) throw new IllegalStateException("Lost download checkpoint.");
             writes.add("download:" + task.get("status")); return super.putDownloadTask(id, task);
         }
+        /** Read exactly one authoritative task from the fixture broker. */
         private Map<String, Object> row(String id) {
             for (JsonNode task : listDownloadTasks()) if (id.equals(task.path("taskId").asText())) return copy(JSON.convertValue(task, Map.class));
             return Map.of();
@@ -215,6 +256,7 @@ class BulkTaskTerminalRecoveryTest {
     private static final class Fixture implements AutoCloseable {
         private final Broker broker;
         private final DownloaderService service;
+        /** Construct a real downloader with isolated broker and filesystem dependencies. */
         private Fixture(Path root, Broker broker) {
             this.broker = broker;
             ScriptarrLogger logger = mock(ScriptarrLogger.class); when(logger.getDownloadsRoot()).thenReturn(root);
@@ -222,9 +264,13 @@ class BulkTaskTerminalRecoveryTest {
             service = new DownloaderService(new DownloadProviderRegistry(List.of(), settings), null, mock(LibraryService.class),
                 mock(DownloadIntakeService.class), mock(MetadataService.class), broker, settings, logger);
         }
+        /** Inspect the exact local checkpoint boundary under test. */
         @SuppressWarnings("unchecked") private Map<String, Map<String, Object>> tasks() {return (Map<String, Map<String, Object>>) ReflectionTestUtils.getField(service, "tasks");}
+        /** Access one execution guard for deterministic winding-down fixtures. */
         @SuppressWarnings("unchecked") private Map<String, Object> fieldMap(String name) {return (Map<String, Object>) ReflectionTestUtils.getField(service, name);}
+        /** Require no registered worker, queued runnable or accepted dispatch for the identity. */
         private boolean quiescent(String id) {return List.of("runningTaskThreads", "queuedTasks", "bulkTaskDispatches").stream().noneMatch(name -> fieldMap(name).containsKey(id));}
+        /** Seed divergent local and durable snapshots without allocating an executable attempt. */
         private void seed(Map<String, Object> local, Map<String, Object> durable) {
             broker.putDownloadTask(String.valueOf(local.get("taskId")), durable);
             details(local).forEach(local::putIfAbsent);

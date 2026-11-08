@@ -102,7 +102,8 @@
   reconciliation. `BulkTaskTerminalRecovery` accepts only failed dirty local bulk snapshots with no executor, queued
   runnable, dispatch reservation or pending cancellation. Match durable owner/plan, frozen request, queued timestamp
   and retry receipt; a blank durable start is valid when its first running write never committed. Reject another
-  nonblank start, newer receipt/time or terminal result. Redo all three broker checkpoints, including generic jobs,
+  nonblank start, newer receipt/time or terminal result. Match Vault's millisecond timestamp conversion with either
+  SQL whole-second rounding or explicit truncation. Redo all three broker checkpoints, including generic jobs,
   before clearing the dirty flag. Keep unpersisted failed evidence beyond the UI's 200-terminal history limit.
   This operation does not schedule downloads, change parent status, rotate approvals or reset attempt counters.
 - Read terminal outcomes from durable records beyond the local 200-task history. Queue age is not a stall. Use actual

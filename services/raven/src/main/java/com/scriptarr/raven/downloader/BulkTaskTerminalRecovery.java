@@ -33,11 +33,11 @@ final class BulkTaskTerminalRecovery {
         }
         try {
             if (!Objects.equals(BulkRetryAttemptReceipt.from(local), BulkRetryAttemptReceipt.from(durable))) return false;
-            if (!sameSecond(text(local, "queuedAt"), text(durable, "queuedAt"))) return false;
+            if (!sameStoredTimestamp(text(local, "queuedAt"), text(durable, "queuedAt"))) return false;
             String started = text(durable, "startedAt");
             if (!started.isBlank() && !started.equals(text(local, "startedAt"))) return false;
-            return !Instant.parse(text(durable, "updatedAt")).truncatedTo(ChronoUnit.SECONDS)
-                .isAfter(Instant.parse(text(local, "updatedAt")).truncatedTo(ChronoUnit.SECONDS));
+            return !Instant.parse(text(durable, "updatedAt")).isAfter(Instant.parse(text(local, "updatedAt")))
+                || sameStoredTimestamp(text(local, "updatedAt"), text(durable, "updatedAt"));
         } catch (RuntimeException invalid) { return false; }
     }
 
@@ -53,25 +53,35 @@ final class BulkTaskTerminalRecovery {
             && text(local, "titleId").equals(text(durable, "titleId")) && equalValue(local.get("details"), durable.get("details"));
     }
 
-    private static boolean sameSecond(String left, String right) {
-        return Instant.parse(left).truncatedTo(ChronoUnit.SECONDS).equals(Instant.parse(right).truncatedTo(ChronoUnit.SECONDS));
+    /** Match the submitted instant or Vault's millisecond Date value rounded/truncated by a whole-second SQL column. */
+    private static boolean sameStoredTimestamp(String submitted, String persisted) {
+        Instant original = Instant.parse(submitted);
+        Instant stored = Instant.parse(persisted);
+        Instant milliseconds = Instant.ofEpochMilli(original.toEpochMilli());
+        return stored.equals(original) || stored.equals(milliseconds)
+            || stored.equals(milliseconds.truncatedTo(ChronoUnit.SECONDS))
+            || stored.equals(milliseconds.plusMillis(500).truncatedTo(ChronoUnit.SECONDS));
     }
 
+    /** Cancellation evidence is not an ordinary failed execution eligible for automatic persistence repair. */
     private static boolean cancelled(Map<String, Object> task) {
         return text(task, "message").toLowerCase(java.util.Locale.ROOT).startsWith("cancelled")
             || "cancelled".equals(text(task, "failureCode"));
     }
 
+    /** Read a scalar consistently from a live task or broker-persisted details. */
     private static String text(Map<String, Object> task, String key) {
         Object value = value(task, key);
         return value == null ? "" : String.valueOf(value);
     }
 
+    /** Prefer explicit live values while supporting the durable nested-details representation. */
     private static Object value(Map<String, Object> task, String key) {
         Object value = task.get(key);
         return value == null && task.get("details") instanceof Map<?, ?> details ? details.get(key) : value;
     }
 
+    /** Compare frozen JSON values without treating integral Java numeric wrapper differences as changed requests. */
     private static boolean equalValue(Object left, Object right) {
         if (left instanceof Number && right instanceof Number) {
             return new java.math.BigDecimal(left.toString()).compareTo(new java.math.BigDecimal(right.toString())) == 0;
