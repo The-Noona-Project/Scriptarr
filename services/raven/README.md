@@ -208,7 +208,8 @@ per-title failures, and reuse the active queued or running run id when the same 
 `GET /v1/ingest/runs` returns bounded active, recent, or all run summaries for admin surfaces without returning every
 child title task, including the scheduler state, current title, queue position, last progress time, and conservative
 ETA when Raven has credible timing. `/v1/ingest` includes active and recent run summaries alongside the per-title
-backlog. Type-wide rebuilds use balanced fair title lanes (`SCRIPTARR_RAVEN_AVIF_TITLE_LANES`, default `2`, max `3`):
+backlog. Type-wide rebuilds use balanced fair title lanes (`SCRIPTARR_RAVEN_AVIF_TITLE_LANES`, default `2`, max `3`).
+The legacy AVIF setting remains supported; `SCRIPTARR_RAVEN_INGEST_TITLE_LANES` is used only when it is unset or blank.
 Legacy mode processes one title per leased library type; WebP migration checkpoints one chapter, then rotates to the next active type instead of
 marking waiting runs as fake-running. A per-title lock still serializes duplicate attempts for the same title id.
 The clean restart/admin flow (`POST /v1/ingest/runs/clean-restart`) supersedes active AVIF runs without deleting

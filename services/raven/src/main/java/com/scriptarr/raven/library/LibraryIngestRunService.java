@@ -1695,10 +1695,20 @@ public final class LibraryIngestRunService {
         return 1;
     }
 
+    /** @return bounded title lanes from the process environment */
     private static int resolveConfiguredTitleLanes() {
-        String raw = Optional.ofNullable(System.getenv("SCRIPTARR_RAVEN_reader-page_TITLE_LANES"))
+        return resolveConfiguredTitleLanes(System.getenv());
+    }
+
+    /**
+     * Resolve the established title-lane policy without mutating the process environment.
+     * @param env process environment or isolated test values
+     * @return configured lanes bounded to one through three, or the existing default
+     */
+    static int resolveConfiguredTitleLanes(Map<String, String> env) {
+        String raw = Optional.ofNullable(env.get("SCRIPTARR_RAVEN_AVIF_TITLE_LANES"))
             .filter((value) -> !value.isBlank())
-            .orElseGet(() -> Optional.ofNullable(System.getenv("SCRIPTARR_RAVEN_INGEST_TITLE_LANES")).orElse(""));
+            .orElseGet(() -> Optional.ofNullable(env.get("SCRIPTARR_RAVEN_INGEST_TITLE_LANES")).orElse(""));
         try {
             return raw == null || raw.isBlank()
                 ? DEFAULT_TITLE_LANES

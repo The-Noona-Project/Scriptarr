@@ -120,6 +120,8 @@
   selected-format run starts. If duplicate active same-type durable runs are found at startup or scheduling time, keep the
   preferred run and mark the rest `superseded` before any title work can run for both.
 - Keep type-wide AVIF rebuilds on bounded fair title lanes (`SCRIPTARR_RAVEN_AVIF_TITLE_LANES`, default `2`, max `3`).
+  Preserve that legacy environment name first, with `SCRIPTARR_RAVEN_INGEST_TITLE_LANES` only as the unset/blank fallback;
+  selected invalid values retain default `2`, and integer values remain clamped to `1..3`.
   Only leased run/tasks should be marked `running`; unfinished runs beyond the lane count should remain queued or
   waiting with a bounded queue position. Summaries may expose scheduler state, current title text, last progress, and
   ETA, but never full child task arrays or storage paths. Resume, cancel, restart-active, and clean-restart controls

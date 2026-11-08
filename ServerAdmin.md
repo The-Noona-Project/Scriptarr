@@ -548,7 +548,8 @@ Manhwa, Manga, Webtoon, Comic
 order without deleting catalog rows, CBZ archives, requests, read state, follows, bookmarks, or user data. Raven uses
 balanced fair title lanes for those type runs (`SCRIPTARR_RAVEN_AVIF_TITLE_LANES`, default `2`, max `3`): one title per
 leased library type converts at a time, then the scheduler rotates to the next active type so OEL, manga, manhwa, and
-other backlogs can all make progress. Restart-all may briefly show a run as preparing while Raven writes the durable
+other backlogs can all make progress. The legacy AVIF variable keeps priority; `SCRIPTARR_RAVEN_INGEST_TITLE_LANES`
+is the fallback only when it is unset or blank. Restart-all may briefly show a run as preparing while Raven writes the durable
 title-task list in the background; after that, the run moves into the normal waiting/running fair-scheduler states. The
 page also shows active and recent durable type-run summaries with state labels, current title, queue position, last
 progress, title counts, resume/cancel controls, and ETA when Raven has enough data, without loading every child title
