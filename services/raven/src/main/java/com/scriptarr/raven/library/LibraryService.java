@@ -71,7 +71,8 @@ public final class LibraryService {
     private final Map<String, ReaderArchiveIndex> readerArchiveIndexes = new ConcurrentHashMap<>();
     private final Map<String, PageValidationResult> readerPageValidations = new ConcurrentHashMap<>();
     private final Map<String, String> ingestTaskStartedAt = new ConcurrentHashMap<>();
-    private final Map<String, Object> titleIngestLocks = new ConcurrentHashMap<>();
+    private final LibraryTitleLocks titleOperationLocks = new LibraryTitleLocks();
+    private final Object importOperationLock = new Object();
 
     /**
      * Create the shared Raven library service.
@@ -561,7 +562,16 @@ public final class LibraryService {
      * @param body admin import payload
      * @return import and ingest result payload
      */
-    public synchronized Map<String, Object> importLibrary(Map<String, Object> body) {
+    public Map<String, Object> importLibrary(Map<String, Object> body) {
+        synchronized (importOperationLock) {
+            PreparedImport prepared = prepareLibraryImport(body);
+            // Never wait for a title lease while holding the catalog persistence monitor.
+            LibraryTitle ingested = ingestTitle(prepared.title().id(), prepared.requestedBy());
+            return Map.of("title", ingested, "importedChapters", prepared.chapterCount(), "ingestStatus", ingested.ingestStatus());
+        }
+    }
+
+    private synchronized PreparedImport prepareLibraryImport(Map<String, Object> body) {
         Map<String, Object> payload = body == null ? Map.of() : body;
         String titleName = stringValue(payload.get("titleName"));
         String existingTitleId = stringValue(payload.get("existingTitleId"));
@@ -608,13 +618,10 @@ public final class LibraryService {
             existing != null && existing.workingRoot() != null && !existing.workingRoot().isBlank() ? Path.of(existing.workingRoot()) : null,
             downloadRoot
         );
-        LibraryTitle ingested = ingestTitle(title.id(), requestedBy);
-        return Map.of(
-            "title", ingested,
-            "importedChapters", imported.chapters().size(),
-            "ingestStatus", ingested.ingestStatus()
-        );
+        return new PreparedImport(title, requestedBy, imported.chapters().size());
     }
+
+    private record PreparedImport(LibraryTitle title, String requestedBy, int chapterCount) { }
 
     /**
      * Run or retry AVIF ingest for every chapter in a title.
@@ -653,13 +660,8 @@ public final class LibraryService {
      */
     public LibraryTitle ingestTitle(String titleId, String requestedBy, BooleanSupplier cancelled, Consumer<IngestProgress> progress) {
         String normalizedTitleId = firstNonBlank(titleId, "").trim();
-        Object titleLock = titleIngestLocks.computeIfAbsent(normalizedTitleId, (_key) -> new Object());
-        synchronized (titleLock) {
-            try {
-                return ingestTitleLocked(normalizedTitleId, requestedBy, cancelled == null ? () -> false : cancelled, progress == null ? value -> { } : progress);
-            } finally {
-                titleIngestLocks.remove(normalizedTitleId, titleLock);
-            }
+        try (var lease = titleOperationLocks.acquire(normalizedTitleId)) {
+            return ingestTitleLocked(normalizedTitleId, requestedBy, cancelled == null ? () -> false : cancelled, progress == null ? value -> { } : progress);
         }
     }
 
@@ -1552,63 +1554,78 @@ public final class LibraryService {
                 ? existing.id()
                 : UUID.randomUUID().toString();
 
-            for (Path archive : archives) {
-                String chapterNumber = LibraryNaming.extractChapterNumber(archive.getFileName().toString(), namingSettings, typeLabel);
-                chapters.add(new LibraryChapter(
-                    chapterId(titleId, chapterNumber),
-                    "Chapter " + chapterNumber,
-                    chapterNumber,
-                    countArchivePages(archive),
-                    resolveArchiveTimestamp(archive),
-                    true,
-                    archive.toString(),
-                    null,
-                    null
-                ));
-            }
-            chapters = normalizeChapters(titleId, chapters);
-            if (existing != null && scannedTitleIsUnchanged(existing, chapters, folder, workingRoot)) {
-                return;
-            }
+            try (var lease = titleOperationLocks.acquire(titleId)) {
+                // A startup ingest may have committed newer chapter state while this scan waited.
+                if (existing != null) existing = findTitleById(titleId);
+                for (Path archive : archives) {
+                    String chapterNumber = LibraryNaming.extractChapterNumber(archive.getFileName().toString(), namingSettings, typeLabel);
+                    chapters.add(new LibraryChapter(
+                        chapterId(titleId, chapterNumber),
+                        "Chapter " + chapterNumber,
+                        chapterNumber,
+                        countArchivePages(archive),
+                        resolveArchiveTimestamp(archive),
+                        true,
+                        archive.toString(),
+                        null,
+                        null
+                    ));
+                }
+                chapters = preserveReadyScannedChapters(existing, normalizeChapters(titleId, chapters));
+                if (existing != null && scannedTitleIsUnchanged(existing, chapters, folder, workingRoot)) {
+                    return;
+                }
 
-            LibraryTitle title = new LibraryTitle(
-                titleId,
-                titleName,
-                LibraryNaming.normalizeMediaType(typeLabel),
-                typeLabel,
-                typeSlug,
-                existing != null ? existing.status() : "active",
-                resolveLatestChapter(chapters),
-                existing != null ? existing.coverAccent() : resolveCoverAccent(titleId),
-                existing != null ? existing.summary() : "",
-                existing != null ? existing.releaseLabel() : "",
-                chapters.size(),
-                chapters.size(),
-                existing != null ? existing.author() : "",
-                existing != null ? existing.tags() : List.of(),
-                existing != null ? existing.aliases() : List.of(),
-                existing != null ? existing.metadataProvider() : "",
-                existing != null ? existing.metadataMatchedAt() : null,
-                existing != null ? existing.relations() : List.of(),
-                existing != null ? existing.sourceUrl() : "",
-                existing != null ? existing.coverUrl() : "",
-                workingRoot != null ? workingRoot.toString() : (existing != null ? existing.workingRoot() : ""),
-                folder.toString(),
-                List.copyOf(chapters),
-                existing != null ? existing.updatedAt() : null
-            );
-            LibraryTitle persisted = upsertTitle(title);
-            String persistedTitleId = persisted != null && persisted.id() != null && !persisted.id().isBlank()
-                ? persisted.id()
-                : titleId;
-            List<LibraryChapter> chaptersToPersist = Objects.equals(persistedTitleId, titleId)
-                ? chapters
-                : rekeyChapters(persistedTitleId, chapters);
-            replaceChapters(persistedTitleId, chaptersToPersist);
-            scanContext.titleIdsByTypeSlugAndTitleSlug().putIfAbsent(scanTitleKey(typeSlug, titleName), persistedTitleId);
+                LibraryTitle title = new LibraryTitle(
+                    titleId,
+                    titleName,
+                    LibraryNaming.normalizeMediaType(typeLabel),
+                    typeLabel,
+                    typeSlug,
+                    existing != null ? existing.status() : "active",
+                    resolveLatestChapter(chapters),
+                    existing != null ? existing.coverAccent() : resolveCoverAccent(titleId),
+                    existing != null ? existing.summary() : "",
+                    existing != null ? existing.releaseLabel() : "",
+                    chapters.size(),
+                    chapters.size(),
+                    existing != null ? existing.author() : "",
+                    existing != null ? existing.tags() : List.of(),
+                    existing != null ? existing.aliases() : List.of(),
+                    existing != null ? existing.metadataProvider() : "",
+                    existing != null ? existing.metadataMatchedAt() : null,
+                    existing != null ? existing.relations() : List.of(),
+                    existing != null ? existing.sourceUrl() : "",
+                    existing != null ? existing.coverUrl() : "",
+                    workingRoot != null ? workingRoot.toString() : (existing != null ? existing.workingRoot() : ""),
+                    folder.toString(),
+                    List.copyOf(chapters),
+                    existing != null ? existing.updatedAt() : null
+                );
+                LibraryTitle persisted = upsertTitle(title);
+                String persistedTitleId = persisted != null && persisted.id() != null && !persisted.id().isBlank()
+                    ? persisted.id()
+                    : titleId;
+                List<LibraryChapter> chaptersToPersist = Objects.equals(persistedTitleId, titleId)
+                    ? chapters
+                    : rekeyChapters(persistedTitleId, chapters);
+                replaceChapters(persistedTitleId, chaptersToPersist);
+                scanContext.titleIdsByTypeSlugAndTitleSlug().putIfAbsent(scanTitleKey(typeSlug, titleName), persistedTitleId);
+            }
         } catch (Exception error) {
             logger.warn("LIBRARY", "Raven import scan could not index a title folder.", error.getMessage());
         }
+    }
+
+    private List<LibraryChapter> preserveReadyScannedChapters(LibraryTitle existing, List<LibraryChapter> scanned) {
+        if (existing == null || existing.chapters() == null) return scanned;
+        Map<String, LibraryChapter> previous = new LinkedHashMap<>();
+        for (LibraryChapter chapter : existing.chapters()) previous.put(normalizeStoredChapterNumber(chapter.chapterNumber()), chapter);
+        return scanned.stream().map(chapter -> {
+            LibraryChapter saved = previous.get(normalizeStoredChapterNumber(chapter.chapterNumber()));
+            return saved != null && Objects.equals(saved.archivePath(), chapter.archivePath())
+                && saved.pageCount() == chapter.pageCount() && ingestService.canReuseReadyChapter(saved) ? saved : chapter;
+        }).toList();
     }
 
     private LibraryTitle findExistingTitleForScan(String titleName, String typeSlug, ScanCatalogContext scanContext) {

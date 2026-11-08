@@ -103,6 +103,7 @@ Discord commands and approval actions reuse their existing run or accepted decis
 window. Reading status never starts work.
 After a restart, healthy canonical CBZs can finish reader-page processing without fetching those chapters again.
 Append recovery keeps earlier readable chapters, and failed work still waits for its approved retry.
+Startup catalog scans also retain valid ready-page metadata when the underlying archives have not changed.
 
 Completion requires finished discovery and successful owned work, including canonical CBZ files, saved catalog state,
 and ready AVIF pages. Source-quality markers and generated missing-page placeholders remain visible through the

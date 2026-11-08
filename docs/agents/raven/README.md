@@ -108,6 +108,9 @@
   Healthy canonical CBZs can resume ingest offline; `AppendChapterMerger` retains untouched chapter IDs and ready
   reader metadata. Replacements retain their full replacement semantics. Failed owned tasks remain failed on startup
   until the approved bulk retry or an explicit retry queues that same identity again.
+- Startup catalog scans preserve each validated ready chapter when its archive path, number, page count, and AVIF
+  revision still match. `LibraryTitleLocks` counts active and waiting title operations so scan writes cannot erase
+  newer ingest checkpoints. Keep the service monitor out of the wait for a title lease to avoid lock inversion.
 - Continue/cancel consumes the captured `approvalId` before scheduling and retains a compact accepted receipt.
   Replays return that receipt; stale or opposite decisions cannot affect a later approval window. Cancellation closes
   the enqueue gate and reconciles owned tasks and batch checkpoints after in-flight discovery callbacks finish.

@@ -29,6 +29,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
@@ -63,6 +64,47 @@ class CanonicalArchiveRecoveryTest {
         assertTrue(new DownloadCompletionVerifier(context.library()).complete(finished, List.of(chapter(1), chapter(2))));
         assertFingerprints(untouched);
         verifyNoProvider(context.provider());
+    }
+
+    /** A real startup rescan must retain ready output when an import had no prior working folder. */
+    @Test
+    void startupRescanPreservesReadyChapterBeforeOfflineRecovery() throws Exception {
+        startupRescanRecovery(false);
+    }
+
+    /** Discovering a newly promoted archive must not reset another chapter's ready reader metadata. */
+    @Test
+    void startupRescanPreservesReadyChapterWhenAnotherArchiveWasPromoted() throws Exception {
+        startupRescanRecovery(true);
+    }
+
+    /** Startup scanning must wait for ingest rather than replace a newer durable chapter checkpoint. */
+    @Test
+    void concurrentStartupRescanCannotOverwriteIngestCheckpoints() throws Exception {
+        Context context = context();
+        LibraryTitle title = seed(context, 2, 1);
+        Map<Path, Fingerprint> untouched = fingerprints(title, true);
+        CountDownLatch ingestEntered = new CountDownLatch(1);
+        CountDownLatch finishIngest = new CountDownLatch(1);
+        CompletableFuture<LibraryTitle> ingest = CompletableFuture.supplyAsync(() -> context.library().ingestTitle(title.id(), "qa", () -> false, progress -> {
+            ingestEntered.countDown();
+            try { if (!finishIngest.await(5, TimeUnit.SECONDS)) throw new IllegalStateException("Test ingest gate timed out."); }
+            catch (InterruptedException error) { Thread.currentThread().interrupt(); throw new IllegalStateException(error); }
+        }));
+        CompletableFuture<Void> scan = null;
+        try {
+            assertTrue(ingestEntered.await(5, TimeUnit.SECONDS));
+            scan = CompletableFuture.runAsync(context.library()::rescanDownloadedFiles);
+            Thread.sleep(150);
+            assertFalse(scan.isDone(), "Catalog scan must coordinate with the active title ingest.");
+        } finally {
+            finishIngest.countDown();
+            ingest.get(10, TimeUnit.SECONDS);
+            if (scan != null) scan.get(10, TimeUnit.SECONDS);
+        }
+        LibraryTitle finished = context.library().findTitle(title.id());
+        assertTrue(new DownloadCompletionVerifier(context.library()).complete(finished, List.of(chapter(1), chapter(2))));
+        assertFingerprints(untouched);
     }
 
     /** Reconstruct missing broker catalog state after promotion without upstream lookup or archive replacement. */
@@ -167,6 +209,29 @@ class CanonicalArchiveRecoveryTest {
         assertTrue(((Number) task.get("percent")).intValue() < 100);
         verify(context.provider()).getChapters(anyString());
         assertFingerprints(untouched);
+    }
+
+    private void startupRescanRecovery(boolean newlyPromoted) throws Exception {
+        Context context = context();
+        LibraryTitle title = seed(context, newlyPromoted ? 1 : 2, 1);
+        LibraryChapter ready = title.chapters().stream().filter(chapter -> chapter.chapterNumber().equals("1")).findFirst().orElseThrow();
+        Map<Path, Fingerprint> untouched = fingerprints(title, true);
+        if (newlyPromoted) {
+            Path archive = archive(context, canonicalRoot(), 2);
+            untouched.put(archive, fingerprint(archive));
+        }
+        assertTrue(title.workingRoot() == null || title.workingRoot().isBlank());
+        context.library().rescanDownloadedFiles();
+        LibraryChapter scanned = context.library().findTitle(title.id()).chapters().stream().filter(chapter -> chapter.chapterNumber().equals("1")).findFirst().orElseThrow();
+        assertEquals("ready", scanned.ingestStatus());
+        assertEquals(ready.ingestRevision(), scanned.ingestRevision());
+        assertEquals(ready.ingestedAt(), scanned.ingestedAt());
+        assertEquals(ready.ingestManifestPath(), scanned.ingestManifestPath());
+        seedTask(context, title, List.of(chapter(1), chapter(2)), "offline-fixture", "running", "", false);
+        start(context);
+        assertCompleted(awaitTask());
+        assertFingerprints(untouched);
+        verifyNoProvider(context.provider());
     }
 
     private void unhealthyCatalogRow(boolean staleCount) throws Exception {
