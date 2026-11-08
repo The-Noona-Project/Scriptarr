@@ -1,6 +1,7 @@
 package com.scriptarr.raven.downloader;
 
 import com.scriptarr.raven.library.LibraryChapter;
+import com.scriptarr.raven.library.ArchiveImageEntries;
 import com.scriptarr.raven.library.LibraryNaming;
 import com.scriptarr.raven.library.LibraryService;
 import com.scriptarr.raven.library.LibraryTitle;
@@ -2050,11 +2051,8 @@ public class DownloaderService {
     }
 
     private int countArchiveEntries(Path archivePath) {
-        try (java.util.zip.ZipFile zipFile = new java.util.zip.ZipFile(archivePath.toFile())) {
-            return (int) zipFile.stream().filter((entry) -> !entry.isDirectory()).count();
-        } catch (Exception ignored) {
-            return 1;
-        }
+        try { return ArchiveImageEntries.count(archivePath); }
+        catch (Exception error) { return 0; }
     }
 
     private String normalizeStoredChapterNumber(String value) {

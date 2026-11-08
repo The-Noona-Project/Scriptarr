@@ -518,15 +518,7 @@ public final class LibraryIngestService {
         return transcoder.format() + "-" + HexFormat.of().formatHex(digest.digest()).substring(0, 16);
     }
 
-    private boolean isImageEntry(String name) {
-        String normalized = Optional.ofNullable(name).orElse("").toLowerCase(Locale.ROOT);
-        return normalized.endsWith(".jpg")
-            || normalized.endsWith(".jpeg")
-            || normalized.endsWith(".png")
-            || normalized.endsWith(".gif")
-            || normalized.endsWith(".webp")
-            || normalized.endsWith(".avif");
-    }
+    private boolean isImageEntry(String name) { return ArchiveImageEntries.isImage(name); }
 
     private String mediaTypeForArchiveEntry(String name) {
         String normalized = Optional.ofNullable(name).orElse("").toLowerCase(Locale.ROOT);
@@ -565,14 +557,7 @@ public final class LibraryIngestService {
         return ".jpg";
     }
 
-    private int countArchivePages(Path archivePath) throws IOException {
-        try (ZipFile zipFile = new ZipFile(archivePath.toFile())) {
-            return (int) zipFile.stream()
-                .filter((entry) -> !entry.isDirectory())
-                .filter((entry) -> isImageEntry(entry.getName()))
-                .count();
-        }
-    }
+    private int countArchivePages(Path archivePath) throws IOException { return ArchiveImageEntries.count(archivePath); }
 
     private String safeSegment(String value, String fallback) {
         String segment = LibraryNaming.slugifySegment(firstNonBlank(value, fallback));

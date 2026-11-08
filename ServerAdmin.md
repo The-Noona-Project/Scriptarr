@@ -495,6 +495,9 @@ chips, and a safe replacement queue action that stages the replacement download 
 `/admin/import` is reserved for manual library intake. Admins point Raven at CBZ files that are already visible under
 the Raven downloads mount, confirm title and chapter metadata, and Raven copies the accepted archives into the canonical
 `downloaded/<type>/<title-folder>` library tree before queueing ingest.
+CBZ page counts include supported images and exclude metadata such as `ComicInfo.xml`. Valid ready pages are retained
+when older inflated catalog counts are corrected. Startup scans preserve known chapter identities even when series
+names contain numbers or archive naming settings change.
 `/admin/ingest` is the AVIF backlog and recovery surface. It shows Raven's per-title ingest status, hardware state,
 completion counts, and retry controls. Failed ingest keeps the CBZ in place and appears as retryable work instead of
 making the title readable. Its `Start / rebuild all` action asks Raven for a clean ingest restart: active AVIF runs are

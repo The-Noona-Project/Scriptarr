@@ -693,9 +693,14 @@ public final class LibraryService {
                     continue;
                 }
                 if (ingestService.canReuseReadyChapter(chapter)) {
-                    updatedChapters.add(chapter);
+                    LibraryChapter reusable = reconcileReadyPageCount(chapter);
+                    if (reusable != chapter) {
+                        reusable = checkpointIngestChapter(title.id(), reusable);
+                        chapters = mergeChapterUpdate(chapters, reusable);
+                    }
+                    updatedChapters.add(reusable);
                     completed += 1;
-                    progress.accept(new IngestProgress("ingesting", chapter.pageCount(), chapter.pageCount(), completed, total, true));
+                    progress.accept(new IngestProgress("ingesting", reusable.pageCount(), reusable.pageCount(), completed, total, true));
                     int percent = 10 + (int) Math.floor((completed / (double) total) * 85);
                     if (shouldPersistIngestProgress(percent, lastTaskPercent, lastTaskProgressAt, completed, total)) {
                         persistIngestTask(taskId, title, "running", "Verified " + completed + " of " + total + " chapter(s).", percent, requestedBy, "");
@@ -1353,7 +1358,7 @@ public final class LibraryService {
             chapter.id(),
             chapter.label(),
             chapter.chapterNumber(),
-            Math.max(chapter.pageCount(), pageCount),
+            "ready".equals(status) ? Math.max(0, pageCount) : Math.max(chapter.pageCount(), pageCount),
             chapter.releaseDate(),
             chapter.available(),
             chapter.archivePath(),
@@ -1557,8 +1562,16 @@ public final class LibraryService {
             try (var lease = titleOperationLocks.acquire(titleId)) {
                 // A startup ingest may have committed newer chapter state while this scan waited.
                 if (existing != null) existing = findTitleById(titleId);
+                Map<Path, LibraryChapter> knownArchives = new LinkedHashMap<>();
+                if (existing != null) for (LibraryChapter chapter : Optional.ofNullable(existing.chapters()).orElse(List.of())) {
+                    try {
+                        if (!stringValue(chapter.archivePath()).isBlank()) knownArchives.putIfAbsent(Path.of(chapter.archivePath()).toAbsolutePath().normalize(), chapter);
+                    } catch (RuntimeException ignored) { /* Invalid stored paths cannot identify a scanned archive. */ }
+                }
                 for (Path archive : archives) {
-                    String chapterNumber = LibraryNaming.extractChapterNumber(archive.getFileName().toString(), namingSettings, typeLabel);
+                    LibraryChapter known = knownArchives.get(archive.toAbsolutePath().normalize());
+                    String chapterNumber = known != null && !stringValue(known.chapterNumber()).isBlank() ? known.chapterNumber()
+                        : LibraryNaming.extractChapterNumber(archive.getFileName().toString(), namingSettings, typeLabel);
                     chapters.add(new LibraryChapter(
                         chapterId(titleId, chapterNumber),
                         "Chapter " + chapterNumber,
@@ -1623,9 +1636,21 @@ public final class LibraryService {
         for (LibraryChapter chapter : existing.chapters()) previous.put(normalizeStoredChapterNumber(chapter.chapterNumber()), chapter);
         return scanned.stream().map(chapter -> {
             LibraryChapter saved = previous.get(normalizeStoredChapterNumber(chapter.chapterNumber()));
-            return saved != null && Objects.equals(saved.archivePath(), chapter.archivePath())
-                && saved.pageCount() == chapter.pageCount() && ingestService.canReuseReadyChapter(saved) ? saved : chapter;
+            return saved != null && sameArchivePath(saved.archivePath(), Path.of(chapter.archivePath()))
+                && saved.ingestedPageCount() == chapter.pageCount() && ingestService.canReuseReadyChapter(saved)
+                ? reconcileReadyPageCount(saved) : chapter;
         }).toList();
+    }
+
+    private LibraryChapter reconcileReadyPageCount(LibraryChapter chapter) {
+        // Call only after validating its existing archive, manifest and reader pages; this never re-encodes.
+        return chapter.pageCount() == chapter.ingestedPageCount() ? chapter : withIngestState(chapter, chapter.ingestStatus(),
+            chapter.ingestError(), chapter.ingestRevision(), chapter.ingestedPageCount(), chapter.ingestedAt(), chapter.ingestManifestPath());
+    }
+
+    private boolean sameArchivePath(String stored, Path archive) {
+        try { return !stringValue(stored).isBlank() && Path.of(stored).toAbsolutePath().normalize().equals(archive.toAbsolutePath().normalize()); }
+        catch (RuntimeException error) { return false; }
     }
 
     private LibraryTitle findExistingTitleForScan(String titleName, String typeSlug, ScanCatalogContext scanContext) {
@@ -1654,12 +1679,15 @@ public final class LibraryService {
             return false;
         }
         Map<String, String> archiveByChapterNumber = new LinkedHashMap<>();
+        Map<String, Integer> pagesByChapterNumber = new LinkedHashMap<>();
         for (LibraryChapter chapter : existingChapters) {
             archiveByChapterNumber.put(normalizeStoredChapterNumber(chapter.chapterNumber()), stringValue(chapter.archivePath()));
+            pagesByChapterNumber.put(normalizeStoredChapterNumber(chapter.chapterNumber()), chapter.pageCount());
         }
         for (LibraryChapter chapter : scannedChapters) {
             String chapterNumber = normalizeStoredChapterNumber(chapter.chapterNumber());
-            if (!Objects.equals(archiveByChapterNumber.get(chapterNumber), stringValue(chapter.archivePath()))) {
+            if (!Objects.equals(archiveByChapterNumber.get(chapterNumber), stringValue(chapter.archivePath()))
+                || pagesByChapterNumber.getOrDefault(chapterNumber, -1) != chapter.pageCount()) {
                 return false;
             }
         }
@@ -2180,13 +2208,8 @@ public final class LibraryService {
     }
 
     private int countArchivePages(Path archivePath) {
-        try (ZipFile zipFile = new ZipFile(archivePath.toFile())) {
-            return (int) zipFile.stream()
-                .filter((entry) -> !entry.isDirectory())
-                .count();
-        } catch (Exception error) {
-            return 1;
-        }
+        try { return ArchiveImageEntries.count(archivePath); }
+        catch (Exception error) { return 0; }
     }
 
     private ReaderPageReadResult resolveReaderPageRead(ReaderChapterPayload payload, int pageIndex) {
@@ -2658,7 +2681,7 @@ public final class LibraryService {
     private List<? extends ZipEntry> sortArchiveEntries(ZipFile zipFile, LibraryTitle title) {
         RavenNamingSettings namingSettings = settingsService.getNamingSettings();
         return zipFile.stream()
-            .filter((entry) -> !entry.isDirectory())
+            .filter((entry) -> !entry.isDirectory() && ArchiveImageEntries.isImage(entry.getName()))
             .sorted(
                 Comparator
                     .comparingInt((ZipEntry entry) -> LibraryNaming.extractPageOrder(

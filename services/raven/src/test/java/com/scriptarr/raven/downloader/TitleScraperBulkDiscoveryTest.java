@@ -80,6 +80,32 @@ class TitleScraperBulkDiscoveryTest {
         assertEquals("upstream_challenge",assertThrows(BulkDiscoveryException.class,()->scraper().browseTitlesAlphabetically("Manhua",false,"a")).code());
     }
 
+    /** Challenge phrases in legitimate full-display title and synopsis text must not hide valid results. */
+    @Test
+    void legitimateResultTextDoesNotBecomeAnAccessChallenge() throws Exception {
+        server = HttpServer.create(new InetSocketAddress(0),0);
+        server.createContext("/search/data",exchange->reply(exchange,200,
+            card("captcha","Captcha: Access Denied, Just a Moment","Manhua")
+                +"<p>A story about checking your browser and asking you to verify you are human.</p>"));
+        server.start();
+
+        BulkBrowseResult result = scraper().browseTitlesAlphabetically("Manhua",false,"c");
+        assertEquals(1,result.titles().size());
+        assertEquals("Captcha: Access Denied, Just a Moment",result.titles().getFirst().get("title"));
+    }
+
+    /** Explicit access-challenge markup remains fail-closed even alongside otherwise valid result cards. */
+    @Test
+    void explicitChallengeMarkupStillRejectsResultCards() throws Exception {
+        server = HttpServer.create(new InetSocketAddress(0),0);
+        server.createContext("/search/data",exchange->reply(exchange,200,
+            card("a","Alpha","Manhua")+"<form id='challenge-form'></form>"));
+        server.start();
+
+        assertEquals("upstream_challenge",assertThrows(BulkDiscoveryException.class,
+            ()->scraper().browseTitlesAlphabetically("Manhua",false,"a")).code());
+    }
+
     /** Verify cancellation after a page prevents requesting the next page. */
     @Test
     void cancellationStopsDiscoveryBetweenPages() throws Exception {

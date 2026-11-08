@@ -116,6 +116,10 @@
 - Startup catalog scans preserve each validated ready chapter when its archive path, number, page count, and AVIF
   revision still match. `LibraryTitleLocks` counts active and waiting title operations so scan writes cannot erase
   newer ingest checkpoints. Keep the service monitor out of the wait for a title lease to avoid lock inversion.
+- `ArchiveImageEntries` defines supported CBZ image entries for import, scans, ingest, recovery, and completion.
+  Metadata such as `ComicInfo.xml` is not a page. Correct legacy inflated counts only after validating existing ready
+  manifests; preserve AVIF revisions, timestamps, files, and quality evidence. Prefer a persisted archive path's known
+  chapter identity during scans, and keep filename parsing aware of optional volume fields and numeric series names.
 - Continue/cancel consumes the captured `approvalId` before scheduling and retains a compact accepted receipt.
   Replays return that receipt; stale or opposite decisions cannot affect a later approval window. Cancellation closes
   the enqueue gate and reconciles owned tasks and batch checkpoints after in-flight discovery callbacks finish.

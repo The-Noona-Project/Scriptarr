@@ -16,6 +16,25 @@ import static org.mockito.Mockito.*;
 
 /** Prove that catalog presence alone never establishes completed download work. */
 class DownloadCompletionVerifierTest {
+    /** Existing valid reader output remains usable when legacy catalog counts included metadata files. */
+    @Test
+    void legacyCountMismatchRequiresValidatedReadyEvidence(@TempDir Path root) throws Exception {
+        Path archive = root.resolve("metadata.cbz");
+        try (ZipOutputStream zip = new ZipOutputStream(Files.newOutputStream(archive))) {
+            zip.putNextEntry(new ZipEntry("1.png")); zip.write(new byte[]{1, 2, 3}); zip.closeEntry();
+            zip.putNextEntry(new ZipEntry("ComicInfo.xml")); zip.write(new byte[]{4}); zip.closeEntry();
+            zip.putNextEntry(new ZipEntry("unsupported.bmp")); zip.write(new byte[]{5}); zip.closeEntry();
+        }
+        LibraryService library = mock(LibraryService.class);
+        LibraryChapter legacy = new LibraryChapter("chapter", "Chapter 1", "1", 3, "", true, archive.toString(), "", "clean", 3, 0, List.of(), List.of(),
+            "ready", "saved-revision", 1, "saved-time", "", "saved-manifest", "saved-update");
+        DownloadCompletionVerifier verifier = new DownloadCompletionVerifier(library);
+        assertEquals(1, DownloadCompletionVerifier.archiveImageCount(archive.toString()));
+        assertFalse(verifier.archiveHealthy(legacy));
+        when(library.isReaderReadyChapter(legacy)).thenReturn(true);
+        assertTrue(verifier.archiveHealthy(legacy));
+    }
+
     /** Verify missing expected chapters, corrupt archives and non-ready AVIF each prevent completion. */
     @Test
     void requiresEveryExpectedChapterArchiveAndReaderManifest(@TempDir Path root) throws Exception {

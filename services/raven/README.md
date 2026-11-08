@@ -105,6 +105,8 @@ window. Reading status never starts work.
 After a restart, healthy canonical CBZs can finish reader-page processing without fetching those chapters again.
 Append recovery keeps earlier readable chapters, and failed work still waits for its approved retry.
 Startup catalog scans also retain valid ready-page metadata when the underlying archives have not changed.
+Archive metadata such as `ComicInfo.xml` does not increase page counts. Older inflated counts can be corrected without
+rebuilding validated ready pages.
 
 Completion requires finished discovery and successful owned work, including canonical CBZ files, saved catalog state,
 and ready AVIF pages. Source-quality markers and generated missing-page placeholders remain visible through the

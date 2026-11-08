@@ -30,6 +30,7 @@ import java.util.function.IntFunction;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -168,6 +169,31 @@ class BulkRunServiceTest {
         fixture.broker.setStatus(runId, "paused");
         fixture.service.reconcileInterruptedRuns();
         assertEquals("paused", fixture.service.status(runId).get("status"));
+    }
+
+    /** One malformed legacy run must not block later jobs or make subsequent recovery passes unusable. */
+    @Test
+    void malformedLegacyRunDoesNotStopThisOrLaterRecoveryPasses() throws Exception {
+        Fixture fixture = fixture();
+        String malformedId = fixture.create(Map.of("start", false));
+        Map<String, Object> malformed = fixture.broker.job(malformedId);
+        Map<String, Object> payload = map(malformed.get("payload"));
+        payload.put("type", "unsupported-legacy-type");
+        malformed.put("payload", payload);
+        malformed.put("status", "running");
+        fixture.broker.putJob(malformedId, malformed);
+        String firstHealthy = fixture.create(Map.of("start", false));
+        fixture.broker.setStatus(firstHealthy, "running");
+
+        assertDoesNotThrow(fixture.service::reconcileInterruptedRuns);
+        awaitStatus(fixture.service, firstHealthy, "completed");
+        assertEquals("running", fixture.broker.job(malformedId).get("status"));
+
+        String laterHealthy = fixture.create(Map.of("start", false));
+        fixture.broker.setStatus(laterHealthy, "running");
+        assertDoesNotThrow(fixture.service::reconcileInterruptedRuns);
+        awaitStatus(fixture.service, laterHealthy, "completed");
+        assertEquals(2, fixture.gateway.discoveryCalls.get());
     }
 
     /** Terminal restoration errors are visible and paused, never successful. */

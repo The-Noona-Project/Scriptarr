@@ -177,12 +177,12 @@ public class TitleScraper {
                 });
                 checkBulkCancelled(stop);
                 String body = doc.text().toLowerCase(Locale.ROOT);
+                List<Map<String, String>> parsed = parseSearchResults(doc);
                 if (doc.selectFirst("#challenge-running, #challenge-form, .cf-challenge, [name=cf-turnstile-response]") != null
-                    || body.contains("verify you are human") || body.contains("just a moment") || body.contains("access denied")
-                    || body.contains("checking your browser") || body.contains("captcha")) {
+                    || (parsed.isEmpty() && (body.contains("verify you are human") || body.contains("just a moment") || body.contains("access denied")
+                    || body.contains("checking your browser") || body.contains("captcha")))) {
                     throw new BulkDiscoveryException("upstream_challenge", "The provider returned an access challenge instead of title results.", pagesScanned, null);
                 }
-                List<Map<String, String>> parsed = parseSearchResults(doc);
                 boolean more = hasMoreResults(doc);
                 if (parsed.isEmpty()) {
                     if (more || (!body.contains("no results") && !body.contains("no series") && doc.selectFirst(".no-results, [data-no-results]") == null)) {

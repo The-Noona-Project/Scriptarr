@@ -1,18 +1,15 @@
 package com.scriptarr.raven.downloader;
 
 import com.scriptarr.raven.library.LibraryChapter;
+import com.scriptarr.raven.library.ArchiveImageEntries;
 import com.scriptarr.raven.library.LibraryService;
 import com.scriptarr.raven.library.LibraryTitle;
 
-import java.io.OutputStream;
 import java.math.BigDecimal;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipInputStream;
 
 /** Require expected chapters, canonical archives and reader-ready pages before completion. */
 final class DownloadCompletionVerifier {
@@ -35,8 +32,10 @@ final class DownloadCompletionVerifier {
 
     /** Verify an available catalog chapter still has its complete readable canonical CBZ. */
     boolean archiveHealthy(LibraryChapter chapter) {
-        return chapter != null && chapter.available() && chapter.pageCount() > 0
-            && archiveImageCount(chapter.archivePath()) == chapter.pageCount();
+        if (chapter == null || !chapter.available()) return false;
+        int images = archiveImageCount(chapter.archivePath());
+        return images > 0 && (images == chapter.pageCount() || (images == chapter.ingestedPageCount()
+            && library != null && library.isReaderReadyChapter(chapter)));
     }
 
     /** Verify the archive and reusable reader-page manifest together. */
@@ -63,22 +62,8 @@ final class DownloadCompletionVerifier {
     /** Count readable nonempty archive images, checking ZIP integrity while reading. */
     static int archiveImageCount(String filename) {
         if (filename == null || filename.isBlank()) return -1;
-        try {
-            Path archive = Path.of(filename);
-            if (!Files.isRegularFile(archive) || Files.size(archive) == 0) return -1;
-            int count = 0;
-            try (ZipInputStream zip = new ZipInputStream(Files.newInputStream(archive))) {
-                ZipEntry entry;
-                while ((entry = zip.getNextEntry()) != null) {
-                    String name = entry.getName().toLowerCase(Locale.ROOT);
-                    boolean image = !entry.isDirectory() && name.matches(".*\\.(?:jpe?g|png|webp|avif|gif|bmp)$");
-                    long bytes = zip.transferTo(OutputStream.nullOutputStream());
-                    zip.closeEntry();
-                    if (image) {if (bytes == 0) return -1;count++;}
-                }
-            }
-            return count > 0 ? count : -1;
-        } catch (Exception error) {return -1;}
+        try { return ArchiveImageEntries.verifiedCount(Path.of(filename)); }
+        catch (RuntimeException error) { return -1; }
     }
 
     private static String text(Object value) {return value == null ? "" : String.valueOf(value).trim();}

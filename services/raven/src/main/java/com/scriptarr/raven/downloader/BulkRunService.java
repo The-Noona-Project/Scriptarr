@@ -297,37 +297,34 @@ public class BulkRunService {
      * Status reads never call this lifecycle operation.
      */
     public synchronized void reconcileInterruptedRuns() {
-        if (!restoreReady()) {
-            if (!restoreFailure().isBlank()) {
-                try {
-                    for (Map<String, Object> job : loadRunJobs()) {
-                        String status = stringValue(job.get("status"));
-                        if (STATUS_RUNNING.equals(status) || (STATUS_QUEUED.equals(status)
-                            && booleanValue(normalizeMap(job.get("payload")).get("startRequested")))) {
-                            updateRunStatus(job, STATUS_PAUSED, "Downloader restoration failed: " + restoreFailure(),
-                                buildRunSummary(loadBatchTasks(stringValue(job.get("jobId")))));
-                        }
-                    }
-                } catch (Exception error) {
-                    logger.warn("DOWNLOAD", "Bulk recovery could not persist a restore failure.", error.getMessage());
-                }
-            }
-            return;
-        }
         try {
+            boolean restored = restoreReady();
+            String restoreError = restoreFailure();
+            if (!restored && restoreError.isBlank()) return;
             for (Map<String, Object> job : loadRunJobs()) {
-                String runId = stringValue(job.get("jobId"));
-                String status = stringValue(job.get("status")).toLowerCase(Locale.ROOT);
-                Map<String, Object> payload = normalizeMap(job.get("payload"));
-                if (STATUS_CANCELLED.equals(status) && booleanValue(payload.get("cancellationPending"))) {
-                    finishCancellation(runId);
-                } else if (STATUS_RUNNING.equals(status)
-                    || (STATUS_QUEUED.equals(status) && booleanValue(payload.get("startRequested")))) {
-                    repairManifest(job);
-                    tryScheduleRunWorker(runId);
+                try {
+                    String runId = stringValue(job.get("jobId"));
+                    String status = stringValue(job.get("status")).toLowerCase(Locale.ROOT);
+                    Map<String, Object> payload = normalizeMap(job.get("payload"));
+                    if (!restored) {
+                        if (STATUS_RUNNING.equals(status) || (STATUS_QUEUED.equals(status)
+                            && booleanValue(payload.get("startRequested")))) {
+                            updateRunStatus(job, STATUS_PAUSED, "Downloader restoration failed: " + restoreError,
+                                buildRunSummary(loadBatchTasks(runId)));
+                        }
+                    } else if (STATUS_CANCELLED.equals(status) && booleanValue(payload.get("cancellationPending"))) {
+                        finishCancellation(runId);
+                    } else if (STATUS_RUNNING.equals(status)
+                        || (STATUS_QUEUED.equals(status) && booleanValue(payload.get("startRequested")))) {
+                        repairManifest(job);
+                        tryScheduleRunWorker(runId);
+                    }
+                } catch (RuntimeException error) {
+                    logger.warn("DOWNLOAD", "Bulk recovery could not reconcile one durable run.",
+                        "runId=" + stringValue(job.get("jobId")) + " error=" + error.getMessage());
                 }
             }
-        } catch (IllegalStateException error) {
+        } catch (RuntimeException error) {
             logger.warn("DOWNLOAD", "Raven could not inspect durable bulk runs during startup.", error.getMessage());
         }
     }
