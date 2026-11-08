@@ -152,7 +152,8 @@ The initial worker uses two CPU cores, 4 GiB of memory, two encoding threads, on
 The conversion pool grants only one encoding lease at once. New output is WebP quality 85/method 4. GPU access is not
 required, and Oracle's GPU/model settings are independent. Keep the existing six-title download limit unchanged.
 `/admin/ingest` shows worker readiness, queued conversions, active encoding and results awaiting publication. Jobs
-wait durably when the worker is unavailable; required-remote mode does not fall back to encoding on the storage host.
+wait durably when the worker is unavailable. Warden-managed WebP requires a worker even when none is assigned;
+it reports degraded ingestion while core platform health remains available, and never falls back to storage-host encoding.
 
 Workers use a dedicated restricted service token and a verified HTTPS Sage URL. The optional worker-only Sage listener
 defaults to port 3444 and accepts the worker protocol only. Supply a dedicated server certificate/key using
@@ -176,6 +177,7 @@ Pausing retains canonical archives, readable revisions, and recorded outcomes.
 
 ### Legacy software AVIF compatibility
 
+These settings apply to explicit legacy AVIF mode. Warden-managed deployments use the remote WebP policy above.
 Use `SCRIPTARR_RAVEN_AVIF_ENCODER=cpu` on a host whose GPU does not encode AV1. `auto` tests usable NVIDIA AV1 encoding
 before choosing software; `nvenc` is strict and does not silently fall back. CPU mode does not require NVIDIA devices
 or driver capabilities. Start with `SCRIPTARR_RAVEN_AVIF_ENCODER_SLOTS=1`,
@@ -585,6 +587,10 @@ existing library title through Sage and Raven. `/admin/wanted/metadata-gaps` red
 `/admin/wanted/missing-content` shows coverage gaps, bad chapters, possible missing pages, and bad-source quality
 summaries. It uses the existing library repair candidates to queue a safe staged replacement download when a better
 source is selected. `/admin/wanted/missing-chapters` redirects to this canonical page.
+If a saved reader image disappears, its logical page is recorded in the chapter's quality diagnostics. Missing WebP
+segments also leave a failed ingest that can be retried from the canonical CBZ in `/admin/ingest`.
+Retries can reuse a validated completed conversion artifact. The catalog repair preserves quality history and requires
+the same source, chapter and saved output identity; superseded content remains a diagnosed recovery condition.
 `/admin/calendar` is a month or agenda release view fed by Sage's calendar payload. Completed titles appear through
 dated chapter entries when available and get one title-level completion marker when Raven only has title or chapter
 update timestamps. Titles with no usable date are counted as undated completed instead of being dropped.

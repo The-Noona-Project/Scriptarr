@@ -24,6 +24,14 @@ class DerivedPageManifestTest {
         assertNotEquals(first, DerivedPageManifest.revision(source, 1, "webp", "ffmpeg/libwebp", 85));
     }
 
+    /** New bounded raster profiles cannot overwrite a legacy successful content revision or reuse its content job. */
+    @Test void segmentationVersionHasAnIndependentImmutableRevision(@TempDir Path root) throws Exception {
+        Path source = source(root);
+        String legacy = DerivedPageManifest.revision(source, 1, "webp", "ffmpeg/libwebp", 85, 1), bounded = DerivedPageManifest.revision(source, 1, "webp", "ffmpeg/libwebp", 85, 2);
+        assertNotEquals(legacy, bounded); assertEquals(legacy, DerivedPageManifest.revision(source, 1, "webp", "ffmpeg/libwebp", 85));
+        assertTrue(DerivedPageManifest.reusable(chapter(root)));
+    }
+
     /** Every segment belongs to the same logical page; no-selector reads cannot silently return its top. */
     @Test void segmentedLogicalPageRequiresExplicitIdentity(@TempDir Path root) throws Exception {
         LibraryChapter chapter = chapter(root);

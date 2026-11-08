@@ -37,14 +37,14 @@ public final class RemoteChapterProcessor {
     private final boolean required;
     /** Immutable output profile shared by coordinator and workers. */
     public static final Map<String, Object> PROFILE = Map.of("format", "webp", "quality", 85, "method", 4,
-        "threads", 2, "pageConcurrency", 1, "maxDimension", 16383, "segmentationVersion", 1);
+        "threads", 2, "pageConcurrency", 1, "maxDimension", 16383, "segmentationVersion", 2);
 
     /** @param catalog strict Sage catalog transport @param logger coordinator data-root owner */
     @Autowired
     public RemoteChapterProcessor(RavenBrokerClient catalog, ScriptarrLogger logger) {
         this.catalog = catalog; client = new IngestBrokerClient(System.getenv());
         Path downloads = logger.getDownloadsRoot(); root = (downloads == null ? Path.of("/downloads") : downloads).resolve(".ingest-jobs").toAbsolutePath().normalize();
-        required = "true".equalsIgnoreCase(System.getenv("SCRIPTARR_RAVEN_REMOTE_INGEST_REQUIRED"));
+        required = remoteRequired(System.getenv());
     }
 
     /** @param catalog isolated strict catalog @param downloads isolated managed root @param client explicit test broker transport @param required remote-only policy */
@@ -54,6 +54,12 @@ public final class RemoteChapterProcessor {
 
     /** @return whether this coordinator requires remote WebP conversion */
     public boolean required() { return required; }
+
+    /** @param env explicit deployment settings @return remote-only processing whenever WebP output or the remote policy is selected */
+    static boolean remoteRequired(Map<String, String> env) {
+        return "webp".equalsIgnoreCase(env.getOrDefault("SCRIPTARR_RAVEN_DERIVED_IMAGE_FORMAT", "").trim())
+            || "true".equalsIgnoreCase(env.getOrDefault("SCRIPTARR_RAVEN_REMOTE_INGEST_REQUIRED", "").trim());
+    }
 
     /**
      * Persist an immutable chapter job and wait for a worker without falling back to Plex encoding.
@@ -188,18 +194,36 @@ public final class RemoteChapterProcessor {
      */
     public LibraryChapter complete(Result result, LibraryChapter chapter) throws Exception {
         JsonNode currentJob = unwrap(client.json("GET", "/jobs/" + result.jobId(), null, null));
+        Map<String, Object> payload = json.convertValue(chapter, new com.fasterxml.jackson.core.type.TypeReference<>() { });
+        Map<String, Object> request;
         if ("completed".equals(currentJob.path("status").asText())) {
             if (currentJob.path("lease").path("epoch").asLong() != result.epoch() || !result.artifactSha256().equals(currentJob.path("result").path("artifact").path("sha256").asText())) throw new IOException("Completed conversion belongs to another fenced artifact.");
             JsonNode title = catalog.getLibraryTitle(currentJob.path("spec").path("input").path("titleId").asText());
-            for (JsonNode row : title.path("chapters")) if (chapter.id().equals(row.path("id").asText()) && chapter.ingestRevision().equals(row.path("ingestRevision").asText())
-                && "ready".equals(row.path("ingestStatus").asText()) && chapter.ingestedPageCount() == row.path("ingestedPageCount").asInt()) return json.treeToValue(row, LibraryChapter.class);
-            throw new IOException("Completed conversion has no matching current catalog checkpoint.");
+            JsonNode current = null;
+            for (JsonNode row : title.path("chapters")) if (chapter.id().equals(row.path("id").asText())) current = row;
+            if (acknowledged(current, chapter)) return json.treeToValue(current, LibraryChapter.class);
+            payload.putAll(DerivedPageManifest.catalogFields(chapter));
+            request = CompletedArtifactRepair.request(currentJob, current, payload);
+        } else {
+            payload.putAll(DerivedPageManifest.catalogFields(chapter));
+            request = Map.of("epoch", result.epoch(), "artifactSha256", result.artifactSha256(), "chapter", payload);
         }
-        Map<String, Object> payload = json.convertValue(chapter, new com.fasterxml.jackson.core.type.TypeReference<>() { }); payload.putAll(DerivedPageManifest.catalogFields(chapter));
-        JsonNode response = client.json("POST", "/jobs/" + result.jobId() + "/complete", Map.of("epoch", result.epoch(), "artifactSha256", result.artifactSha256(), "chapter", payload), null);
+        JsonNode response = client.json("POST", "/jobs/" + result.jobId() + "/complete", request, null);
         LibraryChapter saved = json.treeToValue(response.path("chapter"), LibraryChapter.class);
-        if (saved == null || !chapter.id().equals(saved.id()) || !chapter.ingestRevision().equals(saved.ingestRevision()) || !"ready".equals(saved.ingestStatus())) throw new IOException("The fenced chapter checkpoint was not acknowledged.");
+        if (!acknowledged(response.path("chapter"), chapter)) throw new IOException("The fenced chapter checkpoint was not acknowledged.");
         return saved;
+    }
+
+    /** @param row current or acknowledged broker checkpoint @param expected validated output identity @return whether the saved ready chapter matches its logical page and immutable manifest identity */
+    private static boolean acknowledged(JsonNode row, LibraryChapter expected) {
+        return row != null && row.isObject() && expected.id().equals(row.path("id").asText())
+            && expected.ingestRevision().equals(row.path("ingestRevision").asText()) && "ready".equals(row.path("ingestStatus").asText())
+            && expected.ingestManifestPath().equals(row.path("ingestManifestPath").asText())
+            && expected.pageCount() == row.path("pageCount").asInt(-1) && expected.ingestedPageCount() == row.path("ingestedPageCount").asInt(-1)
+            && (expected.sourcePageCount() == null || expected.sourcePageCount() == row.path("sourcePageCount").asInt(-1))
+            && (expected.expectedSegmentCount() == null || expected.expectedSegmentCount() == row.path("expectedSegmentCount").asInt(-1))
+            && (expected.ingestedSegmentCount() == null || expected.ingestedSegmentCount() == row.path("ingestedSegmentCount").asInt(-1))
+            && (expected.segmentsReady() == null || expected.segmentsReady().equals(row.path("segmentsReady").isBoolean() ? row.path("segmentsReady").booleanValue() : null));
     }
 
     /** @param id job identity @param workerId assigned worker @param epoch fence @return current leased job @throws Exception when scope differs */
@@ -235,7 +259,7 @@ public final class RemoteChapterProcessor {
             List<String> allowed = new ArrayList<>(); allowed.add("bundle.json"); long[] remaining = {2_147_483_648L - metadata.getSize()};
             for (int index = 0; index < bundle.path("pages").size(); index++) {
                 JsonNode page = bundle.path("pages").get(index); if (page.path("index").asInt(-1) != index) throw new IOException("Logical page order differs.");
-                List<WebpSegmentation.Rectangle> rectangles = WebpSegmentation.split(page.path("width").asInt(), page.path("height").asInt());
+                List<WebpSegmentation.Rectangle> rectangles = WebpSegmentation.split(page.path("width").asInt(), page.path("height").asInt(), spec.path("profile").path("segmentationVersion").asInt());
                 if (page.path("segments").size() != rectangles.size()) throw new IOException("Logical page coverage differs.");
                 for (WebpSegmentation.Rectangle rectangle : rectangles) {
                     JsonNode segment = page.path("segments").get(rectangle.index());

@@ -125,7 +125,8 @@ export const createWardenRuntime = ({
       const runtime = await getRuntime();
       return {
         ok: Boolean(runtime.warden.dockerSocketAvailable) && !runtime.warden.lastError,
-        ingestDegraded: runtime.managedServices.some(service => service.name === "scriptarr-raven-worker"
+        ingestDegraded: !(runtime.allServices || runtime.services || []).some(service => service.name === "scriptarr-raven-worker")
+          || runtime.managedServices.some(service => service.name === "scriptarr-raven-worker"
           && (!service.running || service.health !== "healthy" || !service.managed || service.conflict || (service.driftReasons || []).length)),
         service: "scriptarr-warden",
         stackMode: runtime.stackMode,

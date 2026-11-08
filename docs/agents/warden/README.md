@@ -60,8 +60,10 @@
   unhealthy optional initialization must not fail other services or cause recreation storms.
   Docker checks the worker's explicit `ready:true` (real WebP codec probe plus recent authenticated Sage traffic),
   while HTTP `/health` remains process liveness. No job is needed to register idle worker readiness.
-- The coordinator receives `SCRIPTARR_RAVEN_REMOTE_INGEST_REQUIRED=true` when a worker is assigned. Lack of capacity
-  means wait; Warden never enables Plex encoding or changes the six-title setting to bypass worker backpressure.
+- The managed WebP coordinator always receives `SCRIPTARR_RAVEN_REMOTE_INGEST_REQUIRED=true`, even without a worker
+  assignment or with a legacy false override. Normalize its compatibility AVIF encoder to `cpu`, avoiding strict NVENC
+  without GPU grants. Lack of worker capacity sets `ingestDegraded` while core health remains healthy and conversion
+  waits; never enable local AVIF/Plex encoding or change the six-title setting to bypass worker backpressure.
 - Sage's worker-only HTTPS port 3444 binds to the core LAN IP in Docker, with dedicated read-only leaf certificate/key
   mounts. Existing HTTP 3004 and all Oracle/Portal URLs stay unchanged. Verify server CA/name on worker outbound calls.
 - Warden should mount Moon's derived cover-cache folder at `/app/cover-cache` and set

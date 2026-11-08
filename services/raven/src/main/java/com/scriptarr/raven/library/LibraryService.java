@@ -634,22 +634,24 @@ public final class LibraryService {
             throw new IllegalArgumentException("At least one chapter sourcePath is required.");
         }
 
-        List<LibraryChapter> chapters = new ArrayList<>(existing != null ? Optional.ofNullable(existing.chapters()).orElse(List.of()) : List.of());
-        FilesystemImportOutcome imported = copyImportArchives(titleName, typeLabel, downloadRoot, namingSettings, importChapters);
-        chapters.removeIf((chapter) -> imported.chapterNumbers().contains(normalizeStoredChapterNumber(chapter.chapterNumber())));
-        chapters.addAll(imported.chapters());
+        try (var maintenance = ContentMaintenance.enter(ContentMaintenance.pathKey(downloadRoot))) {
+            List<LibraryChapter> chapters = new ArrayList<>(existing != null ? Optional.ofNullable(existing.chapters()).orElse(List.of()) : List.of());
+            FilesystemImportOutcome imported = copyImportArchives(titleName, typeLabel, downloadRoot, namingSettings, importChapters);
+            chapters.removeIf((chapter) -> imported.chapterNumbers().contains(normalizeStoredChapterNumber(chapter.chapterNumber())));
+            chapters.addAll(imported.chapters());
 
-        LibraryTitle title = recordDownloadedTitle(
-            titleName,
-            typeLabel,
-            existing != null ? existing.sourceUrl() : "",
-            existing != null ? existing.coverUrl() : "",
-            null,
-            chapters,
-            existing != null && existing.workingRoot() != null && !existing.workingRoot().isBlank() ? Path.of(existing.workingRoot()) : null,
-            downloadRoot
-        );
-        return new PreparedImport(title, requestedBy, imported.chapters().size());
+            LibraryTitle title = recordDownloadedTitle(
+                titleName,
+                typeLabel,
+                existing != null ? existing.sourceUrl() : "",
+                existing != null ? existing.coverUrl() : "",
+                null,
+                chapters,
+                existing != null && existing.workingRoot() != null && !existing.workingRoot().isBlank() ? Path.of(existing.workingRoot()) : null,
+                downloadRoot
+            );
+            return new PreparedImport(title, requestedBy, imported.chapters().size());
+        }
     }
 
     private record PreparedImport(LibraryTitle title, String requestedBy, int chapterCount) { }
@@ -1029,9 +1031,7 @@ public final class LibraryService {
 
         int chapterIndex = manifest.chapters().indexOf(chapter);
         int pageCount = resolvePageCount(manifest.title(), chapter);
-        List<ReaderPage> pages = java.util.stream.IntStream.range(0, pageCount)
-            .mapToObj((index) -> readerPageDescriptor(chapter, index))
-            .toList();
+        List<ReaderPage> pages = ReaderPageDescriptors.describe(chapter, pageCount, ingestService.readerPageMediaType(chapter));
 
         String previousChapterId = chapterIndex > 0 ? manifest.chapters().get(chapterIndex - 1).id() : null;
         String nextChapterId = chapterIndex + 1 < manifest.chapters().size() ? manifest.chapters().get(chapterIndex + 1).id() : null;
@@ -1064,16 +1064,6 @@ public final class LibraryService {
         return result.probe();
     }
 
-    /** @param chapter saved chapter @param index logical source index @return additive saved-format page descriptor */
-    private ReaderPage readerPageDescriptor(LibraryChapter chapter, int index) {
-        try {
-            JsonNode row = DerivedPageManifest.read(chapter).path("pages").path(index);
-            List<Map<String, Object>> segments = row.path("segments").isArray() ? objectMapper.convertValue(row.path("segments"), new TypeReference<>() { }) : List.of();
-            Map<String, Object> thumbnail = row.path("thumbnail").isObject() ? objectMapper.convertValue(row.path("thumbnail"), new TypeReference<>() { }) : Map.of();
-            return new ReaderPage(index, "Page " + (index + 1), ingestService.readerPageMediaType(chapter), row.path("width").asInt(), row.path("height").asInt(), segments, thumbnail);
-        } catch (Exception unavailable) { return new ReaderPage(index, "Page " + (index + 1), ingestService.readerPageMediaType(chapter)); }
-    }
-
     /** @param titleId catalog title @param chapterId catalog chapter @param pageIndex logical index @param segment exact segment @param thumbnail complete logical thumbnail @return exact variant status */
     public ReaderPageProbe probeReaderPage(String titleId, String chapterId, int pageIndex, Integer segment, boolean thumbnail) {
         ReaderChapterPayload payload = readerChapter(titleId, chapterId); int selected = segment == null ? 0 : segment;
@@ -1087,9 +1077,9 @@ public final class LibraryService {
     /** @param titleId catalog title @param chapterId catalog chapter @param pageIndex logical index @param segment exact segment @param thumbnail complete logical thumbnail @return selected saved encoded image or null */
     public RenderedPage renderReaderPage(String titleId, String chapterId, int pageIndex, Integer segment, boolean thumbnail) {
         ReaderChapterPayload payload = readerChapter(titleId, chapterId);
-        if (payload == null) return null;
+        if (!ReaderPageDescriptors.validSelector(payload, pageIndex, segment, thumbnail)) return null;
         try { return new RenderedPage(ingestService.readIngestedPage(payload.chapter(), pageIndex, segment, thumbnail), ingestService.readerPageMediaType(payload.chapter()), segment == null ? 0 : segment, thumbnail); }
-        catch (IOException unavailable) { return null; }
+        catch (IOException unavailable) { markReaderPageIssue(payload, pageIndex, "missing_page", segment, thumbnail); return null; }
     }
 
     /**
@@ -1205,13 +1195,6 @@ public final class LibraryService {
         RavenNamingSettings namingSettings,
         List<Map<String, Object>> importChapters
     ) {
-        try (var maintenance = ContentMaintenance.enter(ContentMaintenance.pathKey(downloadRoot))) {
-            return copyImportArchivesUnfenced(titleName, typeLabel, downloadRoot, namingSettings, importChapters);
-        }
-    }
-
-    /** Copy approved archive sources while the caller holds its exact path writer lease. */
-    private FilesystemImportOutcome copyImportArchivesUnfenced(String titleName, String typeLabel, Path downloadRoot, RavenNamingSettings namingSettings, List<Map<String, Object>> importChapters) {
         try {
             Files.createDirectories(downloadRoot);
             List<LibraryChapter> chapters = new ArrayList<>();
@@ -1470,7 +1453,7 @@ public final class LibraryService {
             error,
             firstNonBlank(manifestPath, chapter.ingestManifestPath()),
             Instant.now().toString()
-        );
+        ).preserveSegmentCheckpointFrom(chapter);
     }
 
     private void persistIngestTask(
@@ -2084,7 +2067,7 @@ public final class LibraryService {
             firstNonBlank(preferred.ingestError(), secondary.ingestError()),
             firstNonBlank(preferred.ingestManifestPath(), secondary.ingestManifestPath()),
             firstNonBlank(preferred.updatedAt(), secondary.updatedAt())
-        );
+        ).preserveSegmentCheckpointFrom(preferred).preserveSegmentCheckpointFrom(secondary);
     }
 
     private int chapterRichnessScore(LibraryChapter chapter) {
@@ -2195,7 +2178,7 @@ public final class LibraryService {
                 chapter.ingestError(),
                 chapter.ingestManifestPath(),
                 chapter.updatedAt()
-            ));
+            ).preserveSegmentCheckpointFrom(chapter));
         }
 
         return chapterByNumber.values().stream()
@@ -2226,7 +2209,7 @@ public final class LibraryService {
                 chapter.ingestError(),
                 chapter.ingestManifestPath(),
                 chapter.updatedAt()
-            ))
+            ).preserveSegmentCheckpointFrom(chapter))
             .toList());
     }
 
@@ -2270,7 +2253,7 @@ public final class LibraryService {
                 ingestSource != null ? ingestSource.ingestError() : "",
                 ingestSource != null ? ingestSource.ingestManifestPath() : "",
                 firstNonBlank(chapter.updatedAt(), persisted != null ? persisted.updatedAt() : "")
-            ));
+            ).preserveSegmentCheckpointFrom(ingestSource));
         }
         return normalizeChapters(titleId, merged);
     }
@@ -2412,11 +2395,43 @@ public final class LibraryService {
     }
 
     private void markReaderPageIssue(ReaderChapterPayload payload, int pageIndex, String failureCode) {
+        markReaderPageIssue(payload, pageIndex, failureCode, null, false);
+    }
+
+    /** Recheck the exact failed variant after obtaining writer ownership, including same-revision repairs. */
+    private void markReaderPageIssue(ReaderChapterPayload payload, int pageIndex, String failureCode, Integer segment, boolean thumbnail) {
+        String titleId = payload.title().id();
+        try (var maintenance = ContentMaintenance.enter("title:" + titleId); var lease = titleOperationLocks.acquire(titleId)) {
+            synchronized (this) {
+                LibraryTitle current = findTitleById(titleId);
+                if (current == null) return;
+                LibraryChapter chapter = Optional.ofNullable(current.chapters()).orElse(List.of()).stream()
+                    .filter(value -> Objects.equals(value.id(), payload.chapter().id())).findFirst().orElse(null);
+                if (chapter == null || !chapter.available() || !"ready".equals(chapter.ingestStatus())
+                    || !Objects.equals(chapter.ingestRevision(), payload.chapter().ingestRevision())
+                    || !Objects.equals(chapter.ingestManifestPath(), payload.chapter().ingestManifestPath())
+                    || !Objects.equals(chapter.archivePath(), payload.chapter().archivePath())
+                    || !Objects.equals(chapter.updatedAt(), payload.chapter().updatedAt())
+                    || chapter.ingestedPageCount() != payload.chapter().ingestedPageCount()) return;
+                try {
+                    byte[] restored = ingestService.readIngestedPage(chapter, pageIndex, segment, thumbnail);
+                    if (restored != null && restored.length > 0) return;
+                } catch (IOException stillMissing) { /* The exact saved variant is still unavailable under the title lease. */ }
+                markReaderPageIssueLocked(new ReaderChapterPayload(current, chapter, payload.pages(), null, null), pageIndex, failureCode);
+            }
+        } catch (Exception unavailable) {
+            logger.warn("LIBRARY", "Reader quality checkpoint was fenced or unavailable.", unavailable.getMessage());
+        }
+    }
+
+    /** Checkpoint only a fresh matching chapter while its actual writer and catalog leases remain held. */
+    private void markReaderPageIssueLocked(ReaderChapterPayload payload, int pageIndex, String failureCode) {
         LibraryTitle title = payload.title();
         LibraryChapter chapter = payload.chapter();
         int pageNumber = pageIndex + 1;
         if (Optional.ofNullable(chapter.missingPages()).orElse(List.of()).contains(pageNumber)
-            && !"clean".equals(normalizeChapterQuality(chapter.qualityStatus()))) {
+            && !"clean".equals(normalizeChapterQuality(chapter.qualityStatus()))
+            && !(chapter.ingestRevision().startsWith("webp-") && "ready".equals(chapter.ingestStatus()))) {
             return;
         }
 
@@ -2425,6 +2440,12 @@ public final class LibraryService {
             chapter.qualityNotes(),
             List.of("Reader page " + pageNumber + " failed validation: " + firstNonBlank(failureCode, "unknown") + ".")
         );
+        Instant checkpointTime = Instant.now();
+        try {
+            Instant nextStoredSecond = Instant.parse(Optional.ofNullable(chapter.updatedAt()).orElse(""))
+                .truncatedTo(java.time.temporal.ChronoUnit.SECONDS).plusSeconds(1);
+            if (checkpointTime.isBefore(nextStoredSecond)) checkpointTime = nextStoredSecond;
+        } catch (java.time.DateTimeException legacyTimestamp) { /* Legacy rows may omit a parseable checkpoint time. */ }
         LibraryChapter updatedChapter = new LibraryChapter(
             chapter.id(),
             chapter.label(),
@@ -2439,14 +2460,14 @@ public final class LibraryService {
             missingPages.size(),
             missingPages,
             qualityNotes,
-            chapter.ingestStatus(),
+            chapter.ingestRevision().startsWith("webp-") ? "failed" : chapter.ingestStatus(),
             chapter.ingestRevision(),
             chapter.ingestedPageCount(),
             chapter.ingestedAt(),
-            chapter.ingestError(),
+            chapter.ingestRevision().startsWith("webp-") ? "A saved reader page is missing; retry reader-page ingest from the canonical archive." : chapter.ingestError(),
             chapter.ingestManifestPath(),
-            Instant.now().toString()
-        );
+            checkpointTime.toString()
+        ).preserveSegmentCheckpointFrom(chapter);
         List<LibraryChapter> nextChapters = Optional.ofNullable(title.chapters()).orElse(List.of()).stream()
             .map((entry) -> Objects.equals(entry.id(), chapter.id()) ? updatedChapter : entry)
             .toList();
@@ -2484,7 +2505,7 @@ public final class LibraryService {
         );
         try {
             upsertTitle(updatedTitle);
-            replaceChapters(title.id(), nextChapters);
+            upsertChapter(title.id(), updatedChapter);
         } catch (Exception error) {
             logger.warn("LIBRARY", "Failed to persist reader page quality marker.", error.getMessage());
         }

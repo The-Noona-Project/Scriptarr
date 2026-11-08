@@ -24,16 +24,21 @@ Raven-visible CBZs from `import-staging` or existing downloaded storage, copies 
 `downloaded/<type-slug>/<title-folder>`, catalogs the title or chapter rows, and queues reader-page processing.
 A chapter needs acknowledged ready metadata, its logical page count, and a complete manifest before Moon can serve it.
 Existing AVIF chapters remain readable while new WebP pages are prepared.
+Retrying a damaged WebP chapter can restore its validated completed artifact from the canonical CBZ workflow without
+encoding again. The catalog repair is fenced to the unchanged current chapter and keeps source-quality history.
 Before Raven creates or catalogs a title, it resolves the logical catalog identity of library type plus normalized title
 against Vault's compact title-card projection. Downloads, manual imports, startup rescans, and AVIF ingest setup should
 therefore reuse the canonical title id even when the same title appears under a different source or filesystem folder.
 The distributed setup runs Raven as `coordinator` on the canonical-storage host and an `ingest-worker` on the assigned
-worker host. The coordinator uses `SCRIPTARR_RAVEN_REMOTE_INGEST_REQUIRED=true`; it waits when the worker is unavailable
+worker host. Selecting `SCRIPTARR_RAVEN_DERIVED_IMAGE_FORMAT=webp` implies remote-only processing, even without an
+assigned worker. `SCRIPTARR_RAVEN_REMOTE_INGEST_REQUIRED=true` also selects that policy. It waits when the worker is unavailable
 and never falls back to local encoding. The worker uses FFmpeg WebP quality `85`, method `4`, two encoder threads, one
 page at a time and one chapter at a time. Its container is limited to two CPUs and 4 GiB; the durable pool permits one
 active encoding lease across all workers. The worker has disposable scratch only and reaches Sage over verified TLS.
 
-Oversized source images are split into exact two-dimensional WebP segments, each at most 16383 pixels per side.
+Source images are split into exact two-dimensional WebP segments, each at most 16383 pixels per side and 64 Mi pixels.
+Native header and sequential region processing avoid decoding the full oversized image in Java or passing an image
+beyond FFmpeg's decoder limit. New output uses a distinct segmentation profile; earlier WebP and AVIF stay readable.
 Reader navigation and saved progress still count original logical pages. The reader composes every segment, and cover
 fallback uses a thumbnail of the whole first page. Source archives and source-quality evidence remain unchanged.
 
@@ -186,9 +191,10 @@ queued tasks can be removed from recovery, which clears the persisted task and d
 When an upstream page image returns `404`, Raven now skips same-URL image retries, refreshes the chapter page list on
 the next chapter attempt, and leaves a clearer source-image failure if the refreshed source still points at missing
 images.
-Reader page serving reads saved AVIF or segmented WebP manifests instead of extracting CBZ pages on demand. The ingest pipeline
-extracts ordered archive pages, writes stable page slugs such as `p000001.avif`, stores a per-chapter manifest, and
-serves `image/avif` through the existing Moon/Sage reader routes. Raven also exposes a redacted page probe
+Reader page serving reads saved AVIF or segmented WebP manifests instead of extracting CBZ pages on demand. New ingest
+converts ordered archive pages into WebP segments and stores their logical-page mapping in an immutable chapter manifest.
+The existing Moon/Sage reader routes serve `image/webp` for those segments and retain `image/avif` for legacy output.
+Raven also exposes a redacted page probe
 for Moon and keeps Missing Content quality fields available for damaged source detection.
 Raven also accepts `POST /v1/ingest/runs` for Appa/Sage-owned library-type reingest jobs. These jobs rebuild only the
 derived reader pages from existing canonical CBZ archives, create one durable task per ready title, continue after

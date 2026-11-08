@@ -17,11 +17,11 @@ final class WebpMigrationControl {
 
     /** @param broker isolated durable broker @param env explicit deployment settings */
     WebpMigrationControl(RavenBrokerClient broker, Map<String, String> env) {
-        this.broker = broker; remote = "true".equalsIgnoreCase(env.get("SCRIPTARR_RAVEN_REMOTE_INGEST_REQUIRED")); defaultEnabled = "true".equalsIgnoreCase(env.get("SCRIPTARR_RAVEN_WEBP_MIGRATION_ENABLED"));
+        this.broker = broker; remote = RemoteChapterProcessor.remoteRequired(env); defaultEnabled = "true".equalsIgnoreCase(env.get("SCRIPTARR_RAVEN_WEBP_MIGRATION_ENABLED"));
     }
 
     /** @return whether this deployment requires remote WebP output */
-    static boolean webp() { return "true".equalsIgnoreCase(System.getenv("SCRIPTARR_RAVEN_REMOTE_INGEST_REQUIRED")); }
+    static boolean webp() { return RemoteChapterProcessor.remoteRequired(System.getenv()); }
 
     /** @return persisted scheduler intent; false is the initial remote deployment default */
     boolean enabled() {

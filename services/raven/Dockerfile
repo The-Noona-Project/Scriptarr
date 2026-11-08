@@ -20,7 +20,7 @@ FROM eclipse-temurin:24-jre
 WORKDIR /app
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends curl ffmpeg openvpn iproute2 unzip \
+  && apt-get install -y --no-install-recommends curl ffmpeg libvips-tools openvpn iproute2 unzip \
   && rm -rf /var/lib/apt/lists/*
 
 COPY services/raven/scripts/verify-avif.sh /usr/local/bin/scriptarr-verify-avif

@@ -110,7 +110,7 @@ export const createClusterRuntime = ({env = process.env, local, client = createC
       : topology.hosts.find((entry) => entry.id === host.hostId).services.map((name) => ({name, hostId: host.hostId, status: "unavailable", health: "unavailable", running: false, error: host.error})));
     return {
       ...runtime,
-      ingestDegraded: Boolean(topology.owners["scriptarr-raven-worker"]) && ![...(runtime.managedServices || []), ...remoteServices].some(service =>
+      ingestDegraded: ![...(runtime.managedServices || []), ...remoteServices].some(service =>
         service.name === "scriptarr-raven-worker" && service.running && service.health === "healthy" && service.managed
         && !service.conflict && !(service.driftReasons || []).length),
       ...bootstrap(),
@@ -142,7 +142,7 @@ export const createClusterRuntime = ({env = process.env, local, client = createC
       void remoteStates();
       const hosts = remoteHosts.map((host) => cachedHosts.find((entry) => entry.hostId === host.id)
         || {hostId: host.id, available: false, healthy: false, error: "Agent state has not yet been refreshed."});
-      const ingestDegraded = topology.owners["scriptarr-raven-worker"] && hosts.some(host =>
+      const ingestDegraded = !topology.owners["scriptarr-raven-worker"] || hosts.some(host =>
         host.hostId === topology.owners["scriptarr-raven-worker"] && (!host.available
           || !(host.runtime?.managedServices || []).some(service => service.name === "scriptarr-raven-worker" && service.running && service.health === "healthy"
             && service.managed && !service.conflict && !(service.driftReasons || []).length)));

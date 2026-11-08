@@ -55,7 +55,7 @@ export const normalizeConversionSpec = body => {
   const expectedKeys = ["format", "quality", "method", "threads", "pageConcurrency", "maxDimension", "segmentationVersion"];
   if (Object.keys(profile).some(key => !expectedKeys.includes(key)) || profile.format !== "webp"
     || profile.quality !== 85 || profile.method !== 4 || profile.threads !== 2 || profile.pageConcurrency !== 1
-    || profile.maxDimension !== 16383 || profile.segmentationVersion !== 1) {
+    || profile.maxDimension !== 16383 || ![1, 2].includes(profile.segmentationVersion)) {
     fail(400, "CONVERSION_INVALID", "Unsupported conversion profile.");
   }
   const archiveName = text(input.archiveName);
@@ -87,7 +87,7 @@ const artifactValue = (value, job) => ({
 });
 
 /** Create authoritative conversion state transitions over a transactional repository. */
-export const createConversionJobs = ({repository, now = Date.now, publishChapter = null}) => {
+export const createConversionJobs = ({repository, now = Date.now, publishChapter = null, repairChapter = null}) => {
   const time = tx => Number.isFinite(tx.now) ? tx.now : now();
   const requireJob = async (tx, id) => {
     const job = await tx.get(identifier(id, "job id"));
@@ -261,6 +261,23 @@ export const createConversionJobs = ({repository, now = Date.now, publishChapter
         const job = await requireJob(tx, id);
         await coordinatorFence(tx, job, body, ["publishing", "completed"]);
         if (!body.chapter || typeof body.chapter !== "object") fail(400, "CONVERSION_INVALID", "A fenced chapter checkpoint is required.");
+        if (body.repair != null) {
+          if (job.status !== "completed" || body.expectedCoordinatorGeneration !== job.spec.coordinatorGeneration) conflict("This completed coordinator execution no longer owns the repair.");
+          const requestId = identifier(body.repair.requestId, "repair request id");
+          sha(body.repair.expectedCurrentChapterFingerprint, "current chapter fingerprint");
+          if (!repairChapter) fail(503, "CONVERSION_PUBLISH_UNAVAILABLE", "The catalogue repair publisher is unavailable.");
+          const requestHash = hash(canonical(body));
+          const previous = job._repairReceipts?.[requestId];
+          if (previous && previous.requestHash !== requestHash) conflict("This repair request id already accepted different content.");
+          const chapter = await repairChapter(tx, job, body, {replay: Boolean(previous)});
+          if (previous) return copy(previous.response);
+          const response = {job: publicJob(job), chapter, repair: {requestId, repairedAt: chapter.updatedAt}};
+          job._repairReceipts ||= {};
+          job._repairReceipts[requestId] = {requestHash, response: copy(response)};
+          // A repair receipt must not rewrite the original public completion checkpoint or timestamps.
+          await tx.put(job);
+          return response;
+        }
         const completionHash = hash(canonical(body.chapter));
         if (job.status === "completed") {
           if (job._completionHash !== completionHash) conflict("This conversion already completed with another chapter checkpoint.");

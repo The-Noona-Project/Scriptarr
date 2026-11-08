@@ -99,14 +99,15 @@ public final class DerivedPageManifest {
         try {
             JsonNode manifest = read(chapter); Path archive = Path.of(chapter.archivePath()); int count = ArchiveImageEntries.count(archive);
             String format = manifest.path("format").asText(), encoder = manifest.path("encoder").asText(); int quality = "webp".equals(format) ? 85 : 50;
+            int version = "webp".equals(format) ? manifest.path("segmentationVersion").asInt() : 1;
             if (count <= 0 || count != chapter.ingestedPageCount() || encoder.isBlank() || manifest.path("quality").asInt() != quality
-                || !revision(archive, count, format, encoder, quality).equals(chapter.ingestRevision())) return false;
+                || !revision(archive, count, format, encoder, quality, version).equals(chapter.ingestRevision())) return false;
             JsonNode pages = manifest.path("pages"); if (!pages.isArray() || pages.size() != count) return false;
             for (int index = 0; index < count; index++) {
                 JsonNode page = pages.get(index); if (page.path("index").asInt(-1) != index) return false;
                 if ("avif".equals(format)) { page(chapter, index, null, false); continue; }
-                if (manifest.path("method").asInt() != 4 || manifest.path("segmentationVersion").asInt() != 1) return false;
-                List<WebpSegmentation.Rectangle> expected = WebpSegmentation.split(page.path("width").asInt(), page.path("height").asInt());
+                if (manifest.path("method").asInt() != 4 || !List.of(1, 2).contains(version)) return false;
+                List<WebpSegmentation.Rectangle> expected = WebpSegmentation.split(page.path("width").asInt(), page.path("height").asInt(), version);
                 JsonNode segments = page.path("segments"); if (!segments.isArray() || segments.size() != expected.size()) return false;
                 for (WebpSegmentation.Rectangle rectangle : expected) {
                     JsonNode segment = segments.get(rectangle.index());
@@ -137,9 +138,14 @@ public final class DerivedPageManifest {
      * @throws Exception when source metadata cannot be read
      */
     public static String revision(Path archive, int count, String format, String encoder, int quality) throws Exception {
+        return revision(archive, count, format, encoder, quality, 1);
+    }
+
+    /** @param archive canonical source @param count logical pages @param format saved output format @param encoder saved encoder @param quality quality policy @param version saved segmentation profile @return content/profile revision retaining legacy identities @throws Exception when hashing fails */
+    public static String revision(Path archive, int count, String format, String encoder, int quality, int version) throws Exception {
         MessageDigest hash = MessageDigest.getInstance("SHA-256");
         List<String> identity = "webp".equals(format)
-            ? List.of(WebpChapterEncoder.sha256(archive), Integer.toString(count), format, encoder, Integer.toString(quality), "method4-segmentation1")
+            ? List.of(WebpChapterEncoder.sha256(archive), Integer.toString(count), format, encoder, Integer.toString(quality), "method4-segmentation" + version)
             : List.of(archive.toString(), Long.toString(Files.size(archive)), Long.toString(Files.getLastModifiedTime(archive).toMillis()), Integer.toString(count), format, encoder, Integer.toString(quality));
         for (String value : identity) hash.update(value.getBytes(java.nio.charset.StandardCharsets.UTF_8));
         return format + "-" + HexFormat.of().formatHex(hash.digest()).substring(0, 16);

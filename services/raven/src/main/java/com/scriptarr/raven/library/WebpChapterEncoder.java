@@ -29,7 +29,10 @@ public final class WebpChapterEncoder {
             Files.createDirectories(directory); Path input = directory.resolve("probe.ppm"), output = directory.resolve("probe.webp");
             byte[] header = "P6\n2 2\n255\n".getBytes(java.nio.charset.StandardCharsets.US_ASCII), bytes = new byte[header.length + 12];
             System.arraycopy(header, 0, bytes, 0, header.length); java.util.Arrays.fill(bytes, header.length, bytes.length, (byte) 127); Files.write(input, bytes);
-            convert(input, output, "format=rgb24"); return Files.size(output) > 12;
+            int[] dimensions = VipsImageSource.dimensions(input); if (dimensions[0] != 2 || dimensions[1] != 2) return false;
+            Path region = directory.resolve("probe-region.png"); VipsImageSource.region(input, region, new WebpSegmentation.Rectangle(0, 0, 0, 2, 2));
+            VipsImageSource.thumbnail(input, directory.resolve("probe-thumbnail.png"));
+            convert(region, output, "format=rgb24"); return Files.size(output) > 12;
         } catch (Exception failure) { if (failure instanceof InterruptedException) Thread.currentThread().interrupt(); return false; }
         finally { try { if (Files.exists(directory)) try (var paths = Files.walk(directory)) { for (Path file : paths.sorted(java.util.Comparator.reverseOrder()).toList()) Files.deleteIfExists(file); } } catch (IOException ignored) { /* Probe scratch is never canonical content. */ } }
     }
@@ -51,7 +54,8 @@ public final class WebpChapterEncoder {
     /** @param archive input CBZ @param spec immutable job @param scratch private output @param progress actual logical/physical completion @return encoded result ZIP @throws IOException when conversion fails @throws InterruptedException on cancellation */
     public Path encodeWithProgress(Path archive, JsonNode spec, Path scratch, java.util.function.Consumer<Progress> progress) throws IOException, InterruptedException {
         JsonNode profile = spec.path("profile");
-        if (!profile.equals(json.valueToTree(RemoteChapterProcessor.PROFILE))) throw new IOException("Unsupported immutable WebP profile.");
+        Map<String, Object> legacy = new LinkedHashMap<>(RemoteChapterProcessor.PROFILE); legacy.put("segmentationVersion", 1);
+        if (!profile.equals(json.valueToTree(RemoteChapterProcessor.PROFILE)) && !profile.equals(json.valueToTree(legacy))) throw new IOException("Unsupported immutable WebP profile.");
         if (!sha256(archive).equals(spec.path("input").path("sourceFingerprint").path("sha256").asText())) throw new IOException("Input archive fingerprint differs.");
         Files.createDirectories(scratch);
         List<Map<String, Object>> pages = new ArrayList<>();
@@ -68,11 +72,13 @@ public final class WebpChapterEncoder {
                 try {
                     int[] dimensions = dimensions(source);
                     List<Map<String, Object>> segments = new ArrayList<>();
-                    List<WebpSegmentation.Rectangle> tiles = WebpSegmentation.split(dimensions[0], dimensions[1]); totalSegments += tiles.size();
+                    List<WebpSegmentation.Rectangle> tiles = WebpSegmentation.split(dimensions[0], dimensions[1], profile.path("segmentationVersion").asInt()); totalSegments += tiles.size();
                     for (WebpSegmentation.Rectangle tile : tiles) {
                         String slug = String.format(Locale.ROOT, "p%06d-s%04d.webp", index + 1, tile.index());
                         Path target = scratch.resolve(slug);
-                        convert(source, target, "format=rgba,crop=" + tile.width() + ":" + tile.height() + ":" + tile.x() + ":" + tile.y() + ":exact=1");
+                        Path raster = scratch.resolve("region-" + index + "-" + tile.index() + ".png");
+                        try { VipsImageSource.region(source, raster, tile); convert(raster, target, "format=rgba"); }
+                        finally { Files.deleteIfExists(raster); }
                         Map<String, Object> segment = new LinkedHashMap<>(file(target));
                         segment.putAll(Map.of("index", tile.index(), "x", tile.x(), "y", tile.y(), "width", tile.width(), "height", tile.height()));
                         segments.add(segment);
@@ -83,7 +89,9 @@ public final class WebpChapterEncoder {
                     if (segments.size() == 1) page.put("slug", segments.getFirst().get("slug"));
                     if (index == 0) {
                         Path thumb = scratch.resolve("p000001-thumbnail.webp");
-                        convert(source, thumb, "scale=w='max(1,trunc(iw*min(1,min(512/iw,768/ih))))':h='max(1,trunc(ih*min(1,min(512/iw,768/ih))))'");
+                        Path raster = scratch.resolve("thumbnail-source.png");
+                        try { VipsImageSource.thumbnail(source, raster); convert(raster, thumb, "format=rgba"); }
+                        finally { Files.deleteIfExists(raster); }
                         int[] size = dimensions(thumb); Map<String, Object> thumbnail = new LinkedHashMap<>(file(thumb));
                         thumbnail.putAll(Map.of("width", size[0], "height", size[1])); page.put("thumbnail", thumbnail);
                     }
@@ -126,10 +134,7 @@ public final class WebpChapterEncoder {
      * @throws InterruptedException when probing is cancelled
      */
     private int[] dimensions(Path source) throws IOException, InterruptedException {
-        JsonNode stream = json.readTree(MediaProcess.run(List.of("ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "json", source.toString()), true)).path("streams").path(0);
-        int width = stream.path("width").asInt(), height = stream.path("height").asInt();
-        if (width <= 0 || height <= 0) throw new IOException("Image dimensions are unavailable.");
-        return new int[]{width, height};
+        return VipsImageSource.dimensions(source);
     }
 
     /** @param file worker output @return immutable file identity @throws IOException when output cannot be read */

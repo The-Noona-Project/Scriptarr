@@ -75,6 +75,10 @@ Existing AVIF chapters remain readable. WebP chapter checkpoints additionally re
 `expectedSegmentCount`, `ingestedSegmentCount`, and `segmentsReady`; logical page counts never count physical tiles.
 Partial or legacy WebP output without a complete segment checkpoint is not reader-ready. Metadata-only updates preserve
 omitted segment fields in both memory and MySQL, and publication invalidates cached catalogue and reader projections.
+The fixed WebP profiles retain distinct identities for segmentation versions 1 and 2, so newer area-bounded tiles do
+not overwrite earlier output. A completed artifact can repair a failed chapter through the same fenced completion
+operation. Repair compares the exact current chapter snapshot, restores only readiness, preserves current metadata and
+quality evidence, and retains the original completion receipt. Repeated replies are safe; superseded content is rejected.
 
 Selected-run cleanup uses the separate `content-reset/preview`, `begin`, `apply`, and `finish` conversion routes.
 Preview records exactly the selected durable plans and owned tasks, deduplicates canonical IDs, and retains the original

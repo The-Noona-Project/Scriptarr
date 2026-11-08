@@ -161,6 +161,9 @@ and remove obsolete containers deliberately. Standalone installs without a topol
 New reader pages use CPU WebP at quality 85/method 4. Existing AVIF remains readable during migration. Legacy AVIF/GPU
 settings no longer grant Raven NVIDIA devices or change new output; Oracle's independent GPU/model settings remain
 unchanged. Download-title concurrency remains Sage-owned, separately from encoding capacity.
+Warden always marks its WebP coordinator as remote-required, including when no worker is assigned. Conversion waits
+for worker capacity instead of falling back to local AVIF or encoding on Plex. The compatibility AVIF encoder setting
+inside the managed container is normalized to `cpu`; saved deployment settings and existing AVIF files are retained.
 
 To offload encoding, add optional service `scriptarr-raven-worker` to the remote host's topology list. Keep
 `scriptarr-raven` beside Sage/Vault on the primary host. Warden runs the worker from the same Raven artifact in
@@ -172,6 +175,7 @@ Worker CPU/memory limits are fixed at 2 CPUs and 4 GiB, with a 4 GiB combined me
 encoder/native headroom. Encoding uses one chapter job, one page at a time and two threads. Only `raven-worker/scratch`
 and `raven-worker/logs` are writable mounts. Missing worker capacity waits without enabling Plex encoding; reader
 services remain available. A matching unhealthy worker is reported rather than repeatedly recreated.
+An unassigned or unhealthy worker sets `ingestDegraded` without failing the platform health check.
 
 Configure these values consistently on both Wardens before enabling its topology placement:
 

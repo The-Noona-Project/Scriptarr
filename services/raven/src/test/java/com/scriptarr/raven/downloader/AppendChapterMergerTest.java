@@ -69,6 +69,39 @@ class AppendChapterMergerTest {
         assertEquals(List.of(original), AppendChapterMerger.merge(List.of(original), null));
     }
 
+    /** Verify stable identity projection retains explicit new segment evidence and matching prior evidence. */
+    @Test
+    void identityProjectionPreservesOnlyMatchingSegmentCheckpoint() {
+        LibraryChapter previous = new LibraryChapter("stable", "Original", "1", 2, null, true,
+            "/downloaded/one.cbz", "https://example.invalid/one", "clean", 2, 0, List.of(), List.of(),
+            "ready", "webp-0123456789abcdef", 2, "2026-11-08T00:00:00Z", "", "/ingested/one/manifest.json",
+            "2026-11-08T00:00:00Z", 2, 3, 3, true);
+        LibraryChapter metadataCopy = new LibraryChapter("temporary", "Renamed", "1", 2, null, true,
+            previous.archivePath(), previous.sourceUrl(), "clean", 2, 0, List.of(), List.of(), "ready",
+            previous.ingestRevision(), 2, previous.ingestedAt(), "", previous.ingestManifestPath(), previous.updatedAt());
+        LibraryChapter preserved = AppendChapterMerger.merge(List.of(previous), List.of(metadataCopy)).getFirst();
+        assertEquals("stable", preserved.id());
+        assertEquals(3, preserved.expectedSegmentCount());
+        assertEquals(true, preserved.segmentsReady());
+        LibraryChapter sameIdentityCopy = new LibraryChapter(previous.id(), metadataCopy.label(), "1", 2, null, true,
+            previous.archivePath(), previous.sourceUrl(), "clean", 2, 0, List.of(), List.of(), "ready",
+            previous.ingestRevision(), 2, previous.ingestedAt(), "", previous.ingestManifestPath(), previous.updatedAt());
+        LibraryChapter sameIdentity = AppendChapterMerger.merge(List.of(previous), List.of(sameIdentityCopy)).getFirst();
+        assertEquals(3, sameIdentity.expectedSegmentCount());
+        assertEquals(true, sameIdentity.segmentsReady());
+        LibraryChapter replacement = new LibraryChapter("temporary", "Repaired", "1", 2, null, true,
+            previous.archivePath(), previous.sourceUrl(), "clean", 2, 0, List.of(), List.of(), "ready",
+            "webp-fedcba9876543210", 2, previous.ingestedAt(), "", "/ingested/new/manifest.json", previous.updatedAt(),
+            2, 4, 4, true);
+        LibraryChapter replaced = AppendChapterMerger.merge(List.of(previous), List.of(replacement)).getFirst();
+        assertEquals("stable", replaced.id());
+        assertEquals(4, replaced.expectedSegmentCount());
+        assertEquals(true, replaced.segmentsReady());
+        LibraryChapter pending = pendingChapter("temporary", "1", previous.archivePath());
+        assertNull(AppendChapterMerger.merge(List.of(previous), List.of(pending)).getFirst().segmentsReady());
+        assertNull(AppendChapterMerger.merge(List.of(previous), List.of(pendingChapter(previous.id(), "1", previous.archivePath()))).getFirst().segmentsReady());
+    }
+
     private LibraryChapter readyChapter(String id, String number) {
         return new LibraryChapter(id, "Earlier chapter", number, 2, "2026-11-01", true,
             "/downloaded/original-one.cbz", "https://weebcentral.com/chapters/original", "clean", 2, 0,

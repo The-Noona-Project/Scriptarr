@@ -124,9 +124,13 @@ test("legacy GPU hints do not grant NVIDIA devices to the WebP coordinator", () 
 });
 
 test("legacy NVENC selection cannot override the new CPU WebP runtime", () => {
-  const plan = resolveServicePlan({env: {SCRIPTARR_RAVEN_AVIF_ENCODER: "nvenc", SCRIPTARR_GPU_HINT: "cpu"}});
+  const plan = resolveServicePlan({env: {SCRIPTARR_RAVEN_AVIF_ENCODER: "nvenc", SCRIPTARR_GPU_HINT: "cpu",
+    SCRIPTARR_RAVEN_REMOTE_INGEST_REQUIRED: "false"}});
   const raven = plan.services.find((service) => service.name === "scriptarr-raven");
   assert.equal(raven.extraArgs.includes("--gpus"), false);
+  assert.equal(raven.env.SCRIPTARR_RAVEN_AVIF_ENCODER, "cpu");
+  assert.equal(raven.env.SCRIPTARR_RAVEN_DERIVED_IMAGE_FORMAT, "webp");
+  assert.equal(raven.env.SCRIPTARR_RAVEN_REMOTE_INGEST_REQUIRED, "true");
   assert.equal(raven.env.SCRIPTARR_RAVEN_AVIF_REQUIRE_NVIDIA, "false");
   assert.equal(raven.env.SCRIPTARR_RAVEN_INGEST_REQUIRE_NVIDIA, "false");
 });

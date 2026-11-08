@@ -6,7 +6,9 @@
   verified-TLS Sage transport, health server and FFmpeg WebP converter. They have no provider, VPN, downloader,
   canonical mounts, catalog writer, Docker socket or direct Vault connection. `ready` requires real encode/decode
   self-test and recent authenticated Sage availability; HTTP liveness remains 200 when degraded.
-- Coordinator output is remote-only with `SCRIPTARR_RAVEN_REMOTE_INGEST_REQUIRED=true`. Canonical CBZs and publication
+- Coordinator output is remote-only with `SCRIPTARR_RAVEN_REMOTE_INGEST_REQUIRED=true` or configured output `webp`,
+  independently of worker assignment. Use that same derivation for migration defaults/mode; missing workers wait.
+  Explicit standalone `avif` without remote policy retains compatibility. Canonical CBZs and publication
   stay coordinator-owned. Worker q85/m4, two threads, one page/chapter and 2CPU/4GiB combine with Vault's one active
   encoding lease. The private CA file is `SCRIPTARR_RAVEN_WORKER_CA_FILE`. No local encode fallback.
 - Conversion traffic uses `/api/internal/raven-ingest` through Sage. Content IDs hash recursively sorted compact
@@ -19,13 +21,29 @@
 - Stream/extraction byte bounds, exact entries, hashes, dimensions and full decode precede artifact acceptance.
   Submit releases the encode slot; result-ready/publishing jobs are not worker-reassigned. Vault atomically checks
   epoch and checkpoints the final chapter at complete. Exact artifact/current catalog replays preserve lost responses.
+- Completed-artifact repair uses that same complete route with the captured coordinator generation, epoch and artifact,
+  plus the canonical fingerprint of the exact raw current failed/pending chapter. Validate restored files first; retain
+  the original completion receipt and source/quality data, use a separate repair receipt, and never enqueue or direct-PUT
+  a repaired catalog row. Missing, reset, superseded or changed chapter identities fail closed.
 - WebP revisions use source SHA/profile, never CBZ mtime. Immutable output lives under
   `ingested/<type>/<title>/<chapter>/<webp-revision>/`. Identical content in a new transfer epoch retains its files and
   manifest. Different page/profile hashes cannot overwrite it. Existing AVIF identity and reads remain supported.
-- Logical pages retain source count/index. Two-dimensional segments cover every pixel, ≤16383 per side, with at most
+- Logical pages retain source count/index. Segmentation profile2 bounds every native raster to 64Mi pixels and ≤16383
+  per side; row width=min(width,16383), row height=min(16383,floor(64Mi/rowWidth)). Keep profile1 geometry/revisions
+  readable, and create distinct profile2 content jobs/revisions instead of overwriting older immutable output.
+  `vipsheader` reads dimensions; sequential `vips crop` emits one bounded lossless PNG before unchanged FFmpeg q85/m4
+  encoding/decoding. Native operations use two threads, zero operation cache and 64MiB memory/disc thresholds; delete
+  intermediates after each segment. Whole thumbnails use native full-page scaling and exact bounded fit dimensions.
+  Two-dimensional segments cover every pixel, with at most
   1024 segments/page and a 300M-pixel bound. `segment` selects exact bytes; `thumbnail=true` is the whole first logical
   page. Probes include both selectors. WebP-ready requires matching logical counts, all physical segments and thumbnail;
   valid files alone do not make a failed/pending DTO ready.
+- Reader descriptors parse one saved manifest for all descriptors, then project every logical page from that snapshot.
+  Variant file resolution independently parses the manifest once. A valid
+  missing WebP tile records source-quality/failed-ingest recovery from the canonical CBZ; malformed or out-of-range
+  selectors never mark content damaged. Variant status remains scoped to the selected tile or whole-page thumbnail.
+- A manual import's path writer lease covers its filesystem copy and both catalog checkpoints, including the final
+  ingestion checkpoint. Releasing the path fence before those writes finish is not actual maintenance quiescence.
 - Migration defaults disabled. Protected `/v1/ingest/migration/{start,pause,resume,retry,status}` persists intent in a
   generic control job. Whole-library runs include ready AVIF, yield the fair title lock after each chapter, preserve old
   readable state on failures, and leave failed title work for explicit retry. Pause lets the current chapter finish.

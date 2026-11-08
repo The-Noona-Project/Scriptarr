@@ -22,10 +22,13 @@ class WebpWorkerContractsTest {
     /** Both dimensions split with exact row-major coverage and no dropped pixels. */
     @Test void oversizedBothDimensionsCoverOriginalExactly() {
         var rectangles = WebpSegmentation.split(16384, 16384);
-        assertEquals(4, rectangles.size());
+        assertEquals(8, rectangles.size());
         assertEquals(268435456L, rectangles.stream().mapToLong(r -> (long) r.width() * r.height()).sum());
-        assertEquals(new WebpSegmentation.Rectangle(3, 16383, 16383, 1, 1), rectangles.getLast());
+        assertEquals(new WebpSegmentation.Rectangle(7, 16383, 12288, 1, 4096), rectangles.getLast());
         assertTrue(rectangles.stream().allMatch(r -> r.width() <= 16383 && r.height() <= 16383));
+        assertTrue(rectangles.stream().allMatch(r -> (long) r.width() * r.height() <= WebpSegmentation.MAX_TILE_PIXELS && (8L * r.width() + 1024) * (r.height() + 128L) < Integer.MAX_VALUE));
+        assertEquals(4, WebpSegmentation.split(16384, 16384, 1).size());
+        assertEquals(10, WebpSegmentation.split(17000, 17000, 2).size());
     }
 
     /** Resource and frontend bounds fail explicitly rather than crop, resize or silently omit segments. */

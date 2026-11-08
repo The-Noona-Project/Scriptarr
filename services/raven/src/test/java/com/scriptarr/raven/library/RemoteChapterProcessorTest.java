@@ -75,6 +75,36 @@ class RemoteChapterProcessorTest {
         }
     }
 
+    /** A validated completed artifact repairs only its failed current checkpoint through the existing fenced HTTP route. */
+    @Test void completedArtifactRepairsFailedCatalogWithoutAnotherExecution(@TempDir Path root) throws Exception {
+        try (Fixture f = new Fixture(root); var manifest = mockStatic(DerivedPageManifest.class)) {
+            ObjectNode original = f.json.valueToTree(f.chapter);
+            original.put("archivePath", "/downloads/downloaded/manga/Fixture/chapter.cbz")
+                .put("ingestManifestPath", "/downloads/ingested/manga/title/chapter/webp-1111111111111111/manifest.json")
+                .put("sourcePageCount", 1).put("expectedSegmentCount", 1).put("ingestedSegmentCount", 1).put("segmentsReady", true);
+            f.job.put("status", "completed"); f.job.set("result", f.json.valueToTree(Map.of("artifact", Map.of("sha256", "a".repeat(64), "segmentCount", 1), "chapter", original)));
+            ObjectNode current = original.deepCopy(); current.put("ingestStatus", "failed").put("ingestError", "A saved tile is missing.").put("segmentsReady", false)
+                .put("qualityStatus", "possible_missing_page").put("missingPageCount", 1);
+            current.putArray("missingPages").add(1); current.putArray("qualityNotes").add("Retained reader quality evidence."); current.putObject("futureMetadata").putNull("retained");
+            f.catalog.putLibraryChapters("title", Map.of("chapters", List.of(f.json.convertValue(current, Map.class))));
+            ObjectNode desired = current.deepCopy(); desired.put("ingestStatus", "ready").put("ingestError", "").put("segmentsReady", true);
+            LibraryChapter checkpoint = f.json.treeToValue(desired, LibraryChapter.class);
+            manifest.when(() -> DerivedPageManifest.catalogFields(checkpoint)).thenReturn(Map.of("sourcePageCount", 1, "expectedSegmentCount", 1, "ingestedSegmentCount", 1, "segmentsReady", true));
+            RemoteChapterProcessor.Result result = new RemoteChapterProcessor.Result(f.id, 1, "a".repeat(64), null, null);
+            LibraryChapter saved = f.processor.complete(result, checkpoint);
+            assertEquals("ready", saved.ingestStatus()); assertEquals(current.path("qualityNotes"), f.completedBody.get().path("chapter").path("qualityNotes"));
+            assertEquals("execution-old", f.completedBody.get().path("expectedCoordinatorGeneration").asText());
+            Map<String, Object> expected = CompletedArtifactRepair.request(f.job, current, f.json.convertValue(checkpoint, Map.class));
+            assertEquals(f.json.valueToTree(expected).path("repair"), f.completedBody.get().path("repair"));
+            assertEquals(1, f.completes.get()); assertEquals(0, f.submits.get()); assertNull(f.created.get());
+            f.catalog.putLibraryChapters("title", Map.of("chapters", List.of(f.json.convertValue(saved, Map.class))));
+            assertEquals(saved, f.processor.complete(result, checkpoint)); assertEquals(1, f.completes.get());
+            ObjectNode changed = current.deepCopy(); changed.put("archivePath", "/downloads/downloaded/manga/Other/chapter.cbz");
+            f.catalog.putLibraryChapters("title", Map.of("chapters", List.of(f.json.convertValue(changed, Map.class))));
+            assertThrows(Exception.class, () -> f.processor.complete(result, checkpoint)); assertEquals(1, f.completes.get());
+        }
+    }
+
     /** Invalid artifact ZIPs cannot submit metadata or alter canonical bytes. */
     @Test void invalidArtifactNeverReachesSubmit(@TempDir Path root) throws Exception {
         try (Fixture f = new Fixture(root)) {
@@ -122,7 +152,8 @@ class RemoteChapterProcessorTest {
         private final LibraryTitle title;
         private final ObjectNode job;
         private final RemoteChapterProcessor processor;
-        private final AtomicReference<JsonNode> created = new AtomicReference<>(), cancelled = new AtomicReference<>();
+        private final FakeRavenBrokerClient catalog = new FakeRavenBrokerClient();
+        private final AtomicReference<JsonNode> created = new AtomicReference<>(), cancelled = new AtomicReference<>(), completedBody = new AtomicReference<>();
         private final AtomicInteger submits = new AtomicInteger(), completes = new AtomicInteger();
         private final AtomicInteger cancelEpoch = new AtomicInteger(-1);
         private boolean rotateOnCancel = true;
@@ -135,7 +166,7 @@ class RemoteChapterProcessorTest {
             id = RemoteChapterProcessor.jobId("title", "chapter", WebpChapterEncoder.sha256(archive));
             job = json.valueToTree(Map.of("jobId", id, "status", "running", "lease", Map.of("workerId", "worker", "epoch", 1, "expiresAt", Instant.now().plusSeconds(120).toString()),
                 "spec", Map.of("coordinatorGeneration", "execution-old", "input", Map.of("titleId", "title", "chapterId", "chapter", "sourcePageCount", 1, "entries", List.of("001.png"), "archiveName", "chapter.cbz", "sourceFingerprint", Map.of("sha256", WebpChapterEncoder.sha256(archive), "size", Files.size(archive))), "profile", RemoteChapterProcessor.PROFILE)));
-            FakeRavenBrokerClient catalog = new FakeRavenBrokerClient(); catalog.putLibraryTitle("title", json.convertValue(title, Map.class)); catalog.putLibraryChapters("title", Map.of("chapters", json.convertValue(title.chapters(), List.class)));
+            catalog.putLibraryTitle("title", json.convertValue(title, Map.class)); catalog.putLibraryChapters("title", Map.of("chapters", json.convertValue(title.chapters(), List.class)));
             server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0); server.createContext("/api/internal/raven-ingest", this::handle); server.start();
             processor = new RemoteChapterProcessor(catalog, root, new IngestBrokerClient(Map.of("SCRIPTARR_SAGE_BASE_URL", "http://127.0.0.1:" + server.getAddress().getPort())), true);
         }
@@ -152,7 +183,11 @@ class RemoteChapterProcessorTest {
                     job.put("status", "cancelled");
                 }
                 if (path.endsWith("/submit")) submits.incrementAndGet();
-                if (path.endsWith("/complete")) completes.incrementAndGet();
+                if (path.endsWith("/complete")) {
+                    completes.incrementAndGet(); completedBody.set(body);
+                    byte[] bytes = json.writeValueAsBytes(Map.of("job", job, "chapter", body.path("chapter")));
+                    exchange.getResponseHeaders().set("Content-Type", "application/json"); exchange.sendResponseHeaders(200, bytes.length); exchange.getResponseBody().write(bytes); exchange.close(); return;
+                }
             }
             byte[] bytes = json.writeValueAsBytes(Map.of("job", job)); exchange.getResponseHeaders().set("Content-Type", "application/json"); exchange.sendResponseHeaders(200, bytes.length); exchange.getResponseBody().write(bytes); exchange.close();
         }

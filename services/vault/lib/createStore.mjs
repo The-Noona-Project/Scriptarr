@@ -7,6 +7,7 @@ import {ensureLegacyRavenCatalogDefaults} from "./legacyRavenCatalogCompatibilit
 import {createConversionJobs, createMemoryConversionRepository} from "./conversionJobs.mjs";
 import {createMysqlConversionRepository} from "./mysqlConversionRepository.mjs";
 import {validateConversionChapter, writeMysqlConversionChapter} from "./conversionCatalog.mjs";
+import {conversionChapterFingerprint, repairedConversionChapter, writeMysqlConversionRepair} from "./conversionRepair.mjs";
 import {hasAllRavenSegments, mergeRavenSegmentFields, normalizeRavenSegments} from "./ravenIngestSegments.mjs";
 import {createScopedContentReset} from "./scopedContentReset.mjs";
 import {createMemoryScopedResetAdapter, createMysqlScopedResetAdapter} from "./scopedResetAdapters.mjs";
@@ -741,6 +742,12 @@ const normalizeRavenChapter = (chapter = {}) => {
     ...normalizeRavenSegments(chapter)
   };
 };
+const ravenChapterCheckpointAt = (chapter, previous, currentTime = Date.now()) => {
+  const normalizedPrevious = previous ? normalizeRavenChapter(previous) : null;
+  const withoutTimestamp = value => { const {updatedAt, ...fields} = value; return JSON.stringify(fields); };
+  if (normalizedPrevious?.updatedAt && withoutTimestamp(chapter) === withoutTimestamp(normalizedPrevious)) return normalizedPrevious.updatedAt;
+  return new Date(Math.max(Math.floor(currentTime / 1000) * 1000, (Date.parse(normalizedPrevious?.updatedAt) || 0) + 1000)).toISOString();
+};
 const summarizeRavenIngestStatus = (chapters = []) => {
   const rows = Array.isArray(chapters) ? chapters.map(normalizeRavenChapter) : [];
   if (!rows.length) {
@@ -1467,6 +1474,25 @@ const createMemoryStore = (options = {}) => {
         state.ravenTitles.set(canonicalId, {...state.ravenTitles.get(canonicalId), ingestStatus: aggregate.status, ingestedChapterCount: aggregate.readyCount, updatedAt: normalized.updatedAt});
       });
       return normalized;
+    },
+    repairChapter: async (tx, job, body, repairOptions) => {
+      const canonicalId = resolveMemoryRavenTitleId(job.spec.input.titleId);
+      const current = state.ravenChapters.get(canonicalId)?.get(job.spec.input.chapterId);
+      if (!state.ravenTitles.has(canonicalId) || !current) throw Object.assign(new Error("The repair chapter no longer exists."), {status: 409, code: "CONVERSION_CATALOG_CONFLICT"});
+      const snapshot = normalizeRavenChapter(current);
+      const desired = validateConversionChapter(job, body.chapter, normalizeRavenChapter);
+      const repaired = repairedConversionChapter(job, desired, snapshot, body.repair.expectedCurrentChapterFingerprint, normalizeRavenChapter, tx.now, repairOptions);
+      if (repairOptions.replay) return repaired;
+      tx.afterCommit(() => {
+        const latest = state.ravenChapters.get(canonicalId)?.get(job.spec.input.chapterId);
+        if (!latest || conversionChapterFingerprint(normalizeRavenChapter(latest)) !== conversionChapterFingerprint(snapshot)) throw Object.assign(new Error("The chapter changed during repair."), {status: 409, code: "CONVERSION_CATALOG_CONFLICT"});
+        const chapters = new Map(state.ravenChapters.get(canonicalId));
+        chapters.set(repaired.id, repaired);
+        const aggregate = summarizeRavenIngestStatus(Array.from(chapters.values()));
+        state.ravenChapters.set(canonicalId, chapters);
+        state.ravenTitles.set(canonicalId, {...state.ravenTitles.get(canonicalId), ingestStatus: aggregate.status, ingestedChapterCount: aggregate.readyCount, updatedAt: repaired.updatedAt});
+      });
+      return repaired;
     }});
 
   const scopedReset = createScopedContentReset({repository: conversionRepository,
@@ -2098,19 +2124,17 @@ const createMemoryStore = (options = {}) => {
     async replaceRavenChapters(titleId, chapters) {
       const canonicalTitleId = resolveMemoryRavenTitleId(titleId);
       const previous = state.ravenChapters.get(canonicalTitleId) || new Map();
-      state.ravenChapters.set(canonicalTitleId, new Map(sortRavenChapters(chapters).map((chapter) => [chapter.id, {
-        ...normalizeRavenChapter(mergeRavenSegmentFields(chapter, previous.get(chapter.id))),
-        updatedAt: nowIso()
-      }])));
+      state.ravenChapters.set(canonicalTitleId, new Map(sortRavenChapters(chapters).map((chapter) => {
+        const normalized = normalizeRavenChapter(mergeRavenSegmentFields(chapter, previous.get(chapter.id)));
+        return [chapter.id, {...normalized, updatedAt: ravenChapterCheckpointAt(normalized, previous.get(chapter.id))}];
+      })));
       return Array.from(state.ravenChapters.get(canonicalTitleId).values());
     },
     async upsertRavenChapter(titleId, chapter) {
       const canonicalTitleId = resolveMemoryRavenTitleId(titleId);
       const previous = state.ravenChapters.get(canonicalTitleId)?.get(chapter.id);
-      const normalizedChapter = {
-        ...normalizeRavenChapter(mergeRavenSegmentFields(chapter, previous)),
-        updatedAt: nowIso()
-      };
+      const normalized = normalizeRavenChapter(mergeRavenSegmentFields(chapter, previous));
+      const normalizedChapter = {...normalized, updatedAt: ravenChapterCheckpointAt(normalized, previous)};
       const chapters = state.ravenChapters.get(canonicalTitleId) || new Map();
       chapters.set(normalizedChapter.id, normalizedChapter);
       state.ravenChapters.set(canonicalTitleId, new Map(sortRavenChapters(Array.from(chapters.values())).map((entry) => [entry.id, entry])));
@@ -2289,6 +2313,8 @@ const createMysqlStore = (config) => {
     user: config.mysql.user,
     password: config.mysql.password,
     database: config.mysql.database,
+    // All catalogue timestamps are persisted as UTC text, independent of the host's local timezone.
+    timezone: "Z",
     connectionLimit: 5
   });
   const conversionRepository = createMysqlConversionRepository(pool);
@@ -3254,6 +3280,20 @@ const createMysqlStore = (config) => {
       if (!titles.length) throw Object.assign(new Error("The conversion title no longer exists."), {status: 409, code: "CONVERSION_CATALOG_CONFLICT"});
       const normalized = {...validateConversionChapter(job, chapter, normalizeRavenChapter), updatedAt: new Date(tx.now).toISOString()};
       return writeMysqlConversionChapter(tx.raw, canonicalId, normalized);
+    },
+    repairChapter: async (tx, job, body, repairOptions) => {
+      const canonicalId = await resolveMysqlRavenTitleId(job.spec.input.titleId, tx.raw);
+      const [titles] = await tx.raw.query("SELECT title_id FROM raven_titles WHERE title_id=? FOR UPDATE", [canonicalId]);
+      const [rows] = await tx.raw.query("SELECT * FROM raven_chapters WHERE title_id=? AND chapter_id=? FOR UPDATE", [canonicalId, job.spec.input.chapterId]);
+      if (!titles.length || !rows.length) throw Object.assign(new Error("The repair chapter no longer exists."), {status: 409, code: "CONVERSION_CATALOG_CONFLICT"});
+      // This is exactly the normalization used by getRavenTitle, including SQL null/default handling.
+      const current = normalizeRavenChapter(toRavenChapter(rows[0]));
+      const desired = validateConversionChapter(job, body.chapter, normalizeRavenChapter);
+      const repaired = repairedConversionChapter(job, desired, current, body.repair.expectedCurrentChapterFingerprint, normalizeRavenChapter, tx.now, repairOptions);
+      if (repairOptions.replay) return repaired;
+      await writeMysqlConversionRepair(tx.raw, canonicalId, repaired);
+      const [saved] = await tx.raw.query("SELECT * FROM raven_chapters WHERE title_id=? AND chapter_id=?", [canonicalId, repaired.id]);
+      return normalizeRavenChapter(toRavenChapter(saved[0]));
     }});
 
   const scopedReset = createScopedContentReset({repository: conversionRepository,
@@ -4566,18 +4606,21 @@ const createMysqlStore = (config) => {
     async replaceRavenChapters(titleId, chapters) {
       return withTransaction(async (connection) => {
         const canonicalTitleId = await resolveMysqlRavenTitleId(titleId, connection);
-        const [previousRows] = await connection.query("SELECT * FROM raven_chapters WHERE title_id = ?", [canonicalTitleId]);
+        await connection.query("SELECT title_id FROM raven_titles WHERE title_id=? FOR UPDATE", [canonicalTitleId]);
+        const [previousRows] = await connection.query("SELECT * FROM raven_chapters WHERE title_id = ? FOR UPDATE", [canonicalTitleId]);
+        const [[clock]] = await connection.query("SELECT UNIX_TIMESTAMP(CURRENT_TIMESTAMP(3))*1000 AS now_ms");
         const previous = new Map(previousRows.map(row => [row.chapter_id, toRavenChapter(row)]));
         await connection.query("DELETE FROM raven_chapters WHERE title_id = ?", [canonicalTitleId]);
         for (const chapter of sortRavenChapters(Array.isArray(chapters) ? chapters : [])) {
           const normalizedChapter = normalizeRavenChapter(mergeRavenSegmentFields(chapter, previous.get(chapter.id)));
+          const checkpointAt = ravenChapterCheckpointAt(normalizedChapter, previous.get(chapter.id), Number(clock.now_ms));
           await connection.query(`
             INSERT INTO raven_chapters (
               title_id, chapter_id, label_name, chapter_number, page_count, release_date, is_available, archive_path, source_url,
               quality_status, expected_page_count, missing_page_count, missing_pages_json, quality_notes_json,
               ingest_status, ingest_revision, ingested_page_count, ingested_at, ingest_error, ingest_manifest_path, ingest_segments_json, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           `, [
             canonicalTitleId,
             normalizedChapter.id,
@@ -4599,7 +4642,8 @@ const createMysqlStore = (config) => {
             toMysqlDateTime(normalizedChapter.ingestedAt),
             normalizedChapter.ingestError || null,
             normalizedChapter.ingestManifestPath || null,
-            JSON.stringify(normalizeRavenSegments(normalizedChapter))
+            JSON.stringify(normalizeRavenSegments(normalizedChapter)),
+            toMysqlDateTime(checkpointAt)
           ]);
         }
         const [rows] = await connection.query("SELECT * FROM raven_chapters WHERE title_id = ?", [canonicalTitleId]);
@@ -4609,15 +4653,18 @@ const createMysqlStore = (config) => {
     async upsertRavenChapter(titleId, chapter) {
       return withTransaction(async (connection) => {
         const canonicalTitleId = await resolveMysqlRavenTitleId(titleId, connection);
-        const [previousRows] = await connection.query("SELECT * FROM raven_chapters WHERE title_id = ? AND chapter_id = ? LIMIT 1", [canonicalTitleId, chapter.id]);
+        await connection.query("SELECT title_id FROM raven_titles WHERE title_id=? FOR UPDATE", [canonicalTitleId]);
+        const [previousRows] = await connection.query("SELECT * FROM raven_chapters WHERE title_id = ? AND chapter_id = ? LIMIT 1 FOR UPDATE", [canonicalTitleId, chapter.id]);
+        const [[clock]] = await connection.query("SELECT UNIX_TIMESTAMP(CURRENT_TIMESTAMP(3))*1000 AS now_ms");
         const normalizedChapter = normalizeRavenChapter(mergeRavenSegmentFields(chapter, previousRows[0] ? toRavenChapter(previousRows[0]) : {}));
+        const checkpointAt = ravenChapterCheckpointAt(normalizedChapter, previousRows[0] ? toRavenChapter(previousRows[0]) : null, Number(clock.now_ms));
         await connection.query(`
           INSERT INTO raven_chapters (
             title_id, chapter_id, label_name, chapter_number, page_count, release_date, is_available, archive_path, source_url,
             quality_status, expected_page_count, missing_page_count, missing_pages_json, quality_notes_json,
             ingest_status, ingest_revision, ingested_page_count, ingested_at, ingest_error, ingest_manifest_path, ingest_segments_json, updated_at
           )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON DUPLICATE KEY UPDATE
             label_name = VALUES(label_name),
             chapter_number = VALUES(chapter_number),
@@ -4638,7 +4685,7 @@ const createMysqlStore = (config) => {
             ingest_error = VALUES(ingest_error),
             ingest_manifest_path = VALUES(ingest_manifest_path),
             ingest_segments_json = VALUES(ingest_segments_json),
-            updated_at = NOW()
+            updated_at = VALUES(updated_at)
         `, [
           canonicalTitleId,
           normalizedChapter.id,
@@ -4660,7 +4707,8 @@ const createMysqlStore = (config) => {
           toMysqlDateTime(normalizedChapter.ingestedAt),
           normalizedChapter.ingestError || null,
           normalizedChapter.ingestManifestPath || null,
-            JSON.stringify(normalizeRavenSegments(normalizedChapter))
+          JSON.stringify(normalizeRavenSegments(normalizedChapter)),
+          toMysqlDateTime(checkpointAt)
         ]);
         const [rows] = await connection.query(
           "SELECT * FROM raven_chapters WHERE title_id = ? AND chapter_id = ? LIMIT 1",

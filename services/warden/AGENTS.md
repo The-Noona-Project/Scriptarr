@@ -36,6 +36,9 @@ managed services.
   retain legacy Warden LocalAI read diagnostics and single-host compatibility only.
 - New Raven output is CPU WebP; legacy AVIF remains readable. Never inherit Oracle/shared GPU grants for Raven.
   Oracle GPU planning remains independent of Raven encoding.
+- Managed WebP coordinators are always remote-required, even without worker placement or with a legacy false override.
+  Normalize the compatibility AVIF encoder to CPU so strict legacy NVENC cannot disable the CPU-only deployment.
+  Unassigned worker capacity degrades ingest and waits; it must not trigger local AVIF/Plex encoding or fail core health.
 - `scriptarr-raven-worker` is optional and must belong to a remote host. It reuses the Raven image in `ingest-worker`
   role, with a distinct worker token present only in Sage's token map. Its only persistent mounts are scratch, logs,
   and the exact read-only Sage CA file. Never grant canonical storage, Docker socket, provider/VPN secrets or NET_ADMIN.

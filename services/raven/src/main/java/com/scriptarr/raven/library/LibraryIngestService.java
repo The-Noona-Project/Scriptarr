@@ -275,7 +275,8 @@ public final class LibraryIngestService {
             throwIfCancelled(cancelled); Path archive = resolveArchivePath(chapter);
             RemoteChapterProcessor.Result result = remote.convert(title, chapter, archive, settingsService.getNamingSettings(), cancelled, progress);
             var bundle = result.bundle(); int count = bundle.path("pageCount").asInt();
-            String revision = DerivedPageManifest.revision(archive, count, "webp", bundle.path("encoder").asText(), 85);
+            int version = bundle.path("profile").path("segmentationVersion").asInt();
+            String revision = DerivedPageManifest.revision(archive, count, "webp", bundle.path("encoder").asText(), 85, version);
             Path chapterRoot = resolveDataRoot().resolve(INGESTED_FOLDER_NAME).resolve(safeSegment(title.libraryTypeSlug(), "manga"))
                 .resolve(safeSegment(title.id(), "title")).resolve(safeSegment(chapter.id(), "chapter"));
             Path destination = chapterRoot.resolve(revision), manifest = destination.resolve("manifest.json");
@@ -303,7 +304,7 @@ public final class LibraryIngestService {
                 try (var files = Files.list(result.directory())) { for (Path file : files.filter(p -> p.getFileName().toString().endsWith(".webp")).toList()) Files.copy(file, stage.resolve(file.getFileName())); }
                 ingestedAt = Instant.now().toString(); Map<String, Object> metadata = objectMapper.convertValue(bundle, new com.fasterxml.jackson.core.type.TypeReference<>() { });
                 metadata.putAll(Map.of("titleId", title.id(), "chapterId", chapter.id(), "libraryTypeSlug", title.libraryTypeSlug(), "sourceArchivePath", archive.toString(),
-                    "quality", 85, "method", 4, "segmentationVersion", 1, "revision", revision, "ingestedAt", ingestedAt));
+                    "quality", 85, "method", 4, "segmentationVersion", version, "revision", revision, "ingestedAt", ingestedAt));
                 metadata.put("conversionJobId", result.jobId()); metadata.put("conversionEpoch", result.epoch()); metadata.put("artifactSha256", result.artifactSha256());
                 metadata.put("derivedFileCount", bundle.path("pages").findValues("segments").stream().mapToInt(com.fasterxml.jackson.databind.JsonNode::size).sum());
                 objectMapper.writerWithDefaultPrettyPrinter().writeValue(stage.resolve("manifest.json").toFile(), metadata);

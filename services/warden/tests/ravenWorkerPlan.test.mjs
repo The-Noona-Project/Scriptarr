@@ -24,14 +24,17 @@ const environment = (hostId = "core") => ({
 });
 const find = (plan, name) => plan.allServices.find(service => service.name === name);
 
-test("optional worker is absent from unchanged single-host and old multi-host plans", () => {
-  assert.equal(find(resolveServicePlan({env: {}}), "scriptarr-raven-worker"), undefined);
+test("unassigned optional workers leave WebP conversion waiting without local encoding or extra TLS grants", () => {
+  const single = resolveServicePlan({env: {SCRIPTARR_GPU_HINT: "cpu", SCRIPTARR_RAVEN_AVIF_ENCODER: "nvenc", SCRIPTARR_RAVEN_REMOTE_INGEST_REQUIRED: "false"}});
+  assert.equal(find(single, "scriptarr-raven-worker"), undefined);
+  assert.equal(find(single, "scriptarr-raven").env.SCRIPTARR_RAVEN_REMOTE_INGEST_REQUIRED, "true");
+  assert.equal(find(single, "scriptarr-raven").env.SCRIPTARR_RAVEN_AVIF_ENCODER, "cpu");
   const withoutWorker = structuredClone(topology);
   withoutWorker.hosts[1].services.pop();
   const plan = resolveServicePlan({env: {...environment(), SCRIPTARR_WARDEN_TOPOLOGY: JSON.stringify(withoutWorker)}});
   assert.equal(find(plan, "scriptarr-raven-worker"), undefined);
   assert.equal(find(plan, "scriptarr-sage").env.SCRIPTARR_SAGE_WORKER_TLS_PORT, undefined);
-  assert.equal(find(plan, "scriptarr-raven").env.SCRIPTARR_RAVEN_REMOTE_INGEST_REQUIRED, "false");
+  assert.equal(find(plan, "scriptarr-raven").env.SCRIPTARR_RAVEN_REMOTE_INGEST_REQUIRED, "true");
 });
 
 test("only the remote steward owns the worker and shares the Raven artifact without granting shared storage", () => {
@@ -168,6 +171,9 @@ test("remote ingest degradation preserves core health and worker updates route o
   assert.deepEqual(calls.at(-1), {hostId: "ai", route: "/api/updates/install", body: {services: ["scriptarr-raven-worker"]}});
   const without = structuredClone(topology); without.hosts[1].services.pop();
   const legacy = createClusterRuntime({env: {...environment(), SCRIPTARR_WARDEN_TOPOLOGY: JSON.stringify(without)}, local, client});
+  assert.equal((await legacy.getRuntime()).ingestDegraded, true);
+  assert.equal((await legacy.getHealth()).ingestDegraded, true);
+  assert.equal((await legacy.getHealth()).ok, true);
   await assert.rejects(legacy.installUpdates(["scriptarr-raven-worker"]), /assigned first-party/);
   const foreign = createClusterRuntime({env: environment(), local, client: {request: async () => ({warden: {dockerSocketAvailable: true},
     managedServices: [{name: "scriptarr-raven-worker", running: true, health: "healthy", managed: false}]})}});
