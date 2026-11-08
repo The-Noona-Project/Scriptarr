@@ -127,6 +127,7 @@ the shared topology must match the published port. Agent requests have bounded r
 (`SCRIPTARR_WARDEN_AGENT_TIMEOUT_MS`, default 4000, maximum 15000).
 Image update checks run as background jobs, so image pulls can continue beyond this short control-request deadline.
 Poll `/api/updates` for the job outcome and refreshed image availability; checking does not restart containers.
+Conflicting checks/installs return HTTP `409` while another update operation is running; retry after that job finishes.
 
 In this topology Sage port 3004 is published on the core LAN IP, and Portal/Oracle ports 3003/3001 are published on
 the AI LAN IP. Restrict those LAN ports to the peer host; Portal and Oracle receive required service authorization.

@@ -81,15 +81,20 @@ export const createClusterRuntime = ({env = process.env, local, client = createC
           });
         return {hostId: host.id, available: true, ...result};
       } catch (error) {
+        if (error.status >= 400 && error.status < 500) {
+          return {hostId: host.id, available: true, rejected: true, status: error.status, error: errorMessage(error), services: []};
+        }
         return {hostId: host.id, available: false, error: errorMessage(error), services: services.map((name) => ({name, hostId: host.id, health: "unavailable", running: false}))};
       }
     }));
     const rows = results.filter(Boolean);
     const jobs = rows.filter((host) => host.job).map((host) => ({hostId: host.hostId, ...host.job}));
     const failedHost = rows.find((host) => !host.available);
+    const rejectedHost = rows.find((host) => host.rejected);
     return {
-      ok: !failedHost,
+      ok: !failedHost && !rejectedHost,
       ...(failedHost ? {error: `Warden host ${failedHost.hostId} is unavailable; some requested operations may not have run.`} : {}),
+      ...(!failedHost && rejectedHost ? {status: rejectedHost.status, error: `Warden host ${rejectedHost.hostId} rejected the update operation: ${rejectedHost.error}`} : {}),
       services: rows.flatMap((host) => (host.services || []).map((service) => ({...service, hostId: host.hostId}))),
       hosts: rows.map(({hostId, available, error}) => ({hostId, available, ...(error ? {error} : {})})),
       jobs,

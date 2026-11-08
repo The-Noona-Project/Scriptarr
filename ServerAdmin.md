@@ -130,6 +130,7 @@ remain on the core's local Docker network. Only Moon is a public first-party sur
 storage: core database/library/caches on the core host; Oracle models/runtime on the AI host.
 Topology validation requires Vault and Raven to share Sage's primary host. Warden image checks return an asynchronous
 job (HTTP `202`); poll the updates endpoint for results while image transfers continue in the background.
+An install submitted during a check receives HTTP `409`; retry it once the check completes.
 
 For the example AI host, start with `SCRIPTARR_ORACLE_CPUS=4`, `SCRIPTARR_ORACLE_MEMORY=8g`, one quantized model fitting
 the available VRAM, a 4096-token context, and `SCRIPTARR_ORACLE_MAX_CONCURRENT_GENERATIONS=1`. Resource limits are

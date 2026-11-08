@@ -31,7 +31,8 @@ test("a remote image check responds with a pollable job while the pull remains b
   });
   const app = express();
   app.use(express.json());
-  registerRuntimeRoutes(app, {checkUpdates: workerUpdates.startCheck, getUpdates: workerUpdates.getStatus});
+  registerRuntimeRoutes(app, {checkUpdates: workerUpdates.startCheck, installUpdates: workerUpdates.installUpdates, getUpdates: workerUpdates.getStatus});
+  app.use((error, _req, res, _next) => res.status(error.status || 500).json({error: error.message}));
   const server = app.listen(0, "127.0.0.1");
   await new Promise((resolve) => server.once("listening", resolve));
   const base = `http://127.0.0.1:${server.address().port}`;
@@ -49,6 +50,7 @@ test("a remote image check responds with a pollable job while the pull remains b
         signal: AbortSignal.timeout(1000)
       });
       if (path.endsWith("/check")) assert.equal(response.status, 202);
+      if (!response.ok) throw Object.assign(new Error(`Worker HTTP ${response.status}`), {status: response.status});
       return response.json();
     }}
   });
@@ -59,6 +61,11 @@ test("a remote image check responds with a pollable job while the pull remains b
     assert.equal(accepted.job.payload.action, "check");
     assert.equal(pulled, false);
     assert.equal((await primary.getUpdates()).job.status, "running");
+    const rejected = await primary.installUpdates(["scriptarr-oracle"]);
+    assert.equal(rejected.ok, false);
+    assert.equal(rejected.status, 409);
+    assert.equal(rejected.hosts[0].available, true);
+    assert.equal((await primary.getUpdates()).job.payload.action, "check");
     releasePull();
     let finished;
     for (let attempt = 0; attempt < 100; attempt++) {
@@ -70,6 +77,10 @@ test("a remote image check responds with a pollable job while the pull remains b
     assert.equal(finished.services.find((service) => service.name === "scriptarr-oracle").updateAvailable, true);
     assert.ok(persisted.some((job) => job.status === "completed"));
     assert.deepEqual(reconciled, []);
+    const install = await primary.installUpdates(["scriptarr-oracle"]);
+    assert.equal(install.ok, true);
+    for (let attempt = 0; attempt < 100 && !reconciled.length; attempt++) await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.deepEqual(reconciled, [[["scriptarr-oracle"], {forceRecreate: true}]]);
   } finally {
     releasePull();
     server.closeAllConnections();

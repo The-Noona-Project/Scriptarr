@@ -62,7 +62,7 @@ export const createClusterAgentClient = ({env = process.env, tlsOptions} = {}) =
           response.on("error", reject);
           response.on("end", () => {
             if (response.statusCode < 200 || response.statusCode >= 300) {
-              reject(new Error(`Agent ${host.id} returned HTTP ${response.statusCode}.`));
+              reject(Object.assign(new Error(`Agent ${host.id} returned HTTP ${response.statusCode}.`), {status: response.statusCode}));
               return;
             }
             try {

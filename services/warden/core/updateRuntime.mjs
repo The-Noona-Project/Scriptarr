@@ -211,7 +211,14 @@ export const createUpdateRuntime = ({
   };
 
   const installUpdates = async (requestedServices = [], {checkOnly = false} = {}) => {
+    const selected = normalizeRequestedServices(requestedServices);
     if (state.job?.status === "running") {
+      if ((state.job.payload?.action || "install") !== (checkOnly ? "check" : "install")
+        || JSON.stringify(state.job.requestedServices) !== JSON.stringify(selected)) {
+        const error = new Error("Another managed-service update operation is running. Wait for its job to finish, then retry.");
+        error.status = 409;
+        throw error;
+      }
       return {
         job: state.job,
         services: await loadRows(),
@@ -219,7 +226,6 @@ export const createUpdateRuntime = ({
       };
     }
 
-    const selected = normalizeRequestedServices(requestedServices);
     const job = {
       jobId: `update_${normalizeString(env.SCRIPTARR_WARDEN_HOST_ID) ? `${normalizeString(env.SCRIPTARR_WARDEN_HOST_ID)}_` : ""}${Date.now().toString(36)}`,
       kind: "service-update",
