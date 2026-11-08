@@ -102,6 +102,8 @@ remain visible. Restarts and lost retry responses do not grant extra attempts. C
 preserves completed titles and policy exclusions. Retried
 Discord commands and approval actions reuse their existing run or accepted decision rather than advancing another
 window. Reading status never starts work.
+If a broker outage prevents a failed title from saving its terminal state, background recovery saves that failure
+after the broker returns. It retains partial files and attempt history; a paused run still waits for owner approval.
 After a restart, healthy canonical CBZs can finish reader-page processing without fetching those chapters again.
 Append recovery keeps earlier readable chapters, and failed work still waits for its approved retry.
 Startup catalog scans also retain valid ready-page metadata when the underlying archives have not changed.

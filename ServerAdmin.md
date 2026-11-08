@@ -719,6 +719,9 @@ reads inspect the run; explicit owner actions and background recovery schedule i
 Healthy canonical CBZs can finish ingest while the source is unavailable, keeping their bytes and timestamps and
 preserving earlier readable chapters. Failed owned tasks still wait for the approved retry; restarting does not grant
 another attempt allowance.
+If a broker interruption leaves a stopped title shown as running, Raven's background reconciliation saves the
+failed task once the broker is healthy. The original files and retry history remain intact. A paused run still needs
+the owner's normal continue action; status checks and failure reconciliation do not restart failed downloads.
 
 Vault startup also handles preserved catalogs whose legacy `cataloged_at` timestamp is required but has no default.
 It restores new-title publication while preserving the existing column and stored values. If publication reports that

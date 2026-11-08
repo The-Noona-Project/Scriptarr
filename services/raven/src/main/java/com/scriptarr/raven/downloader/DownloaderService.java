@@ -425,6 +425,39 @@ public class DownloaderService {
     /** Return live task evidence for merging with durable owned history. */
     List<Map<String, Object>> bulkTaskSnapshots() { return tasks.values().stream().map(Map::copyOf).toList(); }
 
+    /**
+     * Persist failed bulk executions after a transient broker outage without dispatching work.
+     * Only the lifecycle reconciler calls this operation; task and run status reads remain pure.
+     */
+    synchronized void reconcileFailedBulkTaskPersistence() {
+        List<Map<String, Object>> dirty = tasks.values().stream().filter(BulkTaskTerminalRecovery::dirtyFailure).toList();
+        if (dirty.isEmpty()) return;
+        Map<String, Map<String, Object>> durable = new LinkedHashMap<>();
+        try {
+            var rows = brokerClient.listDownloadTasks();
+            if (rows == null || !rows.isArray()) throw new IllegalStateException("Invalid durable task snapshot.");
+            rows.forEach(node -> durable.put(node.path("taskId").asText(""), brokerClientPayloadToMap(node)));
+        } catch (Exception error) {
+            logger.warn("DOWNLOAD", "Failed bulk task persistence is awaiting broker recovery.", error.getMessage());
+            return;
+        }
+        for (Map<String, Object> task : dirty) {
+            String taskId = normalizeString(task.get("taskId"));
+            if (runningTaskThreads.containsKey(taskId) || queuedTasks.containsKey(taskId) || bulkTaskDispatches.containsKey(taskId)
+                || cancellationRequestedTaskIds.contains(taskId) || tasks.get(taskId) != task) continue;
+            Map<String, Object> saved = durable.get(taskId);
+            if (!BulkTaskTerminalRecovery.matchingFailure(task, saved) && !BulkTaskTerminalRecovery.writableShadow(task, saved)) continue;
+            Map<String, Object> repaired = new ConcurrentHashMap<>(task);
+            try {
+                persistTaskSnapshot(taskId, repaired);
+                tasks.replace(taskId, task, repaired);
+            } catch (RuntimeException error) {
+                // Keep the original dirty snapshot available for the next lifecycle pass.
+                logger.warn("DOWNLOAD", "Failed bulk task persistence remains pending.", "taskId=" + taskId);
+            }
+        }
+    }
+
     /** Check active source identity without adopting another task owner. */
     boolean bulkTitleAlreadyActive(String url, String type, String ignoredId) {
         return tasks.values().stream().anyMatch(task -> !ignoredId.equals(normalizeString(task.get("taskId")))
@@ -1799,7 +1832,8 @@ public class DownloaderService {
 
     private void pruneTerminalTaskHistory() {
         List<Map.Entry<String, Map<String, Object>>> terminalTasks = tasks.entrySet().stream()
-            .filter((entry) -> isTerminalStatus(normalizeString(entry.getValue().get("status")).toLowerCase(Locale.ROOT)))
+            .filter((entry) -> isTerminalStatus(normalizeString(entry.getValue().get("status")).toLowerCase(Locale.ROOT))
+                && !BulkTaskTerminalRecovery.pendingFailure(entry.getValue()))
             .sorted((left, right) -> {
                 int timestampComparison = taskTimestamp(right.getValue()).compareTo(taskTimestamp(left.getValue()));
                 if (timestampComparison != 0) {
@@ -1811,7 +1845,8 @@ public class DownloaderService {
         for (int index = MAX_RETAINED_TERMINAL_TASKS; index < terminalTasks.size(); index++) {
             String taskId = terminalTasks.get(index).getKey();
             Map<String, Object> task = tasks.get(taskId);
-            if (task != null && isTerminalStatus(normalizeString(task.get("status")).toLowerCase(Locale.ROOT))) {
+            if (task != null && isTerminalStatus(normalizeString(task.get("status")).toLowerCase(Locale.ROOT))
+                && !BulkTaskTerminalRecovery.pendingFailure(task)) {
                 tasks.remove(taskId, task);
             }
         }

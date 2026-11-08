@@ -301,6 +301,7 @@ public class BulkRunService {
             boolean restored = restoreReady();
             String restoreError = restoreFailure();
             if (!restored && restoreError.isBlank()) return;
+            if (restored) downloaderService.reconcileFailedBulkTaskPersistence();
             for (Map<String, Object> job : loadRunJobs()) {
                 try {
                     String runId = stringValue(job.get("jobId"));

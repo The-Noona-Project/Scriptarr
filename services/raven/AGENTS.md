@@ -38,6 +38,10 @@ Raven is Scriptarr's Java download, library, metadata, and VPN-aware download en
 - Bulk status reads must be pure. Lifecycle recovery runs after the complete downloader restore barrier and every
   30 seconds; only running runs or queued runs with persisted `startRequested: true` may recover automatically.
   Deliberately unstarted, legacy queued, paused, and cancelled runs must not start from monitoring.
+- The same restore-gated lifecycle pass may persist quiescent failed bulk tasks left dirty by broker outages, even
+  when their parent is paused or cancelled. Preserve ownership, frozen request, execution identity, attempt receipts
+  and files; never enqueue work, override newer durable attempts/terminal state, or discard unpersisted failures
+  through local history pruning. Clear persistence errors only after every strict checkpoint write acknowledges.
 - Bulk creation `requestId` is optional for legacy callers and bounded to 200 printable characters. Keyed creation
   uses a deterministic run identity and canonical owner/filter fingerprint; conflicting reuse returns HTTP 409.
   Repair absent deterministic batch rows without overwriting existing progress.
