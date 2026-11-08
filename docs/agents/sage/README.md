@@ -1,5 +1,10 @@
 # Sage AI Notes
 
+- Cover cards and title summaries always advertise the lazy Moon cover-cache URL. Only an authenticated artwork
+  request hydrates the title's chapters. `libraryCoverSource.mjs` selects page zero of the numerically earliest ready
+  AVIF chapter with complete pages and emits a same-title Sage reader path; Moon must proxy that path with the current
+  user's credentials. Missing covers and failed upstream artwork may use it without mutating catalog or read state.
+
 - Sage is the Moon-facing broker for auth, first-admin bootstrap, request moderation, status aggregation, and browser-safe
   orchestration.
 - Keep Moon -> Sage -> internal services intact.

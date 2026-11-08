@@ -2,6 +2,9 @@
 
 Sage is Scriptarr's Moon-facing auth and orchestration broker.
 
+Library artwork prefers the title's cover art. When it is unavailable, Sage lets Moon use the first page of the
+earliest readable chapter. Artwork requests require sign-in and leave reading progress unchanged.
+
 For distributed installations, Sage authenticates Warden, Portal, and Oracle requests with the destination's service
 token. Set the matching `SCRIPTARR_WARDEN_SERVICE_TOKEN`, `SCRIPTARR_PORTAL_SERVICE_TOKEN`, and
 `SCRIPTARR_ORACLE_SERVICE_TOKEN`, or include those services in `SCRIPTARR_SERVICE_TOKENS`. Tokens are attached only

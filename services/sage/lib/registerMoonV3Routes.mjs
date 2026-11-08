@@ -80,6 +80,7 @@ import {
 } from "./portalDiscordSettings.mjs";
 import {buildNoonaMemoryAdminPayload, clearNoonaMemory} from "./noonaChatMemory.mjs";
 import {createPortalTriviaService} from "./portalTrivia.mjs";
+import {buildLibraryCoverSource, buildTitleCoverFields} from "./libraryCoverSource.mjs";
 
 const RAVEN_VPN_KEY = "raven.vpn";
 const RAVEN_VPN_PASSWORD_SECRET = "raven.vpn.piaPassword";
@@ -278,7 +279,7 @@ const toTitleSummary = (title = {}) => ({
   status: normalizeString(title.status, "active"),
   latestChapter: normalizeString(title.latestChapter, "Unknown"),
   coverAccent: normalizeString(title.coverAccent, "#4f8f88"),
-  coverUrl: normalizeString(title.coverUrl),
+  ...buildTitleCoverFields(title),
   summary: normalizeString(title.summary),
   releaseLabel: normalizeString(title.releaseLabel),
   chapterCount: Number.parseInt(String(title.chapterCount || 0), 10) || 0,
@@ -522,12 +523,7 @@ const compactStringArray = (value, maxItems = 8) => {
 
 const toTitleCardSummary = (title = {}) => {
   const id = normalizeString(title.id);
-  const coverUrl = normalizeString(title.coverUrl);
   const updatedAt = parseIso(title.updatedAt);
-  const revision = createHash("sha1")
-    .update([id, coverUrl, updatedAt || "", normalizeString(title.metadataMatchedAt)].join("|"))
-    .digest("hex")
-    .slice(0, 12);
   return {
     id,
     title: normalizeString(title.title, "Untitled"),
@@ -537,9 +533,7 @@ const toTitleCardSummary = (title = {}) => {
     status: normalizeString(title.status, "active"),
     latestChapter: normalizeString(title.latestChapter, "Unknown"),
     coverAccent: normalizeString(title.coverAccent, "#4f8f88"),
-    coverUrl,
-    coverThumbUrl: id && coverUrl ? `/api/moon/v3/user/covers/${encodeURIComponent(id)}.webp?rev=${revision}` : normalizeString(title.coverThumbUrl),
-    coverRevision: revision,
+    ...buildTitleCoverFields(title),
     summary: truncateText(title.summary, 280),
     releaseLabel: normalizeString(title.releaseLabel),
     chapterCount: Number.parseInt(String(title.chapterCount || 0), 10) || 0,
@@ -1170,6 +1164,7 @@ export const registerMoonV3Routes = (app, {
     return {
       title: decorateTitleWithTagPreferences({
         ...title,
+        ...buildTitleCoverFields(title),
         userState: {
           ...(title.userState || {}),
           following: isFollowing
@@ -5108,17 +5103,13 @@ export const registerMoonV3Routes = (app, {
 
   app.get("/api/moon-v3/user/library/cover/:titleId/source", withUser(requireUser, async (req, res) => {
     const title = await loadLibraryTitle(req.params.titleId);
-    const card = title ? toTitleCardSummary(title) : null;
-    if (!card?.id || !card.coverUrl) {
+    const source = title ? buildLibraryCoverSource(title) : null;
+    res.setHeader("Cache-Control", "no-store");
+    if (!source) {
       res.status(404).json({error: "Cover source not found."});
       return;
     }
-    res.json({
-      titleId: card.id,
-      coverUrl: card.coverUrl,
-      coverRevision: card.coverRevision,
-      updatedAt: card.updatedAt
-    });
+    res.json(source);
   }));
 
   app.get("/api/moon-v3/user/title/:titleId/summary", withUser(requireUser, async (req, res) => {

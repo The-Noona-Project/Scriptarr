@@ -34,6 +34,9 @@ the canonical links emitted by the user app.
 The catalogue and home shelves use compact paginated title-card APIs so large catalogs do not send chapter arrays to
 the browser. Moon also owns a derived WebP cover cache: cards prefer Sage-provided `coverThumbUrl` values, cache files are
 stored outside authoritative catalog state, and `/admin/system/tasks` includes a safe `Optimize cover images` action.
+Library cards and title pages use the first page of the earliest readable chapter when cover artwork is missing or
+cannot be loaded. This fallback uses existing reader images, preserves the original cover metadata, and checks the
+current session or API key before returning cached artwork. Titles without readable pages keep their initial placeholder.
 Moon's request and admin add-title flows now share the same metadata-first intake engine. Readers pick metadata only,
 and Scriptarr saves that metadata snapshot with the request so moderators can review the upstream metadata site and
 choose the exact Raven source later. Admin add-title uses the same intake base but lets staff pick a concrete source

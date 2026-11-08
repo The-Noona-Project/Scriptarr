@@ -201,6 +201,10 @@ public final class BulkQueueCoordinator implements BulkRunGateway {
                                 if (category.isEmpty() || "unresolved".equals(category)) {
                                     selectedDownload.putAll(Map.of("providerId", provider.id(), "providerName", provider.name(), "titleName", name,
                                         "titleUrl", url, "requestType", wantedType, "libraryTypeLabel", wantedType, "libraryTypeSlug", LibraryNaming.normalizeTypeSlug(wantedType)));
+                                    if (text(selectedDownload.get("coverUrl")).isEmpty() && text(selectedMetadata.get("coverUrl")).isEmpty()
+                                        && text(map(selectedMetadata.get("details")).get("coverUrl")).isEmpty()
+                                        && text(map(selectedMetadata.get("details")).get("coverImageUrl")).isEmpty()
+                                        && !text(title.get("coverUrl")).isEmpty()) selectedDownload.put("coverUrl", title.get("coverUrl"));
                                     if (details.adultContent() != null) selectedDownload.putAll(Map.of("adultContent", details.adultContent(), "nsfw", details.adultContent()));
                                     plan.put("request", Map.of("selectedMetadata", selectedMetadata, "selectedDownload", selectedDownload));
                                     if (durable) save(runId, planId, "bulk-title-plan", batchId, "prepared", plan, Map.of());

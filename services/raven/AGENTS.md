@@ -67,6 +67,9 @@ Raven is Scriptarr's Java download, library, metadata, and VPN-aware download en
 - Old Noona Raven and Komf code are reference material only. Port behavior intentionally, but do not restore Selenium
   or browser-driven scraping.
 - Manual metadata overrides are admin-visible contracts and should stay documented.
+- Preserve saved cover URLs through both canonical-ingest and already-ready completion recovery, independently of
+  metadata-provider availability. Fill only missing catalog artwork with title-summary writes; never replace chapter
+  rows or ready pages for a cover repair. Append plans retain browsed art only after existing selected cover sources.
 - Keep full JavaDoc on Raven main and test Java sources. `gradlew check` is the expected enforcement path.
 
 ## Coding Map

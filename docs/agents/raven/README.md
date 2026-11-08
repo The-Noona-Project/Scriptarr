@@ -23,6 +23,12 @@
 - Raven is the canonical tag merge point. Metadata-provider tags plus download-provider tags should be normalized and
   merged case-insensitively once inside Raven, preserved with clean display casing, and forwarded through Sage so Moon
   home, browse, title, and admin review all consume one canonical tag set.
+- Cover retention is independent of metadata-match eligibility. `DownloaderService.persistSelectedMetadata` first
+  retains an existing saved request cover when the catalog has none, so both canonical ingest recovery and
+  already-ready completion recovery preserve source-only artwork. `LibraryService.retainCoverUrl` writes the title
+  summary only, leaves chapter/AVIF state untouched, and never replaces nonblank catalog art. Metadata application
+  may also fill missing art. Bulk append plans use already-browsed cover URLs only when earlier selected download or
+  metadata art is absent; do not change frozen requests during status reads or recovery.
 - Keep full JavaDoc on Raven main and test Java sources and let `gradlew check` fail when doc coverage regresses.
 - Fresh installs must not reintroduce demo titles; Raven's default library state is empty until real ingest exists.
 - Raven library storage now uses dynamic source-backed type labels and the managed folder lifecycle:

@@ -20,6 +20,46 @@ import static org.mockito.Mockito.*;
 
 /** Verify durable replay, checked persistence, cancellation and uncapped ownership evidence. */
 class BulkQueueCoordinatorTest {
+    /** An append with no metadata snapshot must keep source art already found during browse. */
+    @Test
+    void appendRetainsBrowsedCoverInItsFrozenRequest() {
+        Fixture f = new Fixture(new FakeRavenBrokerClient());
+        var title = mock(com.scriptarr.raven.library.LibraryTitle.class);
+        when(title.sourceUrl()).thenReturn("https://weebcentral.com/series/alpha");
+        when(title.status()).thenReturn("active");
+        when(title.chapters()).thenReturn(List.of());
+        when(f.library.listTitles()).thenReturn(List.of(title));
+        when(f.provider.browseTitlesAlphabetically(anyString(), anyBoolean(), anyString(), any(), any())).thenReturn(
+            new BulkBrowseResult(List.of(Map.of("title", "Alpha", "href", "https://weebcentral.com/series/alpha", "type", "Manhua",
+                "coverUrl", "https://images.example/browse.jpg")), 1));
+        assertEquals(1, f.queue().appendedCount());
+        var request = org.mockito.ArgumentCaptor.forClass(DownloadRequest.class);
+        verify(f.downloader).queueBulkOwned(anyString(), anyString(), anyString(), anyString(), request.capture());
+        assertEquals("https://images.example/browse.jpg", request.getValue().selectedDownload().get("coverUrl"));
+        assertTrue(request.getValue().selectedMetadata().isEmpty());
+        verify(f.intake, never()).resolveBulkMetadata(anyString(), anyString(), anyString(), anyString());
+    }
+
+    /** Browse artwork is a final fallback and cannot override an earlier metadata cover selection. */
+    @Test
+    void browseCoverPreservesSelectedMetadataPrecedence() {
+        for (Map<String, Object> metadata : List.<Map<String, Object>>of(
+            Map.of("coverUrl", "https://images.example/metadata.jpg"),
+            Map.of("details", Map.of("coverImageUrl", "https://images.example/metadata.jpg")))) {
+            Fixture f = new Fixture(new FakeRavenBrokerClient());
+            when(f.provider.browseTitlesAlphabetically(anyString(), anyBoolean(), anyString(), any(), any())).thenReturn(
+                new BulkBrowseResult(List.of(Map.of("title", "Alpha", "href", "https://weebcentral.com/series/alpha", "type", "Manhua",
+                    "coverUrl", "https://images.example/browse.jpg")), 1));
+            when(f.intake.resolveBulkMetadata(anyString(), anyString(), anyString(), anyString())).thenReturn(
+                new DownloadIntakeService.BulkMetadataResolution("matched", metadata, Map.of()));
+            assertEquals(1, f.queue().queuedCount());
+            var request = org.mockito.ArgumentCaptor.forClass(DownloadRequest.class);
+            verify(f.downloader).queueBulkOwned(anyString(), anyString(), anyString(), anyString(), request.capture());
+            assertFalse(request.getValue().selectedDownload().containsKey("coverUrl"));
+            assertEquals(metadata, request.getValue().selectedMetadata());
+        }
+    }
+
     /** Verify complete discovery and a prepared stable plan exist before queue acceptance. */
     @Test
     void persistsBeforeEnqueueAndReplaysWithoutRediscovery() throws Exception {

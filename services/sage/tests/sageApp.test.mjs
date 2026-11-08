@@ -2288,6 +2288,14 @@ test("sage signs in the first owner through the Discord callback and moderates r
   const libraryCardCallsAfterFullLibrary = dependencyStub.calls.libraryCard;
 
   assert.equal(moonLibrary.titles[0].title, ownerSmokeLibraryTitle.title);
+  const coverSourceDenied = await fetch(`${baseUrl}/api/moon-v3/user/library/cover/${ownerSmokeLibraryTitle.id}/source`);
+  assert.equal(coverSourceDenied.status, 401);
+  const coverSourceResponse = await fetch(`${baseUrl}/api/moon-v3/user/library/cover/${ownerSmokeLibraryTitle.id}/source`, {
+    headers: {"Authorization": `Bearer ${ownerClaim.token}`}
+  });
+  assert.equal(coverSourceResponse.status, 200);
+  assert.equal(coverSourceResponse.headers.get("cache-control"), "no-store");
+  assert.equal((await coverSourceResponse.json()).coverUrl, ownerSmokeLibraryTitle.coverUrl);
 
   await seedVaultRavenTitle(vaultPort, ownerSmokeLibraryTitle);
   await fetch(`http://127.0.0.1:${vaultPort}/api/service/progress`, {

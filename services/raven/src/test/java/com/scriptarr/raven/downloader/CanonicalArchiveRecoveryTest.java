@@ -66,6 +66,40 @@ class CanonicalArchiveRecoveryTest {
         verifyNoProvider(context.provider());
     }
 
+    /** Canonical ingest recovery must retain source-only saved cover art without touching ready pages. */
+    @Test
+    void canonicalRecoveryRetainsSavedSourceCover() throws Exception {
+        recoveredCover(1);
+    }
+
+    /** Already-ready completion recovery must repair missing art before its early return. */
+    @Test
+    void completedRecoveryRetainsSavedSourceCover() throws Exception {
+        recoveredCover(2);
+    }
+
+    /** Run both recovery branches with no metadata provider and no accessible download provider. */
+    private void recoveredCover(int ready) throws Exception {
+        Context context = context();
+        LibraryTitle title = seed(context, 2, ready);
+        Map<Path, Fingerprint> untouched = fingerprints(title, true);
+        seedTask(context, title, List.of(chapter(1), chapter(2)), "offline-fixture", "running", "", false,
+            "https://images.example/source-only.jpg");
+        start(context);
+        Map<String, Object> finishedTask = awaitTask();
+        assertCompleted(finishedTask);
+        LibraryTitle finished = context.library().findTitle(title.id());
+        assertEquals("https://images.example/source-only.jpg", finished.coverUrl());
+        assertEquals(finished.coverUrl(), finishedTask.get("coverUrl"));
+        for (LibraryChapter original : title.chapters()) {
+            if ("ready".equals(original.ingestStatus())) {
+                assertEquals(original, finished.chapters().stream().filter(c -> c.id().equals(original.id())).findFirst().orElseThrow());
+            }
+        }
+        assertFingerprints(untouched);
+        verifyNoProvider(context.provider());
+    }
+
     /** A real startup rescan must retain ready output when an import had no prior working folder. */
     @Test
     void startupRescanPreservesReadyChapterBeforeOfflineRecovery() throws Exception {
@@ -350,7 +384,13 @@ class CanonicalArchiveRecoveryTest {
     }
 
     private void seedTask(Context context, LibraryTitle title, List<Map<String, String>> expected, String provider, String status, String message, boolean replacement) {
+        seedTask(context, title, expected, provider, status, message, replacement, "");
+    }
+
+    /** Seed a recoverable durable task whose cover exists only in its frozen source request. */
+    private void seedTask(Context context, LibraryTitle title, List<Map<String, String>> expected, String provider, String status, String message, boolean replacement, String coverUrl) {
         Map<String, Object> selected = new LinkedHashMap<>();
+        if (!coverUrl.isBlank()) selected.put("coverUrl", coverUrl);
         selected.put("expectedChapters", expected);
         selected.put("chapterNumbers", expected.stream().map(row -> row.get("chapter_number")).toList());
         if (!replacement) {selected.put("downloadMode", "append"); if (title != null) selected.put("appendTitleId", title.id());}

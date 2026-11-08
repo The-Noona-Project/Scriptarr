@@ -160,7 +160,9 @@
   Sage/Vault should resolve it to the canonical title before Moon builds reader links. Avoid nested anchors and keep the
   split accessible.
 - Card images should go through `CoverImage.jsx`, preferring `coverThumbUrl` then `coverUrl` and finally a styled
-  initial fallback so intermittent upstream image failures do not show broken alt text in the UI.
+  initial fallback so intermittent upstream image failures do not show broken alt text in the UI. Title heroes use the
+  same component. Sage emits a thumbnail URL even when primary artwork is missing; the thumbnail handler resolves the
+  first readable page before giving up, without adding chapter hydration to compact card requests.
 - For the next Moon speed pass, build a fresh timing table before editing. Watch document load, Next JS/CSS chunk size,
   chrome/session/bootstrap calls, main route payload, admin event-stream startup, image or cover-cache work, and
   downstream Sage/Raven/Vault latency separately so the fix targets the real bottleneck.
@@ -174,6 +176,13 @@
 - Cover cards should prefer Moon's derived `coverThumbUrl` WebP cache when Sage provides one. The cache is derived
   storage only: Moon fetches Sage-approved cover URLs, converts them with `sharp`, stores WebP files under the Moon
   cover-cache folder, and exposes a rerunnable `Optimize cover images` admin task.
+- `lib/coverCache.mjs` owns raster conversion and separate primary/reader cache keys. A failed or absent primary cover
+  may use only Sage's same-title, revisioned reader page-zero path through the current authenticated proxy. Recheck the
+  authorized source before every cache hit and fetch the exact reader page with the current identity before returning
+  cached reader-derived art. Denial or broker unavailability fails closed. Cover responses are private and require
+  revalidation; never restore public immutable caching for reader-derived images. Remote failures have a short retry
+  window so recovery can prefer real cover metadata again. No catalog fields, canonical archives, or reader files are
+  changed by this derived cache.
 - Once UI `1.7.x` makes `compressorjs`, `prismjs`, and `recharts` peer dependencies. Keep the StylePanel bridge lazy,
   avoid root `@once-ui-system/core` JavaScript imports outside that bridge, and run the user build after dependency
   refreshes so peer resolution failures are caught before handoff.

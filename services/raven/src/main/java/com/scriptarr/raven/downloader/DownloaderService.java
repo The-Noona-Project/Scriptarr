@@ -1183,6 +1183,10 @@ public class DownloaderService {
     }
 
     private LibraryTitle persistSelectedMetadata(LibraryTitle title, DownloadRequest request) {
+        if (title != null && !normalizeString(title.id()).isBlank() && normalizeString(title.coverUrl()).isBlank() && !resolveCoverUrl(request).isBlank()) {
+            LibraryTitle retained = libraryService.retainCoverUrl(title.id(), resolveCoverUrl(request));
+            if (retained != null) title = retained;
+        }
         Map<String, Object> selectedMetadata = normalizeMap(request.selectedMetadata());
         String provider = stringValue(selectedMetadata.get("provider"));
         String providerSeriesId = stringValue(selectedMetadata.get("providerSeriesId"));

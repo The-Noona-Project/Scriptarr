@@ -5,11 +5,9 @@ import path from "node:path";
 import express from "express";
 import sharp from "sharp";
 import {proxyRequest, proxyStream} from "./proxy.mjs";
+import {createCoverCache} from "./coverCache.mjs";
 
-const COVER_CACHE_MAX_BYTES = 8 * 1024 * 1024;
-const COVER_CACHE_TIMEOUT_MS = 10_000;
 const DEFAULT_JSON_PROXY_TIMEOUT_MS = 15_000;
-const COVER_CACHE_CONTENT_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 const READER_PAGE_CACHE_MAX_BYTES = 32 * 1024 * 1024;
 const READER_PAGE_CACHE_MAX_TOTAL_BYTES = 1024 * 1024 * 1024;
 const READER_PAGE_CACHE_PRUNE_TARGET_BYTES = Math.round(READER_PAGE_CACHE_MAX_TOTAL_BYTES * 0.85);
@@ -652,127 +650,70 @@ export const registerMoonV3ProxyRoutes = (app, {config, getSessionToken, logger}
     }
   };
 
-  const resolveCoverCacheFile = (titleId, revision) => {
-    const safeTitleId = String(titleId || "").replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 120);
-    const safeRevision = String(revision || "latest").replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64) || "latest";
-    return path.resolve(config.coverCacheDir || "data/moon-cover-cache", `${safeTitleId}-${safeRevision}.webp`);
-  };
+  const ensureCoverCached = createCoverCache({cacheDir: config.coverCacheDir || "data/moon-cover-cache"});
 
+  /**
+   * Load the current authorized source before serving any derived thumbnail.
+   * @param {import("express").Request} req Current browser session or API-key request.
+   * @param {string} titleId Requested catalog title.
+   * @returns {Promise<object>} Authorized cover metadata and optional reader fallback.
+   */
   const readCoverSource = async (req, titleId) => {
     const response = await proxyRequest({
       baseUrl: config.sageBaseUrl,
       path: `/api/moon-v3/user/library/cover/${encodeURIComponent(titleId)}/source`,
       method: "GET",
       sessionToken: getSessionToken(req),
-      headers: forwardedHeaders(req)
+      headers: forwardedHeaders(req),
+      signal: AbortSignal.timeout(15_000)
     });
-    const text = Buffer.isBuffer(response.body) ? response.body.toString("utf8") : String(response.body || "");
     let payload = null;
-    try {
-      payload = text ? JSON.parse(text) : null;
-    } catch {
-      payload = null;
-    }
-    if (response.status < 200 || response.status >= 300 || !payload?.coverUrl) {
-      const error = new Error(payload?.error || "Cover source not found.");
-      error.status = response.status;
+    try {payload = JSON.parse(Buffer.isBuffer(response.body) ? response.body.toString("utf8") : String(response.body || ""));} catch {}
+    if (response.status < 200 || response.status >= 300 || !payload?.titleId || (!payload.coverUrl && !payload.fallbackPagePath)) {
+      const error = new Error("Cover source unavailable.");
+      error.status = response.status >= 400 ? response.status : 502;
       throw error;
     }
     return payload;
   };
 
-  const fetchCoverBuffer = async (coverUrl) => {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), COVER_CACHE_TIMEOUT_MS);
-    try {
-      const response = await fetch(coverUrl, {
-        signal: controller.signal,
-        headers: {
-          "Accept": "image/avif,image/webp,image/png,image/jpeg;q=0.9,*/*;q=0.2",
-          "User-Agent": "Scriptarr cover cache"
-        }
-      });
-      if (!response.ok) {
-        throw new Error(`Cover fetch failed with status ${response.status}.`);
-      }
-      const contentType = String(response.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
-      if (contentType && !COVER_CACHE_CONTENT_TYPES.has(contentType)) {
-        throw new Error("Cover source did not return a supported raster image.");
-      }
-      const arrayBuffer = await response.arrayBuffer();
-      const buffer = Buffer.from(arrayBuffer);
-      if (buffer.length > COVER_CACHE_MAX_BYTES) {
-        throw new Error("Cover source image is too large.");
-      }
-      return buffer;
-    } finally {
-      clearTimeout(timeout);
-    }
+  /**
+   * Use the same authorized artwork selection for individual covers and the admin optimizer.
+   * @param {import("express").Request} req Current caller credentials.
+   * @param {string} titleId Requested catalog title.
+   * @returns {Promise<object>} Cached or newly converted thumbnail.
+   */
+  const loadCoverForRequest = async (req, titleId) => {
+    const source = await readCoverSource(req, titleId);
+    return ensureCoverCached({
+      titleId: source.titleId,
+      coverUrl: source.coverUrl || "",
+      coverRevision: source.coverRevision || "latest",
+      fallbackPagePath: source.fallbackPagePath || "",
+      fetchFallback: (pagePath) => proxyRequest({
+        baseUrl: config.sageBaseUrl, path: pagePath, method: "GET",
+        sessionToken: getSessionToken(req), headers: forwardedHeaders(req),
+        signal: AbortSignal.timeout(15_000)
+      })
+    });
   };
 
-  const ensureCoverCached = async ({titleId, coverUrl, coverRevision = "latest"}) => {
-    const cacheFile = resolveCoverCacheFile(titleId, coverRevision);
-    try {
-      const cached = await fs.readFile(cacheFile);
-      return {status: "cached", bytes: cached.length, cacheFile};
-    } catch (error) {
-      if (error?.code !== "ENOENT") {
-        throw error;
-      }
-    }
-    const input = await fetchCoverBuffer(coverUrl);
-    const output = await sharp(input, {limitInputPixels: 24_000_000})
-      .rotate()
-      .resize({width: 512, height: 768, fit: "inside", withoutEnlargement: true})
-      .webp({quality: 82})
-      .toBuffer();
-    await fs.mkdir(path.dirname(cacheFile), {recursive: true});
-    await fs.writeFile(cacheFile, output);
-    return {
-      status: "converted",
-      inputBytes: input.length,
-      outputBytes: output.length,
-      bytesSaved: Math.max(0, input.length - output.length),
-      cacheFile
-    };
-  };
-
+  /**
+   * Serve a remote cover or the authorized title's first reader page as derived WebP.
+   * @param {import("express").Request} req Current authenticated cover request.
+   * @param {import("express").Response} res Derived private image response.
+   * @returns {Promise<void>}
+   */
   const handleCoverCache = async (req, res) => {
+    res.setHeader("Cache-Control", "private, no-cache, must-revalidate");
+    res.vary("Cookie"); res.vary("Authorization"); res.vary("X-Scriptarr-Api-Key");
     try {
       const titleId = normalizeSplat(req.params.titleId || req.params[0] || "").replace(/\.webp$/i, "");
-      if (!titleId) {
-        res.status(400).json({error: "Title id is required."});
-        return;
-      }
-      const source = await readCoverSource(req, titleId);
-      const revision = String(req.query.rev || source.coverRevision || "latest");
-      const cacheFile = resolveCoverCacheFile(source.titleId || titleId, revision);
-      try {
-        const cached = await fs.readFile(cacheFile);
-        res.status(200);
-        res.setHeader("Content-Type", "image/webp");
-        res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
-        res.send(cached);
-        return;
-      } catch (error) {
-        if (error?.code !== "ENOENT") {
-          throw error;
-        }
-      }
-      const cached = await ensureCoverCached({
-        titleId: source.titleId || titleId,
-        coverUrl: source.coverUrl,
-        coverRevision: revision
-      });
-      const output = await fs.readFile(cached.cacheFile);
-      res.status(200);
-      res.setHeader("Content-Type", "image/webp");
-      res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
-      res.send(output);
+      if (!titleId) {res.status(400).json({error: "Title id is required."}); return;}
+      const cached = await loadCoverForRequest(req, titleId);
+      res.status(200).type("image/webp").send(cached.buffer);
     } catch (error) {
-      res.status(error?.status || 502).json({
-        error: error instanceof Error ? error.message : "Scriptarr could not load that cover."
-      });
+      res.status(error?.status || 502).json({error: "Scriptarr could not load that cover."});
     }
   };
 
@@ -821,24 +762,21 @@ export const registerMoonV3ProxyRoutes = (app, {config, getSessionToken, logger}
       const titles = Array.isArray(page.payload?.titles) ? page.payload.titles : [];
       for (const title of titles) {
         scanned += 1;
-        if (!title?.id || !title?.coverUrl) {
+        if (!title?.id) {
           skipped += 1;
           continue;
         }
         try {
-          const result = await ensureCoverCached({
-            titleId: title.id,
-            coverUrl: title.coverUrl,
-            coverRevision: title.coverRevision || "latest"
-          });
+          const result = await loadCoverForRequest(req, title.id);
           if (result.status === "converted") {
             converted += 1;
             bytesSaved += Number.parseInt(String(result.bytesSaved || 0), 10) || 0;
           } else {
             skipped += 1;
           }
-        } catch {
-          failed += 1;
+        } catch (error) {
+          if (error?.status === 404) skipped += 1;
+          else failed += 1;
         }
       }
       cursor = String(page.payload?.pageInfo?.nextCursor || "");
