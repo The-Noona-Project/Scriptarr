@@ -2,6 +2,7 @@
  * @file Scriptarr Warden module: services/warden/docker/dockerCli.mjs.
  */
 import {spawn} from "node:child_process";
+import {containerDnsArguments} from "../config/containerDns.mjs";
 import {toDockerDesktopHostPath} from "../filesystem/storageLayout.mjs";
 
 const DEFAULT_DOCKER_TIMEOUT_MS = 15 * 60 * 1000;
@@ -356,6 +357,7 @@ export const removeDockerNetwork = async (networkName, {ignoreMissing = true} = 
  *   env?: Record<string, string>,
  *   networkName: string,
  *   networkAliases?: string[],
+ *   dnsServers?: string[],
  *   mounts?: Array<{hostPath: string, containerPath: string | null}>,
  *   publishedPorts?: Array<{hostPort: number, containerPort: number}>,
  *   extraArgs?: string[],
@@ -379,6 +381,7 @@ export const runDetachedContainer = async ({
   env = {},
   networkName = "",
   networkAliases = [],
+  dnsServers,
   mounts = [],
   publishedPorts = [],
   extraArgs = [],
@@ -401,6 +404,8 @@ export const runDetachedContainer = async ({
   for (const alias of networkAliases) {
     args.push("--network-alias", alias);
   }
+
+  args.push(...containerDnsArguments(dnsServers));
 
   for (const extraHost of extraHosts) {
     args.push("--add-host", extraHost);

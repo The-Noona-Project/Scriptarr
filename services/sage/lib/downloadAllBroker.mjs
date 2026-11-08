@@ -28,11 +28,13 @@ export const downloadAllRequestIdError = (value) => value == null || value === "
     : "";
 
 const notificationFromJob = (job, tasks, publicBaseUrl) => {
+  const plans = tasks.filter((task) => task.payload?.kind === "bulk-title-plan");
   tasks = tasks.filter((task) => task.taskKey === "bulk-batch");
   const status = text(job.status).toLowerCase();
   if (!["paused", "completed", "failed", "cancelled"].includes(status) || !text(job.requestedBy)) return null;
   const completed = tasks.filter((task) => task.status === "completed").sort((a, b) => Number(b.sortOrder || 0) - Number(a.sortOrder || 0));
-  const batch = completed[0] || tasks.find((task) => !["completed", "failed", "cancelled"].includes(task.status)) || {};
+  const interrupted = status === "paused" && tasks.find((task) => ["paused", "running"].includes(task.status));
+  const batch = interrupted || completed[0] || tasks.find((task) => !["completed", "failed", "cancelled"].includes(task.status)) || {};
   const runPayload = job.payload || {};
   const filters = {providerId: runPayload.providerId, type: runPayload.type, nsfw: runPayload.nsfw,
     titlegroup: runPayload.titlegroup, titlePrefix: runPayload.titlegroup, batchesPerApproval: runPayload.batchesPerApproval};
@@ -45,19 +47,39 @@ const notificationFromJob = (job, tasks, publicBaseUrl) => {
   const counts = {completedBatches: completed.length, remainingBatches: Math.max(0, tasks.length - completed.length)};
   for (const field of ["queuedCount", "appendedCount", "completedTitleTaskCount", "failedTitleTaskCount", "staleTitleTaskCount", "skippedCompletedCount", "skippedCurrentCount",
     "skippedActiveCount", "skippedAdultContentCount", "skippedNoMetadataCount", "skippedAmbiguousMetadataCount", "invalidSourceCount"]) counts[field] = Number(result[field]) || 0;
+  const failedIds = new Set(tasks.flatMap((task) => [
+    ...array(task.result?.failedTaskIds),
+    ...Object.entries(task.result?.observedStatuses || {}).filter(([, state]) => state === "failed").map(([id]) => id)
+  ]));
+  const planById = new Map(plans.map((task) => [task.taskId, task]));
+  const unresolvedIds = new Set([
+    ...plans.filter((task) => task.result?.category === "unresolved").map((task) => task.taskId),
+    ...tasks.flatMap((task) => array(task.result?.unresolvedPlanIds)).filter((id) => !planById.has(id) || planById.get(id).result?.category === "unresolved")
+  ]);
+  counts.exhaustedTitleTaskCount = counts.failedTitleTaskCount;
+  counts.failedTitleTaskCount = Math.max(counts.failedTitleTaskCount, failedIds.size);
+  counts.unresolvedPlanCount = unresolvedIds.size || (!plans.length ? Number(result.failedCount) || 0 : 0);
+  const pauseReason = status === "paused" ? [
+    counts.unresolvedPlanCount ? `${counts.unresolvedPlanCount} title plan(s) could not be prepared` : "",
+    counts.failedTitleTaskCount ? `${counts.failedTitleTaskCount} title task(s) failed` : "",
+    counts.staleTitleTaskCount ? `${counts.staleTitleTaskCount} title task(s) stalled` : ""
+  ].filter(Boolean).join("; ") : "";
   return {
     id, type: "downloadall", decisionType: status, discordUserId: text(job.requestedBy),
     titleName: "Scriptarr downloadall", status, runId: job.jobId, jobId: job.jobId,
-    batchId, approvalId, batchesPerApproval, filters, counts,
+    batchId, approvalId, batchesPerApproval, filters, counts, pauseReason,
     linkUrl: publicBaseUrl ? `${publicBaseUrl.replace(/\/+$/, "")}/admin/activity/queue` : "",
-    message: status === "paused" ? `Downloadall paused after ${completed.length} batch(es).` : `Downloadall ${status}. ${counts.completedTitleTaskCount} title task(s) completed.`,
+    message: status === "paused"
+      ? pauseReason ? `Downloadall paused: ${pauseReason}.` : completed.length ? `Downloadall paused after ${completed.length} batch(es).` : "Downloadall paused before any batch completed."
+      : `Downloadall ${status}. ${counts.completedTitleTaskCount} title task(s) completed.`,
     summary: {batchesPerApproval, completedBatches: completed.length, remainingBatches: counts.remainingBatches,
       completedTitles: counts.completedTitleTaskCount, queued: counts.queuedCount, appended: counts.appendedCount,
       skippedCompleted: counts.skippedCompletedCount, skippedCurrent: counts.skippedCurrentCount,
       skippedActive: counts.skippedActiveCount, skippedAdultContent: counts.skippedAdultContentCount,
       skippedNoMetadata: counts.skippedNoMetadataCount, skippedAmbiguousMetadata: counts.skippedAmbiguousMetadataCount,
       invalidSource: counts.invalidSourceCount,
-      failedTitles: counts.failedTitleTaskCount, staleTitles: counts.staleTitleTaskCount, currentBatchLabel},
+      failedTitles: counts.failedTitleTaskCount, exhaustedTitles: counts.exhaustedTitleTaskCount,
+      unresolvedPlans: counts.unresolvedPlanCount, pauseReason, staleTitles: counts.staleTitleTaskCount, currentBatchLabel},
     currentBatch: {taskId: text(batch.taskId), status: text(batch.status), label: currentBatchLabel,
       type: text(batch.payload?.type), titlePrefix: text(batch.payload?.titlePrefix || batch.payload?.titlegroup)},
     completedAt: text(job.finishedAt) || text(job.updatedAt)

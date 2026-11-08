@@ -18,6 +18,7 @@ import {
   DEFAULT_WARDEN_SERVICE_BASE_URL
 } from "./constants.mjs";
 import {resolveServiceImage} from "./images.mjs";
+import {resolveServiceDnsServers} from "./containerDns.mjs";
 import {resolveLocalAiProfile} from "./localAiProfiles.mjs";
 import {resolveMysqlConfig, toInternalMysqlEnv} from "./mysqlConfig.mjs";
 import {resolveClusterServiceUrl, resolveClusterTopology} from "./clusterTopology.mjs";
@@ -210,6 +211,7 @@ export const resolveStackMode = ({env = process.env} = {}) =>
  *     env: Record<string, string>,
  *     mounts: Array<{hostPath: string, containerPath: string | null}>,
  *     networkAliases: string[],
+ *     dnsServers?: string[],
  *     publishedPorts: Array<{hostPort: number, containerPort: number}>,
  *     healthCheck?: {
  *       command: string,
@@ -491,6 +493,8 @@ export const resolveServicePlan = ({env = process.env, containerNamePrefix = ""}
   });
 
   for (const service of services) {
+    const dnsServers = resolveServiceDnsServers(service.name, env);
+    if (dnsServers !== undefined) service.dnsServers = dnsServers;
     service.hostId = topology.enabled ? topology.owners[service.name] : "local";
     if (topology.enabled && !service.hostId) {
       throw new Error(`The topology does not assign ${service.name}.`);

@@ -182,6 +182,30 @@ export const formatBulkQueueSummary = (result = {}) => {
   ].filter(Boolean).join("\n\n");
 };
 
+/** Resolve visible bulk failures from scoped durable batch evidence and summary counts.
+ * @param {object} result Brokered run or notification payload.
+ * @returns {{failedTitles: number, unresolvedPlans: number, pauseReason: string}} Displayed attention state.
+ */
+export const resolveBulkRunAttention = (result = {}) => {
+  const counts = result.counts || {}, summary = result.summary || {};
+  const batches = Array.isArray(result.batches) ? result.batches : [];
+  const failedIds = new Set(batches.flatMap((batch) => [
+    ...(Array.isArray(batch.result?.failedTaskIds) ? batch.result.failedTaskIds : []),
+    ...Object.entries(batch.result?.observedStatuses || {}).filter(([, status]) => status === "failed").map(([id]) => id)
+  ]));
+  const unresolvedIds = new Set(batches.flatMap((batch) => Array.isArray(batch.result?.unresolvedPlanIds) ? batch.result.unresolvedPlanIds : []));
+  const failedTitles = Math.max(toCount(summary.failedTitles ?? counts.failedTitleTaskCount ?? result.failedTitleTaskCount, 0), failedIds.size);
+  const unresolvedPlans = Math.max(toCount(summary.unresolvedPlans ?? counts.unresolvedPlanCount ?? result.unresolvedPlanCount
+    ?? counts.failedCount ?? result.failedCount, 0), unresolvedIds.size);
+  const staleTitles = toCount(summary.staleTitles ?? counts.staleTitleTaskCount ?? result.staleTitleTaskCount, 0);
+  const pauseReason = normalizeString(result.pauseReason || summary.pauseReason) || [
+    unresolvedPlans ? `${unresolvedPlans} title plan(s) could not be prepared` : "",
+    failedTitles ? `${failedTitles} title task(s) failed` : "",
+    staleTitles ? `${staleTitles} title task(s) stalled` : ""
+  ].filter(Boolean).join("; ");
+  return {failedTitles, unresolvedPlans, pauseReason};
+};
+
 export const formatBulkRunSummary = (result = {}) => {
   const filters = result?.filters && typeof result.filters === "object" ? result.filters : {};
   const counts = result?.counts && typeof result.counts === "object" ? result.counts : {};
@@ -201,7 +225,7 @@ export const formatBulkRunSummary = (result = {}) => {
   const skippedNoMetadata = toCount(counts.skippedNoMetadataCount ?? result?.skippedNoMetadataCount, 0);
   const skippedAmbiguous = toCount(counts.skippedAmbiguousMetadataCount ?? result?.skippedAmbiguousMetadataCount, 0);
   const invalidSource = toCount(counts.invalidSourceCount ?? result?.invalidSourceCount, 0);
-  const failedTitles = toCount(counts.failedTitleTaskCount ?? result?.failedTitleTaskCount, 0);
+  const {failedTitles, unresolvedPlans, pauseReason} = resolveBulkRunAttention(result);
   const staleTitles = toCount(counts.staleTitleTaskCount ?? result?.staleTitleTaskCount, 0);
   const lines = [
     `Scriptarr downloadall ${status}.`,
@@ -231,6 +255,7 @@ export const formatBulkRunSummary = (result = {}) => {
     `- Invalid source rows: ${invalidSource}`,
     "",
     "Needs attention",
+    `- Unresolved title plans: ${unresolvedPlans}`,
     `- Failed title tasks: ${failedTitles}`,
     `- Stale title tasks: ${staleTitles}`
   ];
@@ -243,6 +268,7 @@ export const formatBulkRunSummary = (result = {}) => {
   if (status.toLowerCase() === "paused") {
     lines.push(
       "",
+      ...(pauseReason ? [`Pause reason: ${pauseReason}.`] : []),
       `Next: react ✅ to continue the next ${batchesPerApproval} batch(es), react ❌ to cancel, or use /downloadall continue runid:${runId || "<id>"}.`
     );
   }

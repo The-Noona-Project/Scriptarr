@@ -104,7 +104,7 @@ test("downloadall payload uses compact content and grouped embed fields", () => 
     }
   }, "https://pax-kun.com");
 
-  assert.match(payload.content, /Downloadall paused after 5 batch/);
+  assert.match(payload.content, /Downloadall paused: 473 title task\(s\) failed/);
   assert.match(payload.content, /React ✅/);
   assert.doesNotMatch(payload.content, /queued 622, appended 38, skipped 515/);
   assert.equal(payload.embeds[0].title, "Scriptarr downloadall Paused");

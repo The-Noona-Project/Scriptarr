@@ -93,6 +93,8 @@ owner approved, even when the run has since advanced. Delivery retries reuse the
 whose outcome cannot be confirmed is held for administrator reconciliation instead of sending another message.
 Run notifications retain separate completion and policy-skip counts, so a finished scan with no eligible titles does
 not imply that a title was downloaded.
+Paused notifications also report unresolved title plans and observed failed title tasks before retry exhaustion, using
+the run's durable records. Updated summaries do not resend an already acknowledged approval-window notification.
 Sage's allowlisted `stale-queue-cleanup` task now checks Raven title tasks and durable Raven bulk runs together. It
 reads current bulk-run status without starting work, and persists exact recovery actions when a stale title task or
 paused bulk run still needs admin follow-up. Raven recovers durable running work independently of status reads.

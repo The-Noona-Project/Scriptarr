@@ -87,6 +87,54 @@ test("notification counts and summary retain every nonzero policy skip separatel
   }
 });
 
+test("paused live-shaped run reports unresolved plans and failed work before retry exhaustion", async () => {
+  const f = fixture(), unresolved = Array.from({length: 34}, (_, index) => `plan-${index}`);
+  Object.assign(f.jobs.get("run-1").result, {completedTitleTaskCount: 0, failedCount: 34, failedTitleTaskCount: 0, queuedCount: 1, skippedNoMetadataCount: 1});
+  f.tasks.set("run-1", [{taskId: "batch-t", taskKey: "bulk-batch", status: "paused", label: "T Manhua", payload: {type: "Manhua", titlePrefix: "T"},
+    result: {observedStatuses: {"task-tales": "failed"}, failedTaskIds: [], attempts: {"task-tales": 2}, approvalAttempts: {"task-tales": 2}, unresolvedPlanIds: unresolved}},
+  ...unresolved.map(taskId => ({taskId, status: "failed", payload: {kind: "bulk-title-plan"}, result: {category: "unresolved"}})),
+  {taskId: "plan-tales", status: "queued", payload: {kind: "bulk-title-plan"}, result: {category: "queued"}},
+  {taskId: "plan-no-match", status: "completed", payload: {kind: "bulk-title-plan"}, result: {category: "noMetadata"}}]);
+  f.vaultClient.listRavenDownloadTasks = async () => assert.fail("Notifications must not load the global download-task list.");
+  const notification = (await f.broker.listNotifications()).notifications[0];
+  assert.equal(notification.counts.completedBatches, 0);
+  assert.equal(notification.counts.remainingBatches, 1);
+  assert.equal(notification.counts.unresolvedPlanCount, 34);
+  assert.equal(notification.counts.failedTitleTaskCount, 1);
+  assert.equal(notification.counts.exhaustedTitleTaskCount, 0);
+  assert.equal(notification.summary.unresolvedPlans, 34);
+  assert.equal(notification.summary.failedTitles, 1);
+  assert.match(notification.pauseReason, /34 title plan\(s\) could not be prepared/);
+  assert.match(notification.message, /1 title task\(s\) failed/);
+  assert.equal(notification.currentBatch.status, "paused");
+  assert.equal(notification.currentBatch.label, "T Manhua");
+  assert.deepEqual(f.calls, []);
+});
+
+test("resolved plans do not retain stale failure ids and an interrupted batch is identified correctly", async () => {
+  const f = fixture();
+  Object.assign(f.jobs.get("run-1").result, {failedCount: 1});
+  f.tasks.get("run-1").push({taskId: "batch-2", taskKey: "bulk-batch", status: "paused", sortOrder: 1, label: "T Manhua",
+    result: {unresolvedPlanIds: ["resolved-plan"]}},
+  {taskId: "resolved-plan", payload: {kind: "bulk-title-plan"}, result: {category: "current"}});
+  const notification = (await f.broker.listNotifications()).notifications[0];
+  assert.equal(notification.counts.unresolvedPlanCount, 0);
+  assert.equal(notification.batchId, "batch-2");
+  assert.equal(notification.currentBatch.status, "paused");
+});
+
+test("updated failure projection never resets an acknowledged old window or its pending prompt", async () => {
+  const f = fixture(), notification = await preparePrompt(f);
+  await f.broker.acknowledge(notification.id);
+  const receipts = [...f.jobs.values()].filter(job => job.ownerService === "scriptarr-sage").map(job => structuredClone(job));
+  f.tasks.get("run-1").push({taskId: "unresolved-plan", payload: {kind: "bulk-title-plan"}, result: {category: "unresolved"}});
+  f.tasks.get("run-1")[0].result = {observedStatuses: {"task-tales": "failed"}};
+  Object.assign(f.jobs.get("run-1").result, {failedCount: 1});
+  assert.deepEqual((await createDownloadAllBroker(f).listNotifications()).notifications, []);
+  for (const receipt of receipts) assert.deepEqual(f.jobs.get(receipt.jobId), receipt);
+  assert.deepEqual(f.calls, []);
+});
+
 test("an accepted paused message can finish delivery after the run advances", async () => {
   const f = fixture(); const notification = (await f.broker.listNotifications()).notifications[0];
   await f.broker.beginDelivery(notification.id, {botIdentity: "noona"});

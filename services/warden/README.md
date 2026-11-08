@@ -32,6 +32,12 @@ First-party images also accept explicit `SCRIPTARR_<SERVICE>_IMAGE` references, 
 image namespace/tag, allowing each host to reconcile a verified immutable release. A pinned reference stays pinned
 until its deployment configuration is changed; an image update check does not silently advance a digest pin.
 
+Use `SCRIPTARR_<SERVICE>_DNS_SERVERS` to give one managed service an ordered list of reachable resolver IP addresses.
+Comma-separated values or a JSON array are accepted. Leave it unset to retain Docker's DNS defaults; an explicit `[]`
+restores inherited DNS after a prior override. Warden recreates only the service with changed DNS. Docker network
+aliases stay available. Choose resolvers reachable through that service's VPN when a VPN is enabled; this setting
+does not change host DNS, VPN routes, or other services.
+
 Warden also ships the Docker-backed test stack used by repo contributors:
 
 - `npm run docker:healthcheck`

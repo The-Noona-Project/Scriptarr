@@ -159,6 +159,8 @@ waitlisted users again when the title becomes ready, DMs unavailable requesters 
 moves back into admin review, and DMs them again if that unavailable request expires after 90 days.
 Portal also polls Sage for durable downloadall run notifications and DMs the requester paused, completed, failed, or
 cancelled summaries once per stable notification id.
+Paused summaries distinguish unresolved title plans from failed title downloads, including failed work that still has
+retry attempts available. They explain the pause and label an interrupted batch without implying it completed.
 Prompt and acknowledgement retries reuse the accepted Discord message. Approval retries apply only to their original
 batch window. If an earlier send cannot be confirmed after the short Discord retry window, delivery waits for an
 administrator to reconcile it rather than sending another summary.

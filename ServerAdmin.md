@@ -709,6 +709,9 @@ persistence and ready AVIF pages. Provider failures, unresolved title tasks, and
 recovery details. Continue retries unresolved work and preserves completed chapters. Cancel stops run-owned work while
 preserving finished archives. Healthy work waiting in the queue or progressing through CPU ingest does not expire
 merely because it has been waiting a long time.
+Paused Discord summaries show unresolved title plans separately from failed title tasks, including failures whose
+retry allowance has not been exhausted. They include the saved recovery reason and identify the paused batch;
+an unfinished batch is not a completed batch. Already acknowledged summary messages are not resent after an update.
 
 Startup recovery waits for title-task restoration before recovering bulk runs. Append recovery checks the planned
 chapters and their actual archives/reader pages instead of treating an existing title as proof of completion. Status
@@ -894,5 +897,13 @@ The test stack uses:
 - `Armed / idle` in Settings means the VPN is enabled and ready but OpenVPN is not currently running because Raven
   connects lazily before protected download traffic. Use `Test VPN` to force a brokered connection check; a successful
   enabled test leaves the tunnel connected.
+- If source lookups work on the host but fail inside Raven after the VPN connects, check which route reaches the
+  container's inherited DNS server. A LAN resolver can become unreachable through the VPN. Set
+  `SCRIPTARR_RAVEN_DNS_SERVERS=1.1.1.1,8.8.8.8` in Warden's private environment only after verifying those resolvers
+  work through the tunnel. Recreate Warden with that environment and let it reconcile Raven. Raven receives the
+  explicit DNS servers while Docker's embedded resolver
+  continues to resolve internal service names. Keep VPN protection enabled; do not add an unprotected DNS bypass.
+  The optional `SCRIPTARR_<SERVICE>_DNS_SERVERS` setting accepts IP addresses separated by commas or whitespace,
+  or a JSON IP array. Unset leaves DNS unchanged; an explicit `[]` returns that service to Docker's inherited DNS.
 - If the Docker test stack is already running, tear it down with `npm run docker:test:teardown` before starting a new
   isolated run with the same stack id.
