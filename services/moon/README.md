@@ -41,6 +41,8 @@ Cached first-page covers use a lightweight access and availability check instead
 Oversized WebP pages retain their logical page number and reading position: the reader displays all image segments
 as one page. Cover fallback uses a thumbnail of the whole logical first page. Existing AVIF chapters remain readable
 while background conversion publishes verified WebP replacements.
+Paged segmented images keep their full logical aspect ratio in Single, Double, and Manga double layouts, with the
+same viewport and page-fit bounds as the reader frame. Display scaling does not reduce the source image resolution.
 Moon's request and admin add-title flows now share the same metadata-first intake engine. Readers pick metadata only,
 and Scriptarr saves that metadata snapshot with the request so moderators can review the upstream metadata site and
 choose the exact Raven source later. Admin add-title uses the same intake base but lets staff pick a concrete source

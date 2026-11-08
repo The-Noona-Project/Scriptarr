@@ -59,6 +59,10 @@
   decode. Preserve the legacy single-image path for existing AVIF. Segment and whole-page-thumbnail selectors belong
   in both image cache identities and current-session status authorization. A tile-zero probe never authorizes another
   tile or a whole-page thumbnail. WebP cover fallback requires the `thumbnail=true` first-page variant.
+- Paged composite width needs a definite native/viewport basis before its auto-sized flex/grid frame can resolve.
+  Never use that frame's cyclic `100%` as an intrinsic minimum: absolutely positioned tiles contribute no intrinsic
+  width and can collapse the whole page to zero. Preserve source aspect ratio, segment geometry, frame caps and
+  `max-width: 100%`; verify actual positive DOM rectangles in every reader layout, not only successful image decoding.
 - Keep Discord login as the only bootstrap and admin sign-in path. Do not reintroduce claim-dev-session behavior.
 - Preserve same-origin login return flow. Moon should pass a sanitized `returnTo` path into Sage's Discord auth URL,
   and the callback relay should send users back to the page where login started whenever that route is still allowed,

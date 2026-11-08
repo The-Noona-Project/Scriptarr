@@ -167,6 +167,7 @@ worker publishes no inbound port.
 WebP's dimension limit is handled by lossless geometric segmentation, not shrinking text: oversized images become
 ordered WebP tiles, with the original logical page index retained for bookmarks and reading progress. All tiles must
 be validated before a page becomes ready. The first-page cover fallback uses a thumbnail of the full logical page.
+Single, double, and manga-double layouts fit segmented pages while preserving their source proportions.
 Existing AVIF chapters remain readable while low-priority migration jobs rebuild WebP from canonical CBZs. A missing
 or invalid CBZ needs repair; converting an already-lossy AVIF file is not a substitute for the original archive.
 Remote WebP migration starts disabled when there is no saved migration intent, so an initial deployment can finish

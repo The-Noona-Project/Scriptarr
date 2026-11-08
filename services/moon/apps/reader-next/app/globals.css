@@ -375,7 +375,7 @@ a {
 }
 
 .reader-app .reader-spread .reader-page-frame .reader-logical-image {
-  width: min(100%, var(--reader-page-width), calc((100vh - 170px) * var(--reader-page-ratio)));
+  width: min(var(--reader-page-width), calc((100vh - 170px) * var(--reader-page-ratio)));
 }
 
 .reader-app .reader-page-frame .reader-logical-image img.reader-page-segment {
