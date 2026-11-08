@@ -5,6 +5,12 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {buildLibraryCoverSource, buildTitleCoverFields} from "../lib/libraryCoverSource.mjs";
 
+/**
+ * Build a complete ready chapter for cover-selection boundary cases.
+ * @param {number | string} number Chapter number.
+ * @param {object} [extra] Overrides used to represent unavailable pages.
+ * @returns {object} Catalog chapter fixture.
+ */
 const chapter = (number, extra = {}) => ({
   id: `chapter-${number}`,
   chapterNumber: String(number),

@@ -12,8 +12,9 @@ test("cover fallback cache retains exact Sage authorization for sessions and API
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "scriptarr-cover-auth-"));
   const avif = await sharp({create: {width: 8, height: 12, channels: 3, background: "#19a276"}}).avif().toBuffer();
   const pagePath = "/api/moon-v3/user/reader/title/title-1/chapter/chapter-1/page/0?rev=avif-1234567890abcdef";
+  const probePath = pagePath.replace("/page/0?", "/page/0/status?");
   let sourceStatus = 200, pageStatus = 200, revoked = false, invalidPath = false;
-  let sourceCalls = 0, pageCalls = 0;
+  let sourceCalls = 0, pageCalls = 0, probeCalls = 0, probePayload = null, malformedProbe = false;
   const sage = http.createServer((req, res) => {
     const authorized = req.headers.authorization === "Bearer member-session" && !revoked || req.headers["x-scriptarr-api-key"] === "member-api-key";
     const json = (status, body) => {res.writeHead(status, {"Content-Type": "application/json"}); res.end(JSON.stringify(body));};
@@ -29,6 +30,12 @@ test("cover fallback cache retains exact Sage authorization for sessions and API
       json(sourceStatus, sourceStatus === 200 ? {titleId: "title-1", coverUrl: "", coverRevision: "revision-1",
         fallbackPagePath: invalidPath ? pagePath.replace("title-1", "foreign-title") : pagePath} : {error: "Not available"});
       return;
+    }
+    if (req.url === probePath) {
+      probeCalls++;
+      if (pageStatus !== 200) {json(pageStatus, {error: "Page not available"}); return;}
+      if (malformedProbe) {res.writeHead(200, {"Content-Type": "application/json"}); res.end("not json"); return;}
+      json(200, probePayload || {ok: true, status: 200, pageIndex: 0, contentTypeFamily: "image", contentLength: avif.length, cacheable: true}); return;
     }
     if (req.url === pagePath) {
       pageCalls++;
@@ -58,18 +65,27 @@ test("cover fallback cache retains exact Sage authorization for sessions and API
     assert.match(response.headers.get("vary"), /Cookie/);
     assert.equal((await sharp(Buffer.from(await response.arrayBuffer())).metadata()).format, "webp");
   }
-  assert.equal(sourceCalls, 2); assert.equal(pageCalls, 2, "warm fallback cache still fetches the exact authorized page");
+  assert.equal(sourceCalls, 2); assert.equal(pageCalls, 1, "only the cold fallback fetches the AVIF body");
+  assert.equal(probeCalls, 1, "the warm hit authorizes the exact page using its current status");
   assert.equal((await fetch(url)).status, 401);
   revoked = true;
   assert.equal((await fetch(url, {headers})).status, 401);
   assert.equal((await fetch(url, {headers: {"X-Scriptarr-Api-Key": "member-api-key"}})).status, 200);
   revoked = false;
-  for (const status of [401, 403, 503]) {
+  for (const status of [401, 403, 404, 500, 502, 503, 504]) {
     pageStatus = status;
     assert.equal((await fetch(url, {headers})).status, status, "a warm cache cannot mask page denial or broker failure");
   }
-  pageStatus = 200; sourceStatus = 503;
+  pageStatus = 200;
+  probePayload = {ok: false, status: 404};
+  assert.equal((await fetch(url, {headers})).status, 404, "HTTP 200 diagnostics must not authorize unavailable pages");
+  probePayload = {ok: true, status: 200, pageIndex: 1, contentTypeFamily: "image", contentLength: avif.length, cacheable: true};
+  assert.equal((await fetch(url, {headers})).status, 503, "a probe for another page must fail closed");
+  probePayload = null; malformedProbe = true;
+  assert.equal((await fetch(url, {headers})).status, 503);
+  malformedProbe = false; sourceStatus = 503;
   const before = pageCalls;
+  const beforeProbes = probeCalls;
   assert.equal((await fetch(url, {headers})).status, 503);
   assert.equal(pageCalls, before, "source authentication/availability must succeed before a fallback read");
   sourceStatus = 204;
@@ -78,6 +94,7 @@ test("cover fallback cache retains exact Sage authorization for sessions and API
   sourceStatus = 200; invalidPath = true;
   assert.equal((await fetch(url, {headers})).status, 502);
   assert.equal(pageCalls, before, "a cross-title path must never be fetched");
+  assert.equal(probeCalls, beforeProbes, "source failure or a cross-title path must not trigger even a status read");
   invalidPath = false;
   const optimizer = url.replace("user/covers/title-1.webp?rev=revision-1", "admin/system/tasks/cover-cache/optimize");
   assert.equal((await fetch(optimizer, {method: "POST"})).status, 401);
@@ -86,5 +103,6 @@ test("cover fallback cache retains exact Sage authorization for sessions and API
   assert.equal(response.status, 200);
   assert.deepEqual({scanned: optimized.scanned, converted: optimized.converted, skipped: optimized.skipped, failed: optimized.failed},
     {scanned: 3, converted: 0, skipped: 2, failed: 1});
-  assert.equal(pageCalls, before + 1, "the optimizer processes blank primary art with the same authenticated fallback");
+  assert.equal(pageCalls, before, "the optimizer must not download an already cached AVIF body");
+  assert.equal(probeCalls, beforeProbes + 1, "the optimizer uses the same authenticated first-page status probe");
 });

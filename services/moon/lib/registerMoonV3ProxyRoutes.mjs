@@ -685,16 +685,23 @@ export const registerMoonV3ProxyRoutes = (app, {config, getSessionToken, logger}
    */
   const loadCoverForRequest = async (req, titleId) => {
     const source = await readCoverSource(req, titleId);
+    /**
+     * Read the fixed reader path with this caller, sharing credentials for body and probe requests.
+     * @param {string} pagePath Validated same-title reader path.
+     * @param {number} timeoutMs Bounded body or status-probe deadline.
+     * @returns {Promise<{status: number, headers: Record<string, string>, body: Buffer}>}
+     */
+    const readFallback = (pagePath, timeoutMs) => proxyRequest({
+      baseUrl: config.sageBaseUrl, path: pagePath, method: "GET",
+      sessionToken: getSessionToken(req), headers: forwardedHeaders(req), signal: AbortSignal.timeout(timeoutMs)
+    });
     return ensureCoverCached({
       titleId: source.titleId,
       coverUrl: source.coverUrl || "",
       coverRevision: source.coverRevision || "latest",
       fallbackPagePath: source.fallbackPagePath || "",
-      fetchFallback: (pagePath) => proxyRequest({
-        baseUrl: config.sageBaseUrl, path: pagePath, method: "GET",
-        sessionToken: getSessionToken(req), headers: forwardedHeaders(req),
-        signal: AbortSignal.timeout(15_000)
-      })
+      fetchFallback: (pagePath) => readFallback(pagePath, 15_000),
+      authorizeFallback: (pagePath) => readFallback(pagePath.replace(/\/page\/0(?=\?)/, "/page/0/status"), 5000)
     });
   };
 

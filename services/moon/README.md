@@ -37,6 +37,7 @@ stored outside authoritative catalog state, and `/admin/system/tasks` includes a
 Library cards and title pages use the first page of the earliest readable chapter when cover artwork is missing or
 cannot be loaded. This fallback uses existing reader images, preserves the original cover metadata, and checks the
 current session or API key before returning cached artwork. Titles without readable pages keep their initial placeholder.
+Cached first-page covers use a lightweight access and availability check instead of downloading the page again.
 Moon's request and admin add-title flows now share the same metadata-first intake engine. Readers pick metadata only,
 and Scriptarr saves that metadata snapshot with the request so moderators can review the upstream metadata site and
 choose the exact Raven source later. Admin add-title uses the same intake base but lets staff pick a concrete source

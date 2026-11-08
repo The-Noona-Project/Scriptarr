@@ -104,7 +104,8 @@ from the same runtime.
 - Compact cards should use the merged `readerTarget` for cover/art links and the canonical title route for title/copy
   links. Use `CoverImage.jsx` for card artwork and title heroes. The authenticated thumbnail route should prefer provider
   art, fall back to the earliest readable chapter's first real page, and use a styled initial only when neither is usable.
-  Reauthorize cached reader-derived artwork through Sage; keep it private and revalidated rather than publicly immutable.
+  Reauthorize cached reader-derived artwork through Sage's exact first-page status probe, validating its payload as well
+  as HTTP status; keep it private and revalidated rather than publicly immutable. Fetch page bytes only on cache misses.
 - Keep always-mounted user/admin shells on local primitives. Do not reintroduce root `@once-ui-system/core` JavaScript
   imports outside the lazy profile-only style panel bridge.
 - Once UI `1.7.x` no longer installs every module helper as a transitive dependency. When refreshing Once UI, keep

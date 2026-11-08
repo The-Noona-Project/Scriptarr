@@ -10,6 +10,25 @@ const REMOTE_RETRY_MS = 60_000;
 const RASTER_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/avif", "image/gif"]);
 
 /**
+ * Fail closed unless a current Sage probe authorizes the exact first reader page.
+ * HTTP success alone is insufficient: unavailable pages may use an HTTP 200 diagnostic envelope.
+ * @param {{status: number, headers: Record<string, string>, body: Buffer}} response Authenticated page-status response.
+ * @returns {void}
+ */
+const requireReaderCoverAuthorization = (response) => {
+  let payload = null;
+  try {payload = JSON.parse(response.body.toString("utf8"));} catch {}
+  if (response.status === 200 && /^application\/json\b/i.test(response.headers["content-type"] || "")
+    && payload?.ok === true && payload.status === 200 && payload.pageIndex === 0
+    && payload.contentTypeFamily === "image" && Number.isInteger(payload.contentLength)
+    && payload.contentLength > 0 && payload.contentLength <= MAX_BYTES && payload.cacheable === true) return;
+  const error = new Error("Reader cover authorization unavailable.");
+  error.status = Number.isInteger(response.status) && response.status >= 400 && response.status <= 599 ? response.status
+    : Number.isInteger(payload?.status) && payload.status >= 400 && payload.status <= 599 ? payload.status : 503;
+  throw error;
+};
+
+/**
  * Accept only Sage's same-title, revisioned first reader page; never an arbitrary upstream URL.
  * @param {string} titleId Authorized canonical catalog title id.
  * @param {string} value Sage-provided reader page path.
@@ -44,10 +63,11 @@ const convert = async (input, contentType) => {
 
 /**
  * Build a per-runtime derived cache. Callers must authenticate the current cover source first.
- * Reader fallback bytes are fetched with the current identity even on a derived cache hit.
+ * Reader fallback cache hits reauthorize the exact page through a current-identity status probe.
  * @param {{cacheDir: string, fetchImpl?: typeof fetch, now?: () => number}} options Cache dependencies.
  * @returns {(source: {titleId: string, coverUrl?: string, coverRevision?: string, fallbackPagePath?: string,
- *   fetchFallback?: (path: string) => Promise<{status: number, headers: Record<string, string>, body: Buffer}>}) => Promise<object>}
+ *   fetchFallback?: (path: string) => Promise<{status: number, headers: Record<string, string>, body: Buffer}>,
+ *   authorizeFallback?: (path: string) => Promise<{status: number, headers: Record<string, string>, body: Buffer}>}) => Promise<object>}
  */
 export const createCoverCache = ({cacheDir, fetchImpl = fetch, now = Date.now}) => {
   const remoteFailures = new Map();
@@ -76,7 +96,7 @@ export const createCoverCache = ({cacheDir, fetchImpl = fetch, now = Date.now}) 
     const input = Buffer.concat(chunks);
     return {buffer: await convert(input, response.headers.get("content-type")), inputBytes: input.length};
   };
-  return async ({titleId, coverUrl = "", coverRevision = "latest", fallbackPagePath = "", fetchFallback}) => {
+  return async ({titleId, coverUrl = "", coverRevision = "latest", fallbackPagePath = "", fetchFallback, authorizeFallback}) => {
     const fallback = validateCoverFallbackPath(titleId, fallbackPagePath);
     const key = createHash("sha256").update(JSON.stringify([titleId, coverUrl, coverRevision, fallback])).digest("hex");
     const remoteFile = path.resolve(cacheDir, `${key}-remote.webp`), fallbackFile = path.resolve(cacheDir, `${key}-reader.webp`);
@@ -96,8 +116,20 @@ export const createCoverCache = ({cacheDir, fetchImpl = fetch, now = Date.now}) 
         }
       }
     }
-    if (!fallback || !fetchFallback) throw new Error("No usable cover image is available.");
-    // Never let disk presence replace current page authorization or a healthy Sage response.
+    if (!fallback) throw new Error("No usable cover image is available.");
+    const cached = await read(fallbackFile);
+    if (cached) {
+      // A cache hit still requires current authorization, without redownloading discarded AVIF bytes.
+      try {
+        if (!authorizeFallback) throw new Error("Missing reader cover authorization probe.");
+        requireReaderCoverAuthorization(await authorizeFallback(fallback));
+      } catch (error) {
+        if (!Number.isInteger(error.status) || error.status < 400 || error.status > 599) error.status = 503;
+        throw error;
+      }
+      return {status: "cached", sourceKind: "reader", bytes: cached.length, buffer: cached, cacheFile: fallbackFile};
+    }
+    if (!fetchFallback) throw new Error("No usable cover image is available.");
     const response = await fetchFallback(fallback);
     if (response.status < 200 || response.status >= 300) {
       const error = new Error("Reader cover fallback unavailable.");
@@ -108,8 +140,6 @@ export const createCoverCache = ({cacheDir, fetchImpl = fetch, now = Date.now}) 
       || !Buffer.isBuffer(response.body) || !response.body.length || response.body.length > MAX_BYTES) {
       throw new Error("Cover source did not return a supported bounded raster image.");
     }
-    const cached = await read(fallbackFile);
-    if (cached) return {status: "cached", sourceKind: "reader", bytes: cached.length, buffer: cached, cacheFile: fallbackFile};
     const buffer = await convert(response.body, response.headers["content-type"]);
     await write(fallbackFile, buffer);
     return {status: "converted", sourceKind: "reader", bytes: buffer.length, buffer, cacheFile: fallbackFile,

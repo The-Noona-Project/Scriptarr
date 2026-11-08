@@ -7,6 +7,14 @@ import sharp from "sharp";
 import {createCoverCache, validateCoverFallbackPath} from "../lib/coverCache.mjs";
 
 const fallbackPagePath = "/api/moon-v3/user/reader/title/title-1/chapter/chapter-1/page/0?rev=avif-1234567890abcdef";
+/**
+ * Build a current first-page authorization response for the synthetic cache fixture.
+ * @param {number} status HTTP status.
+ * @param {object} payload Probe field overrides.
+ * @returns {{status: number, headers: object, body: Buffer}}
+ */
+const probeResponse = (status = 200, payload = {}) => ({status, headers: {"content-type": "application/json"},
+  body: Buffer.from(JSON.stringify({ok: true, status: 200, pageIndex: 0, contentTypeFamily: "image", contentLength: 100, cacheable: true, ...payload}))});
 
 test("cover fallback accepts only the authorized same-title first page revision", () => {
   assert.equal(validateCoverFallbackPath("title-1", fallbackPagePath), fallbackPagePath);
@@ -21,10 +29,11 @@ test("absent or broken remote art uses a real AVIF page and reauthorizes warm ca
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "scriptarr-cover-"));
   t.after(() => fs.rm(directory, {recursive: true, force: true}));
   const avif = await sharp({create: {width: 8, height: 12, channels: 3, background: "#249f78"}}).avif().toBuffer();
-  let remoteRequests = 0, pageRequests = 0, status = 200, now = 1000;
+  let remoteRequests = 0, pageRequests = 0, probeRequests = 0, status = 200, now = 1000;
   const ensure = createCoverCache({cacheDir: directory, now: () => now,
     fetchImpl: async () => {remoteRequests++; return new Response("unavailable", {status: 404});}});
   const source = {titleId: "title-1", coverRevision: "revision-1", fallbackPagePath,
+    authorizeFallback: async (value) => {assert.equal(value, fallbackPagePath); probeRequests++; return probeResponse(status);},
     fetchFallback: async (value) => {assert.equal(value, fallbackPagePath); pageRequests++; return {status, headers: {"content-type": "image/avif"}, body: avif};}};
   const blank = await ensure(source);
   assert.equal(blank.sourceKind, "reader");
@@ -34,7 +43,8 @@ test("absent or broken remote art uses a real AVIF page and reauthorizes warm ca
   const warm = await ensure({...source, coverUrl: "https://covers.invalid/missing.jpg"});
   assert.equal(warm.status, "cached");
   assert.equal(remoteRequests, 1);
-  assert.equal(pageRequests, 3);
+  assert.equal(pageRequests, 2, "warm cache hits must not download a discarded AVIF body");
+  assert.equal(probeRequests, 1);
   for (const denied of [401, 403, 503]) {
     status = denied;
     await assert.rejects(ensure({...source, coverUrl: "https://covers.invalid/missing.jpg"}), error => error.status === denied);
@@ -42,6 +52,30 @@ test("absent or broken remote art uses a real AVIF page and reauthorizes warm ca
   status = 200; now += 60_001;
   await ensure({...source, coverUrl: "https://covers.invalid/missing.jpg"});
   assert.equal(remoteRequests, 2, "failed metadata art is retried after the short negative cache expires");
+  assert.equal(pageRequests, 2);
+});
+
+test("warm cover probes reject false-success envelopes, unavailable pages and incomplete metadata", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "scriptarr-cover-probe-"));
+  t.after(() => fs.rm(directory, {recursive: true, force: true}));
+  const png = await sharp({create: {width: 1, height: 1, channels: 3, background: "#aabbcc"}}).png().toBuffer();
+  let pageRequests = 0;
+  const ensure = createCoverCache({cacheDir: directory});
+  const source = {titleId: "title-1", fallbackPagePath,
+    fetchFallback: async () => {pageRequests++; return {status: 200, headers: {"content-type": "image/png"}, body: png};}};
+  await ensure(source);
+  assert.equal((await ensure({...source, authorizeFallback: async () => probeResponse()})).status, "cached");
+  for (const [response, status] of [
+    ...[401, 403, 404, 500, 502, 503, 504].map(status => [probeResponse(status), status]),
+    [probeResponse(200, {ok: false, status: 404}), 404], [probeResponse(200, {ok: false, status: 503}), 503],
+    ...[{ok: false}, {pageIndex: 1}, {status: "200"}, {contentLength: 0}, {contentLength: "100"},
+      {contentLength: 8 * 1024 * 1024 + 1}, {contentTypeFamily: "binary"}, {cacheable: false}].map(payload => [probeResponse(200, payload), 503]),
+    [{status: 200, headers: {"content-type": "application/json"}, body: Buffer.from("not json")}, 503],
+    [{status: 200, headers: {"content-type": "text/html"}, body: probeResponse().body}, 503]
+  ]) await assert.rejects(ensure({...source, authorizeFallback: async () => response}), error => error.status === status);
+  await assert.rejects(ensure(source), error => error.status === 503);
+  await assert.rejects(ensure({...source, authorizeFallback: async () => {throw new DOMException("Timed out", "TimeoutError");}}), error => error.status === 503);
+  assert.equal(pageRequests, 1, "all warm validation uses metadata probes only, including failures");
 });
 
 test("HTTP success with unsupported or undecodable external bytes also falls back", async (t) => {

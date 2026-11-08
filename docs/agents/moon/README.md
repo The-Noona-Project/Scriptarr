@@ -178,8 +178,11 @@
   cover-cache folder, and exposes a rerunnable `Optimize cover images` admin task.
 - `lib/coverCache.mjs` owns raster conversion and separate primary/reader cache keys. A failed or absent primary cover
   may use only Sage's same-title, revisioned reader page-zero path through the current authenticated proxy. Recheck the
-  authorized source before every cache hit and fetch the exact reader page with the current identity before returning
-  cached reader-derived art. Denial or broker unavailability fails closed. Cover responses are private and require
+  authorized source before every cache hit and probe the exact reader page's `/status?rev=` route with the current
+  identity before returning cached reader-derived art. Require HTTP 200 and a JSON payload with `ok: true`, `status: 200`,
+  `pageIndex: 0`, positive bounded image length, image content family, and `cacheable: true`; HTTP 200 failure envelopes
+  never authorize a hit. Only a cache miss downloads/converts page bytes. Denial or broker unavailability fails closed.
+  Cover responses are private and require
   revalidation; never restore public immutable caching for reader-derived images. Remote failures have a short retry
   window so recovery can prefer real cover metadata again. No catalog fields, canonical archives, or reader files are
   changed by this derived cache.

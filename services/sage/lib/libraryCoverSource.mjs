@@ -3,6 +3,11 @@
  */
 import {createHash} from "node:crypto";
 
+/**
+ * Normalize an optional catalog text field without coercing objects or numbers.
+ * @param {unknown} value Catalog field.
+ * @returns {string} Trimmed text or an empty string.
+ */
 const text = (value) => typeof value === "string" ? value.trim() : "";
 
 /**
