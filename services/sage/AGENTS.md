@@ -69,6 +69,11 @@ HTTP broker.
   update/how-to question, admin-ish status question, request-help question, and lore/catchphrase. Noona should sound
   warm and specific without becoming a support-ticket closer or exposing internal codenames.
 - Keep full JSDoc on exported Sage `.mjs` source and test files. `npm test` should enforce that gate.
+- Keep the conversion worker on its distinct token and verified worker-only HTTPS listener. Workers may claim/renew
+  their fenced chapter and stream binary input/output; they must not read arbitrary jobs/settings or publish catalogues.
+  Proxy protected main Raven operations with Raven's coordinator token without disclosing it to workers.
+- Preserve reader segment/thumbnail selectors and exact response identity on cold streams and warm probes. WebP cover
+  fallback must use a whole logical-page thumbnail; tile count must never replace logical page count.
 
 ## Coding Map
 

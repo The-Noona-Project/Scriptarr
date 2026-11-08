@@ -84,3 +84,22 @@
 - Vault's content reset path must stay content-only. It may clear requests, request work locks, progress, read state,
   follows, bookmarks, Raven catalog rows, Raven download tasks, and Raven-owned jobs, but it must not delete users,
   permission groups, API keys, sessions, settings, secrets, or durable events.
+
+- The selected-run reset is a different, narrower contract: preserve stable title/alias rows, metadata/covers/source
+  publication state, every user's reading state, requests, download tasks, jobs and receipts. Fence the exact selected
+  durable plans before filesystem deletion; canonical IDs require actual task/append references or exact source/type
+  identity, never metadata aliases. Reject ambiguous source ownership. Clear only chapters/roots/content counters after
+  the coordinator's quiescent removal proof, then explicitly finish. Finished replay must not clear newly created data.
+- Conversion state lives in `conversionJobs.mjs` with a MySQL transaction adapter. Serialize the network's single
+  encoding slot using the durable pool-row lock, use DB time for 120-second leases, increment epochs on reassignment,
+  retain claim/retry receipts and hashed lease secrets, and reject stale worker operations. Queue priority is
+  interactive, bulk, then migration; only queued work can be promoted with new owner attribution.
+- Keep coordinator cancellation independent of worker claim epochs: issue `spec.coordinatorGeneration` on create and
+  rotate it on queued promotion and every explicit retry, preserving it across claims/lease reassignments. Validate
+  captured `expectedCoordinatorGeneration` atomically before cancellation; never let an old waiter fetch a newer token
+  merely to cancel it. Idempotent create/retry replays retain their accepted token; retry may promote but never demote
+  foreground priority/attribution. Preserve the legacy optional explicit epoch guard.
+- Root publication validates all segments and commits the chapter and conversion completion in one transaction. Preserve
+  AVIF compatibility, logical page counts, explicit WebP segment checkpoints, metadata-only field preservation, and
+  catalogue/reader cache invalidation. Use `SCRIPTARR_TEST_MYSQL_URL` against an isolated MySQL 8.4 instance to exercise
+  concurrent claims, forced post-chapter rollback, lost-response replay, and scoped-reset preservation.

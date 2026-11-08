@@ -15,6 +15,11 @@ public class RavenApplication {
      * @param args standard Spring Boot command-line arguments
      */
     public static void main(String[] args) {
+        if ("ingest-worker".equals(System.getenv("SCRIPTARR_RAVEN_ROLE"))) {
+            try { com.scriptarr.raven.library.IngestWorkerRuntime.run(System.getenv()); }
+            catch (Exception error) { throw new IllegalStateException("Isolated ingest worker stopped.", error); }
+            return;
+        }
         SpringApplication.run(RavenApplication.class, args);
     }
 }

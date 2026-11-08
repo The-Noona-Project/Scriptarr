@@ -164,17 +164,22 @@ public final class BulkQueueCoordinator implements BulkRunGateway {
                             category = "adult";
                         } else {
                             LibraryTitle catalog = existingTitle(existing, url, name, wantedType);
-                            if (catalog != null && "completed".equalsIgnoreCase(text(catalog.status()))) {
-                                category = "completed";
-                            } else {
+                            CanonicalSourceOwnership.assertCompatible(catalog, url);
                                 Map<String, Object> selectedMetadata = new LinkedHashMap<>();
                                 Map<String, Object> selectedDownload = new LinkedHashMap<>();
+                                if (catalog != null) {
+                                    DownloadIntakeService.BulkMetadataResolution binding = intake.resolveBulkMetadata(provider.id(), url, name, wantedType, details.associatedNames());
+                                    if (binding == null || binding.unmatched() || binding.ambiguous() || !BulkMetadataAnchor.matches(name, details.associatedNames(), binding.metadataSnapshot())) {
+                                        throw new IllegalStateException("metadata_source_ambiguous: Catalog metadata is not anchored to the original provider title or edition.");
+                                    }
+                                    selectedMetadata.putAll(binding.metadataSnapshot()); selectedDownload.putAll(binding.downloadSnapshot());
+                                }
                                 if (catalog != null) {
                                     List<Map<String, String>> source = provider.getChapters(url);
                                     checkCancelled(stop);
                                     if (source == null || source.isEmpty()) throw new IllegalStateException("The provider did not return a verifiable chapter list.");
                                     List<Map<String, String>> missing = missingChapters(catalog, source);
-                                    if (missing.isEmpty()) category = "current";
+                                    if (missing.isEmpty()) category = "completed".equalsIgnoreCase(text(catalog.status())) ? "completed" : "current";
                                     else {
                                         selectedDownload.put("downloadMode", "append");
                                         selectedDownload.put("appendTitleId", catalog.id());
@@ -182,7 +187,7 @@ public final class BulkQueueCoordinator implements BulkRunGateway {
                                         selectedDownload.put("expectedChapters", missing);
                                     }
                                 } else {
-                                    DownloadIntakeService.BulkMetadataResolution metadata = intake.resolveBulkMetadata(provider.id(), url, name, wantedType);
+                                    DownloadIntakeService.BulkMetadataResolution metadata = intake.resolveBulkMetadata(provider.id(), url, name, wantedType, details.associatedNames());
                                     checkCancelled(stop);
                                     if (metadata == null) throw new IllegalStateException("Metadata discovery returned no verifiable outcome.");
                                     if (metadata.unmatched()) category = "noMetadata";
@@ -201,6 +206,7 @@ public final class BulkQueueCoordinator implements BulkRunGateway {
                                 if (category.isEmpty() || "unresolved".equals(category)) {
                                     selectedDownload.putAll(Map.of("providerId", provider.id(), "providerName", provider.name(), "titleName", name,
                                         "titleUrl", url, "requestType", wantedType, "libraryTypeLabel", wantedType, "libraryTypeSlug", LibraryNaming.normalizeTypeSlug(wantedType)));
+                                    selectedDownload.put("sourceAliases", details.associatedNames() == null ? List.of() : details.associatedNames());
                                     if (text(selectedDownload.get("coverUrl")).isEmpty() && text(selectedMetadata.get("coverUrl")).isEmpty()
                                         && text(map(selectedMetadata.get("details")).get("coverUrl")).isEmpty()
                                         && text(map(selectedMetadata.get("details")).get("coverImageUrl")).isEmpty()
@@ -210,7 +216,6 @@ public final class BulkQueueCoordinator implements BulkRunGateway {
                                     if (durable) save(runId, planId, "bulk-title-plan", batchId, "prepared", plan, Map.of());
                                     category = "";
                                 }
-                            }
                         }
                     } else category = "";
                     if (category.isEmpty()) {
@@ -264,7 +269,7 @@ public final class BulkQueueCoordinator implements BulkRunGateway {
                 if (durable == null) return;
                 Map<String, Object> merged = new LinkedHashMap<>(durable);
                 if ("running".equals(text(durable.get("status"))) && "running".equals(text(live.get("status")))) {
-                    for (String key : List.of("actualProgressAt", "stage", "ingestCompletedPages", "ingestTotalPages", "ingestCompletedChapters", "ingestTotalChapters")) {
+                    for (String key : List.of("actualProgressAt", "stage", "ingestCompletedPages", "ingestTotalPages", "ingestCompletedChapters", "ingestTotalChapters", "ingestCompletedSegments", "ingestTotalSegments")) {
                         if (live.containsKey(key)) merged.put(key, live.get(key));
                     }
                 }

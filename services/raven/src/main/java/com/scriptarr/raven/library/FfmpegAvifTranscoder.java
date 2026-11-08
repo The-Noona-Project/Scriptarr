@@ -207,23 +207,7 @@ public final class FfmpegAvifTranscoder implements PageTranscoder {
     }
 
     private static void runProcess(List<String> command) throws IOException, InterruptedException {
-        Process process = new ProcessBuilder(command)
-            .redirectErrorStream(true)
-            .redirectOutput(ProcessBuilder.Redirect.DISCARD)
-            .start();
-        try {
-            if (!process.waitFor(TRANSCODE_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
-                throw new IOException("FFmpeg timed out while converting a reader page to AVIF.");
-            }
-            if (process.exitValue() != 0) {
-                throw new IOException("FFmpeg failed to create an AVIF page with the selected encoder.");
-            }
-        } finally {
-            if (process.isAlive()) {
-                process.destroyForcibly();
-                process.waitFor(PROCESS_STOP_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
-            }
-        }
+        MediaProcess.run(command, false);
     }
 
     private static int configuredCpuThreads(String raw) {

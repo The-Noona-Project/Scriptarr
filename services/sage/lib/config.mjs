@@ -67,6 +67,10 @@ export const resolveSageConfig = () => {
 
   return {
     port: Number.parseInt(process.env.SCRIPTARR_SAGE_PORT || "3004", 10),
+    workerTlsPort: Number(process.env.SCRIPTARR_SAGE_WORKER_TLS_PORT || "0"),
+    workerTlsHost: process.env.SCRIPTARR_SAGE_WORKER_TLS_HOST || "0.0.0.0",
+    workerTlsCertFile: process.env.SCRIPTARR_SAGE_WORKER_TLS_CERT_FILE || "",
+    workerTlsKeyFile: process.env.SCRIPTARR_SAGE_WORKER_TLS_KEY_FILE || "",
     vaultBaseUrl: normalizeBaseUrl(process.env.SCRIPTARR_VAULT_BASE_URL, "http://127.0.0.1:3005"),
     wardenBaseUrl: normalizeBaseUrl(process.env.SCRIPTARR_WARDEN_BASE_URL, "http://127.0.0.1:4001"),
     portalBaseUrl: normalizeBaseUrl(process.env.SCRIPTARR_PORTAL_BASE_URL, "http://127.0.0.1:3003"),

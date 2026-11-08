@@ -6,6 +6,7 @@ import express from "express";
 import sharp from "sharp";
 import {proxyRequest, proxyStream} from "./proxy.mjs";
 import {createCoverCache} from "./coverCache.mjs";
+import {readerImageSelector, readerProbeMatchesSelector, readerResponseMatchesSelector} from "./readerImageIdentity.mjs";
 
 const DEFAULT_JSON_PROXY_TIMEOUT_MS = 15_000;
 const READER_PAGE_CACHE_MAX_BYTES = 32 * 1024 * 1024;
@@ -84,6 +85,8 @@ const sanitizeReaderPageStatusPayload = (payload, {cacheFiles = null, cached = n
   ok: payload?.ok === true,
   status: Math.max(0, safeInteger(payload?.status, 0)),
   pageIndex: Math.max(0, safeInteger(payload?.pageIndex, 0)),
+  segmentIndex: Math.max(0, safeInteger(payload?.segmentIndex, 0)),
+  thumbnail: payload?.thumbnail === true,
   revision: safeCacheToken(payload?.revision, 64),
   contentTypeFamily: safeCacheToken(payload?.contentTypeFamily, 40),
   byteLength: Math.max(0, safeInteger(cached?.stat?.size || payload?.byteLength, 0)),
@@ -96,6 +99,8 @@ const sanitizeReaderPageStatusPayload = (payload, {cacheFiles = null, cached = n
 });
 
 const resolveReaderPageCacheFiles = (config, targetPath, query) => {
+  const selector = readerImageSelector(query);
+  if (!selector) return null;
   const revision = String(query?.rev || "").trim();
   if (!revision) {
     return null;
@@ -106,7 +111,7 @@ const resolveReaderPageCacheFiles = (config, targetPath, query) => {
   }
   const key = crypto
     .createHash("sha256")
-    .update(`${targetPath}?rev=${safeRevision}`)
+    .update(`${targetPath}?rev=${safeRevision}&${selector.key}`)
     .digest("hex");
   const root = path.resolve(config.readerPageCacheDir || "data/moon-reader-page-cache");
   const directory = path.join(root, key.slice(0, 2));
@@ -485,7 +490,8 @@ export const registerMoonV3ProxyRoutes = (app, {config, getSessionToken, logger}
       } catch {
         payload = null;
       }
-      if (checked.status === 200 && payload?.ok === true && payload?.status === 200) {
+      const selector = readerImageSelector(Object.fromEntries(new URLSearchParams(query)));
+      if (checked.status === 200 && payload?.ok === true && payload?.status === 200 && readerProbeMatchesSelector(payload, selector)) {
         return true;
       }
       const deniedStatus = checked.status >= 400 && checked.status < 500
@@ -507,6 +513,10 @@ export const registerMoonV3ProxyRoutes = (app, {config, getSessionToken, logger}
   const handleMoonV3Proxy = async (req, res) => {
     const targetPath = normalizeSplat(req.params.splat);
     const query = toQueryString(req.query);
+    if ((isReaderPageImagePath(targetPath) || isReaderPageStatusPath(targetPath)) && !readerImageSelector(req.query)) {
+      res.status(400).json({error: "Invalid reader image selector."});
+      return;
+    }
     try {
     const isEventStream = targetPath === "admin/events/stream";
     if (isEventStream) {
@@ -552,6 +562,13 @@ export const registerMoonV3ProxyRoutes = (app, {config, getSessionToken, logger}
         return;
       }
       const {response, controller} = proxied;
+      if (response.status === 200 && !readerResponseMatchesSelector(response.headers, readerImageSelector(req.query))) {
+        controller?.abort();
+        response.body?.destroy();
+        res.status(502).setHeader("Cache-Control", "no-store");
+        res.json({error: "The reader returned a different image variant."});
+        return;
+      }
       res.status(response.status);
       forwardResponseHeaders(res, response.headers, {stream: true});
       res.setHeader("X-Scriptarr-Reader-Cache", cacheFiles ? "miss" : "bypass");

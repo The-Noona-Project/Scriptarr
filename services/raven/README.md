@@ -17,17 +17,31 @@ Completed downloads now use Raven's managed storage layout under the existing `/
 
 - `/downloads/downloading/<type-slug>/<title-folder>`
 - `/downloads/downloaded/<type-slug>/<title-folder>` for canonical CBZ archives
-- `/downloads/ingested/<type-slug>/<titleId>/<chapterId>` for derived AVIF reader pages and `manifest.json`
+- `/downloads/ingested/<type-slug>/<titleId>/<chapterId>/<webp-revision>` for immutable WebP reader pages and `manifest.json`
 
 Manual library import and normal downloads converge on the same canonical CBZ layout. `/v1/imports` accepts
 Raven-visible CBZs from `import-staging` or existing downloaded storage, copies approved archives into
-`downloaded/<type-slug>/<title-folder>`, catalogs the title or chapter rows, and immediately queues AVIF ingest.
-Reader routes are AVIF-first: a chapter must have `ingestStatus: "ready"`, a current `avif-` ingest revision, a page
-count, and a manifest path before Moon can serve it.
+`downloaded/<type-slug>/<title-folder>`, catalogs the title or chapter rows, and queues reader-page processing.
+A chapter needs acknowledged ready metadata, its logical page count, and a complete manifest before Moon can serve it.
+Existing AVIF chapters remain readable while new WebP pages are prepared.
 Before Raven creates or catalogs a title, it resolves the logical catalog identity of library type plus normalized title
 against Vault's compact title-card projection. Downloads, manual imports, startup rescans, and AVIF ingest setup should
 therefore reuse the canonical title id even when the same title appears under a different source or filesystem folder.
-Raven supports FFmpeg NVIDIA AV1 and software AVIF encoding. Set `SCRIPTARR_RAVEN_AVIF_ENCODER` to:
+The distributed setup runs Raven as `coordinator` on the canonical-storage host and an `ingest-worker` on the assigned
+worker host. The coordinator uses `SCRIPTARR_RAVEN_REMOTE_INGEST_REQUIRED=true`; it waits when the worker is unavailable
+and never falls back to local encoding. The worker uses FFmpeg WebP quality `85`, method `4`, two encoder threads, one
+page at a time and one chapter at a time. Its container is limited to two CPUs and 4 GiB; the durable pool permits one
+active encoding lease across all workers. The worker has disposable scratch only and reaches Sage over verified TLS.
+
+Oversized source images are split into exact two-dimensional WebP segments, each at most 16383 pixels per side.
+Reader navigation and saved progress still count original logical pages. The reader composes every segment, and cover
+fallback uses a thumbnail of the whole first page. Source archives and source-quality evidence remain unchanged.
+
+Whole-library WebP migration is opt-in and initially paused. The protected operator controls can start, pause, resume,
+or retry it without restarting Raven. Background work yields after each chapter; fresh/user work takes priority.
+Pausing lets the current chapter checkpoint finish. A failed migration preserves an existing valid AVIF chapter.
+
+Legacy standalone AVIF encoding remains available for compatibility. Set `SCRIPTARR_RAVEN_AVIF_ENCODER` to:
 
 - `auto` (default): encode a real test page with `av1_nvenc`, then use `libaom-av1` when NVIDIA AV1 encoding is unavailable.
 - `nvenc`: require a working NVIDIA AV1 encoder; unsupported GPUs and driver failures block ingest with an actionable status.
@@ -111,8 +125,15 @@ Archive metadata such as `ComicInfo.xml` does not increase page counts. Older in
 rebuilding validated ready pages.
 
 Completion requires finished discovery and successful owned work, including canonical CBZ files, saved catalog state,
-and ready AVIF pages. Source-quality markers and generated missing-page placeholders remain visible through the
+and all ready reader pages and segments. A source publication marked completed does not skip an empty or damaged local
+title; missing chapters are queued after source and metadata ownership are verified. Distinct provider editions cannot
+write the same canonical identity. Source-quality markers and generated missing-page placeholders remain visible through the
 existing quality and missing-content screens; completion does not erase them.
+
+Scoped content reset is a separate, guarded operator workflow. Preview resolves exact durable plan ownership, deduplicates
+canonical identities, and records the reviewed file inventory. Apply fences actual writers and removes only that inventory;
+an interrupted apply can resume without accepting new or changed files. It retains stable title identities, metadata,
+covers, follows, reading progress and all run/task/job history. The broad global reset is not used for this operation.
 `/v1/library?view=card` returns the compact Moon shelf projection without chapter arrays or filesystem roots. It
 accepts `q`, `type`, `letter`, `cursor`, `pageSize`, `sort`, and exact `ids`, forwards those filters through Sage to
 Vault's title-only projection, preserves requested exact-id ordering for activity cards, and keeps full title and
@@ -165,18 +186,18 @@ queued tasks can be removed from recovery, which clears the persisted task and d
 When an upstream page image returns `404`, Raven now skips same-URL image retries, refreshes the chapter page list on
 the next chapter attempt, and leaves a clearer source-image failure if the refreshed source still points at missing
 images.
-Reader page serving now reads the ingested AVIF folder instead of extracting CBZ pages on demand. The ingest pipeline
+Reader page serving reads saved AVIF or segmented WebP manifests instead of extracting CBZ pages on demand. The ingest pipeline
 extracts ordered archive pages, writes stable page slugs such as `p000001.avif`, stores a per-chapter manifest, and
 serves `image/avif` through the existing Moon/Sage reader routes. Raven also exposes a redacted page probe
 for Moon and keeps Missing Content quality fields available for damaged source detection.
 Raven also accepts `POST /v1/ingest/runs` for Appa/Sage-owned library-type reingest jobs. These jobs rebuild only the
-derived AVIF reader pages from existing canonical CBZ archives, create one durable task per ready title, continue after
+derived reader pages from existing canonical CBZ archives, create one durable task per ready title, continue after
 per-title failures, and reuse the active queued or running run id when the same library type is already being rebuilt.
 `GET /v1/ingest/runs` returns bounded active, recent, or all run summaries for admin surfaces without returning every
 child title task, including the scheduler state, current title, queue position, last progress time, and conservative
 ETA when Raven has credible timing. `/v1/ingest` includes active and recent run summaries alongside the per-title
 backlog. Type-wide rebuilds use balanced fair title lanes (`SCRIPTARR_RAVEN_AVIF_TITLE_LANES`, default `2`, max `3`):
-Raven processes one title per leased library type, persists progress, then rotates to the next active type instead of
+Legacy mode processes one title per leased library type; WebP migration checkpoints one chapter, then rotates to the next active type instead of
 marking waiting runs as fake-running. A per-title lock still serializes duplicate attempts for the same title id.
 The clean restart/admin flow (`POST /v1/ingest/runs/clean-restart`) supersedes active AVIF runs without deleting
 catalog data or CBZ archives, compacts old superseded run noise, then starts fresh runs in OEL, Manhua, Manhwa, Manga,

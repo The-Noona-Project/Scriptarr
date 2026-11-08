@@ -3,6 +3,7 @@
 /**
  * @file Reader page-chunk state helpers.
  */
+import {resolveReaderPageImages} from "./pageSegments.js";
 
 const REQUEST_TOKEN_SEPARATOR = "\u001f";
 
@@ -67,7 +68,7 @@ export const hasReaderPageImages = (pages = [], indexes = []) => {
   const byIndex = new Map(pages.map((page) => [page?.index, page]));
   return indexes.length > 0 && indexes.every((index) => {
     const page = byIndex.get(index);
-    return Boolean(page?.src);
+    return resolveReaderPageImages(page).length > 0;
   });
 };
 
@@ -286,7 +287,8 @@ export const warmReaderPageImages = async (
     return [];
   }
   const wanted = new Set(indexes);
-  const pageEntries = pages.filter((page) => Number.isInteger(page?.index) && wanted.has(page.index) && page.src);
+  const logicalPages = pages.filter((page) => Number.isInteger(page?.index) && wanted.has(page.index));
+  const pageEntries = logicalPages.flatMap((page) => resolveReaderPageImages(page).map((image) => ({...page, src: image.src, segmentIndex: image.index})));
   const results = await Promise.all(pageEntries.map((page) => new Promise((resolve) => {
     const image = new imageFactory();
     const startedAt = now();
@@ -350,7 +352,7 @@ export const warmReaderPageImages = async (
       });
       if (typeof image.decode === "function") {
         const decodeStartedAt = now();
-        Promise.resolve(image.decode()).then(() => {
+        Promise.resolve().then(() => image.decode()).then(() => {
           if (settled) {
             return;
           }
@@ -392,7 +394,11 @@ export const warmReaderPageImages = async (
     };
     image.src = page.src;
   })));
-  return results;
+  return logicalPages.map((page) => {
+    const expected = resolveReaderPageImages(page).length;
+    const completed = results.filter((result) => result.index === page.index);
+    return {index: page.index, ok: expected > 0 && completed.length === expected && completed.every((result) => result.ok)};
+  });
 };
 
 /**

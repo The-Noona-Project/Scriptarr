@@ -5,7 +5,7 @@ import {isIP} from "node:net";
 
 const normalize = (value) => String(value ?? "").trim();
 const REQUIRED_SERVICES = ["scriptarr-vault", "scriptarr-sage", "scriptarr-moon", "scriptarr-raven", "scriptarr-portal", "scriptarr-oracle"];
-const ALL_SERVICES = new Set(["scriptarr-mysql", ...REQUIRED_SERVICES]);
+const ALL_SERVICES = new Set(["scriptarr-mysql", ...REQUIRED_SERVICES, "scriptarr-raven-worker"]);
 
 /**
  * Parse the shared placement map, rejecting ambiguous ownership before Docker is touched.

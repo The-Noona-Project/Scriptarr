@@ -2,7 +2,7 @@
 # Scriptarr-owned policy; only the explicitly assigned LAN application ports are affected.
 set -euo pipefail
 case "${1:-}" in
-  core) address=192.168.50.6; ports='3004 4401' ;;
+  core) address=192.168.50.6; ports='3004 3444 4401' ;;
   ai) address=192.168.50.7; ports='3001 3003 4401' ;;
   *) printf 'Usage: lan-policy.sh core|ai\n' >&2; exit 2 ;;
 esac
@@ -16,7 +16,9 @@ iptables -w 5 -N SCRIPTARR-LAN 2>/dev/null || true
 # Flush only the dedicated chain. Reapplying never rewrites unrelated Docker or host rules.
 iptables -w 5 -F SCRIPTARR-LAN
 for port in $ports; do
-  if [ "$port" = 4401 ]; then
+  if [ "$port" = 3444 ]; then
+    sources='192.168.50.7'
+  elif [ "$port" = 4401 ]; then
     sources='192.168.50.6'
   elif [ "$1" = core ]; then
     sources='192.168.50.6 192.168.50.7'

@@ -39,7 +39,7 @@ class DownloaderOwnedPersistenceTest {
         when(provider.supportsUrl(anyString())).thenReturn(true);
         when(provider.getChapters(anyString())).thenReturn(List.of(Map.of("chapter_number","1","href","https://weebcentral.com/chapters/one")));
         Map<String,Object> selected=Map.of("downloadMode","append","appendTitleId","existing","chapterNumbers",List.of("2"),"expectedChapters",List.of(Map.of("chapter_number","2","href","https://weebcentral.com/chapters/two")));
-        broker.putDownloadTask("append",Map.ofEntries(Map.entry("taskId","append"),Map.entry("jobId","append"),Map.entry("titleId","existing"),Map.entry("titleName","Alpha"),Map.entry("titleUrl","https://weebcentral.com/series/alpha"),Map.entry("requestType","Manhua"),Map.entry("providerId","weebcentral"),Map.entry("status","running"),Map.entry("percent",98),Map.entry("details",Map.of("bulkRunId","run","bulkBatchId","batch","bulkPlanId","plan","selectedDownload",selected))));
+        broker.putDownloadTask("append",Map.ofEntries(Map.entry("taskId","append"),Map.entry("jobId","append"),Map.entry("titleId","existing"),Map.entry("titleName","Alpha"),Map.entry("titleUrl","https://weebcentral.com/series/8ED3F6AD685B959EAD7022518E"),Map.entry("requestType","Manhua"),Map.entry("providerId","weebcentral"),Map.entry("status","running"),Map.entry("percent",98),Map.entry("details",Map.of("bulkRunId","run","bulkBatchId","batch","bulkPlanId","plan","selectedDownload",selected))));
         DownloaderService service=service(broker,provider,root,library);
         try {
             service.restorePersistedTasks();
@@ -62,7 +62,7 @@ class DownloaderOwnedPersistenceTest {
         DownloadProvider provider=mock(DownloadProvider.class);
         DownloaderService service=service(broker,provider,root);
         try {
-            DownloadRequest request=new DownloadRequest("Alpha","https://weebcentral.com/series/alpha","Manhua","owner","weebcentral","",Map.of(),Map.of(),"","normal");
+            DownloadRequest request=new DownloadRequest("Alpha","https://weebcentral.com/series/8ED3F6AD685B959EAD7022518E","Manhua","owner","weebcentral","",Map.of(),Map.of(),"","normal");
             assertThrows(IllegalStateException.class,()->service.queueBulkOwned("stable","run","batch","plan",request));
             assertTrue(service.snapshot().isEmpty());
             assertTrue(broker.listDownloadTasks().isEmpty());

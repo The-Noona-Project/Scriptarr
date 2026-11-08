@@ -67,6 +67,9 @@ from the same runtime.
   through Moon instead of being buffered like JSON payloads.
 - A reader image cache hit must recheck the exact page's Sage authorization with the current session or API key.
   Never use cache presence or token presence as authorization; upstream denial or unavailability must fail closed.
+- WebP segments form one logical source page. Preserve page indexes/progress and wait for every segment decode before
+  paged navigation. Segment and thumbnail selectors must participate in image cache identities and authorization;
+  whole-page cover fallback must use the thumbnail variant, never just the first tile of an oversized page.
 - Reader speed instrumentation exists before policy changes. Keep capturing session latency, page chunk latency, image
   fetch latency, decode latency, preload window depth, retry counts, decoded pages ahead/behind, and how often the user
   reaches an unready target page. Keep full diagnostics in the local reader buffer and persist only redacted slow-event

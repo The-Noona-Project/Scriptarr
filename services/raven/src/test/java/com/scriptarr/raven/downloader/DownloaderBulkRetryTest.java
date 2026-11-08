@@ -240,7 +240,7 @@ class DownloaderBulkRetryTest {
             ((Map<?, ?>) queuedField.get(downloader)).remove("owned");
             // This is the real process dequeue-before-running-registration window.
             if (retryReceipt) retry("retry-2", 2, 1, 2);
-            else downloader.queueBulkOwned("owned", "run", "batch", "plan", new DownloadRequest("Alpha", "https://weebcentral.com/series/alpha", "Manhua", "qa", "weebcentral", "", Map.of(), Map.of(), "", "normal"));
+            else downloader.queueBulkOwned("owned", "run", "batch", "plan", new DownloadRequest("Alpha", "https://weebcentral.com/series/8ED3F6AD685B959EAD7022518E", "Manhua", "qa", "weebcentral", "", Map.of(), Map.of(), "", "normal"));
             verify(held.worker(), times(1)).execute(any());
             assertTrue(held.queue().isEmpty());
         } finally { restoreWorker(held); }
@@ -277,7 +277,7 @@ class DownloaderBulkRetryTest {
         Map<String, Object> details = new java.util.LinkedHashMap<>(Map.of("bulkRunId", "run", "bulkBatchId", "batch", "bulkPlanId", "plan"));
         if (!receipt.isEmpty()) details.put("bulkRetryAttempt", receipt);
         broker.putDownloadTask("owned", Map.ofEntries(Map.entry("taskId", "owned"), Map.entry("jobId", "owned"), Map.entry("titleName", "Alpha"),
-            Map.entry("titleUrl", "https://weebcentral.com/series/alpha"), Map.entry("requestType", "Manhua"), Map.entry("providerId", "weebcentral"),
+            Map.entry("titleUrl", "https://weebcentral.com/series/8ED3F6AD685B959EAD7022518E"), Map.entry("requestType", "Manhua"), Map.entry("providerId", "weebcentral"),
             Map.entry("status", "failed"), Map.entry("percent", 90), Map.entry("message", "Source failure."), Map.entry("details", details)));
         ScriptarrLogger logger = mock(ScriptarrLogger.class);
         when(logger.getDownloadsRoot()).thenReturn(root);

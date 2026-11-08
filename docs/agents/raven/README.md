@@ -1,5 +1,45 @@
 # Raven AI Notes
 
+## Distributed WebP ingest
+
+- `SCRIPTARR_RAVEN_ROLE=ingest-worker` branches before Spring bootstrap. Workers instantiate only the lease loop,
+  verified-TLS Sage transport, health server and FFmpeg WebP converter. They have no provider, VPN, downloader,
+  canonical mounts, catalog writer, Docker socket or direct Vault connection. `ready` requires real encode/decode
+  self-test and recent authenticated Sage availability; HTTP liveness remains 200 when degraded.
+- Coordinator output is remote-only with `SCRIPTARR_RAVEN_REMOTE_INGEST_REQUIRED=true`. Canonical CBZs and publication
+  stay coordinator-owned. Worker q85/m4, two threads, one page/chapter and 2CPU/4GiB combine with Vault's one active
+  encoding lease. The private CA file is `SCRIPTARR_RAVEN_WORKER_CA_FILE`. No local encode fallback.
+- Conversion traffic uses `/api/internal/raven-ingest` through Sage. Content IDs hash recursively sorted compact
+  JSON `{titleId,chapterId,sourceSha256,profile}` with prefix `raven_webp_`; the exact profile is format/quality/method/
+  threads/pageConcurrency/maxDimension/segmentationVersion. Ordered archive entries are immutable spec data.
+- Claims use worker-generated idempotency IDs and transient lease secrets; only secret hashes persist. Renew every
+  20 seconds under a 120-second epoch fence. Only real segment/page increments advance `actualProgressAt`. Interactive
+  and bulk jobs outrank migration. Cancel uses the captured server coordinatorGeneration; claims retain it, while
+  owner promotion and approved retry rotate it. Never refetch a newer token solely to cancel.
+- Stream/extraction byte bounds, exact entries, hashes, dimensions and full decode precede artifact acceptance.
+  Submit releases the encode slot; result-ready/publishing jobs are not worker-reassigned. Vault atomically checks
+  epoch and checkpoints the final chapter at complete. Exact artifact/current catalog replays preserve lost responses.
+- WebP revisions use source SHA/profile, never CBZ mtime. Immutable output lives under
+  `ingested/<type>/<title>/<chapter>/<webp-revision>/`. Identical content in a new transfer epoch retains its files and
+  manifest. Different page/profile hashes cannot overwrite it. Existing AVIF identity and reads remain supported.
+- Logical pages retain source count/index. Two-dimensional segments cover every pixel, ≤16383 per side, with at most
+  1024 segments/page and a 300M-pixel bound. `segment` selects exact bytes; `thumbnail=true` is the whole first logical
+  page. Probes include both selectors. WebP-ready requires matching logical counts, all physical segments and thumbnail;
+  valid files alone do not make a failed/pending DTO ready.
+- Migration defaults disabled. Protected `/v1/ingest/migration/{start,pause,resume,retry,status}` persists intent in a
+  generic control job. Whole-library runs include ready AVIF, yield the fair title lock after each chapter, preserve old
+  readable state on failures, and leave failed title work for explicit retry. Pause lets the current chapter finish.
+- Scoped cleanup uses the Warden/Sage wrapper to `/v1/system/scoped-content-reset/{preview,apply}`. Resolve durable
+  plans to deduplicated catalog IDs and orphan roots; never assume plan count equals UUID count. Save the original
+  inventory locally in `.content-maintenance/<operation>.proof`, expose a compact preview, restore fences before startup
+  writers, and check actual queues/threads/processes before deleting. Replay permits missing reviewed entries but no
+  changed/new files. Preserve metadata/covers/aliases, user progress/follows, configuration and all run/task/job history.
+- Bulk metadata must anchor full original/provider-declared labels and editions, including empty placeholders.
+  `matchedQuery` and self-added catalog aliases are not anchors. Distinct sources cannot write shared metadata,
+  canonical or folder scopes; unresolved conflicts remain durable. Never use global reset for a scoped operation.
+
+## Other Raven contracts
+
 - Raven stays Java-first and now runs on Spring Boot with a Java 24 toolchain.
 - Raven owns downloader, library, metadata, PIA/OpenVPN download support, and provider orchestration.
 - Raven must not call Vault directly anymore. Shared settings, secrets, titles, chapters, metadata matches, and task
@@ -17,8 +57,8 @@
   metadata snapshot into the queued download, and report already-active, adult-content, no-metadata,
   ambiguous-metadata, and failed outcomes separately. For `nsfw:false`, queue only concrete WeebCentral targets whose
   detail page explicitly says `Adult Content: No`; skip adult and unknown adult flags.
-- `/downloadall` should skip already-completed catalog titles, append only missing or new chapters for existing
-  non-completed titles, skip already-current titles, and reject invalid/bare provider URLs before queueing. Append
+- `/downloadall` should skip only verified current local chapter sets, append missing or new chapters for existing
+  titles regardless of source publication status, and reject invalid/bare provider URLs before queueing. Append
   downloads must merge new archives into the existing title without replacing clean chapters.
 - Raven is the canonical tag merge point. Metadata-provider tags plus download-provider tags should be normalized and
   merged case-insensitively once inside Raven, preserved with clean display casing, and forwarded through Sage so Moon
@@ -48,8 +88,8 @@
   existing canonical CBZ archives, create durable per-title tasks, continue through individual title failures, and
   return the existing run id when the same type already has a queued or running rebuild. Startup recovery and duplicate
   same-type requests must reattach detached queued/running runs, preserve already failed title tasks, and continue only
-  unfinished queued or stale-running tasks. Legacy WebP-format active runs should be marked `superseded` before the
-  AVIF run starts. If duplicate active same-type durable runs are found at startup or scheduling time, keep the
+  unfinished queued or stale-running tasks. Older active runs with a different output format should be marked `superseded` before the
+  selected-format run starts. If duplicate active same-type durable runs are found at startup or scheduling time, keep the
   preferred run and mark the rest `superseded` before any title work can run for both.
 - Keep type-wide AVIF rebuilds on bounded fair title lanes (`SCRIPTARR_RAVEN_AVIF_TITLE_LANES`, default `2`, max `3`).
   Only leased run/tasks should be marked `running`; unfinished runs beyond the lane count should remain queued or
@@ -64,7 +104,7 @@
   supersede the stale active run and queue a fresh AVIF rebuild over canonical title ids only.
 - Keep `/v1/ingest` backlog and Appa preview/count paths lightweight. They should use compact title-card projections
   and must not pull full title records with chapter arrays just to count eligible library types.
-- Reader serving is AVIF-first. A chapter is readable only after ingest writes stable `p000001.avif`-style page slugs,
+- Reader serving supports saved AVIF and new WebP. A chapter is readable only after ingest writes stable `p000001.avif`-style page slugs,
   a `manifest.json`, and ready ingest metadata with a current `avif-` revision into the catalog.
 - Ingest failures keep the CBZ, delete only staged or derived ingest output, and surface as retryable Needs attention
   work with `recoveryAction: retry-ingest`.

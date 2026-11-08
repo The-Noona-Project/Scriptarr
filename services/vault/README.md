@@ -56,3 +56,32 @@ It also stores the Raven VPN settings, Raven metadata provider configuration, Or
 workflow settings including release notification channel id, and Oracle secrets used by the rest of the stack. Moon
 branding, uploaded WebP logo variants, release/downloadall notification acknowledgments, downloadall reaction prompt
 state, and admin toast preferences are normal Vault settings and survive content reset with other settings.
+
+Chapter conversion has a separate transactional store under the Sage-only `/api/service/raven-ingest` routes.
+Deterministic `raven_webp_<sha256>` identities bind the title, chapter, source archive SHA256, and fixed WebP profile.
+MySQL serializes claims through one InnoDB pool-row lock: the entire network has one encoding lease, lasting 120
+seconds with 20-second renewals. Claims retain durable replay receipts and hashed lease secrets; reassignment increments
+the epoch and rejects stale uploads, heartbeats, failures, and publication. Fresh interactive work precedes bulk work,
+which precedes migration. Joining fresh work can promote a queued migration without changing its content identity.
+Validated results release the encoding slot and remain recoverable until the coordinator atomically commits the final
+chapter and job completion. Generic job upserts are not substitutes for these fenced operations.
+Each create also receives a server-issued `spec.coordinatorGeneration`, separate from the immutable content identity.
+It survives worker claims and lease reassignments, and rotates on queued priority/ownership promotion or explicit retry.
+Coordinators cancel with the generation captured for their own execution, so a queued-to-claimed race can stop its
+worker while a delayed old cancellation cannot stop a newer approved retry. Exact create/retry replays retain the token;
+legacy explicit epoch cancellation remains supported.
+
+Existing AVIF chapters remain readable. WebP chapter checkpoints additionally retain `sourcePageCount`,
+`expectedSegmentCount`, `ingestedSegmentCount`, and `segmentsReady`; logical page counts never count physical tiles.
+Partial or legacy WebP output without a complete segment checkpoint is not reader-ready. Metadata-only updates preserve
+omitted segment fields in both memory and MySQL, and publication invalidates cached catalogue and reader projections.
+
+Selected-run cleanup uses the separate `content-reset/preview`, `begin`, `apply`, and `finish` conversion routes.
+Preview records exactly the selected durable plans and owned tasks, deduplicates canonical IDs, and retains the original
+filesystem inventory for crash recovery. A canonical title requires a persisted task/append reference or an exact
+selected source URL and library type; metadata aliases or similar names cannot expand deletion scope. Ambiguous source
+ownership fails closed. Begin requires the original run to be cancelled and fences canonical IDs and retired aliases.
+Apply requires Raven's exact quiescent filesystem-removal proof. It clears only scoped chapters, roots and content
+readiness/counters, retaining title/alias identities, metadata, covers, publication status, all user reading state,
+requests, jobs, download-task history, settings and credentials. Finish releases the fence. Replaying a finished apply
+never clears fresh content again. This scoped workflow does not call the older global content-reset operation.

@@ -23,6 +23,12 @@ MySQL.
 - Preserve service-to-service auth boundaries.
 - Sage is the supported caller for Vault's HTTP surface. Other first-party services should not bypass Sage.
 - Keep public docs concise and operational.
+- Conversion leases, epoch fences, result acceptance, and chapter-plus-job completion require the dedicated transactional
+  conversion store, including the global encoding pool lock. Generic job upserts cannot implement these transitions.
+- Scoped run cleanup must retain title/alias identities and all user/operational history. Authorize canonical scope only
+  from persisted task/append references or exact source/type identity; never expand it from metadata aliases or names.
+- WebP readiness requires complete logical pages and every physical segment. Preserve omitted segment checkpoint fields
+  during metadata-only catalogue writes; AVIF checkpoints stay compatible.
 - If user, role, permission, or request-model contracts change, update docs and tests in the same change.
 
 ## Coding Map

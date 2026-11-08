@@ -52,8 +52,13 @@
 - Duplicate request blockers should not create second visible rows in Moon. Show the duplicate outcome, link directly
   to the title when it already exists, and let Sage or Portal own the hidden waitlist and later ready notifications.
 - Moon should show honest empty states when Raven has no imported titles, and `/admin` should stay dark by default.
-- Keep `/admin/import` and `/admin/ingest` separate. Import is manual CBZ intake into a library; ingest is the AVIF
+- Keep `/admin/import` and `/admin/ingest` separate. Import is manual CBZ intake into a library; ingest is the WebP
   backlog, hardware status, completion stats, and retry page for CBZs that are not reader-ready yet.
+- Reader indexes, counts, bookmarks and progress refer to logical source pages. `pageSegments.js` validates complete
+  non-overlapping segment geometry; `ReaderLogicalImage` renders the composite and preload waits for every segment
+  decode. Preserve the legacy single-image path for existing AVIF. Segment and whole-page-thumbnail selectors belong
+  in both image cache identities and current-session status authorization. A tile-zero probe never authorizes another
+  tile or a whole-page thumbnail. WebP cover fallback requires the `thumbnail=true` first-page variant.
 - Keep Discord login as the only bootstrap and admin sign-in path. Do not reintroduce claim-dev-session behavior.
 - Preserve same-origin login return flow. Moon should pass a sanitized `returnTo` path into Sage's Discord auth URL,
   and the callback relay should send users back to the page where login started whenever that route is still allowed,

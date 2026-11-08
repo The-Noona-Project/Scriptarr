@@ -11,6 +11,7 @@ const UPDATABLE_SERVICE_ORDER = Object.freeze([
   "scriptarr-vault",
   "scriptarr-sage",
   "scriptarr-raven",
+  "scriptarr-raven-worker",
   "scriptarr-portal",
   "scriptarr-oracle",
   "scriptarr-moon"

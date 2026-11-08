@@ -2,6 +2,7 @@
  * @file Shared catalog cover projection and lazy first-page fallback selection.
  */
 import {createHash} from "node:crypto";
+import {hasReadyReaderRevision} from "./readerVariants.mjs";
 
 /**
  * Normalize an optional catalog text field without coercing objects or numbers.
@@ -50,7 +51,8 @@ export const buildLibraryCoverSource = (title = {}) => {
     .filter((chapter) => text(chapter.id)
       && chapter.available !== false
       && chapter.ingestStatus === "ready"
-      && /^avif-[a-f0-9]{16}$/.test(text(chapter.ingestRevision))
+      && /^(?:avif|webp)-[a-f0-9]{16}$/.test(text(chapter.ingestRevision))
+      && hasReadyReaderRevision(chapter)
       && Number.isInteger(chapter.pageCount) && chapter.pageCount > 0
       && chapter.ingestedPageCount >= chapter.pageCount)
     .sort((left, right) => {
@@ -74,7 +76,7 @@ export const buildLibraryCoverSource = (title = {}) => {
     coverRevision: fields.coverRevision,
     updatedAt: title.updatedAt || null,
     fallbackPagePath: first
-      ? `/api/moon-v3/user/reader/title/${encodeURIComponent(titleId)}/chapter/${encodeURIComponent(first.id)}/page/0?rev=${encodeURIComponent(first.ingestRevision)}`
+      ? `/api/moon-v3/user/reader/title/${encodeURIComponent(titleId)}/chapter/${encodeURIComponent(first.id)}/page/0?rev=${encodeURIComponent(first.ingestRevision)}${first.ingestRevision.startsWith("webp-") ? "&thumbnail=true" : ""}`
       : ""
   };
 };

@@ -4,7 +4,7 @@
 import {resolveClusterTopology} from "../config/clusterTopology.mjs";
 import {createClusterAgentClient} from "./clusterAgentClient.mjs";
 
-const UPDATABLE = new Set(["scriptarr-vault", "scriptarr-sage", "scriptarr-moon", "scriptarr-raven", "scriptarr-portal", "scriptarr-oracle"]);
+const UPDATABLE = new Set(["scriptarr-vault", "scriptarr-sage", "scriptarr-moon", "scriptarr-raven", "scriptarr-portal", "scriptarr-oracle", "scriptarr-raven-worker"]);
 const errorMessage = (error) => error instanceof Error ? error.message : String(error);
 
 /**
@@ -58,8 +58,8 @@ export const createClusterRuntime = ({env = process.env, local, client = createC
     };
   };
   const updates = async (operation, requested) => {
-    const selected = requested?.length ? [...new Set(requested)] : [...UPDATABLE];
-    if (selected.some((service) => !UPDATABLE.has(service))) {
+    const selected = requested?.length ? [...new Set(requested)] : [...UPDATABLE].filter(service => topology.owners[service]);
+    if (selected.some((service) => !UPDATABLE.has(service) || !topology.owners[service])) {
       const error = new Error("Only assigned first-party managed services can be updated.");
       error.status = 400;
       throw error;
@@ -110,6 +110,9 @@ export const createClusterRuntime = ({env = process.env, local, client = createC
       : topology.hosts.find((entry) => entry.id === host.hostId).services.map((name) => ({name, hostId: host.hostId, status: "unavailable", health: "unavailable", running: false, error: host.error})));
     return {
       ...runtime,
+      ingestDegraded: Boolean(topology.owners["scriptarr-raven-worker"]) && ![...(runtime.managedServices || []), ...remoteServices].some(service =>
+        service.name === "scriptarr-raven-worker" && service.running && service.health === "healthy" && service.managed
+        && !service.conflict && !(service.driftReasons || []).length),
       ...bootstrap(),
       storage: localStorage(runtime.storage || {}),
       managedServices: [...(runtime.managedServices || []).map((service) => ({...service, hostId: topology.hostId})), ...remoteServices],
@@ -139,7 +142,11 @@ export const createClusterRuntime = ({env = process.env, local, client = createC
       void remoteStates();
       const hosts = remoteHosts.map((host) => cachedHosts.find((entry) => entry.hostId === host.id)
         || {hostId: host.id, available: false, healthy: false, error: "Agent state has not yet been refreshed."});
-      return {...health, hostId: topology.hostId, degraded: hosts.some((host) => !host.available || !host.healthy), hosts: hosts.map(({hostId, available, healthy, error}) => ({hostId, available, healthy: Boolean(healthy), ...(error ? {error} : {})}))};
+      const ingestDegraded = topology.owners["scriptarr-raven-worker"] && hosts.some(host =>
+        host.hostId === topology.owners["scriptarr-raven-worker"] && (!host.available
+          || !(host.runtime?.managedServices || []).some(service => service.name === "scriptarr-raven-worker" && service.running && service.health === "healthy"
+            && service.managed && !service.conflict && !(service.driftReasons || []).length)));
+      return {...health, hostId: topology.hostId, ingestDegraded: Boolean(health.ingestDegraded || ingestDegraded), degraded: hosts.some((host) => !host.available || !host.healthy), hosts: hosts.map(({hostId, available, healthy, error}) => ({hostId, available, healthy: Boolean(healthy), ...(error ? {error} : {})}))};
     },
     getUpdates: () => updates("getUpdates"),
     checkUpdates: (services) => updates("checkUpdates", services),

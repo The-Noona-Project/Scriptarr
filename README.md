@@ -35,9 +35,10 @@ Keep Moon, Sage, Vault, MySQL, and Raven together when minimizing reader traffic
 run on a GPU host with a local Warden agent, while the primary Warden aggregates status and routes service updates.
 Remote control uses mutually authenticated TLS and an explicit host allowlist; Docker sockets remain local.
 
-Raven supports software AVIF ingest on hosts without NVIDIA AV1 encoding. A Quadro P2000 does not provide AV1 hardware
-encoding; choose the CPU encoder profile on that host and use conservative background concurrency. The reader still
-receives the same AVIF format. See [ServerAdmin.md](ServerAdmin.md) for placement, certificates, CPU ingest, and recovery.
+An optional ingestion worker can convert canonical CBZ chapters into WebP on a second host while downloads and
+library storage stay on the primary host. Oversized pages keep their full resolution and original reading positions;
+existing AVIF chapters remain readable during migration. See [ServerAdmin.md](ServerAdmin.md) for worker placement,
+certificates, restricted LAN access, resource limits, and recovery.
 
 Scriptarr no longer ships a compose-based deployment path in this repo. Each first-party service has its own
 `Dockerfile`, and the supported helper scripts are:
@@ -118,14 +119,15 @@ events keep only redacted slow/retry summaries.
 Moon admin calendar is now backed by Raven chapter release dates captured from provider scrapes plus metadata
 enrichment, and completed catalog titles get a dated completion marker when chapter dates are missing so finished
 series are not silently dropped from the calendar.
-Raven keeps CBZ chapters canonical under `downloaded/<type>/...` and now requires an AVIF ingest pass into
-`ingested/<type>/<titleId>/<chapterId>/` before reader pages become available. Moon admin keeps manual CBZ import at
-`/admin/import` and AVIF ingest backlog or retries at `/admin/ingest`; `/admin/library` links directly to both tools
+Raven keeps CBZ chapters canonical under `downloaded/<type>/...` and requires validated reader pages under
+`ingested/<type>/<titleId>/<chapterId>/` before new chapters become available. Worker-enabled deployments produce
+WebP, with existing AVIF supported during migration. Moon admin keeps manual CBZ import at
+`/admin/import` and reader-page backlog or retries at `/admin/ingest`; `/admin/library` links directly to both tools
 and can retry ingest for titles that are not reader-ready. `/admin/ingest` and `/admin/activity/queue` also show
-bounded durable AVIF type-run summaries so large background rebuilds are visible without loading every child title task.
-The admin `Start / rebuild all` action is an ingest-only clean restart: it supersedes active AVIF runs, keeps catalog
+bounded durable type-run summaries so large background rebuilds are visible without loading every child title task.
+The admin `Start / rebuild all` action is an ingest-only clean restart: it supersedes active rebuild runs, keeps catalog
 and CBZ data intact, starts fresh runs OEL-first with balanced Raven title lanes, and collapses duplicate active
-same-type AVIF runs back to one visible survivor after recovery.
+same-type runs back to one visible survivor after recovery.
 Moon admin also exposes `/admin/system/api` for trusted automation settings, system-level API keys with assigned
 permission groups, personal-key audit, and same-origin Swagger or OpenAPI links. Signed-in readers can create their
 own user-level API keys from `/profile` when they want external readers or trackers to sync only their account data.

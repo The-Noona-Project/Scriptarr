@@ -478,7 +478,7 @@ class LibraryServiceTest {
         service.ingestTitle(title.id(), "test");
 
         JsonNode task = brokerClient.listDownloadTasks().get(0);
-        assertEquals("AVIF ingest completed.", task.path("message").asText());
+        assertEquals("Reader-page ingest completed.", task.path("message").asText());
         assertFalse(task.path("startedAt").asText("").isBlank());
         assertFalse(task.path("updatedAt").asText("").isBlank());
         assertEquals(task.path("startedAt").asText(), task.path("details").path("startedAt").asText());
@@ -1074,7 +1074,7 @@ class LibraryServiceTest {
     }
 
     private LibraryChapter readyChapter(String id, String label, String chapterNumber, int pageCount, String releaseDate, String archivePath) {
-        return readyChapterWithRevision(id, label, chapterNumber, pageCount, releaseDate, archivePath, "avif-test-revision");
+        return readyChapterWithRevision(id, label, chapterNumber, pageCount, releaseDate, archivePath, "avif-1111111111111111");
     }
 
     private LibraryChapter readyChapterWithRevision(String id, String label, String chapterNumber, int pageCount, String releaseDate, String archivePath, String revision) {

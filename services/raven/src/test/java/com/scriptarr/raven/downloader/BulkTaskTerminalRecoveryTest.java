@@ -36,7 +36,7 @@ class BulkTaskTerminalRecoveryTest {
     void actualWorkerFailureFromQueuedShadowHealsOnceWithoutDispatch(@TempDir Path root) throws Exception {
         Broker broker = new Broker(); broker.failAfterInitial = true;
         try (Fixture f = new Fixture(root, broker)) {
-            DownloadRequest request = new DownloadRequest("Alpha", "https://weebcentral.com/series/alpha", "Manhua", "owner", "weebcentral", "",
+            DownloadRequest request = new DownloadRequest("Alpha", "https://weebcentral.com/series/8ED3F6AD685B959EAD7022518E", "Manhua", "owner", "weebcentral", "",
                 Map.of(), Map.of("expectedChapters", List.of(Map.of("chapter_number", "1"))), "", "normal");
             f.service.queueBulkOwned("task", "run", "batch", "plan", request);
             long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);

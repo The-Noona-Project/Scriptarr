@@ -141,7 +141,40 @@ With a topology configured, manage LocalAI through Oracle's embedded runtime in 
 standalone LocalAI configuration, install, start, and remove controls return HTTP `409`; they cannot create a sidecar
 outside the declared service ownership. Read-only diagnostics and legacy single-host controls remain available.
 
-### Software AVIF ingest
+### WebP coordinator and ingestion worker
+
+Keep the Raven coordinator on the storage host. Warden can place the optional `scriptarr-raven-worker` on a separate
+host using the same immutable Raven image with the `ingest-worker` role. Worker mode does not restore downloads, scan
+the library, run a VPN, or publish catalog entries. It receives chapter jobs through Sage and uses its own scratch
+storage; only the coordinator validates and publishes the resulting reader pages.
+
+The initial worker uses two CPU cores, 4 GiB of memory, two encoding threads, one chapter job, and one page at a time.
+The conversion pool grants only one encoding lease at once. New output is WebP quality 85/method 4. GPU access is not
+required, and Oracle's GPU/model settings are independent. Keep the existing six-title download limit unchanged.
+`/admin/ingest` shows worker readiness, queued conversions, active encoding and results awaiting publication. Jobs
+wait durably when the worker is unavailable; required-remote mode does not fall back to encoding on the storage host.
+
+Workers use a dedicated restricted service token and a verified HTTPS Sage URL. The optional worker-only Sage listener
+defaults to port 3444 and accepts the worker protocol only. Supply a dedicated server certificate/key using
+`SCRIPTARR_SAGE_WORKER_TLS_CERT_FILE` and `SCRIPTARR_SAGE_WORKER_TLS_KEY_FILE`, and mount only the trusted CA file into
+the worker using `SCRIPTARR_RAVEN_WORKER_CA_FILE`. Existing Sage HTTP port 3004 and existing service/TLS settings remain
+unchanged. Never disable certificate verification or share the coordinator token with a worker.
+Apply the current `scripts/deployment/lan-policy.sh core` policy before publishing the new listener: TCP 3444 on the
+primary LAN address accepts only the assigned worker host. The existing 3004 and 4401 rules remain in place; the
+worker publishes no inbound port.
+
+WebP's dimension limit is handled by lossless geometric segmentation, not shrinking text: oversized images become
+ordered WebP tiles, with the original logical page index retained for bookmarks and reading progress. All tiles must
+be validated before a page becomes ready. The first-page cover fallback uses a thumbnail of the full logical page.
+Existing AVIF chapters remain readable while low-priority migration jobs rebuild WebP from canonical CBZs. A missing
+or invalid CBZ needs repair; converting an already-lossy AVIF file is not a substitute for the original archive.
+Remote WebP migration starts disabled when there is no saved migration intent, so an initial deployment can finish
+scoped cleanup first. Warden-authenticated POSTs to Sage's
+`/api/internal/warden/raven/webp-migration/{start,pause,resume,retry,status}` control and inspect the durable migration.
+Start or resume only after cleanup; fresh downloads and user work take priority over migration between chapter jobs.
+Pausing retains canonical archives, readable revisions, and recorded outcomes.
+
+### Legacy software AVIF compatibility
 
 Use `SCRIPTARR_RAVEN_AVIF_ENCODER=cpu` on a host whose GPU does not encode AV1. `auto` tests usable NVIDIA AV1 encoding
 before choosing software; `nvenc` is strict and does not silently fall back. CPU mode does not require NVIDIA devices
@@ -369,7 +402,7 @@ chat even if an admin enabled them on the AI page.
 - review Raven download providers, with WeebCentral first by default and MangaDex available as a second normal source
 - set Raven's active title-download limit from `/admin/settings`; the value defaults to `2`, accepts `1` through `6`,
   applies live when Raven can reload it, and otherwise persists for the next Raven restart
-- import existing CBZ files into a library from `/admin/import`, then track the required AVIF ingest pass from
+- import existing CBZ files into a library from `/admin/import`, then track the required reader-page ingest pass from
   `/admin/ingest`
 - manage Moon branding from `/admin/settings`, including site name and a PNG, JPEG, or WebP logo that Scriptarr stores
   as WebP variants for user/admin chrome and install metadata
@@ -498,9 +531,9 @@ the Raven downloads mount, confirm title and chapter metadata, and Raven copies 
 CBZ page counts include supported images and exclude metadata such as `ComicInfo.xml`. Valid ready pages are retained
 when older inflated catalog counts are corrected. Startup scans preserve known chapter identities even when series
 names contain numbers or archive naming settings change.
-`/admin/ingest` is the AVIF backlog and recovery surface. It shows Raven's per-title ingest status, hardware state,
+`/admin/ingest` is the WebP backlog and recovery surface. It shows per-title ingest status, worker readiness,
 completion counts, and retry controls. Failed ingest keeps the CBZ in place and appears as retryable work instead of
-making the title readable. Its `Start / rebuild all` action asks Raven for a clean ingest restart: active AVIF runs are
+making the title readable. Its `Start / rebuild all` action asks Raven for a clean ingest restart: active rebuild runs are
 superseded quickly, old superseded run noise is hidden from normal summaries, and fresh runs start in OEL, Manhua,
 Manhwa, Manga, Webtoon, Comic
 order without deleting catalog rows, CBZ archives, requests, read state, follows, bookmarks, or user data. Raven uses
@@ -512,28 +545,26 @@ page also shows active and recent durable type-run summaries with state labels, 
 progress, title counts, resume/cancel controls, and ETA when Raven has enough data, without loading every child title
 task into the browser. If Raven recovers duplicate active durable runs for the same library type, it keeps the preferred
 run and marks the others superseded before the scheduler can work both.
-Appa can also start a type-wide AVIF rebuild from Discord with
+Appa can also start a type-wide reader-page rebuild from Discord with
 `/ingest type:<manga|manhwa|manhua|webtoon|comic|oel>`. The command previews title count from Raven's compact
 title-card projection plus Raven hardware state,
 requires a confirm button within five minutes, and then Sage asks Raven to create a durable `raven-library-ingest` run.
-The run rebuilds derived AVIF pages from existing canonical CBZ archives without redownloading chapters or changing
-metadata. Raven's NVIDIA runtime needs the `video` driver capability so FFmpeg `av1_nvenc` can load the host encode
-library. Appa DMs the confirming admin at 25%, 50%, 75%, and final completion or failure; missed milestones are not
+The run rebuilds derived WebP pages from existing canonical CBZ archives without redownloading chapters or changing
+metadata. Appa DMs the confirming admin at 25%, 50%, 75%, and final completion or failure; missed milestones are not
 replayed once the run is already terminal. If a run was created without a saved Discord requester, Sage falls back to
 the configured owner DM for those updates. If Discord says the saved requester can no longer receive DMs, Portal marks
 that specific notification undeliverable instead of retrying it every poll. If Raven restarts or temporarily loses the
 Sage/Vault broker during a type-wide rebuild, Raven reattaches the durable run, keeps already failed title tasks failed,
 resets stale running tasks, and continues unfinished title tasks instead of starting a duplicate run. Waiting runs are
-not fake-running; admin pages show them as waiting for the AVIF worker slot until the fair scheduler rotates to them.
-Per-title AVIF progress now checkpoints one chapter row at a time through Sage and Vault, so large titles do not rewrite
+not fake-running; admin pages show them as waiting for the conversion worker slot until the fair scheduler rotates to them.
+Per-title progress checkpoints one chapter row at a time through Sage and Vault, so large titles do not rewrite
 their entire chapter list after every converted chapter. Raven also skips unchanged ready chapters during retry and
-throttles progress updates so large titles do not spam the queue store. Page conversion runs with a bounded per-chapter
-window using `SCRIPTARR_RAVEN_AVIF_PAGE_CONCURRENCY` (default `4`, max `8`) and a shared global encoder pool using
-`SCRIPTARR_RAVEN_AVIF_ENCODER_SLOTS` (default `6`, max `8`) to keep the NVIDIA encoder busy without spawning unbounded
-FFmpeg workers. If a
+throttles progress updates so large titles do not spam the queue store. Remote page conversion uses the worker's
+bounded two-thread, single-page policy and the durable pool-wide encoding lease. If a
 checkpoint still exhausts its retry budget, the title appears in Needs attention with a retryable reader-page progress
 message instead of raw broker timeout text.
-Legacy WebP-format type runs are marked `superseded` before the AVIF run starts.
+Legacy run records and readable AVIF files remain available during the WebP transition; they are not deleted to
+make a new run appear successful.
 If a catalog duplicate merge changes the canonical title set for an active type run, Raven supersedes that stale run and
 starts a fresh run against canonical titles only.
 `/admin/users` is now the access-control workspace: a dense user directory, reusable permission-group editor, group
@@ -563,7 +594,7 @@ refreshes without a manual page reload even when WebSocket or SSE transport is d
 retry, retry-all, cancel, priority changes, and queued-task move up/down actions.
 Section bulk buttons can cancel all queued work, cancel all running work for `activity.root` admins, retry all
 recovery items, or remove all removable recovery items.
-Type-wide AVIF rebuilds appear in a separate library-run panel on the queue page; they are not counted as normal Raven
+Type-wide reader-page rebuilds appear in a separate library-run panel on the queue page; they are not counted as normal Raven
 title tasks and do not use the title-task retry/remove controls. The panel mirrors the ingest page states: Running
 current title, Waiting for worker slot, Needs recovery, Cancelling, or terminal, with resume and cancel controls where
 the run can accept them.
@@ -705,7 +736,7 @@ owner's DM. This selects one Manhua/T batch containing every eligible matching t
 batch count, not a twenty-title limit; the separate title-download concurrency setting still controls active work.
 
 A completed run requires complete discovery and successful publication of its queued chapters, including catalog
-persistence and ready AVIF pages. Provider failures, unresolved title tasks, and exhausted retries pause the run with
+persistence and complete ready reader pages. Provider failures, unresolved title tasks, and exhausted retries pause the run with
 recovery details. Continue retries unresolved work and preserves completed chapters. Cancel stops run-owned work while
 preserving finished archives. Healthy work waiting in the queue or progressing through CPU ingest does not expire
 merely because it has been waiting a long time.
@@ -823,11 +854,12 @@ Warden's own container mounts are:
 - `warden/logs -> /var/log/scriptarr`
 - `warden/runtime -> /var/lib/scriptarr`
 
-Raven's download tree now keeps CBZ archives canonical and AVIF reader pages derived under `raven/downloads/`:
+Raven's download tree keeps CBZ archives canonical and reader pages derived under `raven/downloads/`:
 
 - `downloading/<type-slug>/<title-folder>/...` for active or incomplete work
 - `downloaded/<type-slug>/<title-folder>/...` for completed promoted CBZ library content
-- `ingested/<type-slug>/<titleId>/<chapterId>/...` for reader-ready AVIF page folders and `manifest.json`
+- `ingested/<type-slug>/<titleId>/<chapterId>/webp-<revision>/...` for immutable WebP page segments and `manifest.json`
+- existing AVIF revision folders for chapters that have not completed WebP migration
 
 Raven also supports internal chapter and page naming templates through the brokered `raven.naming` setting. This pass
 keeps title-folder naming unchanged so rescans remain compatible with the current library model.
@@ -836,9 +868,10 @@ for manga, manhwa, manhua, webtoon, comic, and OEL downloads. The saved formats 
 archive rescans so Moon, Raven, and the on-disk layout stay aligned.
 Request records now persist the original search query, selected metadata snapshot, selected download snapshot, and any
 linked Raven job or task ids so Moon admin can moderate or retry the exact saved target later.
-Reader availability is AVIF-first. Normal downloads and manual CBZ imports must finish Raven ingest before the chapter
-is readable; the catalog row must carry a current `avif-` ingest revision. Failed ingest keeps the CBZ for retry and
-only removes staged or derived ingest files during cleanup.
+Normal downloads and manual CBZ imports must finish reader-page ingest and catalog persistence before the chapter
+is readable. New output carries a `webp-` ingest revision; existing healthy `avif-` revisions remain supported. WebP
+readiness requires every segment of every logical page. Failed conversion keeps the CBZ for retry, and migration
+keeps a previously readable revision available until the replacement is fully committed.
 Vault now also stores a durable request work key derived from the concrete download target when one exists, or from the
 metadata identity when no download match exists yet, and active duplicate work keys are rejected.
 Vault also stores Raven catalog keys and title aliases. Maintenance operators can preview and merge safe duplicate
@@ -855,6 +888,14 @@ off the shelf until new chapters arrive.
 Moon's content reset is content-only, not a factory reset. The root-only reset flow clears requests, work locks,
 progress, follows, reader bookmarks, Raven catalog or task state, and managed Raven download folders, but keeps users,
 permission groups, sessions, settings, secrets, and durable events.
+For an approved restart of one cancelled bulk run, use the separate Warden-authenticated scoped reset through Sage's
+`/api/internal/warden/raven/content-reset/preview` and `/apply` routes. The first preview requires the cancelled run ID,
+a unique operation ID, and exactly its selected plan IDs. Review both the durable scope digest and filesystem inventory
+digest before applying that operation. This path removes physical content for the selected plans, including existing
+content, and clears their chapter availability while retaining title IDs, metadata, covers, user state, and operational
+history. It rejects ambiguous ownership, shared unrelated paths, symlinks, changed inventory, and actual active writers.
+An interrupted apply retains maintenance fences; resume the same reviewed operation after diagnosing the interruption.
+Do not substitute the global content reset for a scoped restart.
 Raven now also runs up to two title downloads at once globally. Higher-priority work still starts first, queued-task
 reordering only affects work that has not started yet, and the live Moon queue reflects the two available running
 slots. Raven also persists real task start times and, when it can measure them credibly, live download speeds that

@@ -3,6 +3,7 @@
  */
 import {createHash, randomBytes} from "node:crypto";
 import {Readable} from "node:stream";
+import {hasReadyReaderRevision, readerPageRow, readerVariantQuery} from "./readerVariants.mjs";
 import {ADMIN_ACCESS_DOMAINS} from "@scriptarr/access";
 import {hasDomainAccess, hasPermission} from "./auth.mjs";
 import {
@@ -226,6 +227,8 @@ const sanitizeReaderPageProbePayload = (payload = {}, {fallbackStatus = 0, fallb
     ok: source.ok === true,
     status: status > 0 ? status : fallbackStatus,
     pageIndex: normalizeTelemetryInteger(source.pageIndex, fallbackPageIndex),
+    ...(Number.isSafeInteger(source.segmentIndex) && source.segmentIndex >= 0 ? {segmentIndex: source.segmentIndex} : {}),
+    ...(typeof source.thumbnail === "boolean" ? {thumbnail: source.thumbnail} : {}),
     contentTypeFamily: normalizeTelemetryLabel(source.contentTypeFamily, 40),
     contentLength: Math.max(0, normalizeTelemetryInteger(source.contentLength, 0)),
     cacheable: source.cacheable === true,
@@ -262,9 +265,7 @@ const normalizeIngestStatus = (value, fallback = "pending") => {
   const normalized = normalizeString(value, fallback).toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
   return ["ready", "running", "pending", "failed", "missing"].includes(normalized) ? normalized : fallback;
 };
-const READER_DERIVED_REVISION_PREFIX = "avif-";
-const hasCurrentReaderRevision = (chapter = {}) =>
-  normalizeString(chapter.ingestRevision).toLowerCase().startsWith(READER_DERIVED_REVISION_PREFIX);
+const hasCurrentReaderRevision = hasReadyReaderRevision;
 const isReadableChapter = (chapter = {}) =>
   chapter.available !== false
   && normalizeIngestStatus(chapter.ingestStatus) === "ready"
@@ -312,6 +313,7 @@ const toChapterSummary = (chapter = {}) => ({
   ingestStatus: normalizeIngestStatus(chapter.ingestStatus) === "ready" && !hasCurrentReaderRevision(chapter) ? "pending" : normalizeIngestStatus(chapter.ingestStatus),
   ingestRevision: normalizeString(chapter.ingestRevision),
   ingestedPageCount: Number.parseInt(String(chapter.ingestedPageCount || 0), 10) || 0,
+  ...Object.fromEntries(["sourcePageCount", "expectedSegmentCount", "ingestedSegmentCount", "segmentsReady"].filter(key => Object.hasOwn(chapter, key)).map(key => [key, chapter[key]])),
   ingestedAt: parseIso(chapter.ingestedAt),
   ingestError: normalizeString(chapter.ingestError),
   ingestManifestPath: normalizeString(chapter.ingestManifestPath),
@@ -447,23 +449,11 @@ const buildReaderPageRevision = ({title = {}, chapter = {}, pages = []} = {}) =>
 const buildReaderPageBase = (titleId, chapterId) =>
   `/api/moon/v3/user/reader/title/${encodeURIComponent(titleId)}/chapter/${encodeURIComponent(chapterId)}/page`;
 
-const withReaderPageRevision = (pageBase, index, revision) =>
-  `${pageBase}/${encodeURIComponent(String(index))}?rev=${encodeURIComponent(revision)}`;
-
 const toReaderPageRows = ({pages = [], pageBase = "", pageRevision = "", cursor = 0, pageSize = READER_PAGE_DEFAULT_SIZE} = {}) => {
   const rows = normalizeArray(pages);
   const start = Math.max(0, Math.min(parseReaderPageCursor(cursor), rows.length));
   const limit = parseReaderPageSize(pageSize);
-  const selected = rows.slice(start, start + limit).map((page, offset) => {
-    const pageIndex = Number.parseInt(String(page?.index ?? start + offset), 10);
-    const index = Number.isFinite(pageIndex) ? pageIndex : start + offset;
-    return {
-      ...page,
-      index,
-      label: normalizeString(page?.label, `Page ${index + 1}`),
-      src: withReaderPageRevision(pageBase, index, pageRevision)
-    };
-  });
+  const selected = rows.slice(start, start + limit).map((page, offset) => readerPageRow(page, {pageBase, revision: pageRevision, fallbackIndex: start + offset}));
   const nextCursor = start + selected.length;
   return {
     pages: selected,
@@ -1377,6 +1367,8 @@ export const registerMoonV3Routes = (app, {
     const pendingTitles = Number.parseInt(String(summary.pendingTitles ?? summary.pending ?? 0), 10) || 0;
     const failedTitles = Number.parseInt(String(summary.failedTitles ?? summary.failed ?? 0), 10) || 0;
     const runs = await normalizeIngestRunGroups(payload, requestOptions);
+    const pool = await vaultClient.ravenIngest?.("GET", "/pool").catch(() => null);
+    const conversionPool = pool?.status === 200 ? pool.payload : {capacity: 1, activeJobs: 0, queuedJobs: 0, resultReadyJobs: 0, publishingJobs: 0, workers: [], unavailable: true};
     return {
       ...payload,
       hardware,
@@ -1389,7 +1381,8 @@ export const registerMoonV3Routes = (app, {
         readyTitles,
         pendingTitles,
         failedTitles,
-        hardware
+        hardware,
+        conversionPool
       },
       titles: normalizeArray(payload.titles),
       runs
@@ -6136,16 +6129,7 @@ export const registerMoonV3Routes = (app, {
       pageCount: context.pageCount,
       pageRevision: context.pageRevision,
       manifest: manifestPayload,
-      pages: context.pages.map((page, offset) => {
-        const pageIndex = Number.parseInt(String(page?.index ?? offset), 10);
-        const index = Number.isFinite(pageIndex) ? pageIndex : offset;
-        return {
-          ...page,
-          index,
-          label: normalizeString(page?.label, `Page ${index + 1}`),
-          src: withReaderPageRevision(context.pageBase, index, context.pageRevision)
-        };
-      }),
+      pages: context.pages.map((page, offset) => readerPageRow(page, {pageBase: context.pageBase, revision: context.pageRevision, fallbackIndex: offset})),
       progress: context.progress,
       bookmarks: context.bookmarks,
       preferences: context.preferences
@@ -6153,13 +6137,15 @@ export const registerMoonV3Routes = (app, {
   }));
 
   app.get("/api/moon-v3/user/reader/title/:titleId/chapter/:chapterId/page/:pageIndex/status", withUser(requireUser, async (req, res) => {
+    let variant;
+    try { variant = readerVariantQuery(req.query); } catch (error) { res.status(400).json({error: error.message}); return; }
     const startedAt = Date.now();
     const pageIndex = Number.parseInt(String(req.params.pageIndex || "-1"), 10);
     res.setHeader("Cache-Control", "no-store");
     try {
       const result = await serviceJson(
         config.ravenBaseUrl,
-        `/v1/reader/${encodeURIComponent(req.params.titleId)}/${encodeURIComponent(req.params.chapterId)}/page/${encodeURIComponent(req.params.pageIndex)}/status`,
+        `/v1/reader/${encodeURIComponent(req.params.titleId)}/${encodeURIComponent(req.params.chapterId)}/page/${encodeURIComponent(req.params.pageIndex)}/status${variant}`,
         {timeoutMs: 5000}
       );
       res.status(result.status >= 500 ? 502 : 200).json(sanitizeReaderPageProbePayload(result.payload, {
@@ -6184,6 +6170,8 @@ export const registerMoonV3Routes = (app, {
   }));
 
   app.get("/api/moon-v3/user/reader/title/:titleId/chapter/:chapterId/page/:pageIndex", withUser(requireUser, async (req, res) => {
+    let variant;
+    try { variant = readerVariantQuery(req.query); } catch (error) { res.status(400).json({error: error.message}); return; }
     const controller = new AbortController();
     let stream = null;
     let finished = false;
@@ -6207,7 +6195,7 @@ export const registerMoonV3Routes = (app, {
     let response;
     try {
       response = await fetch(
-        `${config.ravenBaseUrl}/v1/reader/${encodeURIComponent(req.params.titleId)}/${encodeURIComponent(req.params.chapterId)}/page/${encodeURIComponent(req.params.pageIndex)}`,
+        `${config.ravenBaseUrl}/v1/reader/${encodeURIComponent(req.params.titleId)}/${encodeURIComponent(req.params.chapterId)}/page/${encodeURIComponent(req.params.pageIndex)}${variant}`,
         {
           headers: {"Accept": "image/avif,image/webp,image/png,image/jpeg,image/svg+xml,*/*;q=0.2"},
           signal: controller.signal
@@ -6233,6 +6221,10 @@ export const registerMoonV3Routes = (app, {
     }
     if (lastModified) {
       res.setHeader("Last-Modified", lastModified);
+    }
+    for (const name of ["x-scriptarr-segment-index", "x-scriptarr-thumbnail"]) {
+      const value = response.headers.get(name);
+      if (value != null) res.setHeader(name, value);
     }
     if (!response.body) {
       cleanup();

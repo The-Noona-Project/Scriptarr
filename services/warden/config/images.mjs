@@ -32,6 +32,9 @@ export const resolveImageTag = ({env = process.env} = {}) =>
  */
 export const resolveServiceImage = (serviceName, {env = process.env} = {}) => {
   const overrideKey = `${String(serviceName).toUpperCase().replace(/-/g, "_")}_IMAGE`;
+  if (serviceName === "scriptarr-raven-worker") {
+    return normalizeString(env[overrideKey]) || resolveServiceImage("scriptarr-raven", {env});
+  }
   return normalizeString(env[overrideKey]) || `${resolveImageNamespace({env})}/${serviceName}:${resolveImageTag({env})}`;
 };
 

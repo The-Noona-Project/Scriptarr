@@ -145,6 +145,11 @@ public class DownloadIntakeService {
      * @return bulk metadata resolution outcome
      */
     public BulkMetadataResolution resolveBulkMetadata(String providerId, String titleUrl, String titleName, String requestedType) {
+        return resolveBulkMetadata(providerId, titleUrl, titleName, requestedType, List.of());
+    }
+
+    /** @param providerId source provider @param titleUrl exact source target @param titleName complete source title @param requestedType actual source type @param sourceAliases provider-declared aliases @return confident original-source-anchored metadata only */
+    public BulkMetadataResolution resolveBulkMetadata(String providerId, String titleUrl, String titleName, String requestedType, List<String> sourceAliases) {
         String normalizedProviderId = stringValue(providerId);
         String normalizedTitleUrl = stringValue(titleUrl);
         String normalizedTitleName = stringValue(titleName);
@@ -154,8 +159,10 @@ public class DownloadIntakeService {
         }
 
         Map<String, BulkMetadataCandidate> groupedCandidates = new LinkedHashMap<>();
+        boolean unanchored = false;
         for (Map<String, Object> metadataResult : metadataService.search(normalizedTitleName, null)) {
             Map<String, Object> metadataSnapshot = buildMetadataSnapshot(metadataResult);
+            if (!BulkMetadataAnchor.matches(normalizedTitleName, sourceAliases, metadataSnapshot)) { unanchored = true; continue; }
             Map<String, Object> downloadSnapshot = resolveDownloadSnapshot(normalizedTitleName, metadataSnapshot);
             if (!sameDownloadTarget(normalizedProviderId, normalizedTitleUrl, downloadSnapshot)) {
                 continue;
@@ -174,7 +181,7 @@ public class DownloadIntakeService {
         }
 
         if (groupedCandidates.isEmpty()) {
-            return BulkMetadataResolution.unmatchedResult();
+            return unanchored ? BulkMetadataResolution.ambiguousResult() : BulkMetadataResolution.unmatchedResult();
         }
 
         List<BulkMetadataCandidate> rankedCandidates = groupedCandidates.values().stream()

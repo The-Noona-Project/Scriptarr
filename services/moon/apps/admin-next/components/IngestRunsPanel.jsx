@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * @file Durable AVIF ingest-run summaries shared by Moon admin pages.
+ * @file Durable reader-page ingest-run summaries shared by Moon admin pages.
  */
 
 import {formatDate, formatEta, formatPercent, normalizeString} from "../lib/format.js";
@@ -109,7 +109,7 @@ const RunProgress = ({run}) => {
 };
 
 /**
- * Render durable AVIF ingest-run summaries without title-task controls.
+ * Render durable reader-page ingest-run summaries without title-task controls.
  *
  * @param {{
  *   runs: Array<Record<string, any>> | {active?: Array<Record<string, any>>, recent?: Array<Record<string, any>>},
@@ -126,10 +126,10 @@ const RunProgress = ({run}) => {
  */
 export const IngestRunsPanel = ({
   runs,
-  title = "AVIF runs",
+  title = "Reader-page runs",
   kicker = "Library ingest",
   includeRecent = true,
-  empty = "No durable AVIF ingest runs are active right now.",
+  empty = "No durable reader-page ingest runs are active right now.",
   canWrite = false,
   busyRunId = "",
   onResume,

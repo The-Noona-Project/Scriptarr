@@ -34,6 +34,7 @@ import ReaderControls from "./ReaderControls.jsx";
 import GlobalLoadingOverlay from "./GlobalLoadingOverlay.jsx";
 import ReaderSettings from "./ReaderSettings.jsx";
 import ReaderStage from "./ReaderStage.jsx";
+import {readerPageImageKey} from "../lib/pageSegments.js";
 import {ReaderInitialSkeleton} from "./ReaderSkeleton.jsx";
 
 const PAGE_CHUNK_SIZE = 18;
@@ -475,7 +476,7 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = "", initialSessi
         return null;
       }
       return () => {
-        const warmKey = `${session.chapter.id}:${page.index}:${page.src}`;
+        const warmKey = `${session.chapter.id}:${page.index}:${readerPageImageKey(page)}`;
         const current = imageWarmStateRef.current.get(warmKey);
         if (current?.status === "ready") {
           return Promise.resolve({index: page.index, ok: true, cached: true});

@@ -260,3 +260,18 @@
 - Service-originated async changes from Raven, Portal, or Warden should append immutable summary events through Sage's
   internal broker routes after the authoritative mutation succeeds so `/admin/users`, `/admin/requests`, and
   `/admin/system/events` all reflect the same truth.
+
+- Conversion workers use a distinct `scriptarr-raven-worker` token over verified HTTPS 3444 only. Keep HTTP 3004 intact.
+  `workerTlsServer.mjs` allowlists only worker routes; `registerRavenIngestBroker.mjs` enforces principal and current
+  lease before binary streaming to main Raven. Forward Raven's coordinator token only upstream, never in worker JSON.
+  Worker access excludes arbitrary jobs/settings, catalogue writes, migration and destructive maintenance operations.
+- The broker's create/claim/heartbeat/submit/publish/complete/fail/cancel/retry transitions must use Vault's dedicated
+  fenced store, not generic job upserts. A completed chapter and conversion receipt commit atomically. Keep global
+  encoding capacity one, claim replay IDs, lease epochs, actual logical/physical progress, and worker codec self-test
+  liveness visible in compact `summary.conversionPool` without hydrating catalogue titles.
+- Warden's scoped reset wrapper proxies fixed preview/apply operations only. Preserve the original immutable inventory
+  by operation ID, enforce begin/apply/finish maintenance fences, and never reset users, reading history, old jobs,
+  approval/delivery receipts or unrelated content. Migration control is a separate explicit Warden-only operation.
+- Reader byte and status routes must preserve exact revision/segment/thumbnail selectors and identity headers. Do not
+  invent missing warm-probe identity. Reject malformed variants before upstream fetch. Keep logical pages distinct from
+  ordered physical segments, and request a whole logical thumbnail for first-page WebP cover fallback.
