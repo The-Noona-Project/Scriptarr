@@ -171,6 +171,27 @@ class BulkRunServiceTest {
         assertEquals("paused", fixture.service.status(runId).get("status"));
     }
 
+    /** Lifecycle persistence repair waits for restore and never starts paused or cancelled runs from a status read. */
+    @Test
+    void dirtyTerminalFlushRunsAfterRestoreWithoutStartingPausedOrCancelledWork() {
+        Fixture fixture = fixture();
+        String runId = fixture.create(Map.of("start", false));
+        fixture.broker.setStatus(runId, "paused");
+        fixture.gateway.restored = new CompletableFuture<>();
+        fixture.service.status(runId);
+        fixture.service.reconcileInterruptedRuns();
+        verify(fixture.downloader, never()).reconcileFailedBulkTaskPersistence();
+        fixture.gateway.restored.complete(null);
+        fixture.service.reconcileInterruptedRuns();
+        verify(fixture.downloader, times(1)).reconcileFailedBulkTaskPersistence();
+        assertEquals("paused", fixture.service.status(runId).get("status"));
+        fixture.broker.setStatus(runId, "cancelled");
+        fixture.service.reconcileInterruptedRuns();
+        verify(fixture.downloader, times(2)).reconcileFailedBulkTaskPersistence();
+        assertEquals("cancelled", fixture.service.status(runId).get("status"));
+        assertEquals(0, fixture.gateway.queueCalls.get());
+    }
+
     /** One malformed legacy run must not block later jobs or make subsequent recovery passes unusable. */
     @Test
     void malformedLegacyRunDoesNotStopThisOrLaterRecoveryPasses() throws Exception {

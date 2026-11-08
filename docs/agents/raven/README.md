@@ -98,6 +98,13 @@
 - Keyed creation repairs missing deterministic batch rows without resetting progress; conflicting owner/filter reuse
   returns 409. Status GETs are observational. Startup and 30-second reconciliation wait for full title-task restoration
   and recover only running or explicitly started queued runs, preserving paused and cancelled states.
+- Before filtering run status, that restore-gated lifecycle pass calls the downloader's synchronized terminal
+  reconciliation. `BulkTaskTerminalRecovery` accepts only failed dirty local bulk snapshots with no executor, queued
+  runnable, dispatch reservation or pending cancellation. Match durable owner/plan, frozen request, queued timestamp
+  and retry receipt; a blank durable start is valid when its first running write never committed. Reject another
+  nonblank start, newer receipt/time or terminal result. Redo all three broker checkpoints, including generic jobs,
+  before clearing the dirty flag. Keep unpersisted failed evidence beyond the UI's 200-terminal history limit.
+  This operation does not schedule downloads, change parent status, rotate approvals or reset attempt counters.
 - Read terminal outcomes from durable records beyond the local 200-task history. Queue age is not a stall. Use actual
   download and per-page ingest progress, preserving encoder waits. Completion requires every planned chapter, healthy
   canonical CBZs, persisted catalog rows, and reusable ready AVIF manifests; reuse archives during interrupted append
