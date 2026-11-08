@@ -14,6 +14,7 @@ import {formatDate, formatProgress} from "../../lib/date.js";
 import {Button, Flex} from "../UiPrimitives.jsx";
 import {useMoonChrome} from "../MoonChromeContext.jsx";
 import {AuthRequiredView, EmptyView, ErrorView} from "../StateView.jsx";
+import CoverImage from "../CoverImage.jsx";
 
 const CHAPTER_PAGE_SIZE = 40;
 const CHAPTER_PAGE_SIZE_MAX = 100;
@@ -550,11 +551,12 @@ export const TitlePageClient = ({titleId, typeSlug = ""}) => {
         <section className="moon-title-detail-hero">
           <div className="moon-title-cover-column">
             <div className="moon-title-cover">
-              {title.coverUrl ? (
-                <img src={title.coverUrl} alt={`${title.title} cover`} loading="lazy" referrerPolicy="no-referrer" />
-              ) : (
-                <div className="moon-title-card-fallback"><span>{title.title.charAt(0)}</span></div>
-              )}
+              <CoverImage
+                title={title.title}
+                coverUrl={title.coverUrl || ""}
+                coverThumbUrl={title.coverThumbUrl || ""}
+                fallbackClassName="moon-title-card-fallback"
+              />
             </div>
             <div className="moon-title-read-meter">
               <span>{formatProgress(readRatio)}</span>

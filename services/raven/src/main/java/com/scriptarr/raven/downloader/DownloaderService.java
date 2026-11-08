@@ -1182,7 +1182,18 @@ public class DownloaderService {
         }
     }
 
+    /**
+     * Retain saved request artwork and apply selected metadata when its provider identity is available.
+     *
+     * @param title current catalog title
+     * @param request frozen intake request used for the download or archive recovery
+     * @return title with retained artwork and any applicable selected metadata
+     */
     private LibraryTitle persistSelectedMetadata(LibraryTitle title, DownloadRequest request) {
+        if (title != null && !normalizeString(title.id()).isBlank() && normalizeString(title.coverUrl()).isBlank() && !resolveCoverUrl(request).isBlank()) {
+            LibraryTitle retained = libraryService.retainCoverUrl(title.id(), resolveCoverUrl(request));
+            if (retained != null) title = retained;
+        }
         Map<String, Object> selectedMetadata = normalizeMap(request.selectedMetadata());
         String provider = stringValue(selectedMetadata.get("provider"));
         String providerSeriesId = stringValue(selectedMetadata.get("providerSeriesId"));

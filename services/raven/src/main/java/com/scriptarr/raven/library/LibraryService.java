@@ -324,6 +324,24 @@ public final class LibraryService {
     }
 
     /**
+     * Fill missing title artwork without replacing chapters or existing artwork.
+     *
+     * @param titleId existing catalog identity
+     * @param coverUrl cover retained in a saved download request
+     * @return current title, including its unchanged chapter and ingest state
+     */
+    public synchronized LibraryTitle retainCoverUrl(String titleId, String coverUrl) {
+        LibraryTitle existing = findTitleById(titleId);
+        if (existing == null || !stringValue(existing.coverUrl()).isBlank() || stringValue(coverUrl).isBlank()) {
+            return existing;
+        }
+        LibraryTitle updated = existing.withCoverUrl(coverUrl.trim());
+        upsertTitle(updated);
+        LibraryTitle persisted = findTitleById(titleId);
+        return persisted == null ? updated : persisted;
+    }
+
+    /**
      * Replace a title's stored chapter list.
      *
      * @param titleId stable title id
@@ -911,7 +929,7 @@ public final class LibraryService {
             objectMapper.convertValue(details.getOrDefault("relations", existing.relations()), new TypeReference<List<Map<String, String>>>() {
             }),
             existing.sourceUrl(),
-            existing.coverUrl(),
+            firstNonBlank(existing.coverUrl(), stringValue(details.get("coverUrl"))),
             existing.workingRoot(),
             existing.downloadRoot(),
             Optional.ofNullable(existing.chapters()).orElse(List.of()),

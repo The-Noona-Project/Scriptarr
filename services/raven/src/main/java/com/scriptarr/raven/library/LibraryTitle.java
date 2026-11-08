@@ -41,6 +41,20 @@ public record LibraryTitle(
     String updatedAt
 ) {
     /**
+     * Copy this title with different cover metadata, retaining all chapter and ingest state.
+     *
+     * @param nextCoverUrl chosen cover URL
+     * @return title with the same persisted identity and content state
+     */
+    public LibraryTitle withCoverUrl(String nextCoverUrl) {
+        return new LibraryTitle(id, title, mediaType, libraryTypeLabel, libraryTypeSlug, status, latestChapter,
+            coverAccent, summary, releaseLabel, chapterCount, chaptersDownloaded, author, tags, aliases,
+            metadataProvider, metadataMatchedAt, relations, sourceUrl, nextCoverUrl, workingRoot, downloadRoot,
+            chapters, qualityStatus, cleanChapterCount, partialChapterCount, missingContentCount, qualitySummary,
+            ingestStatus, ingestedChapterCount, ingestError, updatedAt);
+    }
+
+    /**
      * Backward-compatible constructor for titles without explicit quality
      * metadata.
      */

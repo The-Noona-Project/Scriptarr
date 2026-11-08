@@ -735,8 +735,11 @@ safely reconciled surface an operator recovery condition instead of repeatedly s
 Moon user browse/library pages use compact paginated title-card reads, and title pages use summary plus paged chapter
 reads, so large libraries do not send chapter arrays or Raven filesystem roots to the browser. Cover images are cached
 by Moon as derived WebP files under the Moon cover-cache storage folder. The
-Tasks page has an `Optimize cover images` action that scans Sage-approved cover URLs, converts missing or stale cache
-entries, and is safe to rerun.
+Tasks page has an `Optimize cover images` action that scans Sage-approved artwork, converts missing or stale cache
+entries, and is safe to rerun. Titles retain provider cover art when downloads resume from existing archives.
+If a cover is missing or cannot be loaded, Moon uses the first page of the earliest readable chapter as the cover.
+That fallback becomes available after reader processing finishes for a chapter and follows the same sign-in checks
+as reader pages; it does not modify reading progress or replace the canonical archives.
 Vault deduplicates compact title cards before counts, letter totals, sorting, and pagination, and old duplicate title
 ids resolve through catalog aliases so stale title or reader links land on the canonical title instead of 404ing.
 Portal also sends requester DMs when a moderated request is approved, denied, or finishes downloading, and dedupes

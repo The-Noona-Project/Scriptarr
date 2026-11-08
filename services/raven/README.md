@@ -119,6 +119,9 @@ Vault's title-only projection, preserves requested exact-id ordering for activit
 reader routes as the detail paths.
 Raven now also treats cover art as first-class title metadata, carries it through intake, queue state, and library
 records, and exposes the same imagery Moon and Portal reuse in their UIs and embeds.
+Recovery also restores missing cover metadata from the saved download request, including source-only artwork,
+while preserving existing covers, canonical archives and ready reader pages. Append requests retain artwork already
+found during source browsing when no cover was selected earlier.
 Raven now also preserves chapter release dates from provider chapter scrapes and blends in richer title-level release
 labels from metadata providers, which Moon admin reuses for its library and calendar views.
 Raven now also normalizes lifecycle status from both source scrapes and metadata providers, including completed or
