@@ -195,22 +195,22 @@ public final class RemoteChapterProcessor {
     public LibraryChapter complete(Result result, LibraryChapter chapter) throws Exception {
         JsonNode currentJob = unwrap(client.json("GET", "/jobs/" + result.jobId(), null, null));
         Map<String, Object> payload = json.convertValue(chapter, new com.fasterxml.jackson.core.type.TypeReference<>() { });
+        payload.putAll(DerivedPageManifest.catalogFields(chapter));
+        LibraryChapter expected = json.convertValue(payload, LibraryChapter.class);
         Map<String, Object> request;
         if ("completed".equals(currentJob.path("status").asText())) {
             if (currentJob.path("lease").path("epoch").asLong() != result.epoch() || !result.artifactSha256().equals(currentJob.path("result").path("artifact").path("sha256").asText())) throw new IOException("Completed conversion belongs to another fenced artifact.");
             JsonNode title = catalog.getLibraryTitle(currentJob.path("spec").path("input").path("titleId").asText());
             JsonNode current = null;
             for (JsonNode row : title.path("chapters")) if (chapter.id().equals(row.path("id").asText())) current = row;
-            if (acknowledged(current, chapter)) return json.treeToValue(current, LibraryChapter.class);
-            payload.putAll(DerivedPageManifest.catalogFields(chapter));
+            if (acknowledged(current, expected)) return json.treeToValue(current, LibraryChapter.class);
             request = CompletedArtifactRepair.request(currentJob, current, payload);
         } else {
-            payload.putAll(DerivedPageManifest.catalogFields(chapter));
             request = Map.of("epoch", result.epoch(), "artifactSha256", result.artifactSha256(), "chapter", payload);
         }
         JsonNode response = client.json("POST", "/jobs/" + result.jobId() + "/complete", request, null);
         LibraryChapter saved = json.treeToValue(response.path("chapter"), LibraryChapter.class);
-        if (!acknowledged(response.path("chapter"), chapter)) throw new IOException("The fenced chapter checkpoint was not acknowledged.");
+        if (!acknowledged(response.path("chapter"), expected)) throw new IOException("The fenced chapter checkpoint was not acknowledged.");
         return saved;
     }
 

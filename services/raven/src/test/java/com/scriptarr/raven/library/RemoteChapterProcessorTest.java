@@ -67,7 +67,8 @@ class RemoteChapterProcessorTest {
 
     /** Completed exact replay reads the current chapter and does not write a changed timestamp or spend another execution. */
     @Test void acceptedCompletionReplayDoesNotWriteAgain(@TempDir Path root) throws Exception {
-        try (Fixture f = new Fixture(root)) {
+        try (Fixture f = new Fixture(root); var manifest = mockStatic(DerivedPageManifest.class)) {
+            manifest.when(() -> DerivedPageManifest.catalogFields(f.chapter)).thenReturn(Map.of());
             f.job.put("status", "completed"); f.job.set("result", f.json.valueToTree(Map.of("artifact", Map.of("sha256", "a".repeat(64)))));
             RemoteChapterProcessor.Result result = new RemoteChapterProcessor.Result(f.id, 1, "a".repeat(64), null, null);
             assertEquals(f.chapter, f.processor.complete(result, f.chapter)); assertEquals(0, f.completes.get());
@@ -75,8 +76,8 @@ class RemoteChapterProcessorTest {
         }
     }
 
-    /** A validated completed artifact repairs only its failed current checkpoint through the existing fenced HTTP route. */
-    @Test void completedArtifactRepairsFailedCatalogWithoutAnotherExecution(@TempDir Path root) throws Exception {
+    /** A retry caller retains failed segment readiness until actual manifest validation supplies authoritative ready evidence. */
+    @Test void completedArtifactNormalizesRetainedFailedSegmentReadiness(@TempDir Path root) throws Exception {
         try (Fixture f = new Fixture(root); var manifest = mockStatic(DerivedPageManifest.class)) {
             ObjectNode original = f.json.valueToTree(f.chapter);
             original.put("archivePath", "/downloads/downloaded/manga/Fixture/chapter.cbz")
@@ -87,14 +88,17 @@ class RemoteChapterProcessorTest {
                 .put("qualityStatus", "possible_missing_page").put("missingPageCount", 1);
             current.putArray("missingPages").add(1); current.putArray("qualityNotes").add("Retained reader quality evidence."); current.putObject("futureMetadata").putNull("retained");
             f.catalog.putLibraryChapters("title", Map.of("chapters", List.of(f.json.convertValue(current, Map.class))));
-            ObjectNode desired = current.deepCopy(); desired.put("ingestStatus", "ready").put("ingestError", "").put("segmentsReady", true);
+            ObjectNode desired = current.deepCopy(); desired.put("ingestStatus", "ready").put("ingestError", "");
             LibraryChapter checkpoint = f.json.treeToValue(desired, LibraryChapter.class);
+            assertEquals(Boolean.FALSE, checkpoint.segmentsReady(), "The real retry copy retains the prior failed checkpoint flag.");
             manifest.when(() -> DerivedPageManifest.catalogFields(checkpoint)).thenReturn(Map.of("sourcePageCount", 1, "expectedSegmentCount", 1, "ingestedSegmentCount", 1, "segmentsReady", true));
             RemoteChapterProcessor.Result result = new RemoteChapterProcessor.Result(f.id, 1, "a".repeat(64), null, null);
             LibraryChapter saved = f.processor.complete(result, checkpoint);
-            assertEquals("ready", saved.ingestStatus()); assertEquals(current.path("qualityNotes"), f.completedBody.get().path("chapter").path("qualityNotes"));
+            assertEquals("ready", saved.ingestStatus()); assertEquals(Boolean.TRUE, saved.segmentsReady()); assertEquals(current.path("qualityNotes"), f.completedBody.get().path("chapter").path("qualityNotes"));
+            assertEquals(Boolean.FALSE, checkpoint.segmentsReady(), "Validation must not mutate the caller's retained state.");
             assertEquals("execution-old", f.completedBody.get().path("expectedCoordinatorGeneration").asText());
-            Map<String, Object> expected = CompletedArtifactRepair.request(f.job, current, f.json.convertValue(checkpoint, Map.class));
+            Map<String, Object> validated = f.json.convertValue(checkpoint, Map.class); validated.putAll(DerivedPageManifest.catalogFields(checkpoint));
+            Map<String, Object> expected = CompletedArtifactRepair.request(f.job, current, validated);
             assertEquals(f.json.valueToTree(expected).path("repair"), f.completedBody.get().path("repair"));
             assertEquals(1, f.completes.get()); assertEquals(0, f.submits.get()); assertNull(f.created.get());
             f.catalog.putLibraryChapters("title", Map.of("chapters", List.of(f.json.convertValue(saved, Map.class))));
@@ -102,6 +106,10 @@ class RemoteChapterProcessorTest {
             ObjectNode changed = current.deepCopy(); changed.put("archivePath", "/downloads/downloaded/manga/Other/chapter.cbz");
             f.catalog.putLibraryChapters("title", Map.of("chapters", List.of(f.json.convertValue(changed, Map.class))));
             assertThrows(Exception.class, () -> f.processor.complete(result, checkpoint)); assertEquals(1, f.completes.get());
+            f.catalog.putLibraryChapters("title", Map.of("chapters", List.of(f.json.convertValue(current, Map.class))));
+            f.invalidCompletionAck = true;
+            assertThrows(java.io.IOException.class, () -> f.processor.complete(result, checkpoint), "A false broker acknowledgment must still fail against validated readiness.");
+            assertEquals(2, f.completes.get()); assertEquals(0, f.submits.get());
         }
     }
 
@@ -157,6 +165,7 @@ class RemoteChapterProcessorTest {
         private final AtomicInteger submits = new AtomicInteger(), completes = new AtomicInteger();
         private final AtomicInteger cancelEpoch = new AtomicInteger(-1);
         private boolean rotateOnCancel = true;
+        private boolean invalidCompletionAck;
 
         /** @param root isolated storage @throws Exception when local fixture creation fails */
         private Fixture(Path root) throws Exception {
@@ -185,7 +194,9 @@ class RemoteChapterProcessorTest {
                 if (path.endsWith("/submit")) submits.incrementAndGet();
                 if (path.endsWith("/complete")) {
                     completes.incrementAndGet(); completedBody.set(body);
-                    byte[] bytes = json.writeValueAsBytes(Map.of("job", job, "chapter", body.path("chapter")));
+                    ObjectNode acknowledgment = body.path("chapter").deepCopy();
+                    if (invalidCompletionAck) acknowledgment.put("segmentsReady", false);
+                    byte[] bytes = json.writeValueAsBytes(Map.of("job", job, "chapter", acknowledgment));
                     exchange.getResponseHeaders().set("Content-Type", "application/json"); exchange.sendResponseHeaders(200, bytes.length); exchange.getResponseBody().write(bytes); exchange.close(); return;
                 }
             }
