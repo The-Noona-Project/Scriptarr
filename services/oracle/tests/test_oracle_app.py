@@ -5,6 +5,7 @@ from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from fastapi.testclient import TestClient
 
 from oracle_service.app import create_app
@@ -215,6 +216,24 @@ def build_config() -> OracleConfig:
         llm_timeout_seconds=60.0,
         noona_persona_name="Noona"
     )
+
+
+def test_lan_api_requires_service_token_but_health_remains_available():
+    config = replace(build_config(), require_service_auth=True, service_token="oracle-private")
+    app = create_app(config=config, sage_client=FakeSageClient())
+    with TestClient(app) as client:
+        assert client.get("/health").status_code == 200
+        assert client.get("/api/status").status_code == 401
+        assert client.post("/api/chat", json={"message": "hello"}).status_code == 401
+        assert client.get("/api/status", headers={"Authorization": "Bearer wrong"}).status_code == 401
+        assert client.get("/api/status", headers=[(b"authorization", b"Bearer \xff")]).status_code == 401
+        assert client.get("/api/status", headers={"Authorization": "Bearer oracle-private"}).status_code == 200
+
+
+@pytest.mark.parametrize("token", ["", " ", "oracle-dev-token"])
+def test_required_service_auth_rejects_unconfigured_or_development_token(token):
+    with pytest.raises(ValueError, match="explicit non-development token"):
+        create_app(config=replace(build_config(), require_service_auth=True, service_token=token), sage_client=FakeSageClient())
 
 
 def build_embedded_config() -> OracleConfig:

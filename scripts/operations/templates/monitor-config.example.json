@@ -1,0 +1,13 @@
+{
+  "backupStores": [
+    {"name": "core", "path": "/home/scriptarr-backup/store"},
+    {"name": "ai", "path": "/home/scriptarr-backup/ai-store"}
+  ],
+  "maxBackupAgeHours": 30,
+  "statusFile": "/home/scriptarr-backup/store/status/monitor.json",
+  "endpoints": [
+    {"name": "scriptarr-login", "url": "https://192.168.50.6:18443/login", "servername": "pax-kun.com", "expectedStatus": [200]},
+    {"name": "oracle-health", "url": "http://192.168.50.7:3001/health", "expectedStatus": [200], "expectedFields": {"ok": true, "enabled": true, "provider": "localai", "embeddedLocalAi.ready": true}},
+    {"name": "portal-health", "url": "http://192.168.50.7:3003/health", "expectedStatus": [200], "expectedFields": {"ok": true, "connected": true}}
+  ]
+}

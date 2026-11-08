@@ -5,6 +5,7 @@ import {createHash, randomBytes, timingSafeEqual} from "node:crypto";
 import express from "express";
 import {createLogger} from "@scriptarr/logging";
 import {resolveSageConfig} from "./config.mjs";
+import {createServiceJson} from "./serviceRequest.mjs";
 import {createVaultClient} from "./vaultClient.mjs";
 import {
   buildCallbackUrl,
@@ -103,22 +104,7 @@ const fetchJsonWithTimeout = async (url, timeoutMs = 1200) => {
   return response.json();
 };
 
-const parseServicePayload = (text, response) => {
-  if (!text) {
-    return null;
-  }
-  try {
-    return JSON.parse(text);
-  } catch {
-    return {
-      error: response.ok
-        ? "Service returned a non-JSON response."
-        : `Service request failed with HTTP ${response.status}.`
-    };
-  }
-};
-
-const loadWardenStatus = async (baseUrl) => {
+const loadWardenStatus = async (baseUrl, serviceJson) => {
   const [health, bootstrap, runtime] = await Promise.all([
     safeJson(fetchJsonWithTimeout(`${baseUrl}/health`)),
     safeJson(serviceJson(baseUrl, "/api/bootstrap")),
@@ -145,29 +131,6 @@ const toBrowserBootstrapStatus = (bootstrap = {}, config) => ({
   callbackUrl: buildCallbackUrl(config),
   oauthConfigured: Boolean(config.discordClientId && config.discordClientSecret)
 });
-
-const serviceJson = async (baseUrl, servicePath, options = {}) => {
-  const method = options.method || "GET";
-  const timeoutMs = Number.isFinite(Number(options.timeoutMs)) && Number(options.timeoutMs) > 0
-    ? Number(options.timeoutMs)
-    : 0;
-  const response = await fetch(`${baseUrl}${servicePath}`, {
-    method,
-    headers: {
-      "Content-Type": "application/json",
-      ...(options.headers || {})
-    },
-    body: options.body == null ? undefined : JSON.stringify(options.body),
-    signal: timeoutMs > 0 ? AbortSignal.timeout(timeoutMs) : undefined
-  });
-  const text = await response.text();
-  const payload = parseServicePayload(text, response);
-  return {
-    ok: response.ok,
-    status: response.status,
-    payload
-  };
-};
 
 const normalizeBoolean = (value, fallback = false) => {
   if (typeof value === "boolean") {
@@ -497,6 +460,7 @@ const readMoonPublicApiSettings = async (vaultClient) => {
 };
 
 const loadPortalDiscordRuntime = async (config, settings) => {
+  const serviceJson = createServiceJson(config);
   const [health, commands] = await Promise.all([
     safeJson(fetchJsonWithTimeout(`${config.portalBaseUrl}/health`)),
     safeJson(serviceJson(config.portalBaseUrl, "/api/commands"))
@@ -526,13 +490,13 @@ const portalInternalHeaders = (config) => {
   return sageToken ? {"Authorization": `Bearer ${sageToken}`} : {};
 };
 
-const reloadPortalDiscordRuntime = async (config) => safeJson(serviceJson(config.portalBaseUrl, "/api/runtime/discord/reload", {
+const reloadPortalDiscordRuntime = async (config) => safeJson(createServiceJson(config)(config.portalBaseUrl, "/api/runtime/discord/reload", {
   method: "POST",
   headers: portalInternalHeaders(config),
   body: {}
 }));
 
-const sendPortalOnboardingTest = async (config, payload) => safeJson(serviceJson(config.portalBaseUrl, "/api/onboarding/test", {
+const sendPortalOnboardingTest = async (config, payload) => safeJson(createServiceJson(config)(config.portalBaseUrl, "/api/onboarding/test", {
   method: "POST",
   headers: portalInternalHeaders(config),
   body: payload
@@ -578,6 +542,7 @@ const persistOracleSettings = async ({config, vaultClient, user, body, appendAdm
 };
 
 const loadLegacyLibrary = async (config) => {
+  const serviceJson = createServiceJson(config);
   const result = await serviceJson(config.ravenBaseUrl, "/v1/library?view=card&pageSize=100");
   if (!result.ok) {
     throw new Error(result.payload?.error || `Raven library request failed with status ${result.status}.`);
@@ -597,6 +562,7 @@ const loadLegacyLibrary = async (config) => {
  */
 export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
   const config = resolveSageConfig();
+  const serviceJson = createServiceJson(config);
   const vaultClient = createVaultClient(config);
   const liveEventHub = createLiveEventHub({vaultClient, logger});
   const app = express();
@@ -1268,7 +1234,7 @@ export const createSageApp = async ({logger = createLogger("SAGE")} = {}) => {
 
   app.get("/api/admin/status", requirePermission(vaultClient, "manage_settings"), async (_req, res) => {
     const [warden, portal, oracle, raven, ravenVpn, metadataProviders, downloadProviders] = await Promise.all([
-      loadWardenStatus(config.wardenBaseUrl),
+      loadWardenStatus(config.wardenBaseUrl, serviceJson),
       safeJson(fetch(`${config.portalBaseUrl}/health`).then((response) => response.json())),
       safeJson(fetch(`${config.oracleBaseUrl}/health`).then((response) => response.json())),
       safeJson(fetch(`${config.ravenBaseUrl}/health`).then((response) => response.json())),

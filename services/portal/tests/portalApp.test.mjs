@@ -25,7 +25,8 @@ const withPortalEnv = async (overrides, handler) => {
     "SCRIPTARR_DISCORD_SUPERUSER_ID",
     "SCRIPTARR_DISCORD_UPDATE_CHANNEL_ID",
     "SCRIPTARR_ONBOARDING_TEMPLATE",
-    "SCRIPTARR_SERVICE_TOKENS"
+    "SCRIPTARR_SERVICE_TOKENS",
+    "SCRIPTARR_REQUIRE_SERVICE_AUTH"
   ];
   const previous = new Map(keys.map((key) => [key, process.env[key]]));
 
@@ -137,6 +138,21 @@ const createPortalServer = async (options = {}) => {
     }
   };
 };
+
+test("LAN deployment authenticates API reads and writes without blocking health", async () => {
+  await withPortalEnv({SCRIPTARR_REQUIRE_SERVICE_AUTH: "true", SCRIPTARR_PORTAL_SERVICE_TOKEN: "portal-private"}, async () => {
+    const portal = await createPortalServer();
+    try {
+      assert.equal((await fetch(`${portal.baseUrl}/health`)).status, 200);
+      assert.equal((await fetch(`${portal.baseUrl}/api/runtime`)).status, 401);
+      assert.equal((await fetch(`${portal.baseUrl}/api/runtime/discord/reload`, {method: "POST"})).status, 401);
+      assert.equal((await fetch(`${portal.baseUrl}/api/runtime`, {headers: {Authorization: "Bearer wrong"}})).status, 401);
+      assert.equal((await fetch(`${portal.baseUrl}/api/runtime`, {headers: {Authorization: "Bearer portal-private"}})).status, 200);
+    } finally {
+      await portal.close();
+    }
+  });
+});
 
 test("portal HTTP surface covers command inventory, request routing, chat routing, and onboarding helpers", async () => {
   await withPortalEnv({}, async () => {

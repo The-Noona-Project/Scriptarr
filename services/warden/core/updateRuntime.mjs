@@ -67,6 +67,7 @@ const normalizeRequestedServices = (requestedServices) => {
  * @returns {{
  *   getStatus: () => Promise<{services: Array<Record<string, unknown>>, job: Record<string, unknown> | null, checkedAt: string | null}>,
  *   checkForUpdates: (requestedServices?: string[]) => Promise<{services: Array<Record<string, unknown>>, job: Record<string, unknown> | null, checkedAt: string}>,
+ *   startCheck: (requestedServices?: string[]) => Promise<{job: Record<string, unknown>, services: Array<Record<string, unknown>>, checkedAt: string | null}>,
  *   installUpdates: (requestedServices?: string[]) => Promise<{job: Record<string, unknown>, services: Array<Record<string, unknown>>, checkedAt: string | null}>
  * }}
  */
@@ -82,6 +83,7 @@ export const createUpdateRuntime = ({
     pullDockerImage
   }
 }) => {
+  const hostId = normalizeString(env.SCRIPTARR_WARDEN_HOST_ID);
   const state = {
     checkedAt: null,
     job: null
@@ -144,7 +146,9 @@ export const createUpdateRuntime = ({
         ownerService: "scriptarr-warden",
         kind: "service-update"
       });
-      const latest = Array.isArray(jobs) ? jobs[0] : null;
+      const latest = Array.isArray(jobs)
+        ? jobs.find((job) => !hostId || job.payload?.hostId === hostId || job.jobId?.startsWith(`update_${hostId}_`))
+        : null;
       return latest ? hydrateJob(latest) : null;
     } catch (error) {
       logger.warn("Failed to load the latest persisted Warden update job.", {
@@ -206,8 +210,15 @@ export const createUpdateRuntime = ({
     };
   };
 
-  const installUpdates = async (requestedServices = []) => {
+  const installUpdates = async (requestedServices = [], {checkOnly = false} = {}) => {
+    const selected = normalizeRequestedServices(requestedServices);
     if (state.job?.status === "running") {
+      if ((state.job.payload?.action || "install") !== (checkOnly ? "check" : "install")
+        || JSON.stringify(state.job.requestedServices) !== JSON.stringify(selected)) {
+        const error = new Error("Another managed-service update operation is running. Wait for its job to finish, then retry.");
+        error.status = 409;
+        throw error;
+      }
       return {
         job: state.job,
         services: await loadRows(),
@@ -215,19 +226,20 @@ export const createUpdateRuntime = ({
       };
     }
 
-    const selected = normalizeRequestedServices(requestedServices);
     const job = {
-      jobId: `update_${Date.now().toString(36)}`,
+      jobId: `update_${normalizeString(env.SCRIPTARR_WARDEN_HOST_ID) ? `${normalizeString(env.SCRIPTARR_WARDEN_HOST_ID)}_` : ""}${Date.now().toString(36)}`,
       kind: "service-update",
       ownerService: "scriptarr-warden",
       status: "running",
-      label: "Managed service update",
+      label: checkOnly ? "Managed service update check" : "Managed service update",
       requestedBy: "moon-admin",
       requestedServices: selected,
       servicesToRestart: [],
       tasks: [],
       payload: {
-        requestedServices: selected
+        requestedServices: selected,
+        action: checkOnly ? "check" : "install",
+        ...(hostId ? {hostId} : {})
       },
       result: {},
       startedAt: new Date().toISOString(),
@@ -296,7 +308,7 @@ export const createUpdateRuntime = ({
           }
         });
 
-        if (!servicesToRestart.length) {
+        if (checkOnly || !servicesToRestart.length) {
           job.status = "completed";
           job.finishedAt = nowIso();
           await saveJob();
@@ -372,6 +384,7 @@ export const createUpdateRuntime = ({
       job: state.job ? await hydrateJob(state.job) : await loadPersistedLatestJob(),
       checkedAt: state.checkedAt
     }),
+    startCheck: (requestedServices) => installUpdates(requestedServices, {checkOnly: true}),
     checkForUpdates,
     installUpdates
   };

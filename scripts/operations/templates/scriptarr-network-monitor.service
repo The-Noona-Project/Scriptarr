@@ -1,0 +1,17 @@
+[Unit]
+Description=Independent Scriptarr availability and backup freshness check
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=scriptarr-backup
+Group=scriptarr-backup
+UMask=0077
+ExecStart=/snap/node/current/bin/node /home/scriptarr-backup/bin/monitor.mjs /home/scriptarr-backup/monitor-config.json
+TimeoutStartSec=45
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/home/scriptarr-backup/store /home/scriptarr-backup/ai-store
+MemoryMax=256M

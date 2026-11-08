@@ -1,0 +1,11 @@
+[Unit]
+Description=Nightly Scriptarr AI configuration recovery point
+
+[Timer]
+OnCalendar=*-*-* 03:47:00 America/Los_Angeles
+Persistent=true
+RandomizedDelaySec=120
+Unit=scriptarr-network-backup.service
+
+[Install]
+WantedBy=timers.target

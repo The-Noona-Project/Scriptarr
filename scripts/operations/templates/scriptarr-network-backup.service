@@ -1,0 +1,14 @@
+[Unit]
+Description=Encrypted Scriptarr AI-host configuration backup
+Wants=network-online.target
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+UMask=0077
+Environment=PATH=/usr/local/bin:/usr/bin:/bin:/snap/bin
+ExecStart=/usr/bin/flock -n -E 75 /srv/appdata/scriptarr-backup-work/job.lock /usr/bin/env node /srv/appdata/scriptarr/operations/bin/backup-source.mjs /srv/appdata/scriptarr/operations/config.json
+SuccessExitStatus=75
+TimeoutStartSec=2h
+Nice=10
+IOSchedulingClass=idle

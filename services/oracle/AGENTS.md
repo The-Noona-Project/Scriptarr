@@ -14,6 +14,7 @@ LocalAI.
 - Keep Oracle non-mutating: text chat, read-only status lookup, and bounded structured assistance are allowed, but
   Sage owns all action proposals, confirmations, and executions.
 - Oracle degradation must not make the rest of Scriptarr unhealthy.
+- Required service authentication must reject missing/development tokens at startup and treat malformed credentials as unauthorized.
 - Keep Oracle off by default on fresh installs.
 - Keep LocalAI communication OpenAI-compatible. Oracle owns the embedded LocalAI model cache/runtime; Warden only
   injects container mounts and GPU/runtime flags.

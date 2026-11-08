@@ -1,0 +1,2 @@
+# Unraid host timezone must be America/Los_Angeles. Preserve all other plugin cron files.
+17 3 * * * /usr/bin/flock -n -E 75 /boot/config/scriptarr-backup/backup.lock /usr/local/bin/node /mnt/user/scriptarr/operations/bin/backup-source.mjs /mnt/user/scriptarr/operations/config.json >> /boot/config/scriptarr-backup/backup.log 2>&1

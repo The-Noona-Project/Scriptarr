@@ -6,6 +6,7 @@ import {registerHealthRoutes} from "./registerHealthRoutes.mjs";
 import {registerLocalAiRoutes} from "./registerLocalAiRoutes.mjs";
 import {registerRuntimeRoutes} from "./registerRuntimeRoutes.mjs";
 import {createWardenRuntime} from "../core/createWardenRuntime.mjs";
+import {createWardenControlAuthorization} from "./controlSecurity.mjs";
 
 /**
  * Create the Scriptarr Warden Express app and its runtime wrapper.
@@ -25,8 +26,12 @@ export const createWardenApp = ({env = process.env} = {}) => {
   app.use(express.json());
 
   registerHealthRoutes(app, runtime);
+  app.use("/api", createWardenControlAuthorization({env}));
   registerRuntimeRoutes(app, runtime);
   registerLocalAiRoutes(app, runtime);
+  app.use((error, _req, res, _next) => {
+    res.status(Number.isInteger(error.status) ? error.status : 500).json({error: error.status ? error.message : "Warden control request failed."});
+  });
 
   return {
     app,

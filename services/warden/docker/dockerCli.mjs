@@ -422,7 +422,8 @@ export const runDetachedContainer = async ({
   }
 
   for (const publishedPort of publishedPorts) {
-    args.push("-p", `${publishedPort.hostPort}:${publishedPort.containerPort}`);
+    const address = publishedPort.hostIp ? `${publishedPort.hostIp.includes(":") ? `[${publishedPort.hostIp}]` : publishedPort.hostIp}:` : "";
+    args.push("-p", `${address}${publishedPort.hostPort}:${publishedPort.containerPort}`);
   }
 
   for (const extraArg of extraArgs) {

@@ -115,7 +115,7 @@ export const resolveMysqlConfig = ({env = process.env} = {}) => {
       rawUrl: MYSQL_SELFHOST_VALUE,
       host: "scriptarr-mysql",
       port: DEFAULT_MYSQL_PORT,
-      database: DEFAULT_MYSQL_DATABASE,
+      database: normalizeString(env.SCRIPTARR_MYSQL_DATABASE) || DEFAULT_MYSQL_DATABASE,
       user: fallbackUser,
       password: fallbackPassword,
       passwordConfigured: Boolean(fallbackPassword),

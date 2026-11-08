@@ -26,6 +26,15 @@ managed services.
   network.
 - Keep full JSDoc on exported Warden `.mjs` source and test files. `npm test` is expected to fail when doc coverage
   regresses.
+- A multi-host topology is authoritative and immutable for a deployment: reconcile/prune only locally assigned
+  services, use authenticated mTLS for primary-to-worker control, and never expose a remote Docker socket. Keep
+  remote AI/Portal failures separate from core reader health.
+- Vault and Raven must share Sage's primary host while their ports are bridge-private. Public update checks must
+  return background jobs; reserve synchronous image comparison for the update worker itself.
+- Multi-host planning must reject missing or development-default service credentials before creating published services.
+- Multi-host mode must reject legacy standalone LocalAI mutations on both hosts. Oracle owns its embedded backend;
+  retain legacy Warden LocalAI read diagnostics and single-host compatibility only.
+- CPU AVIF mode must omit NVIDIA runtime requirements; Oracle GPU planning remains independent of Raven encoding.
 - Keep `npm run docker:healthcheck` aligned with Warden's real runtime plan; it is the default cross-service smoke path
   for contributors and agents.
 - Keep Moon -> Sage -> Warden managed-service updates scoped to the sibling first-party services. Warden and MySQL stay
@@ -57,6 +66,9 @@ managed services.
 - Container reconciliation and drift handling live in `core/managedStackRuntime.mjs`; update orchestration lives in
   `core/updateRuntime.mjs`; legacy sidecar LocalAI lifecycle work lives in `core/localAiRuntime.mjs`.
 - Docker CLI helpers live under `docker`; filesystem and storage layout helpers live under `filesystem`.
+- Cluster placement lives in `config/clusterTopology.mjs`, bounded mTLS transport in `core/clusterAgentClient.mjs`,
+  owner-routed aggregation in `core/clusterRuntime.mjs`, and the control authorization/listener in
+  `api/controlSecurity.mjs`.
 - Warden should reconcile sibling first-party services from inside the `scriptarr-warden` container through the Docker
   socket. Do not move this responsibility into Moon, Sage, or host scripts.
 - Managed-service updates are for sibling services only. Warden itself and MySQL stay manual unless product

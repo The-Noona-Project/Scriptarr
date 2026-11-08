@@ -36,6 +36,8 @@ Raven is Scriptarr's Java download, library, metadata, and VPN-aware download en
   bad-source quality states deterministically.
 - Reader page serving is AVIF-first. Do not extract CBZ pages on demand for normal reads; LibraryService should serve
   ready chapters from ingested manifests and stable `p000001.avif`-style page files while keeping controllers thin.
+- AVIF encoder policy is `auto`, strict `nvenc`, or `cpu`. CPU mode must work without NVIDIA devices; automatic
+  selection tests real encoding and stays fixed until restart. Preserve usable ready chapters when changing backends.
 - Manual CBZ import is separate from AVIF ingest. `/v1/imports` should copy approved Raven-visible CBZs into the
   canonical downloaded tree and queue ingest; `/v1/ingest` owns backlog, retry, hardware state, and manifest generation.
 - Startup recovery should reconcile finished `downloaded/<type>/...` archives back into the catalog and collapse

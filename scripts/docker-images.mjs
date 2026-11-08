@@ -28,7 +28,7 @@ const usage = () => {
     `  SCRIPTARR_DOCKER_TAG default=${DEFAULT_TAG}`,
     `  SCRIPTARR_DOCKER_PROGRESS default=${DEFAULT_PROGRESS}`,
     `  SCRIPTARR_DOCKER_USERNAME default=${DEFAULT_LOGIN_USERNAME}`,
-    "  SCRIPTARR_DOCKER_PASSWORD override the registry bot password"
+    "  SCRIPTARR_DOCKER_PASSWORD optional explicit registry password; otherwise use existing Docker login"
   ].join("\n"));
 };
 

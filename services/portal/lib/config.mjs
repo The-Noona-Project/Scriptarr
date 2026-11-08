@@ -75,6 +75,7 @@ export const resolvePortalConfig = (env = process.env) => ({
   sageBaseUrl: normalizeUrl(env.SCRIPTARR_SAGE_BASE_URL, "http://127.0.0.1:3004"),
   serviceToken: env.SCRIPTARR_SERVICE_TOKEN || env.SCRIPTARR_PORTAL_SERVICE_TOKEN || "portal-dev-token",
   serviceTokens: parseServiceTokens(env.SCRIPTARR_SERVICE_TOKENS),
+  requireServiceAuth: env.SCRIPTARR_REQUIRE_SERVICE_AUTH === "true",
   publicBaseUrl: normalizeUrl(env.SCRIPTARR_PUBLIC_BASE_URL || env.SCRIPTARR_MOON_BASE_URL, ""),
   discordToken: normalizeString(env.SCRIPTARR_DISCORD_TOKEN || env.DISCORD_TOKEN || "", ""),
   discordClientId: normalizeString(env.SCRIPTARR_DISCORD_CLIENT_ID || "", ""),

@@ -2,6 +2,12 @@
 
 Sage is Scriptarr's Moon-facing auth and orchestration broker.
 
+For distributed installations, Sage authenticates Warden, Portal, and Oracle requests with the destination's service
+token. Set the matching `SCRIPTARR_WARDEN_SERVICE_TOKEN`, `SCRIPTARR_PORTAL_SERVICE_TOKEN`, and
+`SCRIPTARR_ORACLE_SERVICE_TOKEN`, or include those services in `SCRIPTARR_SERVICE_TOKENS`. Tokens are attached only
+to the configured destination URL, and internal JSON requests do not follow redirects. Warden supplies this contract
+when it plans services across hosts.
+
 Sage is also the only supported first-party internal HTTP broker. Moon talks to Sage, and Portal, Oracle, Raven, or
 Warden should use Sage's internal broker routes instead of reaching across the stack directly.
 

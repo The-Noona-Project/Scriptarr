@@ -32,6 +32,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BooleanSupplier;
 import java.util.zip.ZipEntry;
@@ -49,7 +50,6 @@ public final class LibraryIngestService {
     private static final int MAX_PAGE_CONCURRENCY = 8;
     private static final int DEFAULT_ENCODER_SLOTS = 6;
     private static final int MAX_ENCODER_SLOTS = 8;
-    private static final int NVIDIA_PROBE_TIMEOUT_SECONDS = 3;
 
     private final RavenSettingsService settingsService;
     private final ScriptarrLogger logger;
@@ -195,19 +195,18 @@ public final class LibraryIngestService {
      * @return hardware status payload
      */
     public Map<String, Object> hardwareStatus() {
-        boolean required = requiresNvidiaRuntime();
-        boolean present = !required || hasNvidiaRuntime();
-        PageTranscoder.Readiness encoder = present ? transcoder.readiness() : new PageTranscoder.Readiness(false, "hardware_missing", "NVIDIA runtime access is not available for Raven ingest.");
+        PageTranscoder.Readiness encoder = transcoder.readiness();
+        boolean required = transcoder.requiresNvidiaRuntime();
         Map<String, Object> status = new LinkedHashMap<>();
-        status.put("profile", required ? "nvidia-avif" : "avif");
+        status.put("profile", transcoder.runtimeProfile());
         status.put("required", required);
-        status.put("state", present && encoder.ready() ? "ready" : present ? encoder.code() : "hardware_missing");
+        status.put("state", encoder.ready() ? "ready" : encoder.code());
         status.put("encoder", transcoder.encoderName());
         status.put("format", transcoder.format());
         status.put("mediaType", transcoder.mediaType());
         status.put("pageConcurrency", pageConcurrency);
         status.put("encoderSlots", encoderSlots);
-        status.put("message", present ? encoder.message() : "NVIDIA runtime access is not available for Raven ingest.");
+        status.put("message", encoder.message());
         return Map.copyOf(status);
     }
 
@@ -266,12 +265,12 @@ public final class LibraryIngestService {
                 }
                 futures.add(submitPageTranscode(new PageTranscodeInput(index, slug, mediaType, sourcePath, outputPath), cancelled));
                 while (futures.size() - collected >= pageConcurrency) {
-                    pages.add(readPageFuture(futures.get(collected)));
+                    pages.add(readPageFuture(futures.get(collected), cancelled));
                     collected += 1;
                 }
             }
             while (collected < futures.size()) {
-                pages.add(readPageFuture(futures.get(collected)));
+                pages.add(readPageFuture(futures.get(collected), cancelled));
                 collected += 1;
             }
             pages.sort(Comparator.comparingInt(PageManifestEntry::index));
@@ -300,9 +299,16 @@ public final class LibraryIngestService {
         return pageExecutor.submit(task);
     }
 
-    private PageManifestEntry readPageFuture(Future<PageManifestEntry> future) throws IOException, InterruptedException {
+    private PageManifestEntry readPageFuture(Future<PageManifestEntry> future, BooleanSupplier cancelled) throws IOException, InterruptedException {
         try {
-            return future.get();
+            while (true) {
+                throwIfCancelled(cancelled);
+                try {
+                    return future.get(200, TimeUnit.MILLISECONDS);
+                } catch (TimeoutException pending) {
+                    // Recheck admin cancellation while a bounded encoder is running.
+                }
+            }
         } catch (InterruptedException error) {
             future.cancel(true);
             Thread.currentThread().interrupt();
@@ -335,8 +341,8 @@ public final class LibraryIngestService {
     }
 
     /**
-     * Determine whether an existing ready chapter can be reused for the
-     * current AVIF encoder settings and source archive.
+     * Determine whether a ready chapter still matches its source archive and
+     * saved AVIF settings, including after the active backend changes.
      *
      * @param chapter chapter to inspect
      * @return true when the existing derived pages match the current archive
@@ -357,11 +363,18 @@ public final class LibraryIngestService {
             if (pageCount <= 0 || pageCount != chapter.ingestedPageCount()) {
                 return false;
             }
-            if (!buildRevision(archivePath, pageCount).equals(chapter.ingestRevision())) {
-                return false;
-            }
             Path manifestPath = Path.of(chapter.ingestManifestPath());
             if (!Files.exists(manifestPath) || Files.size(manifestPath) <= 0L) {
+                return false;
+            }
+            var manifest = objectMapper.readTree(manifestPath.toFile());
+            String storedEncoder = manifest.path("encoder").asText("");
+            if (!transcoder.format().equals(manifest.path("format").asText())
+                || !transcoder.mediaType().equals(manifest.path("mediaType").asText())
+                || storedEncoder.isBlank()
+                || manifest.path("quality").asInt() != AVIF_QUALITY
+                || !chapter.ingestRevision().equals(manifest.path("revision").asText())
+                || !buildRevision(archivePath, pageCount, storedEncoder).equals(chapter.ingestRevision())) {
                 return false;
             }
             Path chapterRoot = manifestPath.getParent();
@@ -469,48 +482,18 @@ public final class LibraryIngestService {
         }
     }
 
-    private boolean requiresNvidiaRuntime() {
-        String avifRequire = Optional.ofNullable(System.getenv("SCRIPTARR_RAVEN_AVIF_REQUIRE_NVIDIA")).orElse("");
-        if (List.of("1", "true", "yes", "on").contains(avifRequire.trim().toLowerCase(Locale.ROOT))) {
-            return true;
-        }
-        String require = Optional.ofNullable(System.getenv("SCRIPTARR_RAVEN_INGEST_REQUIRE_NVIDIA")).orElse("");
-        if (List.of("1", "true", "yes", "on").contains(require.trim().toLowerCase(Locale.ROOT))) {
-            return true;
-        }
-        String profile = firstNonBlank(
-            System.getenv("SCRIPTARR_RAVEN_INGEST_GPU_PROFILE"),
-            System.getenv("SCRIPTARR_GPU_HINT")
-        );
-        return "nvidia".equals(profile.trim().toLowerCase(Locale.ROOT));
-    }
-
-    private boolean hasNvidiaRuntime() {
-        if (Files.exists(Path.of("/dev/nvidiactl")) || Files.exists(Path.of("/proc/driver/nvidia/version"))) {
-            return true;
-        }
-        try {
-            Process process = new ProcessBuilder("nvidia-smi", "-L")
-                .redirectErrorStream(true)
-                .start();
-            if (!process.waitFor(NVIDIA_PROBE_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
-                process.destroyForcibly();
-                return false;
-            }
-            return process.exitValue() == 0;
-        } catch (Exception ignored) {
-            return false;
-        }
-    }
-
     private String buildRevision(Path archivePath, int pageCount) throws Exception {
+        return buildRevision(archivePath, pageCount, transcoder.encoderName());
+    }
+
+    private String buildRevision(Path archivePath, int pageCount, String encoderName) throws Exception {
         MessageDigest digest = MessageDigest.getInstance("SHA-256");
         digest.update(archivePath.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
         digest.update(Long.toString(Files.size(archivePath)).getBytes(java.nio.charset.StandardCharsets.UTF_8));
         digest.update(Long.toString(Files.getLastModifiedTime(archivePath).toMillis()).getBytes(java.nio.charset.StandardCharsets.UTF_8));
         digest.update(Integer.toString(pageCount).getBytes(java.nio.charset.StandardCharsets.UTF_8));
         digest.update(transcoder.format().getBytes(java.nio.charset.StandardCharsets.UTF_8));
-        digest.update(transcoder.encoderName().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        digest.update(encoderName.getBytes(java.nio.charset.StandardCharsets.UTF_8));
         digest.update(Integer.toString(AVIF_QUALITY).getBytes(java.nio.charset.StandardCharsets.UTF_8));
         return transcoder.format() + "-" + HexFormat.of().formatHex(digest.digest()).substring(0, 16);
     }

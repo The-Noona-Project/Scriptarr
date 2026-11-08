@@ -3,6 +3,7 @@ from __future__ import annotations
 """FastAPI entrypoint and route handlers for the Oracle service."""
 
 import asyncio
+import hmac
 import json
 import logging
 import re
@@ -14,6 +15,7 @@ from fastapi.responses import JSONResponse
 from .config import OracleConfig, resolve_oracle_config
 from .embedded_localai import EmbeddedLocalAiManager, default_local_ai_model_name
 from .llm import invoke_oracle
+from .inference_gate import InferenceGate
 from .runtime_settings import resolve_oracle_runtime_settings
 from .sage_client import SageClient
 from .status import read_scriptarr_status
@@ -299,9 +301,33 @@ def create_app(
 ) -> FastAPI:
     active_logger = logger or LOGGER
     active_config = config or resolve_oracle_config()
+    if active_config.require_service_auth and (
+        not active_config.service_token.strip()
+        or active_config.service_token.strip().lower().endswith("-dev-token")
+    ):
+        raise ValueError("Service authentication requires an explicit non-development token.")
     active_sage_client = sage_client or SageClient(active_config.sage_base_url, active_config.service_token)
     embedded_runtime = embedded_local_ai or EmbeddedLocalAiManager(config=active_config, logger=active_logger)
     app = FastAPI()
+    inference_gate = InferenceGate(active_config.max_concurrent_generations)
+
+    @app.middleware("http")
+    async def require_service_auth(request: Request, call_next):
+        if active_config.require_service_auth and request.url.path != "/health":
+            authorization = request.headers.get("authorization", "")
+            supplied = authorization[7:].strip() if authorization.lower().startswith("bearer ") else ""
+            if not supplied or not hmac.compare_digest(supplied.encode("utf-8"), active_config.service_token.encode("utf-8")):
+                return JSONResponse(status_code=401, content={"error": "Missing or invalid service token."})
+        return await call_next(request)
+
+    async def invoke_bounded(runtime, persona_name, message, context=None):
+        async def generate():
+            if context is not None:
+                return await invoke_oracle_fn(runtime, persona_name, message, context)
+            return await invoke_oracle_fn(runtime, persona_name, message)
+        if runtime.provider == "localai":
+            return await inference_gate.invoke(generate)
+        return await generate()
 
     @app.on_event("startup")
     async def startup_embedded_local_ai() -> None:
@@ -468,9 +494,9 @@ def create_app(
 
             # Sage-curated context is background only; invoke_oracle_fn handles the guardrail prompt.
             if isinstance(context, dict) and context:
-                reply = await invoke_oracle_fn(runtime, persona_name, message, context)
+                reply = await invoke_bounded(runtime, persona_name, message, context)
             else:
-                reply = await invoke_oracle_fn(runtime, persona_name, message)
+                reply = await invoke_bounded(runtime, persona_name, message)
             return {
                 "ok": True,
                 "reply": reply,
@@ -553,7 +579,7 @@ def create_app(
                 )
 
             persona_name = "Appa" if task == "review-noona-public-chat" else active_config.noona_persona_name
-            text = await invoke_oracle_fn(runtime, persona_name, message)
+            text = await invoke_bounded(runtime, persona_name, message)
             if task == "review-noona-public-chat":
                 decision = _parse_review_decision(text)
                 return {

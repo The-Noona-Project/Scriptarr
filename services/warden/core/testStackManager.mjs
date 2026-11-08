@@ -129,6 +129,9 @@ export const buildTestStackEnvironment = ({
       ...env,
       NODE_ENV: env.NODE_ENV || "development",
       SCRIPTARR_STACK_MODE: "test",
+      SCRIPTARR_WARDEN_TOPOLOGY: "",
+      SCRIPTARR_WARDEN_HOST_ID: "",
+      SCRIPTARR_PUBLISH_HOST: "127.0.0.1",
       SCRIPTARR_STACK_ID: normalizedStackId,
       SCRIPTARR_DATA_ROOT: resolvedDataRoot,
       SCRIPTARR_NETWORK_NAME: managedNetworkName,
@@ -440,7 +443,9 @@ export const createTestStackManager = ({
         })).catch(() => ({ok: false, payload: null})),
         payload.warden?.containerName ? dockerOps.containerExists(payload.warden.containerName) : Promise.resolve(false),
         fetchImpl(payload.moon.healthUrl).then((response) => response.ok).catch(() => false),
-        fetchImpl(`http://127.0.0.1:${payload.warden.port}/api/runtime`).then(async (response) =>
+        fetchImpl(`http://127.0.0.1:${payload.warden.port}/api/runtime`, {
+          headers: {Authorization: `Bearer ${normalizeString(env.SCRIPTARR_WARDEN_SERVICE_TOKEN) || "warden-dev-token"}`}
+        }).then(async (response) =>
           response.ok && typeof response.json === "function" ? response.json() : null
         ).catch(() => null)
       ]);

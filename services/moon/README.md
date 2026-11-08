@@ -91,6 +91,9 @@ Reader page images now auto-retry transient load failures before showing a manua
 successful revisioned page-image responses under its bounded Warden-mounted derived reader page cache. Failed image responses
 stay `no-store`, and the same-origin page probe classifies failures without exposing archive paths, tokens, or raw
 image URLs.
+Before returning cached page bytes, Moon rechecks the exact title, chapter, and page through Sage with the current
+session or API key. Expired sessions, denied access, missing pages, and unavailable authorization fail closed with
+uncached error responses; successful checks still reuse the local image bytes.
 Signed-in reader routes also bootstrap the first session and page chunk server-side through Moon before client
 hydration. That keeps reload/cache flows from sitting on an empty reader shell while the client refreshes session,
 preference, and cache state.
