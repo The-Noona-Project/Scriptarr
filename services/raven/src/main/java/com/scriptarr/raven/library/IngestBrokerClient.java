@@ -35,7 +35,8 @@ public final class IngestBrokerClient {
             if (base.getUserInfo() != null || base.getQuery() != null || base.getFragment() != null) throw new IllegalArgumentException("Invalid broker origin.");
             if ("ingest-worker".equals(env.get("SCRIPTARR_RAVEN_ROLE")) && !"https".equals(base.getScheme())) throw new IllegalArgumentException("Worker broker requires HTTPS.");
             token = env.getOrDefault("SCRIPTARR_SERVICE_TOKEN", "");
-            HttpClient.Builder builder = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).followRedirects(HttpClient.Redirect.NEVER);
+            HttpClient.Builder builder = HttpClient.newBuilder().version(HttpClient.Version.HTTP_1_1)
+                .connectTimeout(Duration.ofSeconds(10)).followRedirects(HttpClient.Redirect.NEVER);
             String ca = env.get("SCRIPTARR_RAVEN_WORKER_CA_FILE");
             if (ca != null && !ca.isBlank()) {
                 KeyStore store = KeyStore.getInstance(KeyStore.getDefaultType()); store.load(null);
