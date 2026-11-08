@@ -113,6 +113,8 @@
   acknowledgment only while current identity remains ready. Changed requests, later failures and superseded output
   conflict. Catalog `updatedAt` advances to a fresh stable second even for two repairs within one DB second. Ordinary
   chapter writes lock rows and advance changed checkpoints monotonically; unchanged replacement siblings retain theirs.
+  Repair must serialize UTC fractional timestamps exactly like publication and ordinary chapter writes, preserving the
+  database's existing precision/rounding of `ingestedAt` while advancing only the repair's `updatedAt` checkpoint.
 - Fixed profiles accept segmentation versions 1 and 2 with otherwise identical seven fields. Version 2 has a distinct
   profile hash and content job ID; worker capability `profileVersion: 1` describes the transport protocol. Do not mutate
   an existing version-1 job into different tile geometry or infer durable segment readiness from DTO defaults.

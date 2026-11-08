@@ -34,7 +34,7 @@ export const repairedConversionChapter = (job, desired, current, expectedFingerp
 
 /** Update only reader readiness inside the conversion transaction; retain current source and quality evidence. */
 export const writeMysqlConversionRepair = async (connection, titleId, chapter) => {
-  const mysqlDate = value => value ? new Date(value).toISOString().replace("T", " ").slice(0, 19) : null;
+  const mysqlDate = value => value ? new Date(value).toISOString().replace("T", " ").slice(0, 23) : null;
   await connection.query(`UPDATE raven_chapters SET ingest_status=?, ingest_revision=?, ingested_page_count=?, ingested_at=?,
     ingest_error=?, ingest_manifest_path=?, ingest_segments_json=?, updated_at=? WHERE title_id=? AND chapter_id=?`, [
     chapter.ingestStatus, chapter.ingestRevision, chapter.ingestedPageCount, mysqlDate(chapter.ingestedAt), chapter.ingestError || null,

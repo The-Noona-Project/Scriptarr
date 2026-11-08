@@ -16,6 +16,13 @@ try {
     await admin.query("CREATE DATABASE ??", [database]); inspector = mysql.createPool(config.mysql);
     await first.init(); await second.init();
     const proof = await proveConversionRepair(first, second, {
+      async initial({original, initialCatalog}) {
+        const [[column]] = await inspector.query("SELECT DATETIME_PRECISION AS precisionValue FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='raven_chapters' AND COLUMN_NAME='ingested_at'");
+        assert.equal(column.precisionValue, 0);
+        assert.equal(original.job.result.chapter.ingestedAt, "2026-11-08T00:00:00.750Z");
+        assert.equal(initialCatalog.ingestedAt, "2026-11-08T00:00:01.000Z", "The real DATETIME(0) publication rounds .750 up; repair must retain that stored value.");
+        console.error(JSON.stringify({timestampBefore: {originalReceiptIngestedAt: original.job.result.chapter.ingestedAt, originalCatalogIngestedAt: initialCatalog.ingestedAt}}));
+      },
       async rollback({jobId, body, failed, get}) {
         await inspector.query("CREATE TRIGGER repair_fixture_reject BEFORE UPDATE ON raven_conversion_jobs FOR EACH ROW BEGIN IF JSON_CONTAINS_PATH(NEW.record_json,'one','$._repairReceipts') THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='isolated repair rollback'; END IF; END");
         await assert.rejects(first.completeConversionJob(jobId, body), /isolated repair rollback/);

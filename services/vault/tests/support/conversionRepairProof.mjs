@@ -23,7 +23,7 @@ export const proveConversionRepair = async (store, peer = store, hooks = {}) => 
   const chapter = {id: chapterId, label: "Original label", chapterNumber: "1", pageCount: 1, sourcePageCount: 1, available: true,
     archivePath: "/downloads/downloaded/manhua/repair/chapter.cbz", sourceUrl: "https://example.invalid/repair/chapter-1", qualityStatus: "clean",
     expectedPageCount: 1, missingPageCount: 0, missingPages: [], qualityNotes: [], ingestStatus: "ready", ingestRevision: "webp-0123456789abcdef",
-    ingestedPageCount: 1, ingestedAt: "2026-11-08T00:00:00.000Z", ingestError: "", expectedSegmentCount: 2, ingestedSegmentCount: 2,
+    ingestedPageCount: 1, ingestedAt: "2026-11-08T00:00:00.750Z", ingestError: "", expectedSegmentCount: 2, ingestedSegmentCount: 2,
     segmentsReady: true, ingestManifestPath: `/downloads/ingested/manhua/${titleId}/${chapterId}/webp-0123456789abcdef/manifest.json`};
   const original = await store.completeConversionJob(job.jobId, {...publication, chapter});
   const get = async () => {
@@ -31,6 +31,9 @@ export const proveConversionRepair = async (store, peer = store, hooks = {}) => 
     peer.clearCache?.();
     return (await peer.getRavenTitle(titleId)).chapters.find(row => row.id === chapterId);
   };
+  const initialCatalog = await get();
+  assert.equal(original.job.result.chapter.ingestedAt, chapter.ingestedAt, "The original completion receipt keeps its precise ingestion timestamp.");
+  if (hooks.initial) await hooks.initial({original, initialCatalog});
   const fail = async () => store.upsertRavenChapter(titleId, {...await get(), label: "Current edited label", qualityStatus: "partial",
     missingPageCount: 1, missingPages: [1], qualityNotes: ["Preserve current quality evidence"], ingestStatus: "failed", segmentsReady: false,
     ingestError: "Missing derived tile; retry from canonical CBZ."});
@@ -50,6 +53,7 @@ export const proveConversionRepair = async (store, peer = store, hooks = {}) => 
   const repaired = await get();
   assert.deepEqual(replies[0].chapter, repaired, "Locked read and public GET must expose exactly the same normalized JSON shape.");
   assert.equal(repaired.ingestStatus, "ready"); assert.equal(repaired.segmentsReady, true);
+  assert.equal(repaired.ingestedAt, initialCatalog.ingestedAt, "Repair must preserve the original stored catalog ingestion timestamp, including database rounding.");
   assert.equal(repaired.label, "Current edited label"); assert.equal(repaired.qualityStatus, "partial");
   assert.deepEqual(repaired.missingPages, [1]); assert.deepEqual(repaired.qualityNotes, ["Preserve current quality evidence"]);
   assert.ok(Date.parse(repaired.updatedAt) > Date.parse(failed.updatedAt));
@@ -66,10 +70,13 @@ export const proveConversionRepair = async (store, peer = store, hooks = {}) => 
   await assert.rejects(store.completeConversionJob(job.jobId, body), error => error.status === 409, "An old repair receipt cannot hide a subsequent real failure.");
   const secondBody = request(failedAgain, "repair-second");
   const second = await store.completeConversionJob(job.jobId, secondBody);
+  assert.equal(second.chapter.ingestedAt, initialCatalog.ingestedAt, "A second repair must retain the same stored catalog ingestion timestamp.");
   assert.ok(Date.parse(second.chapter.updatedAt) > Date.parse(failedAgain.updatedAt));
   assert.deepEqual(await peer.completeConversionJob(job.jobId, secondBody), second);
+  assert.deepEqual(await peer.getConversionJob(job.jobId), original.job, "Both repair cycles must preserve the original completion receipt.");
   await store.upsertRavenChapter(titleId, {...await get(), ingestRevision: "webp-fedcba9876543210", ingestManifestPath: "/downloads/ingested/new/manifest.json"});
   await assert.rejects(peer.completeConversionJob(job.jobId, secondBody), error => error.status === 409, "Saved repair replay cannot acknowledge a superseded content identity.");
   if (hooks.inspect) await hooks.inspect({jobId: job.jobId, original});
-  return {concurrentRepairs: 12, publicSnapshotCas: true, metadataPreserved: true, repeatedFailureRepair: true, supersededReplayRejected: true};
+  return {concurrentRepairs: 12, publicSnapshotCas: true, metadataPreserved: true, repeatedFailureRepair: true, supersededReplayRejected: true,
+    ingestedAtPreserved: true, originalReceiptIngestedAt: original.job.result.chapter.ingestedAt, originalCatalogIngestedAt: initialCatalog.ingestedAt, repairedCatalogIngestedAt: second.chapter.ingestedAt};
 };

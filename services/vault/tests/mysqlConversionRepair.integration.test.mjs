@@ -14,4 +14,8 @@ test("MySQL completed-artifact repair atomically fences public snapshots, lost r
   assert.equal(proof.passed, true); assert.equal(proof.concurrentRepairs, 12); assert.equal(proof.publicSnapshotCas, true);
   assert.equal(proof.rollbackProved, true); assert.equal(proof.sameSecondMonotonicWrites, true);
   assert.equal(proof.repeatedFailureRepair, true); assert.equal(proof.supersededReplayRejected, true);
+  assert.equal(proof.ingestedAtPreserved, true);
+  assert.equal(proof.originalReceiptIngestedAt, "2026-11-08T00:00:00.750Z");
+  assert.equal(proof.originalCatalogIngestedAt, "2026-11-08T00:00:01.000Z");
+  assert.equal(proof.repairedCatalogIngestedAt, proof.originalCatalogIngestedAt);
 });

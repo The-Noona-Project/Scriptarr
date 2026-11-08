@@ -589,8 +589,8 @@ summaries. It uses the existing library repair candidates to queue a safe staged
 source is selected. `/admin/wanted/missing-chapters` redirects to this canonical page.
 If a saved reader image disappears, its logical page is recorded in the chapter's quality diagnostics. Missing WebP
 segments also leave a failed ingest that can be retried from the canonical CBZ in `/admin/ingest`.
-Retries can reuse a validated completed conversion artifact. The catalog repair preserves quality history and requires
-the same source, chapter and saved output identity; superseded content remains a diagnosed recovery condition.
+Retries can reuse a validated completed conversion artifact. Repairs retain quality history and the saved conversion time.
+The source, chapter and saved output identity must match; superseded content remains a diagnosed recovery condition.
 This also repairs a missing saved manifest while retaining validated page files. Damaged older reader files do not
 block an append or import from reaching its ingest repair stage.
 `/admin/calendar` is a month or agenda release view fed by Sage's calendar payload. Completed titles appear through

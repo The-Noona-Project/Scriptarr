@@ -79,6 +79,7 @@ The fixed WebP profiles retain distinct identities for segmentation versions 1 a
 not overwrite earlier output. A completed artifact can repair a failed chapter through the same fenced completion
 operation. Repair compares the exact current chapter snapshot, restores only readiness, preserves current metadata and
 quality evidence, and retains the original completion receipt. Repeated replies are safe; superseded content is rejected.
+Repair also retains the original catalog ingestion time when the database stores it with whole-second precision.
 
 Selected-run cleanup uses the separate `content-reset/preview`, `begin`, `apply`, and `finish` conversion routes.
 Preview records exactly the selected durable plans and owned tasks, deduplicates canonical IDs, and retains the original
