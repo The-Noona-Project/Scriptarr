@@ -38,6 +38,7 @@ export async function encryptStream(input, outputPath, publicKey, {signal} = {})
     await requireNewPath(outputPath);
     key = randomBytes(32);
     const wrapped = publicEncrypt({key: publicKey, oaepHash: "sha256"}, key);
+    if (wrapped.length < 256 || wrapped.length > 1024) throw new Error("Recovery public key size is not restorable; use RSA 2048-8192.");
     const size = Buffer.alloc(2);
     size.writeUInt16BE(wrapped.length);
     const nonce = randomBytes(NONCE_BYTES);

@@ -120,6 +120,9 @@ Both hosts receive the same topology. Keep Warden's HTTP port `4001` on its loca
 must contain the host id as the subject common name and the host address as an IP subject alternative name. The
 worker accepts only the primary's trusted certificate and configured peer address. Bind the agent port `4401` to
 the intended host address and restrict it to the primary. Never publish an unauthenticated Docker API.
+Provide explicit non-development tokens for Warden, Vault, Sage, Moon, Raven, Portal, and Oracle on both hosts;
+multi-host planning refuses missing or known development defaults. Oracle also refuses a development token when its
+service-authentication requirement is enabled directly.
 
 The core publishes Sage `3004` to the private LAN for Portal/Oracle calls. The AI host publishes Portal `3003` and
 Oracle `3001` only for the core host. These APIs require service bearer tokens in distributed mode. MySQL and Vault

@@ -93,7 +93,7 @@ export const createClusterRuntime = ({env = process.env, local, client = createC
       services: rows.flatMap((host) => (host.services || []).map((service) => ({...service, hostId: host.hostId}))),
       hosts: rows.map(({hostId, available, error}) => ({hostId, available, ...(error ? {error} : {})})),
       jobs,
-      job: jobs.find((job) => job.status === "failed") || jobs.find((job) => job.status === "running") || jobs[0] || null,
+      job: jobs.find((job) => job.status === "running") || jobs.find((job) => job.status === "failed") || jobs[0] || null,
       checkedAt: rows.map((host) => host.checkedAt).filter(Boolean).sort().at(-1) || null
     };
   };

@@ -81,6 +81,14 @@ test("the legacy job field surfaces a remote failure instead of a completed loca
   assert.equal((await runtime.getUpdates()).job.jobId, "remote-failed");
 });
 
+test("an active job keeps legacy UI polling while historical failures remain available", async () => {
+  const local = {...makeLocal(), getUpdates: async () => ({services: [], job: {jobId: "local-running", status: "running"}})};
+  const runtime = createClusterRuntime({env: env(), local, client: {request: async () => ({services: [], job: {jobId: "remote-old-failure", status: "failed"}})}});
+  const result = await runtime.getUpdates();
+  assert.equal(result.job.jobId, "local-running");
+  assert.ok(result.jobs.some((job) => job.jobId === "remote-old-failure" && job.status === "failed"));
+});
+
 test("remote operation failures are explicit while preserving per-host diagnostics", async () => {
   const runtime = createClusterRuntime({env: env(), local: makeLocal(), client: {request: async () => {throw new Error("offline");}}});
   const result = await runtime.installUpdates(["scriptarr-oracle"]);

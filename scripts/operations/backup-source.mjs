@@ -67,6 +67,16 @@ export function validateSourceConfig(config) {
   return config;
 }
 
+/** Remove private staging before best-effort failure reporting; retain the original cause. */
+export async function cleanupFailedBackup(directory, statusFile, status, originalError) {
+  let cleanupError;
+  try { await rm(directory, {recursive: true, force: true}); } catch (error) { cleanupError = error; }
+  try { await writeJson(statusFile, status); } catch { /* Disk exhaustion must not hide the backup failure. */ }
+  const failure = new Error(`Backup failed during ${status.phase}.`, {cause: originalError});
+  if (cleanupError) failure.cleanupError = cleanupError;
+  throw failure;
+}
+
 /** Run one immutable backup; the caller should hold an OS flock across this operation. */
 export async function runBackup(config, {signal} = {}) {
   validateSourceConfig(config);
@@ -155,10 +165,9 @@ export async function runBackup(config, {signal} = {}) {
     await rm(directory, {recursive: true});
     return status;
   } catch (error) {
-    await writeJson(path.join(config.workRoot, "latest-status.json"), {state: "failed", id, createdAt, failedAt: new Date().toISOString(), phase, program: error.program, exitCode: error.exitCode});
     // Configuration and logical dumps are plaintext only inside this private staging directory.
-    await rm(directory, {recursive: true, force: true});
-    throw new Error(`Backup failed during ${phase}.`, {cause: error});
+    await cleanupFailedBackup(directory, path.join(config.workRoot, "latest-status.json"),
+      {state: "failed", id, createdAt, failedAt: new Date().toISOString(), phase, program: error.program, exitCode: error.exitCode}, error);
   }
 }
 

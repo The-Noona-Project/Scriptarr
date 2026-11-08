@@ -16,6 +16,7 @@ import {
   desiredGpuRequestsForExtraArgs,
   gpuRequestsMatchExtraArgs,
   resourceLimitsMatchExtraArgs,
+  publishedPortsMatch,
   ownsManagedContainer,
   createManagedStackRuntime,
   desiredRuntimeForExtraArgs
@@ -26,6 +27,22 @@ test("managed stack detects Oracle CPU and memory ceiling drift", () => {
   assert.equal(resourceLimitsMatchExtraArgs(limits, {HostConfig: {NanoCpus: 4e9, Memory: 8 * 1024 ** 3}}), true);
   assert.equal(resourceLimitsMatchExtraArgs(limits, {HostConfig: {NanoCpus: 8e9, Memory: 8 * 1024 ** 3}}), false);
   assert.equal(resourceLimitsMatchExtraArgs(limits, {HostConfig: {NanoCpus: 4e9, Memory: 16 * 1024 ** 3}}), false);
+  assert.equal(resourceLimitsMatchExtraArgs([], {HostConfig: {NanoCpus: 4e9, Memory: 8 * 1024 ** 3}}), false);
+  assert.equal(resourceLimitsMatchExtraArgs([], {HostConfig: {NanoCpus: 0, Memory: 0}}), true);
+  assert.equal(resourceLimitsMatchExtraArgs(["--cpus", "4"], {HostConfig: {NanoCpus: 4e9, Memory: 8 * 1024 ** 3}}), false);
+});
+
+test("wildcard publication addresses do not cause perpetual recreation", () => {
+  for (const desired of [undefined, "0.0.0.0", "::"]) {
+    for (const actual of ["", "0.0.0.0", "::"]) {
+      assert.equal(publishedPortsMatch([{hostIp: desired, hostPort: 3000, containerPort: 3000}], {
+        HostConfig: {PortBindings: {"3000/tcp": [{HostIp: actual, HostPort: "3000"}]}}
+      }), true);
+    }
+  }
+  assert.equal(publishedPortsMatch([{hostIp: "192.168.50.6", hostPort: 3000, containerPort: 3000}], {
+    HostConfig: {PortBindings: {"3000/tcp": [{HostIp: "0.0.0.0", HostPort: "3000"}]}}
+  }), false);
 });
 
 test("cluster pruning never removes another host's or unassigned containers", () => {

@@ -14,9 +14,19 @@ const topology = {
   ]
 };
 const environment = (hostId) => ({
+  ...Object.fromEntries(["WARDEN", "VAULT", "SAGE", "MOON", "RAVEN", "PORTAL", "ORACLE"].map((name) =>
+    [`SCRIPTARR_${name}_SERVICE_TOKEN`, `test-only-${name.toLowerCase()}-explicit-service-token`])),
   SCRIPTARR_WARDEN_TOPOLOGY: JSON.stringify(topology), SCRIPTARR_WARDEN_HOST_ID: hostId,
   SCRIPTARR_GPU_HINT: "cpu", SCRIPTARR_MYSQL_DATABASE: "s75_noona", SCRIPTARR_RAVEN_AVIF_ENCODER: "cpu",
   SCRIPTARR_ORACLE_CPUS: "4", SCRIPTARR_ORACLE_MEMORY: "8g"
+});
+
+test("multi-host planning rejects missing or known development credentials", () => {
+  for (const name of ["WARDEN", "VAULT", "SAGE", "MOON", "RAVEN", "PORTAL", "ORACLE"]) {
+    for (const token of [undefined, "", `${name.toLowerCase()}-dev-token`]) {
+      assert.throws(() => resolveServicePlan({env: {...environment("core"), [`SCRIPTARR_${name}_SERVICE_TOKEN`]: token}}), /requires explicit non-development service tokens/);
+    }
+  }
 });
 
 test("each host plans only its assigned services and injects reachable broker addresses", () => {

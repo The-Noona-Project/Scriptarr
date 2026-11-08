@@ -113,6 +113,7 @@ Unsupported remote placements are rejected before container planning.
 All `/api/*` routes require `Authorization: Bearer <SCRIPTARR_WARDEN_SERVICE_TOKEN>`, including single-host installs.
 Warden injects that token into Sage. Set a strong explicit token in production; the development default is only for
 isolated tests. `/health` remains available for local Docker health checks. Keep HTTP port 4001 unpublished.
+Multi-host planning rejects missing or development-default service tokens for every first-party service.
 
 The separate multi-host HTTPS listener defaults to port 4401. Bind/publish it only on the host LAN address and set
 `SCRIPTARR_WARDEN_TLS_CA_FILE`, `SCRIPTARR_WARDEN_TLS_CERT_FILE`, and `SCRIPTARR_WARDEN_TLS_KEY_FILE` to read-only
@@ -141,7 +142,8 @@ route to the service owner. An unavailable worker is reported as degraded withou
 Docker health responses use cached remote availability and refresh it in the background, so a stalled worker cannot
 consume the core container's health-check timeout.
 Update check/install requests return HTTP 503 with per-host diagnostics when an owner cannot be reached; operations
-already accepted by other hosts may still be running. The legacy single-job field prioritizes failures, and each
+already accepted by other hosts may still be running. The legacy single-job field prioritizes active jobs so polling
+continues; failures remain available in the host/job lists. Each
 Warden hydrates its own host-scoped durable update job after restart. Existing unmanaged or foreign-host containers
 are never replaced by either ordinary drift reconciliation or forced update actions.
 Host assignment changes do not automatically delete containers left behind on another host; preserve/migrate state

@@ -4,7 +4,7 @@ import {generateKeyPairSync, randomBytes} from "node:crypto";
 import {spawn} from "node:child_process";
 import {createServer} from "node:http";
 import {createReadStream} from "node:fs";
-import {mkdir, mkdtemp, readFile, readdir, rm, stat, utimes, writeFile} from "node:fs/promises";
+import {mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, utimes, writeFile} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {Readable} from "node:stream";
@@ -12,7 +12,7 @@ import test from "node:test";
 import {decryptFile, encryptStream} from "./backup-crypto.mjs";
 import {dispatch, initializeStore, pruneStore, validateManifest, verifyStore} from "./backup-receiver.mjs";
 import {retainedSnapshots} from "./backup-retention.mjs";
-import {validateSourceConfig} from "./backup-source.mjs";
+import {cleanupFailedBackup, validateSourceConfig} from "./backup-source.mjs";
 import {probe} from "./monitor.mjs";
 
 const keys = generateKeyPairSync("rsa", {modulusLength: 2048});
@@ -45,6 +45,24 @@ test("empty source files still authenticate and restore exactly", () => temporar
   await encryptStream(Readable.from([]), encrypted, keys.publicKey);
   await decryptFile(encrypted, path.join(directory, "empty"), keys.privateKey);
   assert.equal((await stat(path.join(directory, "empty"))).size, 0);
+}));
+
+test("unrestorable RSA key size fails capture without publishing an artifact", () => temporary(async directory => {
+  const weak = generateKeyPairSync("rsa", {modulusLength: 1024});
+  await assert.rejects(encryptStream(Readable.from(["private recovery data"]), path.join(directory, "bad.enc"), weak.publicKey), /not restorable/);
+  assert.deepEqual(await readdir(directory), []);
+}));
+
+test("failed backup removes plaintext even when failure-status persistence also fails", () => temporary(async directory => {
+  const staging = path.join(directory, "private-staging"); await mkdir(staging);
+  await writeFile(path.join(staging, "database.sql"), "private plaintext");
+  const blocked = path.join(directory, "not-a-directory"); await writeFile(blocked, "block status writes");
+  const original = Object.assign(new Error("original capture failure"), {program: "mysqldump"});
+  await assert.rejects(cleanupFailedBackup(staging, path.join(blocked, "latest-status.json"), {state: "failed", phase: "database"}, original), error => {
+    assert.equal(error.cause, original); assert.match(error.message, /during database/); return true;
+  });
+  await assert.rejects(stat(staging), {code: "ENOENT"});
+  assert.equal(await readFile(blocked, "utf8"), "block status writes");
 }));
 
 test("small producer output remains buffered while encryption initializes", () => temporary(async directory => {
@@ -159,6 +177,40 @@ test("operator-pinned migration baseline survives ordinary retention", () => tem
   await pruneStore(directory);
   assert.ok((await readdir(path.join(directory, "snapshots"))).includes(baseline));
   assert.ok((await readdir(path.join(directory, "snapshots"))).length <= 12);
+}));
+
+test("receiver prunes only stale owned incoming runs and protects recently written uploads", () => temporary(async directory => {
+  await initializeStore(directory);
+  const incoming = path.join(directory, "incoming");
+  const old = new Date(Date.now() - 2 * 86400000);
+  const ids = [0, 1, 2, 3, 4].map(index => `20261107T030000Z-1234abc${index}`);
+  for (const id of ids) await mkdir(path.join(incoming, id));
+  await writeFile(path.join(incoming, ids[0], "snapshot.aesgcm"), "abandoned ciphertext");
+  await utimes(path.join(incoming, ids[0], "snapshot.aesgcm"), old, old);
+  await writeFile(path.join(incoming, ids[1], "snapshot.aesgcm"), "recent active upload");
+  await writeFile(path.join(incoming, ids[2], "snapshot.aesgcm.partial-123"), "recent partial upload");
+  await writeFile(path.join(incoming, ids[3], "unexpected-owned-file"), "preserve unrecognized contents");
+  for (const id of ids) await utimes(path.join(incoming, id), old, old);
+  await mkdir(path.join(incoming, "unrecognized-directory"));
+  await utimes(path.join(incoming, "unrecognized-directory"), old, old);
+  const result = await pruneStore(directory);
+  assert.equal(result.prunedIncoming, 2);
+  const remaining = await readdir(incoming);
+  assert.equal(remaining.includes(ids[0]), false); assert.equal(remaining.includes(ids[4]), false);
+  for (const id of [ids[1], ids[2], ids[3], "unrecognized-directory"]) assert.ok(remaining.includes(id));
+}));
+
+test("incoming retention never follows run or namespace symlinks outside the owned store", () => temporary(async directory => {
+  const store = path.join(directory, "store"); const outside = path.join(directory, "outside");
+  await initializeStore(store); await mkdir(outside); await writeFile(path.join(outside, "sentinel"), "keep");
+  const linkType = process.platform === "win32" ? "junction" : "dir";
+  await symlink(outside, path.join(store, "incoming", "20261107T030000Z-1234abcd"), linkType);
+  assert.equal((await pruneStore(store)).prunedIncoming, 0);
+  assert.equal(await readFile(path.join(outside, "sentinel"), "utf8"), "keep");
+  await rm(path.join(store, "incoming"), {recursive: true});
+  await symlink(outside, path.join(store, "incoming"), linkType);
+  await assert.rejects(pruneStore(store), /Unsafe incoming/);
+  assert.equal(await readFile(path.join(outside, "sentinel"), "utf8"), "keep");
 }));
 
 test("sender rejects staging inside live data and remote command injection", () => {

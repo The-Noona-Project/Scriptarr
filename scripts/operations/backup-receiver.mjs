@@ -1,6 +1,6 @@
 /** @file Restricted SSH receiver; accepts encrypted objects and immutable snapshots only. */
 import {createReadStream, createWriteStream} from "node:fs";
-import {mkdir, open, readFile, readdir, rename, rm, stat, writeFile} from "node:fs/promises";
+import {lstat, mkdir, open, readFile, readdir, realpath, rename, rm, stat, writeFile} from "node:fs/promises";
 import path from "node:path";
 import {pipeline} from "node:stream/promises";
 import {Readable, Transform} from "node:stream";
@@ -63,8 +63,47 @@ async function listSnapshots(root) {
   return snapshots;
 }
 
+/** Remove abandoned uploads only in the real receiver-owned incoming namespace. */
+export async function pruneIncoming(root, now = Date.now()) {
+  const canonicalRoot = await realpath(root);
+  const incoming = path.join(canonicalRoot, "incoming");
+  const configuredIncoming = path.join(root, "incoming");
+  const namespace = await lstat(configuredIncoming);
+  if (!namespace.isDirectory() || namespace.isSymbolicLink() || await realpath(configuredIncoming) !== incoming) throw new Error("Unsafe incoming backup namespace; refusing pruning.");
+  let removed = 0;
+  for (const entry of await readdir(incoming, {withFileTypes: true})) {
+    if (!RUN.test(entry.name) || !entry.isDirectory() || entry.isSymbolicLink()) continue;
+    const target = path.resolve(incoming, entry.name);
+    if (path.dirname(target) !== incoming || await realpath(target) !== target) throw new Error("Incoming backup path escaped its namespace.");
+    const before = await lstat(target);
+    if (!before.isDirectory() || before.isSymbolicLink()) continue;
+    let latest = before.mtimeMs;
+    let owned = true;
+    const files = await readdir(target, {withFileTypes: true});
+    for (const file of files) {
+      // The receiver creates only these flat artifacts and their temporary files.
+      if (!file.isFile() || file.isSymbolicLink() || !/^(snapshot\.aesgcm|manifest\.json)(\.partial-\d+)?$/.test(file.name)) { owned = false; break; }
+      const info = await lstat(path.join(target, file.name));
+      if (!info.isFile() || info.isSymbolicLink()) { owned = false; break; }
+      latest = Math.max(latest, info.mtimeMs);
+    }
+    if (!owned || latest >= now - 86400000) continue;
+    const after = await lstat(target);
+    if (!after.isDirectory() || after.isSymbolicLink() || after.dev !== before.dev || after.ino !== before.ino || after.mtimeMs !== before.mtimeMs || await realpath(target) !== target) continue;
+    for (const file of files) {
+      const info = await lstat(path.join(target, file.name));
+      if (!info.isFile() || info.isSymbolicLink() || info.mtimeMs >= now - 86400000) { owned = false; break; }
+    }
+    if (!owned) continue;
+    await rm(target, {recursive: true});
+    removed++;
+  }
+  return removed;
+}
+
 /** Retain daily/weekly recovery points and garbage-collect only old unreferenced objects. */
 export async function pruneStore(root, now = Date.now()) {
+  const prunedIncoming = await pruneIncoming(root, now);
   const snapshots = await listSnapshots(root);
   const retained = retainedSnapshots(snapshots);
   for (const id of await readdir(path.join(root, "pins"))) {
@@ -80,7 +119,7 @@ export async function pruneStore(root, now = Date.now()) {
     await rm(full);
     await rm(`${full}.json`, {force: true});
   }
-  return {retainedSnapshots: retained.size};
+  return {retainedSnapshots: retained.size, prunedIncoming};
 }
 
 async function commit(root, id) {

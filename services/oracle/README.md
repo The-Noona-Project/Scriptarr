@@ -5,7 +5,8 @@
 Oracle provides Scriptarr's read-only AI replies for Noona and Appa.
 
 Cross-host deployments set `SCRIPTARR_REQUIRE_SERVICE_AUTH=true`: every route except `/health` requires Oracle's
-service bearer token. Publish Oracle only to the private application network and allow the core host to reach it.
+service bearer token. Startup rejects missing or development-default tokens when this requirement is enabled.
+Malformed credentials receive HTTP `401`. Publish Oracle only to the private application network and allow the core host to reach it.
 LocalAI generation is limited by `SCRIPTARR_ORACLE_MAX_CONCURRENT_GENERATIONS` (default `1`, maximum `4`); callers
 whose five-second queue wait expires receive the normal degraded response rather than starting another generation.
 Health and status requests do not occupy generation slots.

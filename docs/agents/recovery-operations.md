@@ -16,8 +16,11 @@ automatic failover.
 - RSA-OAEP wraps a new AES-256-GCM key for each artifact. The sender stores the public recovery key only. The private
   recovery key is escrowed separately with Windows DPAPI under the operator account. Preserve that Windows profile or
   export a separately protected recovery key before retiring the workstation.
+- Recovery public keys must be RSA 2048-8192. Capture rejects an envelope outside the restore-side wrapped-key bounds
+  before publishing ciphertext, so an unsupported recovery key cannot produce apparently successful backups.
 - Encryption is streamed. Live database dumps and container metadata exist only in a private temporary directory and
   are removed after either success or failure. Logs and status expose phase/count/checksum metadata, never credentials.
+  Failure cleanup runs before the best-effort status write, and status-write failures retain the original capture cause.
 
 ## Capture and retention
 
@@ -34,6 +37,9 @@ capture abort the run rather than publishing a mixed recovery point.
 The receiver validates ciphertext hashes before committing a snapshot. It keeps the newest snapshot from each of seven
 days and four calendar weeks. Library garbage collection uses the union of all retained manifests and additionally
 protects newly uploaded objects for 24 hours. Retention never operates outside the dedicated receiver store.
+Abandoned `incoming/<run-id>` directories are removed after 24 hours only when the directory and every recognized
+upload/partial file are old. Recent file writes protect active uploads even if the directory timestamp is older.
+Incoming cleanup skips unrecognized contents and symlinks and rejects a redirected incoming namespace.
 Operator-created files under the store's `pins/`, named by an existing snapshot id, preserve migration baselines beyond
 daily/weekly rotation. A source SSH key cannot create or remove pins. Pin the verified pre-migration cold snapshot.
 
@@ -65,7 +71,8 @@ to 64 KiB with a seven-second total deadline and are never copied into monitorin
 
 Run `node --test scripts/operations/operations.test.mjs`. The suite covers authenticated round trips, tampering,
 truncation, cancellation cleanup, immutable destinations, command/path rejection, missing object refusal, independent
-ciphertext verification, seven-daily/four-weekly selection, and live-root/workspace boundary validation. Execute the
+ciphertext verification, unsupported recovery-key rejection, plaintext cleanup with failed status writes, stale incoming
+cleanup and symlink boundaries, seven-daily/four-weekly selection, and live-root/workspace boundary validation. Execute the
 same suite on a Linux host to verify Unix permission behavior.
 
 The initial November 7 recovery point preserved the stopped October 8 database, then was fetched from na-west-2,

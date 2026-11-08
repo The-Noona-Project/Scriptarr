@@ -225,6 +225,13 @@ export const resolveStackMode = ({env = process.env} = {}) =>
  */
 export const resolveServicePlan = ({env = process.env, containerNamePrefix = ""} = {}) => {
   const topology = resolveClusterTopology({env});
+  if (topology.enabled) {
+    const missing = ["WARDEN", "VAULT", "SAGE", "MOON", "RAVEN", "PORTAL", "ORACLE"].filter((name) => {
+      const token = normalizeString(env[`SCRIPTARR_${name}_SERVICE_TOKEN`]);
+      return !token || /-dev-token$/i.test(token);
+    });
+    if (missing.length) throw new Error(`Multi-host mode requires explicit non-development service tokens for: ${missing.join(", ")}.`);
+  }
   const mysql = resolveMysqlConfig({env});
   const stackMode = resolveStackMode({env});
   const managedNetworkName = resolveManagedNetworkName({env});

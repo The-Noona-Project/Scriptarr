@@ -60,16 +60,17 @@ const actualMountsFor = (inspect) =>
     .map((mount) => `${mount.Source}=>${mount.Destination}`)
     .sort();
 
+const normalizeHostIp = (ip) => !ip || ip === "0.0.0.0" || ip === "::" ? "*" : ip;
 const desiredPortsFor = (ports) =>
   (ports || [])
-    .map((entry) => `${entry.hostIp || "*"}:${entry.hostPort}:${entry.containerPort}`)
+    .map((entry) => `${normalizeHostIp(entry.hostIp)}:${entry.hostPort}:${entry.containerPort}`)
     .sort();
 
 const actualPortsFor = (inspect) => {
   const bindings = inspect?.HostConfig?.PortBindings || {};
   return Object.entries(bindings)
     .flatMap(([containerPort, hostBindings]) =>
-      (hostBindings || []).map((binding) => `${!binding.HostIp || binding.HostIp === "0.0.0.0" || binding.HostIp === "::" ? "*" : binding.HostIp}:${binding.HostPort}:${containerPort.replace(/\/tcp$/, "")}`)
+      (hostBindings || []).map((binding) => `${normalizeHostIp(binding.HostIp)}:${binding.HostPort}:${containerPort.replace(/\/tcp$/, "")}`)
     )
     .sort();
 };
@@ -84,6 +85,13 @@ const actualAliasesFor = (inspect, networkName) =>
 
 const sameList = (left, right) =>
   left.length === right.length && left.every((entry, index) => entry === right[index]);
+
+/** Compare Docker publication bindings with equivalent wildcard host addresses.
+ * @param {object[]} ports Desired published ports.
+ * @param {object} inspect Docker container inspection.
+ * @returns {boolean} Whether the publication bindings match.
+ */
+export const publishedPortsMatch = (ports, inspect) => sameList(actualPortsFor(inspect), desiredPortsFor(ports));
 
 const includesAll = (actual, desired) => desired.every((entry) => actual.includes(entry));
 
@@ -117,14 +125,14 @@ const normalizeLinuxCapability = (value) => normalizeString(value).toUpperCase()
  */
 export const resourceLimitsMatchExtraArgs = (extraArgs = [], inspect = {}) => {
   const cpus = valuesForOption(extraArgs, "--cpus")[0];
-  if (cpus && Math.round(Number(cpus) * 1e9) !== Number(inspect.HostConfig?.NanoCpus || 0)) return false;
+  if (Math.round(Number(cpus || 0) * 1e9) !== Number(inspect.HostConfig?.NanoCpus || 0)) return false;
   const memory = valuesForOption(extraArgs, "--memory")[0];
   if (memory) {
     const match = /^([\d.]+)([bkmg])?b?$/i.exec(memory);
     if (!match) return false;
     const multiplier = {b: 1, k: 1024, m: 1024 ** 2, g: 1024 ** 3}[String(match[2] || "b").toLowerCase()];
     if (Math.round(Number(match[1]) * multiplier) !== Number(inspect.HostConfig?.Memory || 0)) return false;
-  }
+  } else if (Number(inspect.HostConfig?.Memory || 0) !== 0) return false;
   return true;
 };
 
@@ -559,7 +567,7 @@ export const createManagedStackRuntime = ({env = process.env, logger, resolvePla
       reasons.push("mounts");
     }
 
-    if (!sameList(actualPortsFor(inspect), desiredPortsFor(descriptor.publishedPorts))) {
+    if (!publishedPortsMatch(descriptor.publishedPorts, inspect)) {
       reasons.push("ports");
     }
 

@@ -301,6 +301,11 @@ def create_app(
 ) -> FastAPI:
     active_logger = logger or LOGGER
     active_config = config or resolve_oracle_config()
+    if active_config.require_service_auth and (
+        not active_config.service_token.strip()
+        or active_config.service_token.strip().lower().endswith("-dev-token")
+    ):
+        raise ValueError("Service authentication requires an explicit non-development token.")
     active_sage_client = sage_client or SageClient(active_config.sage_base_url, active_config.service_token)
     embedded_runtime = embedded_local_ai or EmbeddedLocalAiManager(config=active_config, logger=active_logger)
     app = FastAPI()
@@ -311,7 +316,7 @@ def create_app(
         if active_config.require_service_auth and request.url.path != "/health":
             authorization = request.headers.get("authorization", "")
             supplied = authorization[7:].strip() if authorization.lower().startswith("bearer ") else ""
-            if not supplied or not hmac.compare_digest(supplied, active_config.service_token):
+            if not supplied or not hmac.compare_digest(supplied.encode("utf-8"), active_config.service_token.encode("utf-8")):
                 return JSONResponse(status_code=401, content={"error": "Missing or invalid service token."})
         return await call_next(request)
 
