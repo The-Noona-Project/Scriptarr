@@ -122,6 +122,8 @@ records, and exposes the same imagery Moon and Portal reuse in their UIs and emb
 Recovery also restores missing cover metadata from the saved download request, including source-only artwork,
 while preserving existing covers, canonical archives and ready reader pages. Append requests retain artwork already
 found during source browsing when no cover was selected earlier.
+Cover repairs also survive ongoing ingest and rescan checkpoints. A background update with no artwork keeps a cover
+that was saved while the work was running; explicit nonblank artwork updates remain supported.
 Raven now also preserves chapter release dates from provider chapter scrapes and blends in richer title-level release
 labels from metadata providers, which Moon admin reuses for its library and calendar views.
 Raven now also normalizes lifecycle status from both source scrapes and metadata providers, including completed or

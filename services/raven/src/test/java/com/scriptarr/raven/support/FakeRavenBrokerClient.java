@@ -154,6 +154,7 @@ public class FakeRavenBrokerClient implements RavenBrokerClient {
             .toList();
         return objectMapper.valueToTree(Map.of(
             "titles", page,
+            "filters", Map.of("ids", exactIds),
             "counts", Map.of("total", titles.size(), "byLetter", Map.of(), "byType", Map.of()),
             "pageInfo", Map.of(
                 "cursor", String.valueOf(cursor),
