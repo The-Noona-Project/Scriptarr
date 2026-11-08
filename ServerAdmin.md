@@ -710,6 +710,9 @@ merely because it has been waiting a long time.
 Startup recovery waits for title-task restoration before recovering bulk runs. Append recovery checks the planned
 chapters and their actual archives/reader pages instead of treating an existing title as proof of completion. Status
 reads inspect the run; explicit owner actions and background recovery schedule its work.
+Healthy canonical CBZs can finish ingest while the source is unavailable, keeping their bytes and timestamps and
+preserving earlier readable chapters. Failed owned tasks still wait for the approved retry; restarting does not grant
+another attempt allowance.
 
 Discord interaction/message identifiers deduplicate retried run creation. Delivery records retain accepted summary
 message identifiers so prompt-registration or acknowledgement retries reuse the same message. Each pause has an

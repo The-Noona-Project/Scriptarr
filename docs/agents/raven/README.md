@@ -104,6 +104,10 @@
   or ingest. Missing, exhausted, superseded, or unplanned legacy work pauses with IDs and reasons, retaining evidence.
   Each explicit approval grants unresolved titles three attempts while preserving cumulative history. Durable
   `approvalGeneration` on completed batches also accounts for a crash before the parent approval counter is saved.
+- `CanonicalArchiveRecovery` verifies cataloged archives or reconstructs planned rows before source/VPN requests.
+  Healthy canonical CBZs can resume ingest offline; `AppendChapterMerger` retains untouched chapter IDs and ready
+  reader metadata. Replacements retain their full replacement semantics. Failed owned tasks remain failed on startup
+  until the approved bulk retry or an explicit retry queues that same identity again.
 - Continue/cancel consumes the captured `approvalId` before scheduling and retains a compact accepted receipt.
   Replays return that receipt; stale or opposite decisions cannot affect a later approval window. Cancellation closes
   the enqueue gate and reconciles owned tasks and batch checkpoints after in-flight discovery callbacks finish.

@@ -27,10 +27,21 @@ final class DownloadCompletionVerifier {
         return expected.stream().allMatch(row -> title.chapters().stream().anyMatch(chapter -> matches(chapter, row) && healthy(chapter)));
     }
 
+    /** Verify the planned canonical archives separately from reader-page readiness. */
+    boolean archivesComplete(LibraryTitle title, List<Map<String, String>> expected) {
+        return title != null && expected != null && !expected.isEmpty() && title.chapters() != null
+            && expected.stream().allMatch(row -> title.chapters().stream().anyMatch(chapter -> matches(chapter, row) && archiveHealthy(chapter)));
+    }
+
+    /** Verify an available catalog chapter still has its complete readable canonical CBZ. */
+    boolean archiveHealthy(LibraryChapter chapter) {
+        return chapter != null && chapter.available() && chapter.pageCount() > 0
+            && archiveImageCount(chapter.archivePath()) == chapter.pageCount();
+    }
+
     /** Verify the archive and reusable reader-page manifest together. */
     boolean healthy(LibraryChapter chapter) {
-        return chapter != null && chapter.available() && chapter.pageCount() > 0
-            && archiveImageCount(chapter.archivePath()) == chapter.pageCount()
+        return archiveHealthy(chapter)
             && library != null && library.isReaderReadyChapter(chapter);
     }
 

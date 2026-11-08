@@ -200,7 +200,8 @@ public class TitleScraper {
                 for (Map<String, String> entry : parsed) {
                     if (!seenHrefs.add(entry.get("href"))) continue;
                     newLinks++;
-                    if (normalizedType.equals(BulkTitleSelection.type(entry.get("type")))
+                    String cardType = BulkTitleSelection.type(entry.get("type"));
+                    if ((cardType == null || normalizedType.equals(cardType))
                         && BulkTitleSelection.matchesPrefix(entry.get("title"), titlePrefix)) collected.add(new LinkedHashMap<>(entry));
                 }
                 if (newLinks == 0) throw new BulkDiscoveryException("repeated_pagination", "The provider browse did not advance.", pagesScanned, null);

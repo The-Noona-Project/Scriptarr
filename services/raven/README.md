@@ -101,6 +101,8 @@ not expire healthy work. Each owner approval allows up to three attempts per unr
 remain visible. Continue retries unresolved work and preserves completed titles and policy exclusions. Retried
 Discord commands and approval actions reuse their existing run or accepted decision rather than advancing another
 window. Reading status never starts work.
+After a restart, healthy canonical CBZs can finish reader-page processing without fetching those chapters again.
+Append recovery keeps earlier readable chapters, and failed work still waits for its approved retry.
 
 Completion requires finished discovery and successful owned work, including canonical CBZ files, saved catalog state,
 and ready AVIF pages. Source-quality markers and generated missing-page placeholders remain visible through the

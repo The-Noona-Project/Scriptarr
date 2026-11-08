@@ -21,6 +21,20 @@ class TitleScraperBulkDiscoveryTest {
     @AfterEach
     void cleanup() { if (server != null) server.stop(0); }
 
+    /** Keep unknown card types for concrete detail verification while excluding confirmed wrong types. */
+    @Test
+    void unknownCardTypeMustNotSilentlyDisappear() throws Exception {
+        server = HttpServer.create(new InetSocketAddress(0),0);
+        server.createContext("/search/data",exchange -> reply(exchange,200,
+            card("wrong","Alpha Wrong Type","Manga")
+                +"<article class='bg-base-300'><a class='line-clamp-1 link link-hover' href='/series/pending'>Alpha Pending Type</a></article>"));
+        server.start();
+        BulkBrowseResult result=scraper().browseTitlesAlphabetically("Manhua",false,"a");
+        assertEquals(1,result.titles().size());
+        assertEquals("Alpha Pending Type",result.titles().getFirst().get("title"));
+        assertFalse(result.titles().getFirst().containsKey("type"));
+    }
+
     /** Verify ignored upstream filters cannot introduce another type, prefix or source origin. */
     @Test
     void locallyRequiresRequestedTypePrefixAndOrigin() throws Exception {

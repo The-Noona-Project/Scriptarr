@@ -106,6 +106,7 @@ public class DownloaderService {
     private final CompletableFuture<Void> persistedTaskRestoreCompletion = new CompletableFuture<>();
     private final BulkQueueCoordinator bulkQueueCoordinator;
     private final DownloadCompletionVerifier completionVerifier;
+    private final CanonicalArchiveRecovery canonicalArchiveRecovery;
     private final AtomicLong queueSortSequence = new AtomicLong();
     private final Map<String, Long> ingestProgressPersistedAt = new ConcurrentHashMap<>();
     private final AtomicLong queueSequence = new AtomicLong();
@@ -163,6 +164,7 @@ public class DownloaderService {
         this.settingsService = settingsService;
         this.logger = logger;
         this.completionVerifier = new DownloadCompletionVerifier(libraryService);
+        this.canonicalArchiveRecovery = new CanonicalArchiveRecovery(libraryService, completionVerifier);
         this.bulkQueueCoordinator = new BulkQueueCoordinator(this, downloadProviderRegistry, libraryService, downloadIntakeService, brokerClient, settingsService);
     }
 
@@ -545,9 +547,26 @@ public class DownloaderService {
         for (Map<String, String> wanted : expected) {
             boolean exists = source.stream().anyMatch(row -> DownloadCompletionVerifier.number(row.get("chapter_number")).equals(DownloadCompletionVerifier.number(wanted.get("chapter_number")))
                 || (!normalizeString(wanted.get("href")).isBlank() && wanted.get("href").equals(row.get("href"))));
-            boolean ready = catalog != null && catalog.chapters() != null && catalog.chapters().stream().anyMatch(c -> DownloadCompletionVerifier.matches(c,wanted) && completionVerifier.healthy(c));
+            boolean ready = catalog != null && catalog.chapters() != null && catalog.chapters().stream().anyMatch(c -> DownloadCompletionVerifier.matches(c,wanted) && completionVerifier.archiveHealthy(c));
             if (!exists && !ready) throw new IllegalStateException("Expected source chapter disappeared before it became reader-ready: " + normalizeString(wanted.get("chapter_number")));
         }
+    }
+
+    private void finishCanonicalIngest(String taskId, DownloadRequest request, LibraryTitle recovered) {
+        throwIfCancelled(taskId);
+        LibraryTitle title = persistSelectedMetadata(recovered, request);
+        Map<String, Object> task = tasks.get(taskId);
+        task.put("titleId", title.id());
+        task.put("libraryTypeLabel", title.libraryTypeLabel());
+        task.put("libraryTypeSlug", title.libraryTypeSlug());
+        task.put("workingRoot", normalizeString(title.workingRoot()));
+        task.put("downloadRoot", normalizeString(title.downloadRoot()));
+        task.put("coverUrl", normalizeString(title.coverUrl()));
+        update(taskId, "running", "Resuming reader-page ingest from verified canonical CBZ archives.", 98);
+        title = libraryService.ingestTitle(title.id(), request.requestedBy(), () -> isCancellationRequested(taskId), progress -> rememberIngestProgress(taskId, progress));
+        throwIfCancelled(taskId);
+        if (!completionVerifier.complete(title, expectedChapters(task))) throw new IllegalStateException("Canonical recovery could not verify all planned reader-ready chapters.");
+        update(taskId, "completed", "Recovered Raven download from unchanged canonical archives.", 100);
     }
 
     private void rememberIngestProgress(String taskId, IngestProgress progress) {
@@ -913,6 +932,12 @@ public class DownloaderService {
             throwIfCancelled(taskId);
             update(taskId, "running", "Preparing Raven download.", 5);
             if (recoverCompletedTask(taskId)) return;
+            LibraryTitle canonicalTitle = canonicalArchiveRecovery.inspect(tasks.get(taskId), request, expectedChapters(tasks.get(taskId)),
+                logger.getDownloadsRoot(), settingsService.getNamingSettings(), () -> isCancellationRequested(taskId));
+            if (!isReplacementDownload(request) && completionVerifier.archivesComplete(canonicalTitle, expectedChapters(tasks.get(taskId)))) {
+                finishCanonicalIngest(taskId, request, canonicalTitle);
+                return;
+            }
             ensureVpnProtectedIfEnabled();
 
             DownloadProvider provider = resolveProvider(request);
@@ -929,6 +954,7 @@ public class DownloaderService {
             boolean appendDownload = isAppendDownload(request);
             Path canonicalFinalRoot = resolveDownloadTargetRoot(request, typeSlug);
             boolean replacementDownload = isReplacementDownload(request);
+            if (canonicalTitle != null && !normalizeString(canonicalTitle.id()).isBlank()) tasks.get(taskId).put("titleId", canonicalTitle.id());
             verifyExpectedSourceChapters(taskId, chapters);
             List<Map<String, String>> chaptersToDownload = appendDownload ? filterChaptersForAppendRequest(chapters, request) : chapters;
             rememberExpectedChapters(taskId, chaptersToDownload);
@@ -948,12 +974,20 @@ public class DownloaderService {
 
             int total = chaptersToDownload.size();
             Map<String, ChapterDownloadResult> chapterDetailsByNumber = new LinkedHashMap<>();
+            Map<String, LibraryChapter> reusedChapters = new LinkedHashMap<>();
             for (int index = 0; index < chaptersToDownload.size(); index++) {
                 throwIfCancelled(taskId);
                 Map<String, String> chapter = chaptersToDownload.get(index);
                 Instant chapterStartedAt = Instant.now();
-                ChapterDownloadResult chapterResult = downloadChapterWithRetries(provider, workingRoot, request, typeLabel, chapter, namingSettings);
-                if (chapterResult.archivePath() != null) {
+                LibraryChapter reusable = replacementDownload ? null : canonicalArchiveRecovery.reusable(canonicalTitle, chapter);
+                ChapterDownloadResult chapterResult;
+                if (reusable != null) {
+                    String number = normalizeStoredChapterNumber(chapter.getOrDefault("chapter_number", reusable.chapterNumber()));
+                    reusedChapters.put(number, reusable);
+                    chapterResult = new ChapterDownloadResult(number, new LinkedHashMap<>(chapter), Path.of(reusable.archivePath()),
+                        reusable.expectedPageCount(), reusable.missingPageCount(), reusable.missingPages(), reusable.qualityNotes(), reusable.qualityStatus(), "Reused canonical chapter " + number + ".");
+                } else chapterResult = downloadChapterWithRetries(provider, workingRoot, request, typeLabel, chapter, namingSettings);
+                if (reusable == null && chapterResult.archivePath() != null) {
                     rememberDownloadSpeed(taskId, chapterResult.archivePath(), chapterStartedAt, Instant.now());
                 }
                 chapterDetailsByNumber.put(chapterResult.chapterNumber(), chapterResult);
@@ -971,13 +1005,16 @@ public class DownloaderService {
                 finalRoot = canonicalFinalRoot;
             }
             throwIfCancelled(taskId);
+            List<LibraryChapter> incomingChapters = buildLibraryChapters(finalRoot, chapterDetailsByNumber, typeLabel, namingSettings, reusedChapters);
+            List<LibraryChapter> finalChapters = replacementDownload || canonicalTitle == null ? incomingChapters
+                : AppendChapterMerger.merge(canonicalTitle.chapters(), incomingChapters);
             LibraryTitle title = libraryService.recordDownloadedTitle(
                 request.titleName(),
                 typeLabel,
                 request.titleUrl(),
                 resolveCoverUrl(request),
                 details,
-                buildLibraryChapters(finalRoot, chapterDetailsByNumber, typeLabel, namingSettings),
+                finalChapters,
                 workingRoot,
                 finalRoot
             );
@@ -1126,10 +1163,13 @@ public class DownloaderService {
         Path finalRoot,
         Map<String, ChapterDownloadResult> chapterDetailsByNumber,
         String typeLabel,
-        RavenNamingSettings namingSettings
+        RavenNamingSettings namingSettings,
+        Map<String, LibraryChapter> reusedChapters
     ) throws IOException {
         List<LibraryChapter> chapters = new ArrayList<>();
         for (ChapterDownloadResult result : chapterDetailsByNumber.values()) {
+            LibraryChapter reused = reusedChapters.get(result.chapterNumber());
+            if (reused != null) { chapters.add(reused); continue; }
             Path finalArchive = result.archivePath() == null ? null : finalRoot.resolve(result.archivePath().getFileName());
             String releaseDate = firstNonBlank(
                 normalizeString(result.chapter().get("release_date")),
@@ -1996,7 +2036,7 @@ public class DownloaderService {
 
     private boolean recoverCompletedTask(String taskId) {
         Map<String, Object> task = tasks.get(taskId);
-        if (task == null) {
+        if (task == null || !normalizeString(task.get("replacementTitleId")).isBlank()) {
             return false;
         }
         Optional<LibraryTitle> recovered = findRecoveredTitle(task);
@@ -2004,7 +2044,8 @@ public class DownloaderService {
             return false;
         }
 
-        LibraryTitle title = recovered.get();
+        LibraryTitle title = persistSelectedMetadata(recovered.get(), requestFromTask(task));
+        if (!completionVerifier.complete(title, expectedChapters(task))) return false;
         task.put("titleId", title.id());
         task.put("libraryTypeLabel", title.libraryTypeLabel());
         task.put("libraryTypeSlug", title.libraryTypeSlug());
@@ -2038,7 +2079,6 @@ public class DownloaderService {
 
         for (Path downloadRoot : candidateDownloadRoots) {
             if (Files.exists(downloadRoot) && hasArchiveFiles(downloadRoot)) {
-                libraryService.rescanDownloadedFiles();
                 String normalizedCandidateRoot = downloadRoot.toString();
                 for (LibraryTitle title : libraryService.listTitles()) {
                     if (normalizedCandidateRoot.equals(normalizeString(title.downloadRoot()))) {
