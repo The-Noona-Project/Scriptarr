@@ -1,5 +1,6 @@
 import {FOLLOW_NOTIFICATION_POLL_MS} from "./discord/constants.mjs";
 import {createDownloadAllDelivery} from "./downloadAllDelivery.mjs";
+import {resolveBulkRunAttention} from "./discord/downloadAllShared.mjs";
 
 const normalizeArray = (value) => Array.isArray(value) ? value : [];
 const normalizeString = (value, fallback = "") => {
@@ -160,7 +161,7 @@ export const buildDownloadAllDirectMessagePayload = (notification = {}, publicBa
   const skippedNoMetadata = toCount(summary.skippedNoMetadata ?? counts.skippedNoMetadataCount ?? notification.skippedNoMetadataCount, 0);
   const skippedAmbiguous = toCount(summary.skippedAmbiguousMetadata ?? counts.skippedAmbiguousMetadataCount ?? notification.skippedAmbiguousMetadataCount, 0);
   const invalidSource = toCount(summary.invalidSource ?? counts.invalidSourceCount ?? notification.invalidSourceCount, 0);
-  const failedTitles = toCount(summary.failedTitles ?? counts.failedTitleTaskCount ?? notification.failedTitleTaskCount, 0);
+  const {failedTitles, unresolvedPlans, pauseReason} = resolveBulkRunAttention(notification);
   const staleTitles = toCount(summary.staleTitles ?? counts.staleTitleTaskCount ?? notification.staleTitleTaskCount, 0);
   const displayRunId = compactRunId(runId);
   const hasApproval = Boolean(normalizeString(notification.approvalId));
@@ -178,6 +179,7 @@ export const buildDownloadAllDirectMessagePayload = (notification = {}, publicBa
   );
   const queueLink = linkUrl ? `[Open queue](${linkUrl})` : "";
   const needsAttention = [
+    unresolvedPlans ? `Unresolved title plans: **${unresolvedPlans}**` : "",
     failedTitles ? `Failed title tasks: **${failedTitles}**` : "",
     staleTitles ? `Stale title tasks: **${staleTitles}**` : ""
   ].filter(Boolean).join("\n") || "None reported";
@@ -185,7 +187,7 @@ export const buildDownloadAllDirectMessagePayload = (notification = {}, publicBa
   return {
     content: [
       status === "paused"
-        ? `Downloadall paused after ${completedBatches} batch(es).`
+        ? pauseReason ? `Downloadall paused: ${pauseReason}.` : completedBatches ? `Downloadall paused after ${completedBatches} batch(es).` : "Downloadall paused before any batch completed."
         : `Downloadall ${status}: ${completedTitles} title task(s) completed.`,
       actionLine
     ].filter(Boolean).join("\n"),
@@ -230,7 +232,9 @@ export const buildDownloadAllDirectMessagePayload = (notification = {}, publicBa
           inline: true
         },
         currentBatchLabel ? {
-          name: status === "paused" ? "Last completed batch" : "Current batch",
+          name: status === "paused"
+            ? completedBatches > 0 && (!currentBatch.status || currentBatch.status === "completed") ? "Last completed batch" : "Paused batch"
+            : "Current batch",
           value: currentBatchLabel,
           inline: true
         } : null,

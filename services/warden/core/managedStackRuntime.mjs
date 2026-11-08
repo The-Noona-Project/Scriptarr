@@ -25,6 +25,7 @@ import {
 import {toDockerDesktopHostPath} from "../filesystem/storageLayout.mjs";
 import {resolveClusterTopology} from "../config/clusterTopology.mjs";
 import {resolveMysqlConfig} from "../config/mysqlConfig.mjs";
+import {containerDnsMatchesInspect} from "../config/containerDns.mjs";
 
 const normalizeString = (value) => String(value ?? "").trim();
 
@@ -575,6 +576,8 @@ export const createManagedStackRuntime = ({env = process.env, logger, resolvePla
       reasons.push("network");
     }
 
+    if (!containerDnsMatchesInspect(descriptor.dnsServers, inspect)) reasons.push("dns");
+
     if (!sameHealthCheck(actualHealthCheckFor(inspect), desiredHealthCheckFor(descriptor))) {
       reasons.push("healthCheck");
     }
@@ -667,6 +670,7 @@ export const createManagedStackRuntime = ({env = process.env, logger, resolvePla
         env: descriptor.env,
         networkName: managedNetworkName,
         networkAliases: descriptor.networkAliases,
+        dnsServers: descriptor.dnsServers,
         mounts: descriptor.mounts,
         publishedPorts: descriptor.publishedPorts,
         extraArgs: descriptor.extraArgs,
@@ -713,6 +717,7 @@ export const createManagedStackRuntime = ({env = process.env, logger, resolvePla
         env: descriptor.env,
         networkName: managedNetworkName,
         networkAliases: descriptor.networkAliases,
+        dnsServers: descriptor.dnsServers,
         mounts: descriptor.mounts,
         publishedPorts: descriptor.publishedPorts,
         extraArgs: descriptor.extraArgs,
@@ -793,6 +798,7 @@ export const createManagedStackRuntime = ({env = process.env, logger, resolvePla
       env: descriptor.env,
       networkName: managedNetworkName,
       networkAliases: descriptor.networkAliases,
+      dnsServers: descriptor.dnsServers,
       mounts: descriptor.mounts,
       publishedPorts: descriptor.publishedPorts,
       extraArgs: descriptor.extraArgs,

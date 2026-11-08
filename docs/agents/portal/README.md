@@ -90,6 +90,9 @@
   message/channel IDs before registering a prompt or acknowledging. Retry these phases against the existing message.
   Sends use a stable nonce of at most 25 characters and `enforceNonce`; outcomes older than two minutes require
   reconciliation instead of automatic resend. Keep acknowledgment tombstones beyond the legacy 500-ID history.
+- Paused summaries and slash status must surface unresolved title plans and observed failed tasks even when the
+  current retry allowance is not exhausted. Render a factual pause reason; label an interrupted batch as paused rather
+  than last completed. Formatting changes never reset an accepted delivery, acknowledgement, or approval prompt.
 - Paused downloadall DMs should add check/cross decision reactions and persist the DM message mapping through Sage
   before acknowledging the notification. Only the configured owner can decide; check continues the run and cross
   cancels remaining work. Completed, failed, and cancelled summaries are informational and should not create decision

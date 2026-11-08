@@ -4,6 +4,9 @@
   planning for managed services.
 - Warden must surface the exact Discord callback URL administrators need.
 - Warden owns one shared internal Docker network named `scriptarr-network`; Moon is the only default public bridge.
+- Per-service `SCRIPTARR_<SERVICE>_DNS_SERVERS` is opt-in. Validate resolver IPs, pass the ordered `dnsServers` descriptor
+  through every Docker create/update path, and reconcile against `HostConfig.Dns` only when explicitly configured.
+  Unset DNS must not recreate other services; explicit `[]` requests inherited DNS. Keep Docker aliases and VPN routing.
 - Warden runs as its own Docker container and is the only first-party container admins should start manually in the
   supported install path.
 - Warden requires a Docker socket bind and should reconcile the managed sibling containers from inside that container.

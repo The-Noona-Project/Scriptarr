@@ -235,6 +235,10 @@
   `lib/downloadAllBroker.mjs` stores delivery phases, accepted message/channel IDs, prompts, action claims, and
   acknowledgment tombstones in generic Vault jobs. Acknowledge only after the accepted DM and required prompt are
   durable; retain tombstones while the associated run remains eligible for notifications, without a 500-ID cap.
+- Derive unresolved-plan attention from scoped title-plan results and unresolved batch plan IDs; derive visible failed
+  title counts from unique batch observed/failed task IDs, separately preserving the exhausted count. No global
+  download-task read is needed for notification projection. Recovery plan records do not count as completed batches.
+  Keep the approval-window notification ID stable when the projection changes so acknowledged messages stay sent once.
 - Preserve the Discord `requestId` on creation. For a slash action, capture the current Raven `approvalId` once into
   its durable action claim before calling Raven. Every retry uses that captured token. Reaction prompts bind the
   accepted message, owner, bot, run, and approval window; registration preserves handled decisions. Stale or opposite

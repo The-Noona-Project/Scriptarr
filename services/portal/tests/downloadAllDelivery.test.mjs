@@ -45,6 +45,29 @@ test("slash and DM summaries distinguish completed title tasks from every policy
   }
 });
 
+test("paused live-shaped status and notification show unresolved plans and unexhausted failed work", () => {
+  const rawStatus = {runId: "run", status: "paused", filters: {type: "Manhua", nsfw: false, titlegroup: "T", batchesPerApproval: 20},
+    counts: {completedBatches: 0, remainingBatches: 1, failedCount: 34, failedTitleTaskCount: 0, completedTitleTaskCount: 0},
+    currentBatch: {status: "paused", label: "T Manhua"},
+    batches: [{result: {observedStatuses: {"task-tales": "failed"}, failedTaskIds: [], approvalAttempts: {"task-tales": 2},
+      unresolvedPlanIds: Array.from({length: 34}, (_, index) => `plan-${index}`)}}]};
+  const notification = {...rawStatus, batches: undefined, counts: {...rawStatus.counts, unresolvedPlanCount: 34, failedTitleTaskCount: 1},
+    summary: {failedTitles: 1, unresolvedPlans: 34}};
+  for (const value of [rawStatus, notification]) {
+    const slash = formatBulkRunSummary(value), dm = buildDownloadAllDirectMessagePayload(value);
+    assert.match(slash, /Unresolved title plans: 34/);
+    assert.match(slash, /Failed title tasks: 1/);
+    assert.match(slash, /Pause reason: 34 title plan\(s\) could not be prepared; 1 title task\(s\) failed/);
+    assert.match(dm.content, /paused: 34 title plan\(s\) could not be prepared; 1 title task\(s\) failed/);
+    const attention = dm.embeds[0].fields.find(field => field.name === "Needs attention").value;
+    assert.match(attention, /Unresolved title plans: \*\*34\*\*/);
+    assert.match(attention, /Failed title tasks: \*\*1\*\*/);
+    assert.doesNotMatch(attention, /None reported/);
+    assert.ok(dm.embeds[0].fields.some(field => field.name === "Paused batch" && field.value === "T Manhua"));
+    assert.ok(!dm.embeds[0].fields.some(field => field.name === "Last completed batch"));
+  }
+});
+
 test("prompt HTTP failures retry the accepted message after process restart", async () => {
   const f = fixture(); const record = f.sage.recordDownloadAllDecisionPrompt; let attempts = 0;
   f.sage.recordDownloadAllDecisionPrompt = async (...args) => ++attempts === 1 ? {ok: false, status: 503} : record(...args);
