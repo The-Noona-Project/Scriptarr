@@ -42,6 +42,12 @@ optional Appa admin/reviewer chat, and the Oracle chat bridge through Sage.
   compact Scriptarr-branded posts and acknowledge digest metadata only after Discord accepts the message.
 - `downloadall` should always use Sage's durable run path, including legacy raw DM text, and Portal should DM paused,
   completed, failed, or cancelled run summaries only once after Sage exposes a stable notification id.
+- Preserve original Discord interaction/message ids as downloadall `requestId` values. Action retries must reuse their
+  persisted approval window; never resolve a newer window for a replayed interaction. The dedicated downloadall
+  delivery helper records accepted message/channel ids through Sage, retries prompt/ack phases without resending,
+  and uses a stable nonce of at most 25 characters with `enforceNonce`. Only ambiguous sends less than two minutes old
+  may retry that nonce. Older unknown outcomes require reconciliation, not blind resend. Keep these phases scoped to
+  downloadall rather than changing the other notification contracts.
 - Reuse the shared `coverUrl` and Moon public base URL in Portal embeds and DMs when they are available instead of
   inventing a second artwork or link source.
 

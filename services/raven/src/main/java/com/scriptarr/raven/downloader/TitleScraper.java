@@ -23,6 +23,9 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CancellationException;
+import java.util.function.BooleanSupplier;
+import java.util.function.IntConsumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -130,66 +133,93 @@ public class TitleScraper {
      * @return collected bulk browse result
      */
     public BulkBrowseResult browseTitlesAlphabetically(String type, boolean adultContent, String titlePrefix) {
-        String normalizedType = normalizeMediaType(type);
-        if (normalizedType == null) {
-            return new BulkBrowseResult(List.of(), 0);
+        return browseTitlesAlphabetically(type, adultContent, titlePrefix, () -> false, ignored -> { });
+    }
+
+    /**
+     * Browse with cancellation and explicit failures rather than partial success.
+     *
+     * @param type exact requested type
+     * @param adultContent whether adult content is allowed
+     * @param titlePrefix visible title group
+     * @param cancelled cancellation predicate checked at every page and retry
+     * @param progress completed-page callback
+     * @return complete, locally filtered discovery
+     */
+    public BulkBrowseResult browseTitlesAlphabetically(String type, boolean adultContent, String titlePrefix,
+        BooleanSupplier cancelled, IntConsumer progress) {
+        String normalizedType = BulkTitleSelection.type(type);
+        if (normalizedType == null || titlePrefix == null || titlePrefix.isBlank()) {
+            throw new BulkDiscoveryException("invalid_filters", "Bulk discovery requires a supported type and prefix.", 0, null);
         }
-
-        String normalizedSearchPrefix = titlePrefix == null
-            ? ""
-            : titlePrefix.trim().toLowerCase(Locale.ROOT);
-
+        BooleanSupplier stop = cancelled == null ? () -> false : cancelled;
+        IntConsumer notify = progress == null ? ignored -> { } : progress;
         List<Map<String, String>> collected = new ArrayList<>();
         Set<String> seenHrefs = new HashSet<>();
+        Set<String> pageFingerprints = new HashSet<>();
         int pagesScanned = 0;
-        int offset = 0;
-        boolean hasMore;
-
         try {
-            do {
-                Document doc = fetchSearchData(Map.of(
-                    // WeebCentral's text search is not a stable prefix browse.
-                    // Bulk alphabet scans should stay on the plain sorted list and
-                    // let Raven enforce the visible prefix locally.
-                    "text", "",
-                    "sort", "Alphabet",
-                    "order", "Ascending",
-                    "official", "Any",
-                    "anime", "Any",
-                    "adult", adultContent ? "True" : "False",
-                    "included_type", normalizedType,
-                    "display_mode", "Full Display",
-                    "limit", String.valueOf(ADVANCED_SEARCH_PAGE_LIMIT),
-                    "offset", String.valueOf(offset)
-                ));
+            for (int offset = 0; offset < 320_000; offset += ADVANCED_SEARCH_PAGE_LIMIT) {
+                checkBulkCancelled(stop);
+                Map<String, String> query = Map.ofEntries(
+                    Map.entry("text", ""), Map.entry("sort", "Alphabet"), Map.entry("order", "Ascending"),
+                    Map.entry("official", "Any"), Map.entry("anime", "Any"),
+                    Map.entry("adult", adultContent ? "Any" : "False"), Map.entry("included_type", normalizedType),
+                    Map.entry("display_mode", "Full Display"), Map.entry("limit", String.valueOf(ADVANCED_SEARCH_PAGE_LIMIT)),
+                    Map.entry("offset", String.valueOf(offset)));
+                Document doc = executeWithRetries("bulk search request", () -> {
+                    checkBulkCancelled(stop);
+                    Connection connection = connect(sourceBaseUrl + "/search/data").followRedirects(false);
+                    query.forEach(connection::data);
+                    Document page = connection.get();
+                    checkBulkCancelled(stop);
+                    return page;
+                });
+                checkBulkCancelled(stop);
+                String body = doc.text().toLowerCase(Locale.ROOT);
+                if (doc.selectFirst("#challenge-running, #challenge-form, .cf-challenge, [name=cf-turnstile-response]") != null
+                    || body.contains("verify you are human") || body.contains("just a moment") || body.contains("access denied")
+                    || body.contains("checking your browser") || body.contains("captcha")) {
+                    throw new BulkDiscoveryException("upstream_challenge", "The provider returned an access challenge instead of title results.", pagesScanned, null);
+                }
+                List<Map<String, String>> parsed = parseSearchResults(doc);
+                boolean more = hasMoreResults(doc);
+                if (parsed.isEmpty()) {
+                    if (more || (!body.contains("no results") && !body.contains("no series") && doc.selectFirst(".no-results, [data-no-results]") == null)) {
+                        throw new BulkDiscoveryException("malformed_results", "The provider did not return a verifiable title results page.", pagesScanned, null);
+                    }
+                    pagesScanned++;
+                    notify.accept(pagesScanned);
+                    return new BulkBrowseResult(List.copyOf(collected), pagesScanned);
+                }
+                String fingerprint = parsed.stream().map(row -> row.get("href")).sorted().reduce("", (a,b) -> a + "\n" + b);
+                if (!pageFingerprints.add(fingerprint)) {
+                    throw new BulkDiscoveryException("repeated_pagination", "The provider repeated a browse page; discovery was not completed.", pagesScanned, null);
+                }
+                int newLinks = 0;
+                for (Map<String, String> entry : parsed) {
+                    if (!seenHrefs.add(entry.get("href"))) continue;
+                    newLinks++;
+                    if (normalizedType.equals(BulkTitleSelection.type(entry.get("type")))
+                        && BulkTitleSelection.matchesPrefix(entry.get("title"), titlePrefix)) collected.add(new LinkedHashMap<>(entry));
+                }
+                if (newLinks == 0) throw new BulkDiscoveryException("repeated_pagination", "The provider browse did not advance.", pagesScanned, null);
                 pagesScanned++;
-
-                List<Map<String, String>> parsedResults = parseSearchResults(doc);
-                if (parsedResults.isEmpty()) {
-                  break;
-                }
-
-                for (Map<String, String> parsed : parsedResults) {
-                    String href = parsed.get("href");
-                    if (href == null || href.isBlank() || !seenHrefs.add(href)) {
-                        continue;
-                    }
-
-                    if (!matchesVisiblePrefix(parsed.get("title"), normalizedSearchPrefix)) {
-                        continue;
-                    }
-
-                    collected.add(new HashMap<>(parsed));
-                }
-
-                hasMore = hasMoreResults(doc);
-                offset += ADVANCED_SEARCH_PAGE_LIMIT;
-            } while (hasMore);
+                notify.accept(pagesScanned);
+                checkBulkCancelled(stop);
+                if (!more) return new BulkBrowseResult(List.copyOf(collected), pagesScanned);
+            }
+            throw new BulkDiscoveryException("pagination_limit", "The provider exceeded the bounded browse limit.", pagesScanned, null);
+        } catch (CancellationException error) { throw error;
+        } catch (BulkDiscoveryException error) { throw error;
         } catch (Exception error) {
-            logger.warn("SCRAPER", "Bulk browse request failed.", error.getMessage());
+            if (Thread.currentThread().isInterrupted() || stop.getAsBoolean()) throw new CancellationException("Bulk discovery cancelled.");
+            throw new BulkDiscoveryException("upstream_failure", "Provider discovery failed before all pages were verified.", pagesScanned, error);
         }
+    }
 
-        return new BulkBrowseResult(collected.isEmpty() ? List.of() : List.copyOf(collected), pagesScanned);
+    private void checkBulkCancelled(BooleanSupplier cancelled) {
+        if (cancelled.getAsBoolean() || Thread.currentThread().isInterrupted()) throw new CancellationException("Bulk discovery cancelled.");
     }
 
     private boolean matchesVisiblePrefix(String rawTitle, String normalizedSearchPrefix) {
@@ -298,7 +328,7 @@ public class TitleScraper {
             }
 
             String href = link.absUrl("href");
-            if (href == null || href.isBlank() || !seen.add(href)) {
+            if (href == null || href.isBlank() || !BulkTitleSelection.validSeriesUrl(href, URI.create(sourceBaseUrl)) || !seen.add(href)) {
                 continue;
             }
 
@@ -382,7 +412,10 @@ public class TitleScraper {
         for (int attempt = 1; attempt <= SCRAPE_RETRY_ATTEMPTS; attempt++) {
             try {
                 return supplier.get();
+            } catch (CancellationException error) {
+                throw error;
             } catch (Exception error) {
+                if (Thread.currentThread().isInterrupted()) throw new CancellationException("Scraper request interrupted.");
                 lastError = error;
                 if (attempt >= SCRAPE_RETRY_ATTEMPTS || !sleepBeforeRetry(label, attempt, error)) {
                     throw error;

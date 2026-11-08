@@ -42,9 +42,10 @@
 - Brokered Portal Discord settings now include the fallback release channel id, per-library release channel ids, and
   update notification channel id. Durable release/update notification acknowledgments or latest posted GitHub update
   digests are normal settings-backed state that content reset should preserve.
-- Downloadall notification acknowledgments and reaction decision prompts are also operational settings-backed state.
-  Content reset should preserve them so an owner cannot accidentally lose a paused-run decision path during unrelated
-  catalog cleanup.
+- Downloadall deliveries, reaction prompts, and slash action claims use generic jobs owned by `scriptarr-sage`, with
+  kinds `portal-downloadall-delivery`, `portal-downloadall-prompt`, and `portal-downloadall-action`. Keep acknowledged
+  delivery tombstones while associated runs remain notification-eligible; do not restore the capped 500-ID setting
+  history. Legacy settings acknowledgments remain readable. Content reset preserves these operational jobs.
 - Brokered Portal Discord settings now also include Noona trivia configuration. Trivia rounds, guesses, score events,
   leaderboard acknowledgments, AI tool settings, and AI proposals are Vault-backed settings and should survive content
   reset with other operational settings.

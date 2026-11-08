@@ -79,22 +79,32 @@ contract is in place for future sites after those two.
 Raven intake is also edition-aware and grouped by concrete provider target, so metadata variants that resolve to the
 same download URL collapse into one requestable result while plain vs colored editions stay separate when the provider
 exposes different series URLs.
-The DM-only Discord `downloadall` flow now uses the same metadata-aware path for each bulk-browsed provider title. It
+The DM-only Discord `downloadall` flow uses the same metadata-aware path for each bulk-browsed provider title. It
 only queues titles with one confident metadata match and reports already-active, adult-content, no-metadata,
-ambiguous-metadata, and failed skips back to Portal instead of bulk-queueing metadata-less library entries. When the
+and ambiguous-metadata exclusions instead of bulk-queueing metadata-less library entries. When the
 command uses `nsfw:false`, Raven verifies the concrete WeebCentral title page and only queues titles with an explicit
 `Adult Content: No`; adult or unverified titles are skipped. That command is intentionally locked to the WeebCentral
 provider and fails when WeebCentral is disabled rather than falling back to MangaDex.
 Raven also exposes durable async bulk-run orchestration under `/v1/downloads/bulk-runs` for owner flows that need
 mega `downloadall` runs. A run can target one type/group or expand `type:all` and `titlegroup:all` into A-Z batches
-ordered group-first, then type. Run and batch state persist through Sage's generic job broker, batch status includes
-the Raven title task ids queued by that batch, and resume skips completed batches after a restart. Each batch still
-uses the same WeebCentral-only metadata-confident bulk queue path while preserving the owner's `nsfw` filter. The
-`groupsize`/`batchesPerApproval` setting controls how many batch tasks run before Raven pauses, and failed or stale
-run-owned title tasks retry up to three total attempts before safe removal lets the rest of the run continue. If a
-stale running title task does not leave `running` after Raven requests cancellation, the batch pauses with a
-`recoveryAction` that points the admin to `/admin/activity/queue` to cancel the exact title task before continuing the
-bulk run.
+ordered group-first, then type. Run and batch state persist through Sage's generic job broker. Each batch records its
+owned title tasks and keeps completed outcomes across restarts and local history pruning. Started runs recover only
+after the download queue has fully restored; paused runs and deliberately unstarted runs wait for the owner.
+
+`groupsize`/`batchesPerApproval` controls how many **type-and-letter batches** run before the next approval; it does not
+limit titles. For example, `type:Manhua nsfw:False titlegroup:t groupsize:20` creates one T/Manhua batch and considers
+every matching title. Download worker concurrency remains a separate setting.
+
+A failed source scan, unresolved title, missing owned task, or exhausted retry allowance pauses the run with the exact
+recovery identities. Failed task records and partial files remain available for inspection. A long queue wait does
+not expire healthy work. Each owner approval allows up to three attempts per unresolved title, while total attempts
+remain visible. Continue retries unresolved work and preserves completed titles and policy exclusions. Retried
+Discord commands and approval actions reuse their existing run or accepted decision rather than advancing another
+window. Reading status never starts work.
+
+Completion requires finished discovery and successful owned work, including canonical CBZ files, saved catalog state,
+and ready AVIF pages. Source-quality markers and generated missing-page placeholders remain visible through the
+existing quality and missing-content screens; completion does not erase them.
 `/v1/library?view=card` returns the compact Moon shelf projection without chapter arrays or filesystem roots. It
 accepts `q`, `type`, `letter`, `cursor`, `pageSize`, `sort`, and exact `ids`, forwards those filters through Sage to
 Vault's title-only projection, preserves requested exact-id ordering for activity cards, and keeps full title and

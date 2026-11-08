@@ -89,8 +89,24 @@
   skipping completed batches instead of re-queueing them.
 - Every `/downloadall` execution should create a durable run, not only expanded mega runs, so delayed completion,
   stale-task handling, summary DMs, reaction approvals, and continue prompts survive process restarts. `groupsize`
-  maps to `batchesPerApproval`, so Raven should process that many batch tasks before pausing. Stale run-owned title
-  tasks should count as failed after the timeout/retry budget and must not block the next batch forever.
+  maps to `batchesPerApproval`, never a title limit. `Manhua` / `false` / `t` / `20` is one batch covering all eligible
+  T-prefix Manhua titles. Preserve the configured title and encoder concurrency independently.
+- `BulkQueueCoordinator` owns strict discovery, title plans, and enqueue ownership. Persist stable run/batch/plan/task
+  identities before queueing; incomplete browsing, challenges, repeated pagination, and unresolved owned work pause
+  instead of completing. Validate the exact provider origin/series path, actual source type, visible title prefix,
+  metadata confidence, and explicit non-adult classification for `nsfw:false`.
+- Keyed creation repairs missing deterministic batch rows without resetting progress; conflicting owner/filter reuse
+  returns 409. Status GETs are observational. Startup and 30-second reconciliation wait for full title-task restoration
+  and recover only running or explicitly started queued runs, preserving paused and cancelled states.
+- Read terminal outcomes from durable records beyond the local 200-task history. Queue age is not a stall. Use actual
+  download and per-page ingest progress, preserving encoder waits. Completion requires every planned chapter, healthy
+  canonical CBZs, persisted catalog rows, and reusable ready AVIF manifests; reuse archives during interrupted append
+  or ingest. Missing, exhausted, superseded, or unplanned legacy work pauses with IDs and reasons, retaining evidence.
+  Each explicit approval grants unresolved titles three attempts while preserving cumulative history. Durable
+  `approvalGeneration` on completed batches also accounts for a crash before the parent approval counter is saved.
+- Continue/cancel consumes the captured `approvalId` before scheduling and retains a compact accepted receipt.
+  Replays return that receipt; stale or opposite decisions cannot affect a later approval window. Cancellation closes
+  the enqueue gate and reconciles owned tasks and batch checkpoints after in-flight discovery callbacks finish.
 - `/v1/library?view=card` is the compact Moon shelf projection. Accept and forward `q`, `type`, `letter`, `cursor`,
   `pageSize`, `sort`, and exact `ids` through Sage to Vault's title-card endpoint, preserving requested exact-id
   ordering for activity hydration. Keep chapter arrays, archive paths, working roots, and download roots out of that

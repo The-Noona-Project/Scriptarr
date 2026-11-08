@@ -184,7 +184,9 @@ Architecture invariants:
   public API collapse cleanly under concurrency.
 - Request-linked moderation and Raven completion events can now trigger one Portal DM per request state when a Discord
   id is available. Completed Raven tasks can also queue one release-channel post with a durable `release:<taskId>` ack,
-  and durable `/downloadall` batches can queue requester DMs with `downloadall:<runId>:<batchId>:<status>` acks.
+  and durable `/downloadall` runs queue requester DMs with stable notification IDs. Paused notifications include the
+  current `approvalId`; delivery phases, message/channel receipts, decisions, and acknowledgment tombstones persist as
+  Sage-owned jobs. Preserve Discord interaction/message `requestId` through Portal -> Sage -> Raven.
 - Portal's `/trivia` command and guild message handler are Sage-backed. Trivia rounds, guesses, score events,
   leaderboard acks, and runtime state persist through Vault settings; Oracle may only advise borderline matches.
   Portal should reconcile one active trivia clock from Sage state so reloads, repeated manual starts, and settings
@@ -212,7 +214,10 @@ Architecture invariants:
   repeated library type plus normalized title matches.
 - Raven should skip completed titles during `/downloadall`, append only missing/new chapters for existing active
   titles, convert source-image damage into Missing Content quality fields instead of wedging a whole batch, and pause
-  with an exact recovery action if a stale running title task cannot be cancelled into retryable work.
+  with an exact recovery action for unresolved owned work. `BulkQueueCoordinator` owns strict complete discovery and
+  durable title planning. Status reads cannot recover workers; startup and 30-second reconciliation wait for complete
+  title restoration. Keep healthy queued work, preserve cumulative attempts and failed evidence, and verify planned
+  chapters, canonical archives, catalog persistence, and AVIF readiness before completion.
 - Oracle is now a FastAPI Python service that keeps the same Sage-facing wire contract plus `/api/assist` for bounded
   structured assistance. It never executes mutations directly.
 - Oracle owns embedded LocalAI model/runtime lifecycle. Warden only injects Oracle mounts and GPU/runtime flags; do not

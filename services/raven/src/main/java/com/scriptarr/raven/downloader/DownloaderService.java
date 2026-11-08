@@ -4,6 +4,7 @@ import com.scriptarr.raven.library.LibraryChapter;
 import com.scriptarr.raven.library.LibraryNaming;
 import com.scriptarr.raven.library.LibraryService;
 import com.scriptarr.raven.library.LibraryTitle;
+import com.scriptarr.raven.library.IngestProgress;
 import com.scriptarr.raven.metadata.MetadataService;
 import com.scriptarr.raven.downloader.providers.DownloadProvider;
 import com.scriptarr.raven.downloader.providers.DownloadProviderRegistry;
@@ -56,6 +57,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.PriorityBlockingQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
@@ -100,13 +102,18 @@ public class DownloaderService {
     private final Map<String, Thread> runningTaskThreads = new ConcurrentHashMap<>();
     private final Set<String> cancellationRequestedTaskIds = ConcurrentHashMap.newKeySet();
     private final AtomicBoolean persistedTaskRestoreStarted = new AtomicBoolean(false);
+    private final AtomicBoolean persistedTaskRestoreInProgress = new AtomicBoolean(false);
+    private final CompletableFuture<Void> persistedTaskRestoreCompletion = new CompletableFuture<>();
+    private final BulkQueueCoordinator bulkQueueCoordinator;
+    private final DownloadCompletionVerifier completionVerifier;
     private final AtomicLong queueSortSequence = new AtomicLong();
+    private final Map<String, Long> ingestProgressPersistedAt = new ConcurrentHashMap<>();
     private final AtomicLong queueSequence = new AtomicLong();
     private volatile int configuredActiveTitleDownloads = RavenDownloadRuntimeSettings.DEFAULT_ACTIVE_TITLE_DOWNLOADS;
     private ThreadPoolExecutor queueWorker = createQueueWorker(configuredActiveTitleDownloads);
     private java.util.concurrent.ExecutorService pageDownloadWorker = createPageDownloadWorker();
-    private final java.util.concurrent.ExecutorService persistedTaskRestoreWorker =
-        Executors.newSingleThreadExecutor((runnable) -> {
+    private final ScheduledExecutorService persistedTaskRestoreWorker =
+        Executors.newSingleThreadScheduledExecutor((runnable) -> {
             Thread thread = new Thread(runnable, "raven-task-restore");
             thread.setDaemon(true);
             return thread;
@@ -155,6 +162,8 @@ public class DownloaderService {
         this.brokerClient = brokerClient;
         this.settingsService = settingsService;
         this.logger = logger;
+        this.completionVerifier = new DownloadCompletionVerifier(libraryService);
+        this.bulkQueueCoordinator = new BulkQueueCoordinator(this, downloadProviderRegistry, libraryService, downloadIntakeService, brokerClient, settingsService);
     }
 
     /**
@@ -174,37 +183,38 @@ public class DownloaderService {
      * after a container restart.
      */
     public void restorePersistedTasks() {
-        reloadDownloadRuntimeSettings();
-        for (int attempt = 1; attempt <= RESTORE_RETRY_ATTEMPTS; attempt++) {
-            try {
-                restorePersistedTasksOnce();
-                return;
-            } catch (Exception error) {
-                logger.warn(
-                    "DOWNLOAD",
-                    "Failed to restore persisted Raven tasks.",
-                    "attempt=" + attempt + "/" + RESTORE_RETRY_ATTEMPTS + " reason="
-                        + normalizeString(error.getMessage(), "unknown")
-                );
-                if (attempt < RESTORE_RETRY_ATTEMPTS && !sleepBeforeRestoreRetry()) {
+        if (persistedTaskRestoreCompletion.isDone() || !persistedTaskRestoreInProgress.compareAndSet(false, true)) return;
+        try {
+            reloadDownloadRuntimeSettings();
+            for (int attempt = 1; attempt <= RESTORE_RETRY_ATTEMPTS; attempt++) {
+                try {
+                    restorePersistedTasksOnce();
+                    persistedTaskRestoreCompletion.complete(null);
                     return;
+                } catch (Exception error) {
+                    logger.warn("DOWNLOAD", "Failed to restore persisted Raven tasks.", "attempt=" + attempt + " reason=" + normalizeString(error.getMessage(), "unknown"));
+                    if (attempt < RESTORE_RETRY_ATTEMPTS && !sleepBeforeRestoreRetry()) return;
                 }
             }
+        } finally {
+            persistedTaskRestoreInProgress.set(false);
+            if (!persistedTaskRestoreCompletion.isDone() && !persistedTaskRestoreWorker.isShutdown()) {
+                persistedTaskRestoreWorker.schedule(this::restorePersistedTasks, 30, TimeUnit.SECONDS);
+            }
         }
-        pruneTerminalTaskHistory();
     }
 
     private void restorePersistedTasksOnce() throws Exception {
             var payload = brokerClient.listDownloadTasks();
             if (payload == null || !payload.isArray()) {
-                return;
+                throw new IllegalStateException("Raven task restoration did not receive a complete durable task snapshot.");
             }
 
             List<Map<String, Object>> restoredTasks = new ArrayList<>();
             Map<String, Map<String, Object>> activeByKey = new LinkedHashMap<>();
 
             payload.forEach((node) -> {
-                Map<String, Object> task = new LinkedHashMap<>();
+                Map<String, Object> task = new ConcurrentHashMap<>();
                 task.put("taskId", node.path("taskId").asText(""));
                 task.put("jobId", node.path("jobId").asText(node.path("taskId").asText("")));
                 task.put("titleId", node.path("titleId").asText(""));
@@ -249,6 +259,9 @@ public class DownloaderService {
                     }
                     copyIfPresent(detailsNode, task, "startedAt");
                     copyNumberIfPresent(detailsNode, task, "downloadSpeedBytesPerSecond");
+                    for (String key : List.of("bulkRunId", "bulkBatchId", "bulkPlanId", "actualProgressAt", "stage", "ingestCompletedPages", "ingestTotalPages", "ingestCompletedChapters", "ingestTotalChapters")) {
+                        if (detailsNode.has(key)) task.put(key, brokerClientValue(detailsNode.path(key)));
+                    }
                     if (restoredSortOrder < 0) {
                         restoredSortOrder = normalizeSortOrder(
                             detailsNode.has("sortOrder") ? brokerClientValue(detailsNode.path("sortOrder")) : null,
@@ -288,6 +301,7 @@ public class DownloaderService {
 
             for (Map<String, Object> task : restoredTasks) {
                 String taskId = String.valueOf(task.get("taskId"));
+                if (queuedTasks.containsKey(taskId) || runningTaskThreads.containsKey(taskId)) continue;
                 if (isIngestTask(task)) {
                     if ("queued".equals(task.get("status")) || "running".equals(task.get("status"))) {
                         task.put("status", "failed");
@@ -391,306 +405,169 @@ public class DownloaderService {
      * @return bulk queue summary
      */
     public BulkQueueDownloadResult bulkQueueDownload(String providerId, String type, Boolean nsfw, String titlePrefix, String requestedBy) {
-        String normalizedProviderId = normalizeString(providerId).toLowerCase(Locale.ROOT);
-        String normalizedType = normalizeBulkQueueType(type);
-        String normalizedPrefix = normalizeBulkTitlePrefix(titlePrefix);
-        BulkQueueDownloadResult.Filters filters = new BulkQueueDownloadResult.Filters(
-            normalizedType == null ? normalizeQueueType(type) : normalizedType,
-            Boolean.TRUE.equals(nsfw),
-            normalizedPrefix == null ? "" : normalizedPrefix
-        );
-
-        if (normalizedProviderId.isBlank() || normalizedType == null || nsfw == null || normalizedPrefix == null) {
-            return new BulkQueueDownloadResult(
-                BulkQueueDownloadResult.STATUS_INVALID_REQUEST,
-                "providerId, type, nsfw, and titlePrefix are required.",
-                filters,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                List.of(),
-                List.of(),
-                List.of(),
-                List.of(),
-                List.of(),
-                List.of(),
-                List.of()
-            );
-        }
-
-        if (!WEBCENTRAL_PROVIDER_ID.equals(normalizedProviderId)) {
-            return new BulkQueueDownloadResult(
-                BulkQueueDownloadResult.STATUS_INVALID_REQUEST,
-                "The Scriptarr downloadall command is locked to the WeebCentral provider.",
-                filters,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                List.of(),
-                List.of(),
-                List.of(),
-                List.of(),
-                List.of(),
-                List.of(),
-                List.of()
-            );
-        }
-
-        Optional<DownloadProvider> selectedProvider = downloadProviderRegistry.getById(normalizedProviderId)
-            .filter((provider) -> settingsService.isDownloadProviderEnabled(provider.id()));
-        if (selectedProvider.isEmpty()) {
-            return new BulkQueueDownloadResult(
-                BulkQueueDownloadResult.STATUS_INVALID_REQUEST,
-                "WeebCentral bulk queue is unavailable because the provider is disabled in Raven settings.",
-                filters,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                List.of(),
-                List.of(),
-                List.of(),
-                List.of(),
-                List.of(),
-                List.of(),
-                List.of()
-            );
-        }
-
-        BulkBrowseResult browseResult = selectedProvider.get().browseTitlesAlphabetically(normalizedType, Boolean.TRUE.equals(nsfw), normalizedPrefix);
-
-        List<Map<String, String>> matchedTitles = filterTitlesByPrefix(browseResult.titles(), normalizedPrefix);
-        if (matchedTitles.isEmpty()) {
-            return new BulkQueueDownloadResult(
-                BulkQueueDownloadResult.STATUS_EMPTY_RESULTS,
-                "No titles matched the supplied filters.",
-                filters,
-                browseResult.pagesScanned(),
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                List.of(),
-                List.of(),
-                List.of(),
-                List.of(),
-                List.of(),
-                List.of(),
-                List.of()
-            );
-        }
-
-        List<String> queuedTitles = new ArrayList<>();
-        List<String> skippedActiveTitles = new ArrayList<>();
-        List<String> skippedAdultContentTitles = new ArrayList<>();
-        List<String> skippedNoMetadataTitles = new ArrayList<>();
-        List<String> skippedAmbiguousMetadataTitles = new ArrayList<>();
-        List<String> skippedCompletedTitles = new ArrayList<>();
-        List<String> skippedCurrentTitles = new ArrayList<>();
-        List<String> appendedTitles = new ArrayList<>();
-        List<String> invalidSourceTitles = new ArrayList<>();
-        List<String> failedTitles = new ArrayList<>();
-        List<String> queuedTaskIds = new ArrayList<>();
-        String actor = normalizeString(requestedBy, "scriptarr-portal");
-        List<LibraryTitle> existingLibraryTitles = libraryService == null ? List.of() : libraryService.listTitles();
-
-        for (Map<String, String> selectedTitle : matchedTitles) {
-            String titleName = normalizeString(selectedTitle.get("title"), "Unknown title");
-            String titleUrl = normalizeString(selectedTitle.get("href"));
-            String requestType = LibraryNaming.normalizeTypeLabel(selectedTitle.getOrDefault("type", normalizedType));
-            String activeKey = activeBulkTaskKey(Map.of(
-                "providerId", selectedProvider.get().id(),
-                "titleUrl", titleUrl
-            ));
-            if (!isValidProviderTitleUrl(titleUrl)) {
-                invalidSourceTitles.add(titleName);
-                continue;
-            }
-            if (isTaskAlreadyActive(activeKey, titleName)) {
-                skippedActiveTitles.add(titleName);
-                continue;
-            }
-
-            try {
-                LibraryTitle existingTitle = findExistingLibraryTitle(existingLibraryTitles, titleUrl, titleName, requestType);
-                if (existingTitle != null && "completed".equalsIgnoreCase(normalizeString(existingTitle.status()))) {
-                    skippedCompletedTitles.add(titleName);
-                    continue;
-                }
-
-                TitleDetails providerDetails = selectedProvider.get().getTitleDetails(titleUrl);
-                if (!Boolean.TRUE.equals(nsfw) && (providerDetails == null || !Boolean.FALSE.equals(providerDetails.adultContent()))) {
-                    skippedAdultContentTitles.add(titleName);
-                    continue;
-                }
-
-                if (existingTitle != null) {
-                    List<Map<String, String>> providerChapters = selectedProvider.get().getChapters(titleUrl);
-                    List<Map<String, String>> missingChapters = missingProviderChapters(existingTitle, providerChapters);
-                    if (missingChapters.isEmpty()) {
-                        skippedCurrentTitles.add(titleName);
-                        continue;
-                    }
-                    Map<String, Object> selectedDownload = new LinkedHashMap<>();
-                    selectedDownload.put("providerId", selectedProvider.get().id());
-                    selectedDownload.put("providerName", selectedProvider.get().name());
-                    selectedDownload.put("titleName", titleName);
-                    selectedDownload.put("titleUrl", titleUrl);
-                    selectedDownload.put("requestType", requestType);
-                    selectedDownload.put("libraryTypeLabel", requestType);
-                    selectedDownload.put("libraryTypeSlug", LibraryNaming.normalizeTypeSlug(requestType));
-                    selectedDownload.put("downloadMode", "append");
-                    selectedDownload.put("appendTitleId", existingTitle.id());
-                    selectedDownload.put("chapterNumbers", missingChapters.stream()
-                        .map((chapter) -> normalizeStoredChapterNumber(chapter.getOrDefault("chapter_number", "")))
-                        .filter((chapterNumber) -> !chapterNumber.isBlank())
-                        .toList());
-                    if (providerDetails != null && providerDetails.adultContent() != null) {
-                        selectedDownload.put("adultContent", providerDetails.adultContent());
-                        selectedDownload.put("nsfw", providerDetails.adultContent());
-                    }
-                    Map<String, Object> queuedTask = queueDownload(new DownloadRequest(
-                        titleName,
-                        titleUrl,
-                        requestType,
-                        actor,
-                        selectedProvider.get().id(),
-                        "",
-                        Map.of(),
-                        selectedDownload,
-                        "",
-                        "normal"
-                    ));
-                    String queuedTaskId = normalizeString(queuedTask.get("taskId"));
-                    if (!queuedTaskId.isBlank()) {
-                        queuedTaskIds.add(queuedTaskId);
-                    }
-                    queuedTitles.add(titleName);
-                    appendedTitles.add(titleName);
-                    continue;
-                }
-
-                DownloadIntakeService.BulkMetadataResolution metadataResolution = downloadIntakeService.resolveBulkMetadata(
-                    selectedProvider.get().id(),
-                    titleUrl,
-                    titleName,
-                    requestType
-                );
-                if (metadataResolution.unmatched()) {
-                    skippedNoMetadataTitles.add(titleName);
-                    continue;
-                }
-                if (metadataResolution.ambiguous()) {
-                    skippedAmbiguousMetadataTitles.add(titleName);
-                    continue;
-                }
-
-                Map<String, Object> selectedMetadata = new LinkedHashMap<>(metadataResolution.metadataSnapshot());
-                Map<String, Object> selectedDownload = new LinkedHashMap<>(metadataResolution.downloadSnapshot());
-                selectedDownload.putIfAbsent("providerId", selectedProvider.get().id());
-                selectedDownload.putIfAbsent("providerName", selectedProvider.get().name());
-                selectedDownload.putIfAbsent("titleName", titleName);
-                selectedDownload.putIfAbsent("titleUrl", titleUrl);
-                selectedDownload.putIfAbsent("requestType", requestType);
-                selectedDownload.putIfAbsent("libraryTypeLabel", requestType);
-                selectedDownload.putIfAbsent("libraryTypeSlug", LibraryNaming.normalizeTypeSlug(requestType));
-                if (providerDetails != null && providerDetails.adultContent() != null) {
-                    selectedDownload.put("adultContent", providerDetails.adultContent());
-                    selectedDownload.put("nsfw", providerDetails.adultContent());
-                }
-
-                Map<String, Object> queuedTask = queueDownload(new DownloadRequest(
-                    titleName,
-                    titleUrl,
-                    requestType,
-                    actor,
-                    selectedProvider.get().id(),
-                    "",
-                    selectedMetadata,
-                    selectedDownload,
-                    "",
-                    "normal"
-                ));
-                String queuedTaskId = normalizeString(queuedTask.get("taskId"));
-                if (!queuedTaskId.isBlank()) {
-                    queuedTaskIds.add(queuedTaskId);
-                }
-                queuedTitles.add(titleName);
-            } catch (Exception error) {
-                failedTitles.add(titleName);
-                logger.warn("DOWNLOAD", "Bulk queue failed for title.", error.getMessage());
-            }
-        }
-
-        return new BulkQueueDownloadResult(
-            resolveBulkQueueStatus(
-                queuedTitles,
-                skippedActiveTitles,
-                skippedAdultContentTitles,
-                skippedNoMetadataTitles,
-                skippedAmbiguousMetadataTitles,
-                skippedCompletedTitles,
-                skippedCurrentTitles,
-                appendedTitles,
-                invalidSourceTitles,
-                failedTitles
-            ),
-            buildBulkQueueMessage(
-                queuedTitles,
-                skippedActiveTitles,
-                skippedAdultContentTitles,
-                skippedNoMetadataTitles,
-                skippedAmbiguousMetadataTitles,
-                skippedCompletedTitles,
-                skippedCurrentTitles,
-                appendedTitles,
-                invalidSourceTitles,
-                failedTitles,
-                matchedTitles.size()
-            ),
-            filters,
-            browseResult.pagesScanned(),
-            matchedTitles.size(),
-            queuedTitles.size(),
-            skippedActiveTitles.size(),
-            skippedAdultContentTitles.size(),
-            skippedNoMetadataTitles.size(),
-            skippedAmbiguousMetadataTitles.size(),
-            skippedCompletedTitles.size(),
-            skippedCurrentTitles.size(),
-            appendedTitles.size(),
-            invalidSourceTitles.size(),
-            failedTitles.size(),
-            queuedTaskIds,
-            queuedTitles,
-            skippedActiveTitles,
-            skippedAdultContentTitles,
-            skippedNoMetadataTitles,
-            skippedAmbiguousMetadataTitles,
-            skippedCompletedTitles,
-            skippedCurrentTitles,
-            appendedTitles,
-            invalidSourceTitles,
-            failedTitles
-        );
+        return bulkQueueCoordinator.queueLegacy(providerId, type, nsfw, titlePrefix, requestedBy);
     }
+
+    /**
+     * Expose durable run discovery and task ownership without the UI history cap.
+     *
+     * @return bulk run gateway
+     */
+    public BulkRunGateway bulkRunGateway() { return bulkQueueCoordinator; }
+
+    /** Return the stable successful-restoration barrier. */
+    CompletableFuture<Void> restorationCompletion() { return persistedTaskRestoreCompletion; }
+
+    /** Return live task evidence for merging with durable owned history. */
+    List<Map<String, Object>> bulkTaskSnapshots() { return tasks.values().stream().map(Map::copyOf).toList(); }
+
+    /** Check active source identity without adopting another task owner. */
+    boolean bulkTitleAlreadyActive(String url, String type, String ignoredId) {
+        return tasks.values().stream().anyMatch(task -> !ignoredId.equals(normalizeString(task.get("taskId")))
+            && Set.of("queued", "running").contains(normalizeString(task.get("status")))
+            && java.util.Objects.equals(BulkTitleSelection.canonicalSeriesUrl(url), BulkTitleSelection.canonicalSeriesUrl(normalizeString(task.get("titleUrl"))))
+            && LibraryNaming.normalizeTypeSlug(type).equals(LibraryNaming.normalizeTypeSlug(normalizeString(task.get("requestType")))));
+    }
+
+    /** Require a healthy archive and reusable reader pages. */
+    boolean bulkChapterHealthy(LibraryChapter chapter) { return completionVerifier.healthy(chapter); }
+
+    /** Persist a stable owned identity before submitting any executable download. */
+    synchronized Map<String, Object> queueBulkOwned(String taskId, String runId, String batchId, String planId, DownloadRequest request) {
+        if (bulkQueueCoordinator.isRunCancelled(runId)) throw new CancellationException("Bulk run cancelled.");
+        Map<String, Object> existing = tasks.get(taskId);
+        if (existing == null) {
+            try {
+                var records = brokerClient.listDownloadTasks();
+                if (records == null || !records.isArray()) throw new IllegalStateException("Invalid durable task snapshot.");
+                for (var node : records) {
+                    if (taskId.equals(node.path("taskId").asText())) {
+                        existing = brokerClientPayloadToMap(node);
+                        Map<String, Object> detail = normalizeMap(existing.get("details"));
+                        for (String key : List.of("bulkRunId", "bulkBatchId", "bulkPlanId", "selectedMetadata", "selectedDownload", "actualProgressAt", "stage")) {
+                            if (!existing.containsKey(key) && detail.containsKey(key)) existing.put(key, detail.get(key));
+                        }
+                        break;
+                    }
+                }
+            } catch (Exception error) { throw new IllegalStateException("Could not verify durable bulk task identity.", error); }
+        }
+        if (existing != null) {
+            if (!runId.equals(normalizeString(existing.get("bulkRunId"))) || !batchId.equals(normalizeString(existing.get("bulkBatchId")))) {
+                throw new IllegalStateException("Bulk task identity belongs to another owner.");
+            }
+            if (!(existing instanceof ConcurrentHashMap<?, ?>)) {
+                Map<String, Object> stable = new ConcurrentHashMap<>();
+                existing.forEach((key, value) -> { if (value != null) stable.put(key, value); });
+                existing = stable;
+            }
+            tasks.put(taskId, existing);
+            if ("queued".equals(normalizeString(existing.get("status"))) && !queuedTasks.containsKey(taskId) && !runningTaskThreads.containsKey(taskId)) {
+                persistTask(taskId);
+                submitQueuedTask(taskId, request);
+            }
+            return Map.copyOf(existing);
+        }
+        Map<String, Object> selectedDownload = request.selectedDownload() == null ? Map.of() : request.selectedDownload();
+        Map<String, Object> task = new ConcurrentHashMap<>();
+        task.put("taskId", taskId);
+        task.put("jobId", taskId);
+        task.put("titleId", normalizeString(selectedDownload.get("appendTitleId")));
+        task.put("titleName", request.titleName());
+        task.put("titleUrl", request.titleUrl());
+        task.put("requestType", request.requestType());
+        task.put("requestedBy", request.requestedBy());
+        task.put("providerId", request.providerId() == null ? "" : request.providerId());
+        task.put("requestId", request.requestId() == null ? "" : request.requestId());
+        task.put("replacementTitleId", request.replacementTitleId() == null ? "" : request.replacementTitleId());
+        task.put("status", "queued");
+        task.put("message", "Queued for Raven download.");
+        task.put("percent", 0);
+        task.put("queuedAt", Instant.now().toString());
+        task.put("updatedAt", Instant.now().toString());
+        task.put("libraryTypeLabel", LibraryNaming.normalizeTypeLabel(request.requestType()));
+        task.put("libraryTypeSlug", LibraryNaming.normalizeTypeSlug(request.requestType()));
+        task.put("selectedMetadata", request.selectedMetadata() == null ? Map.of() : request.selectedMetadata());
+        task.put("selectedDownload", selectedDownload);
+        task.put("coverUrl", resolveCoverUrl(request));
+        task.put("priority", normalizePriorityLabel(request.priority()));
+        task.put("sortOrder", nextQueuedSortOrder());
+        task.put("startedAt", "");
+        task.put("downloadSpeedBytesPerSecond", 0L);
+        task.put("bulkRunId", runId);
+        task.put("bulkBatchId", batchId);
+        task.put("bulkPlanId", planId);
+        task.put("stage", "queued");
+        task.put("actualProgressAt", Instant.now().toString());
+        task.put("details", buildTaskDetails(task));
+        tasks.put(taskId, task);
+        try { persistTask(taskId); }
+        catch (RuntimeException error) { tasks.remove(taskId, task); throw error; }
+        submitQueuedTask(taskId, request);
+        return Map.copyOf(task);
+    }
+
+    /** Cancel only an active task matching the specified durable run owner. */
+    synchronized void cancelBulkOwned(String taskId, String runId) {
+        Map<String, Object> task = tasks.get(taskId);
+        if (task != null && runId.equals(normalizeString(task.get("bulkRunId")))
+            && Set.of("queued", "running").contains(normalizeString(task.get("status")))) cancelTask(taskId);
+    }
+
+    private List<Map<String, String>> expectedChapters(Map<String, Object> task) {
+        Object raw = normalizeMap(task.get("selectedDownload")).get("expectedChapters");
+        if (!(raw instanceof List<?> rows)) return List.of();
+        return rows.stream().map(row -> {
+            Map<String, String> next = new LinkedHashMap<>();
+            normalizeMap(row).forEach((key, value) -> next.put(key, normalizeString(value)));
+            return next;
+        }).toList();
+    }
+
+    private void rememberExpectedChapters(String taskId, List<Map<String, String>> chapters) {
+        Map<String, Object> task = tasks.get(taskId);
+        if (task == null || !expectedChapters(task).isEmpty()) return;
+        Map<String, Object> selected = new LinkedHashMap<>(normalizeMap(task.get("selectedDownload")));
+        selected.put("expectedChapters", List.copyOf(chapters));
+        task.put("selectedDownload", selected);
+        persistTask(taskId);
+    }
+
+    private void verifyExpectedSourceChapters(String taskId, List<Map<String, String>> source) {
+        Map<String, Object> task = tasks.get(taskId);
+        String titleId = normalizeString(task.get("titleId"), normalizeString(normalizeMap(task.get("selectedDownload")).get("appendTitleId")));
+        LibraryTitle catalog = titleId.isBlank() ? null : libraryService.findTitle(titleId);
+        List<Map<String, String>> expected = expectedChapters(task);
+        if (expected.isEmpty()) {
+            Object selected = normalizeMap(task.get("selectedDownload")).get("chapterNumbers");
+            if (selected instanceof List<?> numbers) expected = numbers.stream().map(n -> Map.of("chapter_number", normalizeString(n))).toList();
+        }
+        for (Map<String, String> wanted : expected) {
+            boolean exists = source.stream().anyMatch(row -> DownloadCompletionVerifier.number(row.get("chapter_number")).equals(DownloadCompletionVerifier.number(wanted.get("chapter_number")))
+                || (!normalizeString(wanted.get("href")).isBlank() && wanted.get("href").equals(row.get("href"))));
+            boolean ready = catalog != null && catalog.chapters() != null && catalog.chapters().stream().anyMatch(c -> DownloadCompletionVerifier.matches(c,wanted) && completionVerifier.healthy(c));
+            if (!exists && !ready) throw new IllegalStateException("Expected source chapter disappeared before it became reader-ready: " + normalizeString(wanted.get("chapter_number")));
+        }
+    }
+
+    private void rememberIngestProgress(String taskId, IngestProgress progress) {
+        Map<String, Object> task = tasks.get(taskId);
+        if (task == null) return;
+        boolean chapterAdvanced = progress.completedChapters() > toInt(task.get("ingestCompletedChapters"));
+        task.put("stage", progress.stage());
+        task.put("ingestCompletedPages", progress.completedPages());
+        task.put("ingestTotalPages", progress.totalPages());
+        task.put("ingestCompletedChapters", progress.completedChapters());
+        task.put("ingestTotalChapters", progress.totalChapters());
+        task.put("updatedAt", Instant.now().toString());
+        if (progress.advanced()) task.put("actualProgressAt", Instant.now().toString());
+        long now = System.currentTimeMillis();
+        if (chapterAdvanced || now - ingestProgressPersistedAt.getOrDefault(taskId, 0L) >= 10_000L) {
+            persistTask(taskId);
+            ingestProgressPersistedAt.put(taskId, now);
+        }
+    }
+
 
     /**
      * Queue a new download job and return the initial task snapshot.
@@ -698,7 +575,7 @@ public class DownloaderService {
      * @param request normalized download request payload
      * @return queued task snapshot
      */
-    public Map<String, Object> queueDownload(DownloadRequest request) {
+    public synchronized Map<String, Object> queueDownload(DownloadRequest request) {
         String activeKey = activeBulkTaskKey(Map.of(
             "providerId", request.providerId() == null ? "" : request.providerId(),
             "titleUrl", request.titleUrl()
@@ -709,7 +586,7 @@ public class DownloaderService {
 
         String taskId = "task_" + UUID.randomUUID().toString().replace("-", "");
         Map<String, Object> selectedDownload = request.selectedDownload() == null ? Map.of() : request.selectedDownload();
-        Map<String, Object> task = new LinkedHashMap<>();
+        Map<String, Object> task = new ConcurrentHashMap<>();
         task.put("taskId", taskId);
         task.put("jobId", taskId);
         task.put("titleId", normalizeString(selectedDownload.get("appendTitleId")));
@@ -808,6 +685,7 @@ public class DownloaderService {
      */
     public synchronized Map<String, Object> cancelTask(String taskId) {
         Map<String, Object> task = requireTask(taskId);
+        cancellationRequestedTaskIds.add(taskId);
         String status = normalizeString(task.get("status")).toLowerCase(Locale.ROOT);
         if ("queued".equals(status)) {
             removeQueuedTaskEntry(taskId);
@@ -833,7 +711,8 @@ public class DownloaderService {
      * @return updated task snapshot
      */
     public synchronized Map<String, Object> retryTask(String taskId) {
-        Map<String, Object> task = requireTask(taskId);
+        Map<String, Object> task = requireBulkRetryTask(taskId);
+        if (!normalizeString(task.get("bulkRunId")).isBlank() && bulkQueueCoordinator.isRunCancelled(normalizeString(task.get("bulkRunId")))) throw new CancellationException("The owning bulk run was cancelled.");
         String status = normalizeString(task.get("status")).toLowerCase(Locale.ROOT);
         if ("queued".equals(status) || "running".equals(status) || "completed".equals(status) || SUPERSEDED_STATUS.equals(status)) {
             throw new IllegalStateException("Only failed or stale Raven tasks can be retried.");
@@ -1022,6 +901,7 @@ public class DownloaderService {
     @PreDestroy
     public void shutdown() {
         persistedTaskRestoreWorker.shutdownNow();
+        if (!persistedTaskRestoreCompletion.isDone()) persistedTaskRestoreCompletion.completeExceptionally(new IllegalStateException("Raven stopped before task restoration completed."));
         queueWorker.shutdownNow();
         pageDownloadWorker.shutdownNow();
     }
@@ -1032,6 +912,7 @@ public class DownloaderService {
         try {
             throwIfCancelled(taskId);
             update(taskId, "running", "Preparing Raven download.", 5);
+            if (recoverCompletedTask(taskId)) return;
             ensureVpnProtectedIfEnabled();
 
             DownloadProvider provider = resolveProvider(request);
@@ -1048,10 +929,12 @@ public class DownloaderService {
             boolean appendDownload = isAppendDownload(request);
             Path canonicalFinalRoot = resolveDownloadTargetRoot(request, typeSlug);
             boolean replacementDownload = isReplacementDownload(request);
+            verifyExpectedSourceChapters(taskId, chapters);
             List<Map<String, String>> chaptersToDownload = appendDownload ? filterChaptersForAppendRequest(chapters, request) : chapters;
+            rememberExpectedChapters(taskId, chaptersToDownload);
             if (chaptersToDownload.isEmpty()) {
-                update(taskId, "completed", "No new chapters were found for the existing title.", 100);
-                return;
+                if (recoverCompletedTask(taskId)) return;
+                throw new IllegalStateException("Requested append chapters are missing from the source and are not verified reader-ready.");
             }
             Path workingRoot = replacementDownload || appendDownload
                 ? resolveStagedTitleRoot(DOWNLOADING_FOLDER_NAME, request.titleName(), typeSlug, taskId)
@@ -1104,7 +987,12 @@ public class DownloaderService {
             title = persistSelectedMetadata(title, request);
             throwIfCancelled(taskId);
             update(taskId, "running", "Converting downloaded CBZ files into reader-ready AVIF pages.", 98);
-            title = libraryService.ingestTitle(title.id(), request.requestedBy());
+            tasks.get(taskId).put("titleId", title.id());
+            title = libraryService.ingestTitle(title.id(), request.requestedBy(), () -> isCancellationRequested(taskId), progress -> rememberIngestProgress(taskId, progress));
+            if (title == null || ((isAppendDownload(request) || !normalizeString(tasks.get(taskId).get("bulkRunId")).isBlank())
+                && !completionVerifier.complete(title, expectedChapters(tasks.get(taskId))))) {
+                throw new IllegalStateException("Download completion could not verify every expected chapter, CBZ archive and reader-ready AVIF manifest.");
+            }
             if (title != null) {
                 Map<String, Object> task = tasks.get(taskId);
                 if (task != null) {
@@ -1117,6 +1005,7 @@ public class DownloaderService {
                 }
             }
 
+            throwIfCancelled(taskId);
             update(taskId, "completed", "Raven download completed.", 100);
         } catch (CancellationException error) {
             markTaskCancelled(taskId);
@@ -1137,6 +1026,7 @@ public class DownloaderService {
             }
         } finally {
             runningTaskThreads.remove(taskId);
+            ingestProgressPersistedAt.remove(taskId);
             queuedTasks.remove(taskId);
             cancellationRequestedTaskIds.remove(taskId);
         }
@@ -1298,11 +1188,12 @@ public class DownloaderService {
             resolveDomain(chapter.get("href"))
         );
         Path archivePath = titleRoot.resolve(archiveName);
-        if (Files.exists(archivePath) && Files.size(archivePath) > 0) {
+        if (DownloadCompletionVerifier.archiveImageCount(archivePath.toString()) == images.size()) {
             logger.info("DOWNLOAD", "Skipping chapter archive that already exists.", "file=" + archivePath.getFileName());
             return ChapterDownloadResult.clean(chapter, chapterNumber, archivePath, images.size(), "Downloaded chapter " + chapterNumber + ".");
         }
 
+        Files.deleteIfExists(archivePath);
         Path stagedPagesRoot = resolveChapterStageRoot(titleRoot, archiveName);
         Files.createDirectories(stagedPagesRoot);
         List<Future<PageDownloadResult>> pageDownloads = new ArrayList<>();
@@ -1542,12 +1433,16 @@ public class DownloaderService {
         if (task == null) {
             return;
         }
+        Map<String, Object> previousSnapshot = task;
         String nextStatus = normalizeString(status).toLowerCase(Locale.ROOT);
+        boolean checkedCompletion = "completed".equals(nextStatus) && !normalizeString(task.get("bulkRunId")).isBlank();
+        if (checkedCompletion) task = new ConcurrentHashMap<>(task);
         String currentStatus = normalizeString(task.get("status")).toLowerCase(Locale.ROOT);
         if (cancellationRequestedTaskIds.contains(taskId) && "failed".equals(currentStatus) && !"failed".equals(nextStatus)) {
             return;
         }
         String previousStatus = String.valueOf(task.getOrDefault("status", ""));
+        if (percent > toInt(task.get("percent")) || !message.equals(normalizeString(task.get("message")))) task.put("actualProgressAt", Instant.now().toString());
         task.put("status", status);
         task.put("message", message);
         task.put("percent", percent);
@@ -1560,7 +1455,10 @@ public class DownloaderService {
             task.put("downloadSpeedBytesPerSecond", 0L);
         }
         task.put("details", buildTaskDetails(task));
-        persistTask(taskId);
+        if (checkedCompletion) {
+            persistTaskSnapshot(taskId, task);
+            tasks.replace(taskId, previousSnapshot, task);
+        } else persistTask(taskId);
         syncLinkedRequest(task, previousStatus, status, message);
         if (isTerminalStatus(nextStatus)) {
             pruneTerminalTaskHistory();
@@ -1585,13 +1483,23 @@ public class DownloaderService {
         if (task == null) {
             return;
         }
+        persistTaskSnapshot(taskId, task);
+    }
+
+    private void persistTaskSnapshot(String taskId, Map<String, Object> task) {
+        task.remove("persistenceError");
         try {
             task.put("details", buildTaskDetails(task));
-            brokerClient.putDownloadTask(taskId, task);
             String jobId = String.valueOf(task.getOrDefault("jobId", taskId));
+            if (normalizeString(task.get("bulkRunId")).isBlank()) brokerClient.putDownloadTask(taskId, task);
             brokerClient.putJob(jobId, buildJobPayload(jobId, task));
             brokerClient.putJobTask(jobId, jobTaskId(jobId), buildJobTaskPayload(jobId, task));
+            if (!normalizeString(task.get("bulkRunId")).isBlank()) brokerClient.putDownloadTask(taskId, task);
         } catch (Exception error) {
+            if (!normalizeString(task.get("bulkRunId")).isBlank()) {
+                task.put("persistenceError", "Could not persist the bulk-owned download state.");
+                throw new IllegalStateException("Could not persist a bulk-owned download task.", error);
+            }
             logger.warn("DOWNLOAD", "Failed to persist a Raven task snapshot.", error.getMessage());
         }
     }
@@ -1642,6 +1550,9 @@ public class DownloaderService {
         details.put("sortOrder", taskSortOrder(task));
         details.put("startedAt", String.valueOf(task.getOrDefault("startedAt", "")));
         details.put("downloadSpeedBytesPerSecond", toLong(task.get("downloadSpeedBytesPerSecond")));
+        for (String key : List.of("bulkRunId", "bulkBatchId", "bulkPlanId", "actualProgressAt", "stage", "ingestCompletedPages", "ingestTotalPages", "ingestCompletedChapters", "ingestTotalChapters")) {
+            if (task.containsKey(key)) details.put(key, task.get(key));
+        }
         return details;
     }
 
@@ -2089,7 +2000,7 @@ public class DownloaderService {
             return false;
         }
         Optional<LibraryTitle> recovered = findRecoveredTitle(task);
-        if (recovered.isEmpty()) {
+        if (recovered.isEmpty() || !completionVerifier.complete(recovered.get(), expectedChapters(task))) {
             return false;
         }
 
@@ -2277,6 +2188,30 @@ public class DownloaderService {
         };
     }
 
+    private Map<String, Object> requireBulkRetryTask(String taskId) {
+        Map<String, Object> task = tasks.get(taskId);
+        if (task != null) return task;
+        try {
+            var records = brokerClient.listDownloadTasks();
+            if (records != null && records.isArray()) {
+                for (var node : records) {
+                    if (!taskId.equals(node.path("taskId").asText())) continue;
+                    Map<String, Object> restored = brokerClientPayloadToMap(node);
+                    Map<String, Object> details = normalizeMap(restored.get("details"));
+                    if (normalizeString(details.get("bulkRunId")).isBlank()) break;
+                    for (String key : List.of("bulkRunId", "bulkBatchId", "bulkPlanId", "selectedMetadata", "selectedDownload", "priority", "actualProgressAt", "stage")) {
+                        if (!restored.containsKey(key) && details.containsKey(key)) restored.put(key, details.get(key));
+                    }
+                    Map<String, Object> stable = new ConcurrentHashMap<>();
+                    restored.forEach((key, value) -> { if (value != null) stable.put(key, value); });
+                    tasks.put(taskId, stable);
+                    return stable;
+                }
+            }
+        } catch (Exception error) {throw new IllegalStateException("Could not load a durable bulk-owned task for retry.", error);}
+        return requireTask(taskId);
+    }
+
     private Map<String, Object> requireTask(String taskId) {
         Map<String, Object> task = tasks.get(normalizeString(taskId));
         if (task == null) {
@@ -2320,7 +2255,10 @@ public class DownloaderService {
     }
 
     private boolean isCancellationRequested(String taskId) {
-        return cancellationRequestedTaskIds.contains(normalizeString(taskId));
+        Map<String, Object> task = tasks.get(normalizeString(taskId));
+        String runId = task == null ? "" : normalizeString(task.get("bulkRunId"));
+        return cancellationRequestedTaskIds.contains(normalizeString(taskId))
+            || (!runId.isBlank() && bulkQueueCoordinator.isRunCancelled(runId));
     }
 
     private void throwIfCancelled(String taskId) {
@@ -2702,56 +2640,6 @@ public class DownloaderService {
         return node.asText("");
     }
 
-    private String normalizeBulkQueueType(String value) {
-        String normalized = normalizeString(value).toLowerCase(Locale.ROOT);
-        if (normalized.isBlank()) {
-            return null;
-        }
-        return switch (normalized) {
-            case "manga", "managa" -> "Manga";
-            case "manhwa" -> "Manhwa";
-            case "manhua" -> "Manhua";
-            case "oel" -> "OEL";
-            default -> null;
-        };
-    }
-
-    private String normalizeQueueType(String value) {
-        String normalized = normalizeString(value);
-        return normalized.isBlank() ? "" : LibraryNaming.normalizeTypeLabel(normalized);
-    }
-
-    private String normalizeBulkTitlePrefix(String value) {
-        String normalized = normalizeString(value);
-        return normalized.isBlank() ? null : normalized;
-    }
-
-    private List<Map<String, String>> filterTitlesByPrefix(List<Map<String, String>> titles, String titlePrefix) {
-        if (titles == null || titles.isEmpty() || titlePrefix == null || titlePrefix.isBlank()) {
-            return List.of();
-        }
-
-        String normalizedPrefix = titlePrefix.toLowerCase(Locale.ROOT);
-        List<Map<String, String>> matched = new ArrayList<>();
-        for (Map<String, String> title : titles) {
-            if (title == null || title.isEmpty()) {
-                continue;
-            }
-
-            String comparableTitle = normalizePrefixComparableTitle(title.get("title"));
-            if (comparableTitle.isBlank()) {
-                continue;
-            }
-
-            String lowerTitle = comparableTitle.toLowerCase(Locale.ROOT);
-            if (lowerTitle.startsWith(normalizedPrefix)) {
-                matched.add(new LinkedHashMap<>(title));
-            }
-        }
-
-        return matched.isEmpty() ? List.of() : List.copyOf(matched);
-    }
-
     private boolean isTaskAlreadyActive(String activeKey, String titleName) {
         return tasks.values().stream().anyMatch((task) -> {
             String status = String.valueOf(task.getOrDefault("status", "")).trim().toLowerCase(Locale.ROOT);
@@ -2766,66 +2654,6 @@ public class DownloaderService {
         });
     }
 
-    private LibraryTitle findExistingLibraryTitle(List<LibraryTitle> titles, String titleUrl, String titleName, String requestType) {
-        String normalizedUrl = normalizeString(titleUrl);
-        String normalizedTitle = normalizeString(titleName).toLowerCase(Locale.ROOT);
-        String normalizedType = LibraryNaming.normalizeTypeSlug(requestType);
-        if (titles == null) {
-            return null;
-        }
-        return titles.stream().filter((title) -> {
-            String existingUrl = normalizeString(title.sourceUrl());
-            if (!normalizedUrl.isBlank() && normalizedUrl.equals(existingUrl)) {
-                return true;
-            }
-            return !normalizedTitle.isBlank()
-                && normalizedTitle.equals(normalizeString(title.title()).toLowerCase(Locale.ROOT))
-                && normalizedType.equals(LibraryNaming.normalizeTypeSlug(normalizeString(title.libraryTypeSlug(), title.mediaType())));
-        }).findFirst().orElse(null);
-    }
-
-    private boolean isValidProviderTitleUrl(String titleUrl) {
-        String normalized = normalizeString(titleUrl);
-        if (normalized.isBlank()) {
-            return false;
-        }
-        try {
-            URI uri = URI.create(normalized);
-            String host = normalizeString(uri.getHost()).toLowerCase(Locale.ROOT);
-            String path = normalizeString(uri.getPath());
-            if (!host.contains("weebcentral")) {
-                return true;
-            }
-            String[] parts = path.split("/");
-            for (int index = 0; index < parts.length; index++) {
-                if ("series".equals(parts[index]) && index + 1 < parts.length && !parts[index + 1].isBlank()) {
-                    return true;
-                }
-            }
-            return false;
-        } catch (Exception ignored) {
-            return false;
-        }
-    }
-
-    private List<Map<String, String>> missingProviderChapters(LibraryTitle existingTitle, List<Map<String, String>> providerChapters) {
-        Set<String> existingChapterNumbers = new LinkedHashSet<>();
-        for (LibraryChapter chapter : Optional.ofNullable(existingTitle == null ? null : existingTitle.chapters()).orElse(List.of())) {
-            String chapterNumber = normalizeStoredChapterNumber(chapter.chapterNumber());
-            if (!chapterNumber.isBlank()) {
-                existingChapterNumbers.add(chapterNumber);
-            }
-        }
-        List<Map<String, String>> missing = new ArrayList<>();
-        for (Map<String, String> chapter : Optional.ofNullable(providerChapters).orElse(List.of())) {
-            String chapterNumber = normalizeStoredChapterNumber(chapter.getOrDefault("chapter_number", ""));
-            if (!chapterNumber.isBlank() && !existingChapterNumbers.contains(chapterNumber)) {
-                missing.add(new LinkedHashMap<>(chapter));
-            }
-        }
-        return missing;
-    }
-
     private String activeBulkTaskKey(Map<String, ?> task) {
         String providerId = normalizeString(task.get("providerId"));
         String titleUrl = normalizeString(task.get("titleUrl"));
@@ -2833,107 +2661,6 @@ public class DownloaderService {
             return "";
         }
         return providerId.toLowerCase(Locale.ROOT) + "::" + titleUrl;
-    }
-
-    private String resolveBulkQueueStatus(
-        List<String> queuedTitles,
-        List<String> skippedActiveTitles,
-        List<String> skippedAdultContentTitles,
-        List<String> skippedNoMetadataTitles,
-        List<String> skippedAmbiguousMetadataTitles,
-        List<String> skippedCompletedTitles,
-        List<String> skippedCurrentTitles,
-        List<String> appendedTitles,
-        List<String> invalidSourceTitles,
-        List<String> failedTitles
-    ) {
-        boolean hasQueued = queuedTitles != null && !queuedTitles.isEmpty();
-        boolean hasSkippedActive = skippedActiveTitles != null && !skippedActiveTitles.isEmpty();
-        boolean hasSkippedAdultContent = skippedAdultContentTitles != null && !skippedAdultContentTitles.isEmpty();
-        boolean hasSkippedNoMetadata = skippedNoMetadataTitles != null && !skippedNoMetadataTitles.isEmpty();
-        boolean hasSkippedAmbiguous = skippedAmbiguousMetadataTitles != null && !skippedAmbiguousMetadataTitles.isEmpty();
-        boolean hasSkippedCompleted = skippedCompletedTitles != null && !skippedCompletedTitles.isEmpty();
-        boolean hasSkippedCurrent = skippedCurrentTitles != null && !skippedCurrentTitles.isEmpty();
-        boolean hasAppended = appendedTitles != null && !appendedTitles.isEmpty();
-        boolean hasInvalidSource = invalidSourceTitles != null && !invalidSourceTitles.isEmpty();
-        boolean hasFailed = failedTitles != null && !failedTitles.isEmpty();
-
-        if (hasQueued && !hasSkippedActive && !hasSkippedAdultContent && !hasSkippedNoMetadata && !hasSkippedAmbiguous && !hasSkippedCompleted
-            && !hasSkippedCurrent && !hasInvalidSource && !hasFailed) {
-            return BulkQueueDownloadResult.STATUS_QUEUED;
-        }
-        if (!hasQueued && (hasSkippedActive || hasSkippedCompleted || hasSkippedCurrent) && !hasSkippedAdultContent && !hasSkippedNoMetadata
-            && !hasSkippedAmbiguous && !hasAppended && !hasInvalidSource && !hasFailed) {
-            return BulkQueueDownloadResult.STATUS_ALREADY_ACTIVE;
-        }
-        return BulkQueueDownloadResult.STATUS_PARTIAL;
-    }
-
-    private String buildBulkQueueMessage(
-        List<String> queuedTitles,
-        List<String> skippedActiveTitles,
-        List<String> skippedAdultContentTitles,
-        List<String> skippedNoMetadataTitles,
-        List<String> skippedAmbiguousMetadataTitles,
-        List<String> skippedCompletedTitles,
-        List<String> skippedCurrentTitles,
-        List<String> appendedTitles,
-        List<String> invalidSourceTitles,
-        List<String> failedTitles,
-        int matchedCount
-    ) {
-        int queuedCount = queuedTitles == null ? 0 : queuedTitles.size();
-        int skippedActiveCount = skippedActiveTitles == null ? 0 : skippedActiveTitles.size();
-        int skippedAdultContentCount = skippedAdultContentTitles == null ? 0 : skippedAdultContentTitles.size();
-        int skippedNoMetadataCount = skippedNoMetadataTitles == null ? 0 : skippedNoMetadataTitles.size();
-        int skippedAmbiguousCount = skippedAmbiguousMetadataTitles == null ? 0 : skippedAmbiguousMetadataTitles.size();
-        int skippedCompletedCount = skippedCompletedTitles == null ? 0 : skippedCompletedTitles.size();
-        int skippedCurrentCount = skippedCurrentTitles == null ? 0 : skippedCurrentTitles.size();
-        int appendedCount = appendedTitles == null ? 0 : appendedTitles.size();
-        int invalidSourceCount = invalidSourceTitles == null ? 0 : invalidSourceTitles.size();
-        int failedCount = failedTitles == null ? 0 : failedTitles.size();
-
-        if (matchedCount <= 0) {
-            return "No titles matched the supplied filters.";
-        }
-        if (queuedCount > 0 && skippedActiveCount == 0 && skippedAdultContentCount == 0 && skippedNoMetadataCount == 0
-            && skippedAmbiguousCount == 0 && skippedCompletedCount == 0 && skippedCurrentCount == 0 && invalidSourceCount == 0 && failedCount == 0) {
-            return appendedCount > 0
-                ? "Queued " + queuedCount + " title(s), including " + appendedCount + " append-only update(s)."
-                : "Queued " + queuedCount + " title(s) for download.";
-        }
-        if (queuedCount == 0 && skippedActiveCount > 0 && skippedAdultContentCount == 0 && skippedNoMetadataCount == 0
-            && skippedAmbiguousCount == 0 && skippedCompletedCount == 0 && skippedCurrentCount == 0 && invalidSourceCount == 0 && failedCount == 0) {
-            return skippedActiveCount == 1
-                ? "Download already in progress for: " + skippedActiveTitles.getFirst()
-                : "Downloads already in progress for: " + String.join(", ", skippedActiveTitles);
-        }
-
-        return "Queued " + queuedCount + " title(s). Skipped " + skippedActiveCount
-            + " already-active title(s), " + skippedCompletedCount + " completed title(s), " + skippedCurrentCount
-            + " already-current title(s), " + skippedAdultContentCount + " adult or unverified adult title(s), "
-            + skippedNoMetadataCount + " without confident metadata, " + skippedAmbiguousCount
-            + " with ambiguous metadata, " + invalidSourceCount + " invalid source title(s). Appending "
-            + appendedCount + " existing title(s). Failed " + failedCount + " title(s).";
-    }
-
-    private String normalizePrefixComparableTitle(String rawTitle) {
-        String trimmed = normalizeString(rawTitle);
-        if (trimmed.isBlank()) {
-            return "";
-        }
-
-        int index = 0;
-        while (index < trimmed.length()) {
-            char candidate = trimmed.charAt(index);
-            if (Character.isWhitespace(candidate) || !Character.isLetterOrDigit(candidate)) {
-                index++;
-                continue;
-            }
-            break;
-        }
-
-        return trimmed.substring(Math.min(index, trimmed.length())).trim();
     }
 
     private record PageDownloadResult(

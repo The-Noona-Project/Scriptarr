@@ -209,6 +209,28 @@ test("bulk run helpers call the Sage async downloadall broker routes", async () 
   }
 });
 
+test("downloadall delivery clients preserve receipts, expose HTTP errors, and bound stalled phases", async () => {
+  const seen = [];
+  const server = http.createServer(async (req, res) => {
+    const chunks = []; for await (const chunk of req) chunks.push(chunk);
+    seen.push({path: req.url, body: JSON.parse(Buffer.concat(chunks).toString("utf8")), authorization: req.headers.authorization});
+    if (req.url.endsWith("/ack")) return;
+    res.writeHead(req.url.endsWith("/prompt") ? 503 : 200, {"Content-Type": "application/json"});
+    res.end(JSON.stringify({ok: !req.url.endsWith("/prompt")}));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const sage = createSageClient({sageBaseUrl: `http://127.0.0.1:${server.address().port}`, serviceToken: "test-only", downloadAllNotificationTimeoutMs: 100});
+  try {
+    await sage.beginDownloadAllDelivery("downloadall:run:window:paused", {botIdentity: "noona"});
+    await sage.recordDownloadAllDelivery("downloadall:run:window:paused", {messageId: "message", channelId: "channel"});
+    assert.equal((await sage.recordDownloadAllDecisionPrompt("downloadall:run:window:paused", {messageId: "message"})).ok, false);
+    await assert.rejects(sage.acknowledgeDownloadAllNotification("downloadall:run:window:paused"), /timed out/);
+    assert.match(seen[0].path, /downloadall%3Arun%3Awindow%3Apaused\/begin$/);
+    assert.deepEqual(seen[1].body, {messageId: "message", channelId: "channel"});
+    assert.equal(seen.every((entry) => entry.authorization === "Bearer test-only"), true);
+  } finally { server.closeAllConnections(); await new Promise((resolve) => server.close(resolve)); }
+});
+
 test("ingest helpers call the Sage preview and run broker routes", async () => {
   const seen = [];
   const server = http.createServer(async (req, res) => {

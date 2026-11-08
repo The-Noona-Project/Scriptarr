@@ -696,6 +696,25 @@ entries. Raven skips completed catalog titles, appends only missing or new chapt
 and ignores malformed bare source URLs such as a provider `/series` root.
 That owner-only command is intentionally pinned to WeebCentral. If WeebCentral is disabled in Raven settings,
 `downloadall` fails instead of falling back to MangaDex or another provider.
+
+For `/downloadall run type:Manhua nsfw:False titlegroup:t groupsize:20`, select the registered slash command in the
+owner's DM. This selects one Manhua/T batch containing every eligible matching title. `groupsize:20` is an approval
+batch count, not a twenty-title limit; the separate title-download concurrency setting still controls active work.
+
+A completed run requires complete discovery and successful publication of its queued chapters, including catalog
+persistence and ready AVIF pages. Provider failures, unresolved title tasks, and exhausted retries pause the run with
+recovery details. Continue retries unresolved work and preserves completed chapters. Cancel stops run-owned work while
+preserving finished archives. Healthy work waiting in the queue or progressing through CPU ingest does not expire
+merely because it has been waiting a long time.
+
+Startup recovery waits for title-task restoration before recovering bulk runs. Append recovery checks the planned
+chapters and their actual archives/reader pages instead of treating an existing title as proof of completion. Status
+reads inspect the run; explicit owner actions and background recovery schedule its work.
+
+Discord interaction/message identifiers deduplicate retried run creation. Delivery records retain accepted summary
+message identifiers so prompt-registration or acknowledgement retries reuse the same message. Each pause has an
+approval identifier; an old or repeated reaction cannot approve a newer batch. Ambiguous deliveries that cannot be
+safely reconciled surface an operator recovery condition instead of repeatedly sending DMs.
 Moon user browse/library pages use compact paginated title-card reads, and title pages use summary plus paged chapter
 reads, so large libraries do not send chapter arrays or Raven filesystem roots to the browser. Cover images are cached
 by Moon as derived WebP files under the Moon cover-cache storage folder. The

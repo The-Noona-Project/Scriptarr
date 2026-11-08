@@ -231,10 +231,18 @@
   25/50/75 milestones when crossed, skip missed milestones once a run is terminal, always emit one terminal
   completion/failure notification, and only mark them acknowledged after Portal confirms the requester DM.
 - Sage should expose acked downloadall notification queues for Portal from Raven durable run jobs. Use stable
-  `downloadall:<runId>:<batchId>:<status>` ids and only mark them acknowledged after Portal confirms the requester DM.
-- Sage also owns downloadall reaction decision prompts. Store the paused-notification DM message id, owner id, run id,
-  batch id, and decision status durably; check reactions continue the run, cross reactions cancel the remaining run,
-  duplicate decisions are idempotent, and expired prompts do not repeat actions.
+  `downloadall:<runId>:<batchId-or-approvalId>:<status>` ids and forward completion and policy-skip counters separately.
+  `lib/downloadAllBroker.mjs` stores delivery phases, accepted message/channel IDs, prompts, action claims, and
+  acknowledgment tombstones in generic Vault jobs. Acknowledge only after the accepted DM and required prompt are
+  durable; retain tombstones while the associated run remains eligible for notifications, without a 500-ID cap.
+- Preserve the Discord `requestId` on creation. For a slash action, capture the current Raven `approvalId` once into
+  its durable action claim before calling Raven. Every retry uses that captured token. Reaction prompts bind the
+  accepted message, owner, bot, run, and approval window; registration preserves handled decisions. Stale or opposite
+  approvals return 409. Raven consumes approval tokens authoritatively; Sage's serialization is process-local and
+  must not be represented as distributed compare-and-swap.
+- A sending phase uses the same short Discord nonce for at most two minutes. Older unknown outcomes become
+  `ambiguous` and require reconciliation against the existing Discord message before recording its receipt. Do not
+  silently resend. Already-recorded deliveries can finish prompt registration and acknowledgment after restarts.
 - Moon's user library card route should broker Raven's compact card view and paginate/filter in Sage so browsers never
   need full chapter arrays for `/browse`, `/library`, or shelf cards. Pass `q`, `type`, `letter`, `cursor`,
   `pageSize`, `sort`, and optional exact `ids` through Raven instead of sorting/slicing a full catalog in Sage.

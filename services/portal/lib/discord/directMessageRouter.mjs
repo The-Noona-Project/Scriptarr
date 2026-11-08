@@ -170,6 +170,7 @@ export const createDirectMessageHandler = ({getSettings, sage, logger, onRuntime
       logger,
       onRuntimeEvent,
       requestedBy,
+      requestId: message.id ? `discord:message:${message.id}` : undefined,
       filters: parsed.filters,
       source: "dm-text"
     });

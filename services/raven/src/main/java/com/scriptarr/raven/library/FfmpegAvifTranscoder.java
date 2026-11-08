@@ -54,7 +54,8 @@ public final class FfmpegAvifTranscoder implements PageTranscoder {
      * @param executor bounded FFmpeg process executor
      */
     FfmpegAvifTranscoder(Map<String, String> env, FfmpegExecutor executor) {
-        policy = Optional.ofNullable(env.get("SCRIPTARR_RAVEN_AVIF_ENCODER")).orElse("auto").trim().toLowerCase(Locale.ROOT);
+        String configuredPolicy = Optional.ofNullable(env.get("SCRIPTARR_RAVEN_AVIF_ENCODER")).orElse("").trim().toLowerCase(Locale.ROOT);
+        policy = configuredPolicy.isBlank() ? "auto" : configuredPolicy;
         if (!List.of("auto", "nvenc", "cpu").contains(policy)) {
             throw new IllegalArgumentException("SCRIPTARR_RAVEN_AVIF_ENCODER must be auto, nvenc, or cpu.");
         }
@@ -103,7 +104,11 @@ public final class FfmpegAvifTranscoder implements PageTranscoder {
         }
         synchronized (this) {
             if (cachedReadiness == null) {
-                cachedReadiness = selectBackend();
+                Readiness probed = selectBackend();
+                if (Thread.currentThread().isInterrupted()) {
+                    return new Readiness(false, "encoder_unavailable", "AVIF encoder probing was interrupted; readiness will retry.");
+                }
+                cachedReadiness = probed;
             }
             return cachedReadiness;
         }

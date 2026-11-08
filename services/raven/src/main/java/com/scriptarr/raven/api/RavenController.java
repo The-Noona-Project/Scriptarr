@@ -3,6 +3,7 @@ package com.scriptarr.raven.api;
 import com.scriptarr.raven.downloader.DownloadRequest;
 import com.scriptarr.raven.downloader.BulkQueueDownloadResult;
 import com.scriptarr.raven.downloader.BulkRunService;
+import com.scriptarr.raven.downloader.BulkRunConflictException;
 import com.scriptarr.raven.downloader.DownloadIntakeService;
 import com.scriptarr.raven.downloader.DownloaderService;
 import com.scriptarr.raven.library.LibraryIngestRunService;
@@ -629,8 +630,10 @@ public class RavenController {
             return ResponseEntity.status(HttpStatus.ACCEPTED).body(bulkRunService.createRun(body));
         } catch (IllegalArgumentException error) {
             return ResponseEntity.badRequest().body(Map.of("error", error.getMessage()));
-        } catch (IllegalStateException error) {
+        } catch (BulkRunConflictException error) {
             return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("error", error.getMessage()));
+        } catch (IllegalStateException error) {
+            return bulkStateError(error);
         }
     }
 
@@ -647,7 +650,7 @@ public class RavenController {
         } catch (IllegalArgumentException error) {
             return ResponseEntity.badRequest().body(Map.of("error", error.getMessage()));
         } catch (IllegalStateException error) {
-            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("error", error.getMessage()));
+            return bulkStateError(error);
         }
     }
 
@@ -664,7 +667,7 @@ public class RavenController {
         } catch (IllegalArgumentException error) {
             return ResponseEntity.badRequest().body(Map.of("error", error.getMessage()));
         } catch (IllegalStateException error) {
-            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("error", error.getMessage()));
+            return bulkStateError(error);
         }
     }
 
@@ -672,16 +675,22 @@ public class RavenController {
      * Resume a durable Raven mega downloadall run after a pause or restart.
      *
      * @param runId durable run id
+     * @param body optional captured approval and stable decision request ids
      * @return durable run status payload
      */
     @PostMapping("/v1/downloads/bulk-runs/{runId}/resume")
-    public ResponseEntity<Map<String, Object>> resumeBulkRun(@PathVariable("runId") String runId) {
+    public ResponseEntity<Map<String, Object>> resumeBulkRun(@PathVariable("runId") String runId,
+                                                           @RequestBody(required = false) Map<String, Object> body) {
         try {
-            return ResponseEntity.status(HttpStatus.ACCEPTED).body(bulkRunService.resumeRun(runId));
+            Map<String, Object> request = body == null ? Map.of() : body;
+            return ResponseEntity.status(HttpStatus.ACCEPTED).body(bulkRunService.resumeRun(runId,
+                String.valueOf(request.getOrDefault("approvalId", "")), String.valueOf(request.getOrDefault("requestId", ""))));
         } catch (IllegalArgumentException error) {
             return ResponseEntity.badRequest().body(Map.of("error", error.getMessage()));
+        } catch (BulkRunConflictException error) {
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("error", error.getMessage()));
         } catch (IllegalStateException error) {
-            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("error", error.getMessage()));
+            return bulkStateError(error);
         }
     }
 
@@ -689,28 +698,47 @@ public class RavenController {
      * Continue a durable Raven mega downloadall run after a pause or restart.
      *
      * @param runId durable run id
+     * @param body optional captured approval and stable decision request ids
      * @return durable run status payload
      */
     @PostMapping("/v1/downloads/bulk-runs/{runId}/continue")
-    public ResponseEntity<Map<String, Object>> continueBulkRun(@PathVariable("runId") String runId) {
-        return resumeBulkRun(runId);
+    public ResponseEntity<Map<String, Object>> continueBulkRun(@PathVariable("runId") String runId,
+                                                             @RequestBody(required = false) Map<String, Object> body) {
+        return resumeBulkRun(runId, body);
     }
 
     /**
      * Cancel a durable Raven mega downloadall run.
      *
      * @param runId durable run id
+     * @param body optional captured approval and stable decision request ids
      * @return durable run status payload
      */
     @PostMapping("/v1/downloads/bulk-runs/{runId}/cancel")
-    public ResponseEntity<Map<String, Object>> cancelBulkRun(@PathVariable("runId") String runId) {
+    public ResponseEntity<Map<String, Object>> cancelBulkRun(@PathVariable("runId") String runId,
+                                                           @RequestBody(required = false) Map<String, Object> body) {
         try {
-            return ResponseEntity.ok(bulkRunService.cancelRun(runId));
+            Map<String, Object> request = body == null ? Map.of() : body;
+            return ResponseEntity.ok(bulkRunService.cancelRun(runId,
+                String.valueOf(request.getOrDefault("approvalId", "")), String.valueOf(request.getOrDefault("requestId", ""))));
         } catch (IllegalArgumentException error) {
             return ResponseEntity.badRequest().body(Map.of("error", error.getMessage()));
+        } catch (BulkRunConflictException error) {
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("error", error.getMessage()));
         } catch (IllegalStateException error) {
-            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("error", error.getMessage()));
+            return bulkStateError(error);
         }
+    }
+
+    /**
+     * Keep missing run identities distinct from retryable durable-storage failures.
+     *
+     * @param error bulk storage or lookup failure
+     * @return an operator-safe error response
+     */
+    private ResponseEntity<Map<String, Object>> bulkStateError(IllegalStateException error) {
+        HttpStatus status = "Bulk run not found.".equals(error.getMessage()) ? HttpStatus.NOT_FOUND : HttpStatus.SERVICE_UNAVAILABLE;
+        return ResponseEntity.status(status).body(Map.of("error", String.valueOf(error.getMessage())));
     }
 
     /**

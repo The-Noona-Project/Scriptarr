@@ -14,7 +14,7 @@ import java.util.Map;
 /**
  * In-memory Raven broker test double used by Raven unit tests.
  */
-public final class FakeRavenBrokerClient implements RavenBrokerClient {
+public class FakeRavenBrokerClient implements RavenBrokerClient {
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final Map<String, JsonNode> settings = new LinkedHashMap<>();
     private final Map<String, JsonNode> secrets = new LinkedHashMap<>();

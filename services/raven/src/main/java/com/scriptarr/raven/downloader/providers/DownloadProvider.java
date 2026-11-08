@@ -5,6 +5,9 @@ import com.scriptarr.raven.downloader.TitleDetails;
 
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CancellationException;
+import java.util.function.BooleanSupplier;
+import java.util.function.IntConsumer;
 
 /**
  * Site-specific Raven download provider contract.
@@ -52,6 +55,25 @@ public interface DownloadProvider {
      */
     default BulkBrowseResult browseTitlesAlphabetically(String type, boolean adultContent, String titlePrefix) {
         return new BulkBrowseResult(List.of(), 0);
+    }
+
+    /**
+     * Browse with cooperative cancellation and a completed-page progress callback.
+     *
+     * @param type exact requested type
+     * @param adultContent whether adult content is allowed
+     * @param titlePrefix visible title prefix
+     * @param cancelled cancellation predicate
+     * @param progress completed-page callback
+     * @return complete browse result
+     */
+    default BulkBrowseResult browseTitlesAlphabetically(String type, boolean adultContent, String titlePrefix,
+        BooleanSupplier cancelled, IntConsumer progress) {
+        if (cancelled.getAsBoolean() || Thread.currentThread().isInterrupted()) throw new CancellationException("Bulk browse cancelled.");
+        BulkBrowseResult result = browseTitlesAlphabetically(type, adultContent, titlePrefix);
+        if (cancelled.getAsBoolean() || Thread.currentThread().isInterrupted()) throw new CancellationException("Bulk browse cancelled.");
+        progress.accept(result.pagesScanned());
+        return result;
     }
 
     /**

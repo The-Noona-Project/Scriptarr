@@ -41,6 +41,7 @@ import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BooleanSupplier;
+import java.util.function.Consumer;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
@@ -638,18 +639,31 @@ public final class LibraryService {
      * @return updated title
      */
     public LibraryTitle ingestTitle(String titleId, String requestedBy, BooleanSupplier cancelled) {
+        return ingestTitle(titleId, requestedBy, cancelled, progress -> { });
+    }
+
+    /**
+     * Ingest a title with cancellation and real per-page progress.
+     *
+     * @param titleId catalog title id
+     * @param requestedBy requesting actor
+     * @param cancelled cancellation predicate
+     * @param progress page and chapter completion callback
+     * @return refreshed catalog title
+     */
+    public LibraryTitle ingestTitle(String titleId, String requestedBy, BooleanSupplier cancelled, Consumer<IngestProgress> progress) {
         String normalizedTitleId = firstNonBlank(titleId, "").trim();
         Object titleLock = titleIngestLocks.computeIfAbsent(normalizedTitleId, (_key) -> new Object());
         synchronized (titleLock) {
             try {
-                return ingestTitleLocked(normalizedTitleId, requestedBy, cancelled == null ? () -> false : cancelled);
+                return ingestTitleLocked(normalizedTitleId, requestedBy, cancelled == null ? () -> false : cancelled, progress == null ? value -> { } : progress);
             } finally {
                 titleIngestLocks.remove(normalizedTitleId, titleLock);
             }
         }
     }
 
-    private LibraryTitle ingestTitleLocked(String titleId, String requestedBy, BooleanSupplier cancelled) {
+    private LibraryTitle ingestTitleLocked(String titleId, String requestedBy, BooleanSupplier cancelled, Consumer<IngestProgress> progress) {
         LibraryTitle title = loadTitleById(titleId);
         if (title == null) {
             throw new IllegalArgumentException("Raven title not found.");
@@ -679,6 +693,7 @@ public final class LibraryService {
                 if (ingestService.canReuseReadyChapter(chapter)) {
                     updatedChapters.add(chapter);
                     completed += 1;
+                    progress.accept(new IngestProgress("ingesting", chapter.pageCount(), chapter.pageCount(), completed, total, true));
                     int percent = 10 + (int) Math.floor((completed / (double) total) * 85);
                     if (shouldPersistIngestProgress(percent, lastTaskPercent, lastTaskProgressAt, completed, total)) {
                         persistIngestTask(taskId, title, "running", "Verified " + completed + " of " + total + " chapter(s).", percent, requestedBy, "");
@@ -688,7 +703,8 @@ public final class LibraryService {
                     continue;
                 }
                 updatedChapters.add(chapter);
-                LibraryIngestResult result = ingestService.ingestChapter(title, chapter, cancelled);
+                final int completedBeforeChapter = completed;
+                LibraryIngestResult result = ingestService.ingestChapter(title, chapter, cancelled, page -> progress.accept(new IngestProgress(page.stage(), page.completedPages(), page.totalPages(), completedBeforeChapter, total, page.advanced())));
                 throwIfIngestCancelled(cancelled);
                 LibraryChapter readyChapter = withIngestState(
                     chapter,
@@ -703,6 +719,7 @@ public final class LibraryService {
                 updatedChapters.set(updatedChapters.size() - 1, persistedReady);
                 chapters = mergeChapterUpdate(chapters, persistedReady);
                 completed += 1;
+                progress.accept(new IngestProgress("ingesting", result.pageCount(), result.pageCount(), completed, total, true));
                 int percent = 10 + (int) Math.floor((completed / (double) total) * 85);
                 if (shouldPersistIngestProgress(percent, lastTaskPercent, lastTaskProgressAt, completed, total)) {
                     persistIngestTask(taskId, title, "running", "Ingested " + completed + " of " + total + " chapter(s).", percent, requestedBy, "");
@@ -805,9 +822,19 @@ public final class LibraryService {
     }
 
     /**
-     * Return Raven's reader-page ingest hardware status.
+     * Verify that a ready chapter still matches its archive and stored AVIF pages.
      *
-     * @return hardware status payload
+     * @param chapter catalog chapter
+     * @return whether the existing reader pages can be reused
+     */
+    public boolean isReaderReadyChapter(LibraryChapter chapter) {
+        return ingestService.canReuseReadyChapter(chapter);
+    }
+
+    /**
+     * Resolve reader ingest encoder status.
+     *
+     * @return current encoder status
      */
     public Map<String, Object> ingestHardwareStatus() {
         return ingestService.hardwareStatus();

@@ -75,14 +75,37 @@ class LibraryIngestServiceTest {
             Instant.now().toString()
         );
 
-        LibraryIngestResult result = service.ingestChapter(title, title.chapters().getFirst());
+        List<IngestProgress> progress = new java.util.ArrayList<>();
+        LibraryIngestResult result = service.ingestChapter(title, title.chapters().getFirst(), () -> false, progress::add);
 
         assertEquals(6, result.pageCount());
+        assertEquals(6, progress.stream().filter(IngestProgress::advanced).count());
+        assertTrue(progress.stream().anyMatch(event -> "waiting-for-encoder".equals(event.stage()) && !event.advanced()));
+        assertEquals(6, progress.getLast().completedPages());
+        assertEquals(6, progress.getLast().totalPages());
         assertTrue(transcoder.maxActive.get() > 1);
         JsonNode manifest = OBJECT_MAPPER.readTree(Path.of(result.manifestPath()).toFile());
         assertEquals("p000001.avif", manifest.path("pages").get(0).path("slug").asText());
         assertEquals("p000006.avif", manifest.path("pages").get(5).path("slug").asText());
         assertEquals(6, Files.list(Path.of(result.manifestPath()).getParent()).filter((path) -> path.toString().endsWith(".avif")).count());
+        service.shutdown();
+    }
+
+    /** Verify strict NVIDIA failure keeps the existing hardware-missing UI contract. */
+    @Test
+    void strictNvidiaUnavailableRemainsHardwareMissing() {
+        PageTranscoder transcoder=mock(PageTranscoder.class);
+        when(transcoder.readiness()).thenReturn(new PageTranscoder.Readiness(false,"encoder_unavailable","No usable NVIDIA encoder."));
+        when(transcoder.requiresNvidiaRuntime()).thenReturn(true);
+        when(transcoder.runtimeProfile()).thenReturn("avif");when(transcoder.encoderName()).thenReturn("ffmpeg/unavailable");
+        when(transcoder.format()).thenReturn("avif");when(transcoder.mediaType()).thenReturn("image/avif");
+        LibraryIngestService service=new LibraryIngestService(mock(RavenSettingsService.class),mock(ScriptarrLogger.class),transcoder);
+        try {
+            assertEquals("hardware_missing",service.hardwareStatus().get("state"));
+            assertEquals("No usable NVIDIA encoder.",service.hardwareStatus().get("message"));
+            when(transcoder.requiresNvidiaRuntime()).thenReturn(false);
+            assertEquals("encoder_unavailable",service.hardwareStatus().get("state"));
+        } finally {service.shutdown();}
     }
 
     private static Path writeArchive(Path archivePath, int pages) throws IOException {

@@ -275,7 +275,7 @@ class DownloaderServiceRetryTest {
      * @throws Exception when the temporary downloads root cannot be staged
      */
     @Test
-    void restorePersistedTasksRecoversCompletedFolderWithoutStoredDownloadRoot() throws Exception {
+    void restoreDoesNotCompleteFromAnUnverifiedFolder() throws Exception {
         FakeRavenBrokerClient brokerClient = new FakeRavenBrokerClient();
         brokerClient.setSetting("raven.download.providers", Map.of(
             "providers", List.of(Map.of(
@@ -333,8 +333,8 @@ class DownloaderServiceRetryTest {
         service.restorePersistedTasks();
 
         Map<String, Object> task = service.snapshot().getFirst();
-        assertEquals("completed", task.get("status"));
-        assertEquals(100, task.get("percent"));
+        assertEquals("failed", task.get("status"));
+        assertTrue(((Number) task.get("percent")).intValue() < 100);
         assertEquals(1, libraryService.listTitles().size());
         assertEquals(completedRoot.toString(), libraryService.listTitles().getFirst().downloadRoot());
     }

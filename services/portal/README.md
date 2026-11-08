@@ -41,7 +41,8 @@ finds a source it DMs the requester that the title is back in admin review or wa
 fallback, but that path depends on Discord delivering `messageCreate` events and should not be treated as the primary
 interface anymore. The command stays owner-only and intentionally pinned to WeebCentral, so it fails if that provider
 is disabled instead of browsing MangaDex.
-Every `downloadall` request now creates a durable Raven run. Selecting `type:all` or `titlegroup:all` creates multiple
+Every new `downloadall` command creates a durable Raven run; retries of that same Discord command reuse its run.
+Selecting `type:all` or `titlegroup:all` creates multiple
 batches; Raven pauses after the configured `groupsize` batch count, which defaults to one and is capped at 25. Paused
 summary DMs get check/cross reactions so the owner can continue or cancel without typing a follow-up command.
 Bulk queueing is still provider-browse first, but it now asks Raven to metadata-resolve each matched bulk title before
@@ -49,6 +50,7 @@ queueing it. Portal only queues titles with one confident metadata match and rep
 already-current, appended, adult-content, no-metadata, ambiguous-metadata, invalid-source, and failed outcomes in the
 DM summary. For `nsfw:false`, Raven only queues titles whose WeebCentral detail page explicitly says
 `Adult Content: No`; adult or unverified titles are skipped.
+Run summaries report completed title tasks separately from every skipped category, including runs with no eligible titles.
 
 Appa also owns `/ingest type:<manga|manhwa|manhua|webtoon|comic|oel>` for admin AVIF rebuilds from existing
 canonical CBZ archives. The slash command previews the type, title count, hardware state, and any active run without
@@ -157,6 +159,9 @@ waitlisted users again when the title becomes ready, DMs unavailable requesters 
 moves back into admin review, and DMs them again if that unavailable request expires after 90 days.
 Portal also polls Sage for durable downloadall run notifications and DMs the requester paused, completed, failed, or
 cancelled summaries once per stable notification id.
+Prompt and acknowledgement retries reuse the accepted Discord message. Approval retries apply only to their original
+batch window. If an earlier send cannot be confirmed after the short Discord retry window, delivery waits for an
+administrator to reconcile it rather than sending another summary.
 
 Noona trivia is Sage-backed and runs from the configured trivia channel. Portal now reconciles one active trivia clock
 from Sage state on startup, settings refresh, manual start, win, and timeout. Repeated `/trivia start` calls while a
