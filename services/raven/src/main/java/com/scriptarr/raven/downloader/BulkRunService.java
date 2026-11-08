@@ -607,7 +607,9 @@ public class BulkRunService {
         int generation = toInt(normalizeMap(requireRun(runId).get("payload")).get("approvalGeneration"), 0);
         if (toInt(result.get("approvalGeneration"), -1) != generation) {
             result.put("approvalAttempts", Map.of());
-            result.put("retryBlockedSince", Map.of());
+            Map<String, Object> retryBlockedSince = new LinkedHashMap<>();
+            normalizeMap(result.get("retryBlockedSince")).keySet().forEach(taskId -> retryBlockedSince.put(taskId, now()));
+            result.put("retryBlockedSince", retryBlockedSince);
             result.put("approvalGeneration", generation);
         }
         current.put("result", result);
@@ -725,13 +727,38 @@ public class BulkRunService {
                 }
                 String status = stringValue(task.get("status")).toLowerCase(Locale.ROOT);
                 observed.put(taskId, status);
+                Map<String, Object> acceptedRetry = acceptedRetry(task);
+                if (!attempts.containsKey(taskId)) {
+                    attempts.put(taskId, 1);
+                    if (acceptedRetry.isEmpty()
+                        || toInt(acceptedRetry.get("approvalGeneration"), -1) == toInt(result.get("approvalGeneration"), 0)) {
+                        approvalAttempts.put(taskId, 1);
+                    }
+                }
+                if (!acceptedRetry.isEmpty()) {
+                    int acceptedCumulative = toInt(acceptedRetry.get("cumulativeAttempt"), 0);
+                    boolean newlyAccepted = acceptedCumulative > toInt(attempts.get(taskId), 0);
+                    attempts.put(taskId, Math.max(toInt(attempts.get(taskId), 0), acceptedCumulative));
+                    if (toInt(acceptedRetry.get("approvalGeneration"), -1) == toInt(result.get("approvalGeneration"), 0)) {
+                        newlyAccepted |= toInt(acceptedRetry.get("approvalAttempt"), 0) > toInt(approvalAttempts.get(taskId), 0);
+                        approvalAttempts.put(taskId, Math.max(toInt(approvalAttempts.get(taskId), 0), toInt(acceptedRetry.get("approvalAttempt"), 0)));
+                    }
+                    if (isNonProgressingQueuedTask(status) && (blockedSince.containsKey(taskId) || newlyAccepted)) {
+                        // A durable acceptance can survive a lost response before a local executor was attached.
+                        if (!safeRetryTask(runId, stringValue(batch.get("taskId")), taskId, acceptedRetry)) {
+                            blockedSince.putIfAbsent(taskId, now());
+                            failed.add(taskId);
+                            continue;
+                        }
+                        blockedSince.remove(taskId);
+                        pending = true;
+                        continue;
+                    }
+                    if (newlyAccepted) blockedSince.remove(taskId);
+                }
                 if (!stringValue(task.get("persistenceError")).isBlank()) {
                     failed.add(taskId);
                     continue;
-                }
-                if (!attempts.containsKey(taskId)) {
-                    attempts.put(taskId, 1);
-                    approvalAttempts.put(taskId, 1);
                 }
                 if (STATUS_COMPLETED.equals(status)) {
                     completed.add(taskId);
@@ -760,7 +787,9 @@ public class BulkRunService {
                         || "cancelled".equals(stringValue(task.get("failureCode")));
                     if (used >= MAX_TITLE_ATTEMPTS || (explicitlyCancelled && used > 0)) {
                         failed.add(taskId);
-                    } else if (safeRetryTask(taskId)) {
+                    } else if (safeRetryTask(runId, stringValue(batch.get("taskId")), taskId,
+                        retryAttempt(runId, stringValue(batch.get("taskId")), taskId, toInt(attempts.get(taskId), 0) + 1,
+                            toInt(result.get("approvalGeneration"), 0), used + 1))) {
                         attempts.put(taskId, toInt(attempts.get(taskId), 0) + 1);
                         approvalAttempts.put(taskId, used + 1);
                         blockedSince.remove(taskId);
@@ -1301,9 +1330,24 @@ public class BulkRunService {
         }
     }
 
-    private boolean safeRetryTask(String taskId) {
+    private Map<String, Object> acceptedRetry(Map<String, Object> task) {
+        BulkRetryAttemptReceipt receipt = BulkRetryAttemptReceipt.from(task);
+        return receipt == null ? Map.of() : receipt.payload();
+    }
+
+    private Map<String, Object> retryAttempt(String runId, String batchId, String taskId, int cumulativeAttempt,
+                                           int approvalGeneration, int approvalAttempt) {
+        String id = "bulk_retry_" + BulkRunIdentity.digest(List.of(runId, batchId, taskId,
+            String.valueOf(cumulativeAttempt), String.valueOf(approvalGeneration), String.valueOf(approvalAttempt)));
+        return Map.of("attemptId", id, "cumulativeAttempt", cumulativeAttempt,
+            "approvalGeneration", approvalGeneration, "approvalAttempt", approvalAttempt);
+    }
+
+    private boolean safeRetryTask(String runId, String batchId, String taskId, Map<String, Object> attempt) {
         try {
-            downloaderService.retryTask(taskId);
+            downloaderService.retryBulkTask(taskId, runId, batchId, stringValue(attempt.get("attemptId")),
+                toInt(attempt.get("cumulativeAttempt"), 0), toInt(attempt.get("approvalGeneration"), 0),
+                toInt(attempt.get("approvalAttempt"), 0));
             return true;
         } catch (Exception error) {
             logger.warn("DOWNLOAD", "Bulk run could not retry a failed title task.", "taskId=" + taskId + " error=" + error.getMessage());

@@ -98,7 +98,8 @@ every matching title. Download worker concurrency remains a separate setting.
 A failed source scan, unresolved title, missing owned task, or exhausted retry allowance pauses the run with the exact
 recovery identities. Failed task records and partial files remain available for inspection. A long queue wait does
 not expire healthy work. Each owner approval allows up to three attempts per unresolved title, while total attempts
-remain visible. Continue retries unresolved work and preserves completed titles and policy exclusions. Retried
+remain visible. Restarts and lost retry responses do not grant extra attempts. Continue retries unresolved work and
+preserves completed titles and policy exclusions. Retried
 Discord commands and approval actions reuse their existing run or accepted decision rather than advancing another
 window. Reading status never starts work.
 After a restart, healthy canonical CBZs can finish reader-page processing without fetching those chapters again.

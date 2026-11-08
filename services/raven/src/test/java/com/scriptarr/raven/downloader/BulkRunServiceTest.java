@@ -33,6 +33,8 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -267,10 +269,161 @@ class BulkRunServiceTest {
         Map<String, Object> after = map(maps(completed.get("batches")).getFirst().get("result"));
         assertEquals(4, number(map(after.get("attempts")).get(failedId)));
         assertEquals(1, number(map(after.get("approvalAttempts")).get(failedId)));
-        verify(fixture.downloader, times(3)).retryTask(failedId);
-        verify(fixture.downloader, never()).retryTask(fixture.gateway.idsInCreationOrder().getLast());
+        verify(fixture.downloader, times(3)).retryBulkTask(eq(failedId), anyString(), anyString(), anyString(), anyInt(), anyInt(), anyInt());
+        verify(fixture.downloader, never()).retryBulkTask(eq(fixture.gateway.idsInCreationOrder().getLast()), anyString(), anyString(), anyString(), anyInt(), anyInt(), anyInt());
         verify(fixture.downloader, never()).removeTask(anyString());
         assertEquals(1, fixture.gateway.discoveryCalls.get());
+    }
+
+    /** A durable accepted retry must restore its budget even when the parent checkpoint predates a crash. */
+    @Test
+    void durableChildAttemptPreventsFourthExecutionAfterParentCheckpointLoss() throws Exception {
+        Fixture fixture = fixture();
+        fixture.retryCompletes = false;
+        String runId = fixture.create(Map.of("start", false));
+        Map<String, Object> batch = map(fixture.broker.listJobTasks(runId, "").get(0));
+        String batchId = String.valueOf(batch.get("taskId"));
+        String taskId = "restored-owned-title";
+        fixture.gateway.addOwned(runId, batchId, taskId, "failed");
+        fixture.gateway.update(taskId, Map.of("details", Map.of("bulkRetryAttempt", Map.of(
+            "attemptId", "accepted-before-crash", "cumulativeAttempt", 2, "approvalGeneration", 0, "approvalAttempt", 2))));
+        Map<String, Object> result = map(batch.get("result"));
+        result.put("taskIds", List.of(taskId));
+        result.put("attempts", Map.of(taskId, 1));
+        result.put("approvalAttempts", Map.of(taskId, 1));
+        result.put("approvalGeneration", 0);
+        batch.put("result", result);
+        fixture.broker.putJobTask(runId, batchId, batch);
+
+        fixture.service.startRun(runId);
+        Map<String, Object> paused = awaitStatus(fixture.service, runId, "paused");
+        Map<String, Object> after = map(maps(paused.get("batches")).getFirst().get("result"));
+        assertEquals(3, number(map(after.get("attempts")).get(taskId)));
+        assertEquals(3, number(map(after.get("approvalAttempts")).get(taskId)));
+        assertEquals(1, fixture.executedRetryIds.size());
+        verify(fixture.downloader).retryBulkTask(eq(taskId), eq(runId), eq(batchId), anyString(), eq(3), eq(0), eq(3));
+    }
+
+    /** A lost retry response after execution cannot leave an uncounted extra execution allowance. */
+    @Test
+    void acceptedRetryWithLostResponseStillStopsAtThreeAttempts() throws Exception {
+        Fixture fixture = fixture();
+        fixture.gateway.statusFactory = index -> "failed";
+        fixture.retryCompletes = false;
+        fixture.loseNextRetryResponse = true;
+        String runId = fixture.create(Map.of());
+
+        Map<String, Object> paused = awaitStatus(fixture.service, runId, "paused");
+        String taskId = fixture.gateway.idsInCreationOrder().getFirst();
+        Map<String, Object> result = map(maps(paused.get("batches")).getFirst().get("result"));
+        assertEquals(3, number(map(result.get("attempts")).get(taskId)));
+        assertEquals(3, number(map(result.get("approvalAttempts")).get(taskId)));
+        assertEquals(2, fixture.executedRetryIds.size());
+    }
+
+    /** A persisted queued retry whose response was lost before dispatch is reattached with the same identity. */
+    @Test
+    void acceptedRetryBeforeSubmitIsReattachedWithoutSpendingAnotherAttempt() throws Exception {
+        Fixture fixture = fixture();
+        fixture.gateway.statusFactory = index -> "failed";
+        fixture.retryCompletes = false;
+        fixture.loseBeforeSubmit = true;
+        String runId = fixture.create(Map.of());
+
+        Map<String, Object> paused = awaitStatus(fixture.service, runId, "paused");
+        String taskId = fixture.gateway.idsInCreationOrder().getFirst();
+        Map<String, Object> result = map(maps(paused.get("batches")).getFirst().get("result"));
+        assertEquals(3, number(map(result.get("attempts")).get(taskId)));
+        assertEquals(2, fixture.executedRetryIds.size());
+        assertEquals(3, fixture.requestedRetryIds.size());
+        assertEquals(fixture.requestedRetryIds.get(0), fixture.requestedRetryIds.get(1));
+        assertNotEquals(fixture.requestedRetryIds.get(1), fixture.requestedRetryIds.get(2));
+    }
+
+    /** Lifecycle recovery must attach an accepted queued retry even when the previous worker saved no failure marker. */
+    @Test
+    void newlyObservedQueuedReceiptReattachesWithoutPriorFailureMarker() throws Exception {
+        Fixture fixture = fixture();
+        fixture.retryCompletes = false;
+        String runId = seedQueuedRetryBeforeDispatch(fixture);
+
+        fixture.service.startRun(runId);
+        Map<String, Object> paused = awaitStatus(fixture.service, runId, "paused");
+        Map<String, Object> result = map(maps(paused.get("batches")).getFirst().get("result"));
+        assertEquals(3, number(map(result.get("attempts")).get("queued-owned-title")));
+        assertEquals(3, number(map(result.get("approvalAttempts")).get("queued-owned-title")));
+        assertEquals(2, fixture.executedRetryIds.size());
+        assertEquals("accepted-before-submit", fixture.requestedRetryIds.getFirst());
+        assertEquals(2, fixture.requestedRetryIds.size());
+    }
+
+    /** A failed orphan reattachment remains actionable after its counters were reconciled and the owner continues. */
+    @Test
+    void failedQueuedReceiptReattachmentKeepsRecoveryEvidenceForContinue() throws Exception {
+        Fixture fixture = fixture();
+        fixture.rejectNextRetry = true;
+        String runId = seedQueuedRetryBeforeDispatch(fixture);
+
+        fixture.service.startRun(runId);
+        Map<String, Object> paused = awaitStatus(fixture.service, runId, "paused");
+        Map<String, Object> result = map(maps(paused.get("batches")).getFirst().get("result"));
+        assertEquals(2, number(map(result.get("attempts")).get("queued-owned-title")));
+        assertTrue(map(result.get("retryBlockedSince")).containsKey("queued-owned-title"));
+        assertEquals(0, fixture.executedRetryIds.size());
+
+        fixture.service.resumeRun(runId, String.valueOf(paused.get("approvalId")), "discord:decision:reattach");
+        awaitStatus(fixture.service, runId, "completed");
+        assertEquals(1, fixture.executedRetryIds.size());
+        assertEquals(List.of("accepted-before-submit", "accepted-before-submit"), fixture.requestedRetryIds);
+    }
+
+    /** A definite winding-down rejection spends no execution allowance and keeps the proposed attempt stable. */
+    @Test
+    void definiteRetryRejectionDoesNotConsumeAnAttempt() throws Exception {
+        Fixture fixture = fixture();
+        fixture.gateway.statusFactory = index -> "failed";
+        fixture.retryCompletes = false;
+        fixture.rejectNextRetry = true;
+        String runId = fixture.create(Map.of());
+
+        Map<String, Object> paused = awaitStatus(fixture.service, runId, "paused");
+        String taskId = fixture.gateway.idsInCreationOrder().getFirst();
+        Map<String, Object> result = map(maps(paused.get("batches")).getFirst().get("result"));
+        assertEquals(3, number(map(result.get("attempts")).get(taskId)));
+        assertEquals(2, fixture.executedRetryIds.size());
+        assertEquals(3, fixture.requestedRetryIds.size());
+        assertEquals(fixture.requestedRetryIds.get(0), fixture.requestedRetryIds.get(1));
+    }
+
+    /** Seeing an unchanged old receipt cannot reset the bounded wait for a rejected later retry. */
+    @Test
+    void priorAcceptedReceiptDoesNotResetExpiredWindingDownDeadline() throws Exception {
+        Fixture fixture = fixture();
+        fixture.retryCompletes = false;
+        fixture.rejectNextRetry = true;
+        String runId = fixture.create(Map.of("start", false));
+        Map<String, Object> batch = map(fixture.broker.listJobTasks(runId, "").get(0));
+        String batchId = String.valueOf(batch.get("taskId"));
+        String taskId = "winding-down-owned-title";
+        fixture.gateway.addOwned(runId, batchId, taskId, "failed");
+        fixture.gateway.update(taskId, Map.of("details", Map.of("bulkRetryAttempt", Map.of(
+            "attemptId", "prior-accepted-attempt", "cumulativeAttempt", 2, "approvalGeneration", 0, "approvalAttempt", 2))));
+        Map<String, Object> result = map(batch.get("result"));
+        result.put("taskIds", List.of(taskId));
+        result.put("attempts", Map.of(taskId, 2));
+        result.put("approvalAttempts", Map.of(taskId, 2));
+        result.put("approvalGeneration", 0);
+        result.put("retryBlockedSince", Map.of(taskId, NOW.minus(Duration.ofDays(1)).toString()));
+        batch.put("result", result);
+        fixture.broker.putJobTask(runId, batchId, batch);
+
+        fixture.service.startRun(runId);
+        Map<String, Object> paused = awaitStatus(fixture.service, runId, "paused");
+        Map<String, Object> after = map(maps(paused.get("batches")).getFirst().get("result"));
+        assertEquals(2, number(map(after.get("attempts")).get(taskId)));
+        assertEquals(2, number(map(after.get("approvalAttempts")).get(taskId)));
+        assertEquals(0, fixture.executedRetryIds.size());
+        assertEquals(1, fixture.requestedRetryIds.size());
     }
 
     /** A browse error after a successful page remains explicitly incomplete. */
@@ -571,6 +724,24 @@ class BulkRunServiceTest {
         return fixture(new TestBroker(), new TestGateway());
     }
 
+    private String seedQueuedRetryBeforeDispatch(Fixture fixture) {
+        String runId = fixture.create(Map.of("start", false));
+        Map<String, Object> batch = map(fixture.broker.listJobTasks(runId, "").get(0));
+        String batchId = String.valueOf(batch.get("taskId"));
+        String taskId = "queued-owned-title";
+        fixture.gateway.addOwned(runId, batchId, taskId, "queued");
+        fixture.gateway.update(taskId, Map.of("details", Map.of("bulkRetryAttempt", Map.of(
+            "attemptId", "accepted-before-submit", "cumulativeAttempt", 2, "approvalGeneration", 0, "approvalAttempt", 2))));
+        Map<String, Object> result = map(batch.get("result"));
+        result.put("taskIds", List.of(taskId));
+        result.put("attempts", Map.of(taskId, 1));
+        result.put("approvalAttempts", Map.of(taskId, 1));
+        result.put("approvalGeneration", 0);
+        batch.put("result", result);
+        fixture.broker.putJobTask(runId, batchId, batch);
+        return runId;
+    }
+
     private Fixture fixture(TestBroker broker, TestGateway gateway) {
         Fixture fixture = new Fixture(broker, gateway);
         services.add(fixture.service);
@@ -618,6 +789,11 @@ class BulkRunServiceTest {
         private final DownloaderService downloader = mock(DownloaderService.class);
         private final BulkRunService service;
         private volatile boolean retryCompletes = true;
+        private volatile boolean loseNextRetryResponse;
+        private volatile boolean loseBeforeSubmit;
+        private volatile boolean rejectNextRetry;
+        private final Set<String> executedRetryIds = ConcurrentHashMap.newKeySet();
+        private final List<String> requestedRetryIds = new ArrayList<>();
 
         private Fixture(TestBroker broker, TestGateway gateway) {
             this.broker = broker;
@@ -626,9 +802,33 @@ class BulkRunServiceTest {
                 Clock.fixed(NOW, ZoneOffset.UTC), Duration.ofMillis(5));
             doAnswer(invocation -> {
                 String id = invocation.getArgument(0);
-                gateway.update(id, Map.of("status", retryCompletes ? "completed" : "failed", "updatedAt", NOW.toString()));
+                String attemptId = invocation.getArgument(3);
+                requestedRetryIds.add(attemptId);
+                if (rejectNextRetry) {
+                    rejectNextRetry = false;
+                    throw new BulkRetryBlockedException("The prior execution is still winding down.");
+                }
+                Map<String, Object> previous = gateway.tasks.get(id);
+                Map<String, Object> receipt = previous != null && previous.containsKey("details")
+                    ? map(map(previous.get("details")).getOrDefault("bulkRetryAttempt", Map.of())) : Map.of();
+                if (!attemptId.equals(receipt.get("attemptId"))) {
+                    receipt = Map.of("attemptId", attemptId, "cumulativeAttempt", invocation.getArgument(4),
+                        "approvalGeneration", invocation.getArgument(5), "approvalAttempt", invocation.getArgument(6));
+                    gateway.update(id, Map.of("status", "queued", "details", Map.of("bulkRetryAttempt", receipt)));
+                    if (loseBeforeSubmit) {
+                        loseBeforeSubmit = false;
+                        throw new IllegalStateException("Accepted durable retry, but its response was lost before submit.");
+                    }
+                }
+                if ("queued".equals(gateway.tasks.get(id).get("status")) && executedRetryIds.add(attemptId)) {
+                    gateway.update(id, Map.of("status", retryCompletes ? "completed" : "failed", "updatedAt", NOW.toString()));
+                }
+                if (loseNextRetryResponse) {
+                    loseNextRetryResponse = false;
+                    throw new IllegalStateException("Accepted retry response was lost.");
+                }
                 return gateway.tasks.get(id);
-            }).when(downloader).retryTask(anyString());
+            }).when(downloader).retryBulkTask(anyString(), anyString(), anyString(), anyString(), anyInt(), anyInt(), anyInt());
             doAnswer(invocation -> {
                 String id = invocation.getArgument(0);
                 gateway.update(id, Map.of("status", "failed", "message", "Cancelled by admin."));

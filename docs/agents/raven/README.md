@@ -104,6 +104,11 @@
   or ingest. Missing, exhausted, superseded, or unplanned legacy work pauses with IDs and reasons, retaining evidence.
   Each explicit approval grants unresolved titles three attempts while preserving cumulative history. Durable
   `approvalGeneration` on completed batches also accounts for a crash before the parent approval counter is saved.
+- Owned retry acceptance persists `details.bulkRetryAttempt` with its stable identity and cumulative/current-approval
+  ordinals before executor dispatch. Reconcile those child counters before allocating another retry; a lost parent
+  checkpoint cannot grant extra attempts. The same accepted queued attempt can reattach a missing local worker once,
+  while terminal receipt replay never executes again. Preserve the receipt through task restoration and details
+  rebuilding, and do not spend an allowance on a definite rejection before acceptance.
 - `CanonicalArchiveRecovery` verifies cataloged archives or reconstructs planned rows before source/VPN requests.
   Healthy canonical CBZs can resume ingest offline; `AppendChapterMerger` retains untouched chapter IDs and ready
   reader metadata. Replacements retain their full replacement semantics. Failed owned tasks remain failed on startup

@@ -32,6 +32,9 @@ Raven is Scriptarr's Java download, library, metadata, and VPN-aware download en
   results and unresolved owned work must pause with durable task/plan identities; never silently mark them completed
   or remove failed work to advance a run. Each explicit approval gives unresolved titles three attempts, while
   cumulative attempts and completed outcomes survive restarts and local terminal-history pruning.
+- Owned retries must persist their attempt identity and cumulative/current-approval counters before dispatch. Reconcile
+  those durable child counters before allocating another retry; replays must not execute a terminal attempt again,
+  and an accepted queued attempt must reattach a missing local executor without spending another allowance.
 - Bulk status reads must be pure. Lifecycle recovery runs after the complete downloader restore barrier and every
   30 seconds; only running runs or queued runs with persisted `startRequested: true` may recover automatically.
   Deliberately unstarted, legacy queued, paused, and cancelled runs must not start from monitoring.

@@ -109,6 +109,7 @@ public class DownloaderService {
     private final CanonicalArchiveRecovery canonicalArchiveRecovery;
     private final AtomicLong queueSortSequence = new AtomicLong();
     private final Map<String, Long> ingestProgressPersistedAt = new ConcurrentHashMap<>();
+    private final Map<String, String> bulkTaskDispatches = new ConcurrentHashMap<>();
     private final AtomicLong queueSequence = new AtomicLong();
     private volatile int configuredActiveTitleDownloads = RavenDownloadRuntimeSettings.DEFAULT_ACTIVE_TITLE_DOWNLOADS;
     private ThreadPoolExecutor queueWorker = createQueueWorker(configuredActiveTitleDownloads);
@@ -261,7 +262,7 @@ public class DownloaderService {
                     }
                     copyIfPresent(detailsNode, task, "startedAt");
                     copyNumberIfPresent(detailsNode, task, "downloadSpeedBytesPerSecond");
-                    for (String key : List.of("bulkRunId", "bulkBatchId", "bulkPlanId", "actualProgressAt", "stage", "ingestCompletedPages", "ingestTotalPages", "ingestCompletedChapters", "ingestTotalChapters")) {
+                    for (String key : List.of("bulkRunId", "bulkBatchId", "bulkPlanId", "bulkRetryAttempt", "actualProgressAt", "stage", "ingestCompletedPages", "ingestTotalPages", "ingestCompletedChapters", "ingestTotalChapters")) {
                         if (detailsNode.has(key)) task.put(key, brokerClientValue(detailsNode.path(key)));
                     }
                     if (restoredSortOrder < 0) {
@@ -446,7 +447,7 @@ public class DownloaderService {
                     if (taskId.equals(node.path("taskId").asText())) {
                         existing = brokerClientPayloadToMap(node);
                         Map<String, Object> detail = normalizeMap(existing.get("details"));
-                        for (String key : List.of("bulkRunId", "bulkBatchId", "bulkPlanId", "selectedMetadata", "selectedDownload", "actualProgressAt", "stage")) {
+                        for (String key : List.of("bulkRunId", "bulkBatchId", "bulkPlanId", "bulkRetryAttempt", "selectedMetadata", "selectedDownload", "actualProgressAt", "stage")) {
                             if (!existing.containsKey(key) && detail.containsKey(key)) existing.put(key, detail.get(key));
                         }
                         break;
@@ -756,6 +757,81 @@ public class DownloaderService {
     }
 
     /**
+     * Accept one durable owned retry identity before dispatch, or replay its existing receipt.
+     *
+     * @param taskId stable owned download task id
+     * @param runId owning bulk run id
+     * @param batchId owning batch id
+     * @param attemptId deterministic retry identity
+     * @param cumulativeAttempt cumulative execution ordinal, including the initial download
+     * @param approvalGeneration current explicit approval generation
+     * @param approvalAttempt execution ordinal within that approval, at most three
+     * @return authoritative accepted task snapshot
+     */
+    public synchronized Map<String, Object> retryBulkTask(String taskId, String runId, String batchId, String attemptId,
+        int cumulativeAttempt, int approvalGeneration, int approvalAttempt) {
+        BulkRetryAttemptReceipt requested = new BulkRetryAttemptReceipt(attemptId, cumulativeAttempt, approvalGeneration, approvalAttempt, Instant.now().toString());
+        Map<String, Object> durable = loadDurableBulkRetryTask(taskId);
+        if (!runId.equals(normalizeString(durable.get("bulkRunId"))) || !batchId.equals(normalizeString(durable.get("bulkBatchId")))) {
+            throw new BulkRetryBlockedException("The retry task belongs to another bulk owner.");
+        }
+        BulkRetryAttemptReceipt previous = BulkRetryAttemptReceipt.from(durable);
+        if (requested.same(previous)) {
+            reattachAcceptedBulkRetry(taskId, runId, durable);
+            return Map.copyOf(durable);
+        }
+        if (bulkQueueCoordinator.isRunCancelled(runId)) throw new BulkRetryBlockedException("The owning bulk run was cancelled.");
+        requested.requireSuccessor(previous);
+        if (runningTaskThreads.containsKey(taskId) || queuedTasks.containsKey(taskId) || bulkTaskDispatches.containsKey(taskId)) {
+            throw new BulkRetryBlockedException("This Raven task is still winding down. Retry the same attempt shortly.");
+        }
+        String status = normalizeString(durable.get("status")).toLowerCase(Locale.ROOT);
+        if (!"failed".equals(status)) throw new BulkRetryBlockedException("Only failed owned title tasks can accept a retry.");
+        Map<String, Object> accepted = new ConcurrentHashMap<>(durable);
+        accepted.put("bulkRetryAttempt", requested.payload());
+        accepted.put("status", "queued"); accepted.put("message", "Queued for approved bulk retry."); accepted.put("percent", 0);
+        accepted.put("queuedAt", Instant.now().toString()); accepted.put("updatedAt", Instant.now().toString());
+        accepted.put("sortOrder", nextQueuedSortOrder()); accepted.put("startedAt", ""); accepted.put("downloadSpeedBytesPerSecond", 0L);
+        accepted.put("stage", "queued");
+        // Never publish an uncommitted receipt or let it make a later replay look accepted.
+        persistTaskSnapshot(taskId, accepted);
+        tasks.put(taskId, accepted);
+        syncLinkedRequest(accepted, status, "queued", "Queued for approved bulk retry.");
+        reattachAcceptedBulkRetry(taskId, runId, accepted);
+        return Map.copyOf(accepted);
+    }
+
+    private Map<String, Object> loadDurableBulkRetryTask(String taskId) {
+        try {
+            var records = brokerClient.listDownloadTasks();
+            if (records == null || !records.isArray()) throw new IllegalStateException("Invalid durable task snapshot.");
+            for (var node : records) {
+                if (!taskId.equals(node.path("taskId").asText())) continue;
+                Map<String, Object> restored = brokerClientPayloadToMap(node);
+                Map<String, Object> details = normalizeMap(restored.get("details"));
+                for (String key : List.of("bulkRunId", "bulkBatchId", "bulkPlanId", "bulkRetryAttempt", "selectedMetadata", "selectedDownload", "priority", "actualProgressAt", "stage")) {
+                    if (!restored.containsKey(key) && details.containsKey(key)) restored.put(key, details.get(key));
+                }
+                Map<String, Object> stable = new ConcurrentHashMap<>();
+                restored.forEach((key, value) -> { if (value != null) stable.put(key, value); });
+                return stable;
+            }
+        } catch (Exception error) { throw new IllegalStateException("Could not verify the durable owned retry receipt.", error); }
+        throw new BulkRetryBlockedException("The owned retry task is missing.");
+    }
+
+    private void reattachAcceptedBulkRetry(String taskId, String runId, Map<String, Object> accepted) {
+        if (!"queued".equals(normalizeString(accepted.get("status"))) || queuedTasks.containsKey(taskId) || runningTaskThreads.containsKey(taskId)) return;
+        tasks.put(taskId, accepted);
+        cancellationRequestedTaskIds.remove(taskId);
+        if (bulkQueueCoordinator.isRunCancelled(runId)) {
+            update(taskId, "failed", "Cancelled by owning bulk run.", 0);
+            return;
+        }
+        submitQueuedTask(taskId, requestFromTask(accepted));
+    }
+
+    /**
      * Remove a failed or queued Raven title task and its incomplete managed working folder.
      *
      * @param taskId Raven task id
@@ -904,6 +980,7 @@ public class DownloaderService {
         previousQueueWorker.shutdownNow();
         previousPageWorker.shutdownNow();
         tasks.clear();
+        bulkTaskDispatches.clear();
         queuedTasks.clear();
         runningTaskThreads.clear();
         cancellationRequestedTaskIds.clear();
@@ -1062,10 +1139,12 @@ public class DownloaderService {
                 logger.error("DOWNLOAD", "Raven download failed.", error);
             }
         } finally {
-            runningTaskThreads.remove(taskId);
             ingestProgressPersistedAt.remove(taskId);
             queuedTasks.remove(taskId);
             cancellationRequestedTaskIds.remove(taskId);
+            bulkTaskDispatches.remove(taskId);
+            // Keep winding-down visible until all per-execution cleanup has finished.
+            runningTaskThreads.remove(taskId);
         }
     }
 
@@ -1590,7 +1669,7 @@ public class DownloaderService {
         details.put("sortOrder", taskSortOrder(task));
         details.put("startedAt", String.valueOf(task.getOrDefault("startedAt", "")));
         details.put("downloadSpeedBytesPerSecond", toLong(task.get("downloadSpeedBytesPerSecond")));
-        for (String key : List.of("bulkRunId", "bulkBatchId", "bulkPlanId", "actualProgressAt", "stage", "ingestCompletedPages", "ingestTotalPages", "ingestCompletedChapters", "ingestTotalChapters")) {
+        for (String key : List.of("bulkRunId", "bulkBatchId", "bulkPlanId", "bulkRetryAttempt", "actualProgressAt", "stage", "ingestCompletedPages", "ingestTotalPages", "ingestCompletedChapters", "ingestTotalChapters")) {
             if (task.containsKey(key)) details.put(key, task.get(key));
         }
         return details;
@@ -2167,8 +2246,17 @@ public class DownloaderService {
             request,
             () -> process(taskId, request)
         );
+        boolean owned = !normalizeString(task.get("bulkRunId")).isBlank();
+        String dispatchIdentity = normalizeString(normalizeMap(task.get("bulkRetryAttempt")).get("attemptId"), "initial");
+        // Reserve before publishing the queue entry, including restored and initial owned downloads.
+        if (owned && bulkTaskDispatches.putIfAbsent(taskId, dispatchIdentity) != null) return;
         queuedTasks.put(taskId, prioritizedTask);
-        queueWorker.execute(prioritizedTask);
+        try { queueWorker.execute(prioritizedTask); }
+        catch (RuntimeException error) {
+            queuedTasks.remove(taskId, prioritizedTask);
+            if (owned) bulkTaskDispatches.remove(taskId, dispatchIdentity);
+            throw error;
+        }
     }
 
     private ThreadPoolExecutor createQueueWorker(int activeTitleDownloads) {
@@ -2239,7 +2327,7 @@ public class DownloaderService {
                     Map<String, Object> restored = brokerClientPayloadToMap(node);
                     Map<String, Object> details = normalizeMap(restored.get("details"));
                     if (normalizeString(details.get("bulkRunId")).isBlank()) break;
-                    for (String key : List.of("bulkRunId", "bulkBatchId", "bulkPlanId", "selectedMetadata", "selectedDownload", "priority", "actualProgressAt", "stage")) {
+                    for (String key : List.of("bulkRunId", "bulkBatchId", "bulkPlanId", "bulkRetryAttempt", "selectedMetadata", "selectedDownload", "priority", "actualProgressAt", "stage")) {
                         if (!restored.containsKey(key) && details.containsKey(key)) restored.put(key, details.get(key));
                     }
                     Map<String, Object> stable = new ConcurrentHashMap<>();
@@ -2289,8 +2377,9 @@ public class DownloaderService {
 
     private void removeQueuedTaskEntry(String taskId) {
         PrioritizedTask queuedTask = queuedTasks.remove(taskId);
-        if (queuedTask != null) {
-            queueWorker.getQueue().remove(queuedTask);
+        if (queuedTask != null && queueWorker.getQueue().remove(queuedTask)) {
+            // A truly removed queued execution may be safely reprioritized or restored after a failed removal.
+            bulkTaskDispatches.remove(taskId);
         }
     }
 
