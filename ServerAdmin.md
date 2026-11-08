@@ -720,6 +720,11 @@ Healthy canonical CBZs can finish ingest while the source is unavailable, keepin
 preserving earlier readable chapters. Failed owned tasks still wait for the approved retry; restarting does not grant
 another attempt allowance.
 
+Vault startup also handles preserved catalogs whose legacy `cataloged_at` timestamp is required but has no default.
+It restores new-title publication while preserving the existing column and stored values. If publication reports that
+timestamp error, deploy the compatible Vault image through Warden, wait for Vault readiness, then retry the existing
+run. Retain the canonical CBZs so recovery can reuse them and finish reader-page ingest.
+
 Discord interaction/message identifiers deduplicate retried run creation. Delivery records retain accepted summary
 message identifiers so prompt-registration or acknowledgement retries reuse the same message. Each pause has an
 approval identifier; an old or repeated reaction cannot approve a newer batch. Ambiguous deliveries that cannot be

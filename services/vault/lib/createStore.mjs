@@ -3,6 +3,7 @@ import {createHash, randomUUID} from "node:crypto";
 import mysql from "mysql2/promise";
 import {deriveLegacyPermissions, seedPermissionGroups} from "@scriptarr/access";
 import {createCachedStore} from "./createCachedStore.mjs";
+import {ensureLegacyRavenCatalogDefaults} from "./legacyRavenCatalogCompatibility.mjs";
 import {
   buildEffectiveUserAccess,
   ensureSeedPermissionGroups,
@@ -2457,6 +2458,7 @@ const createMysqlStore = (config) => {
         updated_at DATETIME NOT NULL
       )
     `);
+    await ensureLegacyRavenCatalogDefaults(pool);
     await pool.query(`
       CREATE TABLE IF NOT EXISTS raven_title_aliases (
         alias_title_id VARCHAR(191) PRIMARY KEY,
