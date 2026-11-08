@@ -11,6 +11,9 @@
   the session TTL.
 - Services should not bypass Vault to read or write shared state directly.
 - Vault is the only first-party service allowed to touch MySQL.
+- Legacy catalog compatibility is allowlisted to `raven_titles.cataloged_at`: only a required non-generated timestamp
+  with no default receives `ALTER COLUMN ... SET DEFAULT (CURRENT_TIMESTAMP(precision))`. Never retype/drop the column,
+  rewrite existing values, change SQL mode, or add it to fresh schemas. Other defaults and constraints stay unchanged.
 - Sage is the supported caller for Vault's HTTP API. Other first-party services should use Sage's internal broker
   routes instead of calling Vault directly.
 - Vault exposes `PATCH /api/service/users/:discordUserId/profile` for Sage's Discord login refresh path. Keep it

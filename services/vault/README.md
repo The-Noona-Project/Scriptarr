@@ -5,6 +5,9 @@ Vault is Scriptarr's shared auth, cache, and state broker over MySQL.
 Vault is the only first-party service allowed to touch the shared MySQL database directly. It keeps a cache-first
 shared read layer in front of hot state and now stores durable generic jobs and job tasks for long-running work such
 as managed-service updates and Raven pipeline activity.
+For retained databases with the legacy required `raven_titles.cataloged_at` column, startup supplies a missing
+precision-matched timestamp default. Existing timestamps, custom defaults, column constraints and indexes remain
+intact. Fresh databases keep the current schema without adding that legacy column.
 Vault now also persists reusable permission groups, user-group assignments, and the shared durable event log that
 powers `/admin/users`, `/admin/requests`, and `/admin/system/events`. The bootstrap owner stays protected, while every
 other user's admin access is derived from one or more permission groups plus a required default onboarding group for
