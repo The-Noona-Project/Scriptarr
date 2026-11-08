@@ -205,6 +205,14 @@
 - Startup catalog scans preserve each validated ready chapter when its archive path, number, page count, and AVIF
   revision still match. `LibraryTitleLocks` counts active and waiting title operations so scan writes cannot erase
   newer ingest checkpoints. Keep the service monitor out of the wait for a title lease to avoid lock inversion.
+- `ScanCatalogOwnership` takes one strict raw title census in the background, retaining only small normalized-root/name
+  indexes without chapter DTO deserialization. Public cards omit roots and deduplicate display names, so they cannot
+  prove complete ownership. This is a startup-only linear catalog-read tradeoff; browser/backlog card paths stay compact.
+  Unique absolute normalized
+  `downloadRoot` ownership precedes the legacy type/name fallback; preserve metadata display names and reload the owner
+  strictly under its title lease, including its indexed root. Failed or incomplete identity reads are not an empty catalog. Multiple IDs claiming one
+  root leave their rows/files unchanged and fail the durable rescan job/task with bounded diagnostics and recovery counts;
+  unrelated folders still scan. Never choose, merge, delete or create another owner to conceal that ambiguity.
 - `ArchiveImageEntries` defines supported CBZ image entries for import, scans, ingest, recovery, and completion.
   Metadata such as `ComicInfo.xml` is not a page. Correct legacy inflated counts only after validating existing ready
   manifests; preserve AVIF revisions, timestamps, files, and quality evidence. Prefer a persisted archive path's known

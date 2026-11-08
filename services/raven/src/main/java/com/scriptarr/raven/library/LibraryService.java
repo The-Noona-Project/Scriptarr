@@ -1192,12 +1192,14 @@ public final class LibraryService {
             ScanCatalogContext scanContext = buildScanCatalogContext();
             scanManagedDownloadedRoot(downloadsRoot.resolve(DOWNLOADED_FOLDER_NAME), scanContext);
             scanLegacyDownloadedRoot(downloadsRoot, scanContext);
-            persistRescanJob("completed", "Raven library rescan completed.", startedAt, Instant.now(), Map.of(
-                "titles", listCompactTitleRows(Map.of()).size()
-            ));
+            boolean needsRecovery = scanContext.ownership().hasFailures();
+            persistRescanJob(needsRecovery ? "failed" : "completed", needsRecovery
+                ? "Raven library rescan requires recovery; see the retained folder diagnostics."
+                : "Raven library rescan completed.", startedAt, Instant.now(), scanContext.ownership().result());
         } catch (IOException error) {
             logger.warn("LIBRARY", "Raven import scan failed.", error.getMessage());
-            persistRescanJob("failed", error.getMessage(), startedAt, Instant.now(), Map.of("error", error.getMessage()));
+            persistRescanJob("failed", error.getMessage(), startedAt, Instant.now(), Map.of("error", error.getMessage(),
+                "recoveryRequired", true, "recoveryAction", "retry-library-rescan"));
         }
     }
 
@@ -1628,21 +1630,9 @@ public final class LibraryService {
         }
     }
 
-    private ScanCatalogContext buildScanCatalogContext() {
-        Map<String, String> titleIdsByTypeSlugAndTitleSlug = new LinkedHashMap<>();
-        for (Map<String, Object> row : listCompactTitleRows(Map.of())) {
-            String titleId = stringValue(row.get("id"));
-            String title = stringValue(row.get("title"));
-            String typeSlug = LibraryNaming.normalizeTypeSlug(firstNonBlank(
-                stringValue(row.get("libraryTypeSlug")),
-                stringValue(row.get("mediaType"))
-            ));
-            String key = scanTitleKey(typeSlug, title);
-            if (!titleId.isBlank() && !key.isBlank()) {
-                titleIdsByTypeSlugAndTitleSlug.putIfAbsent(key, titleId);
-            }
-        }
-        return new ScanCatalogContext(settingsService.getNamingSettings(), titleIdsByTypeSlugAndTitleSlug);
+    private ScanCatalogContext buildScanCatalogContext() throws IOException {
+        ScanCatalogOwnership ownership = ScanCatalogOwnership.load(brokerClient);
+        return new ScanCatalogContext(settingsService.getNamingSettings(), ownership);
     }
 
     private void scanTitleFolder(Path folder, String rawType, Path workingRoot, ScanCatalogContext scanContext) {
@@ -1664,14 +1654,13 @@ public final class LibraryService {
             String typeSlug = LibraryNaming.normalizeTypeSlug(typeLabel);
             RavenNamingSettings namingSettings = scanContext.namingSettings();
             List<LibraryChapter> chapters = new ArrayList<>();
-            LibraryTitle existing = findExistingTitleForScan(titleName, typeSlug, scanContext);
-            String titleId = existing != null && existing.id() != null && !existing.id().isBlank()
-                ? existing.id()
-                : UUID.randomUUID().toString();
+            String existingId = scanContext.ownership().resolve(folder, typeSlug, titleName);
+            String titleId = existingId == null || existingId.isBlank() ? UUID.randomUUID().toString() : existingId;
 
             try (var lease = titleOperationLocks.acquire(titleId)) {
                 // A startup ingest may have committed newer chapter state while this scan waited.
-                if (existing != null) existing = findTitleById(titleId);
+                LibraryTitle existing = existingId == null || existingId.isBlank() ? null : loadScanTitle(titleId);
+                if (existing != null) scanContext.ownership().assertReloadMatches(folder, titleId, existing.downloadRoot());
                 Map<Path, LibraryChapter> knownArchives = new LinkedHashMap<>();
                 if (existing != null) for (LibraryChapter chapter : Optional.ofNullable(existing.chapters()).orElse(List.of())) {
                     try {
@@ -1701,7 +1690,7 @@ public final class LibraryService {
 
                 LibraryTitle title = new LibraryTitle(
                     titleId,
-                    titleName,
+                    existing != null ? existing.title() : titleName,
                     LibraryNaming.normalizeMediaType(typeLabel),
                     typeLabel,
                     typeSlug,
@@ -1733,9 +1722,10 @@ public final class LibraryService {
                     ? chapters
                     : rekeyChapters(persistedTitleId, chapters);
                 replaceChapters(persistedTitleId, chaptersToPersist);
-                scanContext.titleIdsByTypeSlugAndTitleSlug().putIfAbsent(scanTitleKey(typeSlug, titleName), persistedTitleId);
+                scanContext.ownership().register(folder, typeSlug, titleName, persistedTitleId);
             }
         } catch (Exception error) {
+            scanContext.ownership().recordFailure(folder, error);
             logger.warn("LIBRARY", "Raven import scan could not index a title folder.", error.getMessage());
         }
     }
@@ -1763,25 +1753,36 @@ public final class LibraryService {
         catch (RuntimeException error) { return false; }
     }
 
-    private LibraryTitle findExistingTitleForScan(String titleName, String typeSlug, ScanCatalogContext scanContext) {
-        String titleId = scanContext.titleIdsByTypeSlugAndTitleSlug().get(scanTitleKey(typeSlug, titleName));
-        return titleId == null || titleId.isBlank() ? null : findTitleById(titleId);
-    }
-
-    private String scanTitleKey(String typeSlug, String titleName) {
-        String normalizedType = LibraryNaming.normalizeTypeSlug(typeSlug);
-        String normalizedTitle = LibraryNaming.slugifySegment(titleName);
-        return normalizedType.isBlank() || normalizedTitle.isBlank() ? "" : normalizedType + ":" + normalizedTitle;
+    /**
+     * Reload the indexed canonical identity under its title lease; an unavailable owner is never absence.
+     * @param titleId exact canonical owner selected by the scan index
+     * @return current canonical title
+     * @throws IOException when the owner is missing, changed or unavailable
+     */
+    private LibraryTitle loadScanTitle(String titleId) throws IOException {
+        try {
+            JsonNode payload = brokerClient.getLibraryTitle(titleId);
+            if (payload == null || !payload.isObject() || payload.has("error") || !payload.path("chapters").isArray()
+                || !payload.has("downloadRoot") || (!payload.path("downloadRoot").isTextual() && !payload.path("downloadRoot").isNull())
+                || payload.path("title").asText("").isBlank() || !titleId.equals(payload.path("id").asText(""))) {
+                throw new IOException("The indexed Raven catalog owner is unavailable.");
+            }
+            return normalizeLibraryTitle(objectMapper.treeToValue(payload, LibraryTitle.class));
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt(); throw new IOException("Raven catalog owner reload was interrupted.", interrupted);
+        } catch (RuntimeException error) {
+            throw new IOException("The indexed Raven catalog owner could not be loaded.", error);
+        }
     }
 
     private boolean scannedTitleIsUnchanged(LibraryTitle existing, List<LibraryChapter> scannedChapters, Path folder, Path workingRoot) {
         if (existing == null || scannedChapters == null) {
             return false;
         }
-        if (!Objects.equals(stringValue(existing.downloadRoot()), folder.toString())) {
+        if (!sameArchivePath(existing.downloadRoot(), folder)) {
             return false;
         }
-        if (workingRoot != null && !Objects.equals(stringValue(existing.workingRoot()), workingRoot.toString())) {
+        if (workingRoot != null && !sameArchivePath(existing.workingRoot(), workingRoot)) {
             return false;
         }
         List<LibraryChapter> existingChapters = Optional.ofNullable(existing.chapters()).orElse(List.of());
@@ -2883,7 +2884,7 @@ public final class LibraryService {
 
     private record ScanCatalogContext(
         RavenNamingSettings namingSettings,
-        Map<String, String> titleIdsByTypeSlugAndTitleSlug
+        ScanCatalogOwnership ownership
     ) {
     }
 

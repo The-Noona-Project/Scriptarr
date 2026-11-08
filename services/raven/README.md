@@ -171,8 +171,10 @@ Download completion now waits for file promotion, brokered catalog persistence, 
 `100%`. If catalog persistence or ingest fails, Raven marks the task failed instead of leaving it stuck at `90%`.
 Ingest failures keep the CBZ and publish retryable `Needs attention` work; cleanup removes only staged or derived ingest
 files. On boot, Raven also rescans the existing `downloaded/<type>/...` tree to backfill missing catalog rows from
-already-finished archives. That startup scan uses compact title-card indexes and skips unchanged folders so a large
-library cannot force repeated full-title catalog reads while auth and admin bootstrap are trying to start.
+already-finished archives. Startup recovery indexes saved canonical paths in the background and skips unchanged folders.
+The scan resolves a folder's saved canonical path before
+matching its display name, so metadata renames retain the title and chapter identities. Multiple titles claiming the
+same path remain untouched and appear in the durable rescan recovery diagnostics; resolve ownership before rescanning.
 The scan keeps its in-memory catalog context current as it repairs folders, which prevents two folders discovered in the
 same pass from creating duplicate durable rows for the same logical title.
 During AVIF ingest, Raven checkpoints each chapter's terminal `ready`, `missing`, or `failed` state through Sage's

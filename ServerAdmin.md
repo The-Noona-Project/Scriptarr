@@ -240,10 +240,15 @@ grants plus baseline user capabilities. New and returning Discord users land in 
 and admin activity now comes from one shared durable event log instead of page-local summaries.
 Raven now only marks download work complete after the promoted files also persist into the brokered catalog, and it
 rescans the existing `downloaded/<type>/...` tree on boot so already-finished archives can repopulate Moon's library
-without forcing a re-download. Startup recovery uses compact title-card indexes and skips unchanged folders so large
-libraries do not flood Vault with repeated full-catalog reads during login/bootstrap. Raven and Vault also share a
+without forcing a re-download. Startup recovery reads one complete catalog snapshot in the background and skips unchanged
+folders rather than repeating full-catalog reads for each folder. Browser and backlog lists remain compact. Raven and Vault also share a
 logical catalog identity of library type plus normalized title, so downloads, imports, rescans, and ingest setup reuse
-the existing canonical title instead of creating a new visible row.
+the existing canonical title instead of creating a new visible row. Startup scans also match each saved canonical path
+before the display name, so a metadata rename keeps the original title and chapter identities. Background scanning
+retains only a small identity index from that snapshot; display-name-deduplicated cards are insufficient to detect all
+folder owners. If multiple titles claim one path, Raven leaves them and
+their files untouched, records a failed rescan with recovery diagnostics, and continues scanning unrelated folders.
+Resolve that ownership conflict before retrying the scan; it is not a reason to delete or merge records automatically.
 Raven's WeebCentral chapter scraper now follows the live source's HTMX full-chapter-list flow for long-running
 series, which is required for titles such as Tomb Raider King that hide older chapters behind a show-all request.
 
