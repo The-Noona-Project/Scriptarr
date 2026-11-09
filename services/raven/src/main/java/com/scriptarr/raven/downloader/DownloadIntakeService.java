@@ -197,6 +197,74 @@ public class DownloadIntakeService {
         return BulkMetadataResolution.matched(best.metadataSnapshot(), best.downloadSnapshot());
     }
 
+    /** Resolve one exact browsed source, preferring a durable verified binding over fresh provider search. */
+    public BulkMetadataResolution resolveSourceMetadata(String providerId, String url, String title, String type,
+        TitleDetails source, String catalogId) {
+        return resolveSourceMetadata(providerId, url, title, type, source, catalogId, () -> false);
+    }
+
+    /** Resolve source metadata while checking owner cancellation between every bounded provider operation. */
+    public BulkMetadataResolution resolveSourceMetadata(String providerId, String url, String title, String type,
+        TitleDetails source, String catalogId, java.util.function.BooleanSupplier cancelled) {
+        if (cancelled.getAsBoolean()) throw new java.util.concurrent.CancellationException("Metadata discovery cancelled.");
+        if (!BulkTitleSelection.validSeriesUrl(url) || source == null || !type.equals(BulkTitleSelection.type(source.type()))) {
+            throw new IllegalStateException("The source identity and requested type could not be verified.");
+        }
+        Map<String, Object> stored = metadataService.storedSourceSelection(catalogId, url);
+        if (stored != null && !stored.isEmpty()) {
+            if (!com.scriptarr.raven.metadata.SourceMetadataFacts.matches(title, source, stored)) {
+                throw new IllegalStateException("metadata_source_ambiguous: Saved binding conflicts with current source facts.");
+            }
+            return sourceResolution(providerId, url, title, type, source, stored, "source".equals(stored.get("provider")) ? "source-backed" : "verified-provider");
+        }
+        Set<String> queries = new LinkedHashSet<>();
+        queries.add(title);
+        if (source.associatedNames() != null) source.associatedNames().stream().limit(1).forEach(queries::add);
+        // A broader finder query is never used as identity or edition evidence.
+        queries.add(title.replaceAll("(?i)\\s*\\((?:reboot|remake|(?:19|20)\\d{2})\\)\\s*$", ""));
+        Map<String, Map<String, Object>> candidates = new LinkedHashMap<>();
+        Set<String> inspected = new LinkedHashSet<>();
+        for (String query : queries) {
+            if (cancelled.getAsBoolean() || Thread.currentThread().isInterrupted()) throw new java.util.concurrent.CancellationException("Metadata discovery interrupted.");
+            for (Map<String, Object> row : metadataService.search(query, null, null, cancelled).stream().limit(20).toList()) {
+                if (cancelled.getAsBoolean()) throw new java.util.concurrent.CancellationException("Metadata discovery cancelled.");
+                String key = row.get("provider") + ":" + row.get("providerSeriesId");
+                if (!inspected.add(key)) continue;
+                if (com.scriptarr.raven.metadata.SourceMetadataFacts.adultConflict(title, source, row)) throw new IllegalStateException("metadata_adult_conflict: Matched provider classifies this source as adult.");
+                if (!com.scriptarr.raven.metadata.SourceMetadataFacts.matches(title, source, row)
+                    && !BulkMetadataAnchor.matches(title, source.associatedNames(), row)) continue;
+                Map<String, Object> candidate = buildMetadataSnapshot(row);
+                Map<String, Object> details = candidate.get("details") instanceof Map<?, ?> data ? (Map<String, Object>) data : Map.of();
+                if (com.scriptarr.raven.metadata.SourceMetadataFacts.adultConflict(title, source, details)) {
+                    throw new IllegalStateException("metadata_adult_conflict: Source and matched metadata disagree on adult content.");
+                }
+                if (com.scriptarr.raven.metadata.SourceMetadataFacts.matches(title, source, details)) candidates.put(key, details);
+            }
+        }
+        if (!candidates.isEmpty()) {
+            Map<String, Object> first = candidates.values().iterator().next();
+            long sameProvider = candidates.values().stream().filter(c -> first.get("provider").equals(c.get("provider"))).count();
+            if (sameProvider == 1) return sourceResolution(providerId, url, title, type, source, first, "verified-provider");
+        }
+        Map<String, Object> fallback = com.scriptarr.raven.metadata.SourceMetadataFacts.fallback(providerId, url, title, source);
+        return sourceResolution(providerId, url, title, type, source, fallback, "source-backed");
+    }
+
+    private BulkMetadataResolution sourceResolution(String providerId, String url, String title, String type,
+        TitleDetails source, Map<String, Object> metadata, String decision) {
+        Map<String, Object> details = com.scriptarr.raven.metadata.SourceMetadataFacts.bind(providerId, url, title, source, metadata, decision);
+        Map<String, Object> snapshot = new LinkedHashMap<>(details);
+        snapshot.put("details", details);
+        snapshot.put("type", type); snapshot.put("typeSlug", LibraryNaming.normalizeTypeSlug(type));
+        Map<String, Object> target = new LinkedHashMap<>();
+        target.put("providerId", providerId); target.put("titleName", title); target.put("titleUrl", url);
+        target.put("sourceUrl", url); target.put("requestType", type); target.put("libraryTypeSlug", LibraryNaming.normalizeTypeSlug(type));
+        target.put("coverUrl", firstNonBlank(stringValue(metadata.get("coverUrl")), source.coverUrl()));
+        target.put("tags", details.get("tags")); target.put("nsfw", Boolean.TRUE.equals(source.adultContent()));
+        target.put("sourceBinding", details.get("sourceBinding"));
+        return BulkMetadataResolution.matched(snapshot, target);
+    }
+
     /**
      * Resolve alternate concrete provider targets for an existing library title
      * so admins can inspect source coverage and queue a safe replacement.

@@ -8,7 +8,7 @@ import {buildAdminQueuePayload} from "../lib/buildAdminQueuePayload.mjs";
 
 test("buildAdminQueuePayload groups title tasks into running, queued, and needs-attention sections", () => {
   const now = Date.now();
-  const staleIso = new Date(now - (31 * 60 * 1000)).toISOString();
+  const staleIso = new Date(now - (46 * 60 * 1000)).toISOString();
   const freshIso = new Date(now - (2 * 60 * 1000)).toISOString();
 
   const payload = buildAdminQueuePayload([{
@@ -73,9 +73,9 @@ test("buildAdminQueuePayload groups title tasks into running, queued, and needs-
 
   assert.equal(payload.stats.runningCount, 1);
   assert.equal(payload.stats.queuedCount, 3);
-  assert.equal(payload.stats.needsAttentionCount, 2);
+  assert.equal(payload.stats.needsAttentionCount, 1);
   assert.equal(payload.stats.totalSlots, 2);
-  assert.equal(payload.stats.retryableAttentionCount, 2);
+  assert.equal(payload.stats.retryableAttentionCount, 1);
   assert.equal(payload.running[0].taskId, "running-1");
   assert.equal(payload.running[0].downloadSpeedBytesPerSecond, 1024);
   assert.equal(Number.isFinite(payload.running[0].etaMinutes), true);
@@ -84,7 +84,7 @@ test("buildAdminQueuePayload groups title tasks into running, queued, and needs-
   assert.equal(payload.queued[0].etaMinutes, undefined);
   assert.equal(payload.queued[1].taskId, "queued-2");
   assert.equal(payload.needsAttention.some((task) => task.taskId === "failed-1" && task.retriable === true && task.removable === true), true);
-  assert.equal(payload.needsAttention.some((task) => task.taskId === "stale-1" && task.attentionReason === "stale" && task.retriable === true && task.removable === true), true);
+  assert.equal(payload.needsAttention.some((task) => task.taskId === "stale-1"), false);
   assert.equal(payload.needsAttention.some((task) => task.taskId === "system-restart-1"), false);
 });
 
@@ -120,7 +120,7 @@ test("buildAdminQueuePayload keeps running cards in a stable queue order", () =>
 });
 
 test("buildAdminQueuePayload marks stale running titles as non-retriable needs-attention cards", () => {
-  const staleIso = new Date(Date.now() - (31 * 60 * 1000)).toISOString();
+  const staleIso = new Date(Date.now() - (46 * 60 * 1000)).toISOString();
 
   const payload = buildAdminQueuePayload([{
     taskId: "running-stale",
@@ -196,4 +196,28 @@ test("buildAdminQueuePayload excludes stale broker snapshots from live title rec
   }]);
 
   assert.deepEqual(payload.needsAttention.map((task) => task.taskId), ["failed-title-1"]);
+});
+
+
+test("healthy long queues and encoder waits never become age-only failures", () => {
+  const old = new Date(Date.now() - 12 * 60 * 60 * 1000).toISOString();
+  const rows = Array.from({length: 400}, (_, i) => ({taskId: `queued-${i}`, titleName: `Title ${i}`, requestType: "Manhua", source: "raven", status: "queued", updatedAt: old}));
+  rows.push({taskId: "cpu", titleName: "CPU title", requestType: "Manhua", source: "raven", status: "running", updatedAt: old, details: {stage: "waiting-for-worker", actualProgressAt: old}});
+  rows.push({taskId: "ingest", titleName: "Active ingest", requestType: "Manhua", source: "raven", status: "running", updatedAt: old, details: {stage: "ingesting", actualProgressAt: new Date().toISOString()}});
+  const result = buildAdminQueuePayload(rows);
+  assert.equal(result.queued.length, 400);
+  assert.equal(result.needsAttention.length, 0);
+});
+
+test("historical cancellation and exact-source replacements do not invite duplicate retries", () => {
+  const base = {titleId: "title", titleName: "Title", requestType: "Manhua", source: "raven", titleUrl: "https://weebcentral.com/series/exact"};
+  const result = buildAdminQueuePayload([
+    {...base, taskId: "cancelled", status: "failed", message: "Cancelled by admin."},
+    {...base, taskId: "old", status: "failed", message: "Restart interrupted ingest", updatedAt: "2026-01-01T00:00:00Z"},
+    {...base, taskId: "new", status: "queued", updatedAt: "2026-01-02T00:00:00Z"},
+    {...base, taskId: "foreign", titleUrl: "https://weebcentral.com/series/other", status: "failed", message: "Catalog persistence failed", updatedAt: "2026-01-01T00:00:00Z"}
+  ]);
+  assert.equal(result.stats.historicalFailureCount, 2);
+  assert.deepEqual(result.needsAttention.map((task) => task.taskId), ["foreign"]);
+  assert.equal(result.historicalFailures.every((task) => task.retriable === false), true);
 });

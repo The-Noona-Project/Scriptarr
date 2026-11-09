@@ -168,8 +168,12 @@ public final class BulkQueueCoordinator implements BulkRunGateway {
                                 Map<String, Object> selectedMetadata = new LinkedHashMap<>();
                                 Map<String, Object> selectedDownload = new LinkedHashMap<>();
                                 if (catalog != null) {
-                                    DownloadIntakeService.BulkMetadataResolution binding = intake.resolveBulkMetadata(provider.id(), url, name, wantedType, details.associatedNames());
-                                    if (binding == null || binding.unmatched() || binding.ambiguous() || !BulkMetadataAnchor.matches(name, details.associatedNames(), binding.metadataSnapshot())) {
+                                    DownloadIntakeService.BulkMetadataResolution binding = (details.sourceTitle() == null || details.sourceTitle().isBlank()
+                                        ? intake.resolveBulkMetadata(provider.id(), url, name, wantedType, details.associatedNames())
+                                        : intake.resolveSourceMetadata(provider.id(), url, name, wantedType, details, catalog == null ? "" : catalog.id(), stop));
+                                    if (binding == null || binding.unmatched() || binding.ambiguous() || !(binding.metadataSnapshot().containsKey("sourceBinding")
+                                            ? com.scriptarr.raven.metadata.SourceMetadataFacts.matches(name, details, binding.metadataSnapshot())
+                                            : BulkMetadataAnchor.matches(name, details.associatedNames(), binding.metadataSnapshot()))) {
                                         throw new IllegalStateException("metadata_source_ambiguous: Catalog metadata is not anchored to the original provider title or edition.");
                                     }
                                     selectedMetadata.putAll(binding.metadataSnapshot()); selectedDownload.putAll(binding.downloadSnapshot());
@@ -187,7 +191,9 @@ public final class BulkQueueCoordinator implements BulkRunGateway {
                                         selectedDownload.put("expectedChapters", missing);
                                     }
                                 } else {
-                                    DownloadIntakeService.BulkMetadataResolution metadata = intake.resolveBulkMetadata(provider.id(), url, name, wantedType, details.associatedNames());
+                                    DownloadIntakeService.BulkMetadataResolution metadata = (details.sourceTitle() == null || details.sourceTitle().isBlank()
+                                        ? intake.resolveBulkMetadata(provider.id(), url, name, wantedType, details.associatedNames())
+                                        : intake.resolveSourceMetadata(provider.id(), url, name, wantedType, details, catalog == null ? "" : catalog.id(), stop));
                                     checkCancelled(stop);
                                     if (metadata == null) throw new IllegalStateException("Metadata discovery returned no verifiable outcome.");
                                     if (metadata.unmatched()) category = "noMetadata";

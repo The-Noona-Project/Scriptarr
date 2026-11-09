@@ -2,6 +2,7 @@
  * @file Allowlisted Sage system task scheduler and execution runtime.
  */
 
+import {buildAdminQueuePayload} from "./buildAdminQueuePayload.mjs";
 import {appendDurableEvent, buildServiceActor} from "./adminEvents.mjs";
 import {createGithubUpdateDigestService} from "./githubUpdateDigest.mjs";
 import {defaultSystemTimezone, getNextCronRuns, normalizeCronSchedule, normalizeString, validateCronExpression} from "./systemCron.mjs";
@@ -20,9 +21,11 @@ const normalizeObject = (value, fallback = {}) => value && typeof value === "obj
 
 const isStaleRavenTask = (task) => {
   const status = normalizeString(task?.status).toLowerCase();
-  const updated = Date.parse(normalizeString(task?.updatedAt));
+  const stage = normalizeString(task?.details?.stage || task?.stage);
+  const updated = Date.parse(normalizeString(task?.details?.actualProgressAt || task?.actualProgressAt || task?.updatedAt));
   return status === "failed"
-    || (["running", "queued"].includes(status) && Number.isFinite(updated) && updated < Date.now() - STALE_QUEUE_THRESHOLD_MS);
+    || (status === "running" && !["waiting-for-encoder", "waiting-for-worker"].includes(stage)
+      && Number.isFinite(updated) && updated < Date.now() - STALE_QUEUE_THRESHOLD_MS);
 };
 
 const buildTitleRecoveryAction = (task) => {
@@ -49,7 +52,8 @@ const runStaleQueueCleanup = async ({config, vaultClient, serviceJson}) => {
     throw new Error(result.payload?.error || "Raven task scan failed.");
   }
   const tasks = normalizeArray(result.payload?.tasks);
-  const staleTitleTasks = tasks.filter(isStaleRavenTask);
+  const historical = new Set(buildAdminQueuePayload(tasks.map((task) => ({...task, source: "raven"}))).historicalFailures.map((task) => task.taskId));
+  const staleTitleTasks = tasks.filter((task) => !historical.has(task.taskId) && isStaleRavenTask(task));
   const titleRecoveryActions = staleTitleTasks.map(buildTitleRecoveryAction);
   const bulkRunRecoveryActions = [];
   const inspectedBulkRuns = [];

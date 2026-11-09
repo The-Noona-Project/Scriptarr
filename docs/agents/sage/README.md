@@ -275,3 +275,7 @@
 - Reader byte and status routes must preserve exact revision/segment/thumbnail selectors and identity headers. Do not
   invent missing warm-probe identity. Reject malformed variants before upstream fetch. Keep logical pages distinct from
   ordered physical segments, and request a whole logical thumbnail for first-page WebP cover fallback.
+
+### Metadata evidence and recovery
+
+Focused metadata routes serve whitelisted evidence only after existing user/admin authorization. Bulk metadata rechecking additionally requires activity root, the configured Discord owner, and matching durable run ownership. Forward only approval/request IDs; browsers never choose internal services or overwrite generic job payloads. Queue and scheduled recovery exclude age-only queued work, encoder waits, explicit cancellations and exact-source superseded failures from actionable recovery while retaining history.

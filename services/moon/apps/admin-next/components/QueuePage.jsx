@@ -10,6 +10,7 @@ import {requestJson, useAdminEventStaleness, useAdminJson} from "../lib/api.js";
 import {formatDate, formatEta, formatPercent, formatTransferRate, normalizeString} from "../lib/format.js";
 import {useAdminToast} from "./AdminToasts.jsx";
 import {IngestRunsPanel} from "./IngestRunsPanel.jsx";
+import {BulkMetadataRecoveryPanel} from "./BulkMetadataRecoveryPanel.jsx";
 
 const normalizeArray = (value) => Array.isArray(value) ? value : [];
 const ACTIVE_QUEUE_POLL_INTERVAL_MS = 5_000;
@@ -467,6 +468,8 @@ export const QueuePage = ({user}) => {
           <MetricCard label="Active slots" value={`${stats.activeSlots ?? 0}/${stats.totalSlots ?? 0}`} />
         </div>
       </section>
+      {hasAdminGrant(user, "activity", "root") ? <BulkMetadataRecoveryPanel /> : null}
+      {stats.historicalFailureCount ? <p className="admin-muted">{stats.historicalFailureCount} historical cancelled or superseded failures remain in history.</p> : null}
       <IngestRunsPanel
         runs={normalizeArray(payload.ingestRuns)}
         title="AVIF library runs"

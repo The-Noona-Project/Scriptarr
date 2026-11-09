@@ -393,7 +393,10 @@ public class TitleScraper {
                 parseBooleanFlag(extractLabeledValue(doc, "Official Translation")),
                 parseBooleanFlag(extractLabeledValue(doc, "Anime Adaptation")),
                 extractTags(doc),
-                extractRelatedSeries(doc)
+                extractRelatedSeries(doc),
+                doc.select("h1").text(),
+                extractLabeledList(doc, "Author(s)"),
+                doc.select("img[alt$=cover]").stream().map(image -> image.absUrl("src")).findFirst().orElse("")
             );
         } catch (Exception error) {
             logger.warn("SCRAPER", "Title details request failed.", error.getMessage());

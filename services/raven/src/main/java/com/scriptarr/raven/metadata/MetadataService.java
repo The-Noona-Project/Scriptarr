@@ -37,6 +37,7 @@ import java.util.Map;
 public class MetadataService {
     private static final String BROWSER_USER_AGENT =
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
+    private com.scriptarr.raven.downloader.providers.DownloadProviderRegistry sourceProviders;
     private final List<MetadataProvider> providers;
     private final RavenSettingsService settingsService;
     private final RavenBrokerClient brokerClient;
@@ -46,6 +47,7 @@ public class MetadataService {
         .connectTimeout(Duration.ofSeconds(10))
         .build();
     private final ObjectMapper objectMapper = new ObjectMapper();
+    private final MetadataLookupCache detailCache = new MetadataLookupCache(java.time.Clock.systemUTC(), 256, 300_000);
 
     /**
      * Create the metadata service.
@@ -68,6 +70,66 @@ public class MetadataService {
         this.brokerClient = brokerClient;
         this.libraryService = libraryService;
         this.logger = logger;
+    }
+
+    /** Assemble source-aware identification while retaining the standalone metadata test seam. */
+    @org.springframework.beans.factory.annotation.Autowired
+    public MetadataService(List<MetadataProvider> providers, RavenSettingsService settingsService,
+        RavenBrokerClient brokerClient, LibraryService libraryService, ScriptarrLogger logger,
+        com.scriptarr.raven.downloader.providers.DownloadProviderRegistry sourceProviders) {
+        this(providers, settingsService, brokerClient, libraryService, logger);
+        this.sourceProviders = sourceProviders;
+    }
+
+    /** Load only an exact-source durable binding; fresh source facts must still validate its metadata. */
+    public Map<String, Object> storedSourceSelection(String titleId, String sourceUrl) {
+        if (titleId == null || titleId.isBlank()) return Map.of();
+        try {
+            JsonNode row = brokerClient.getMetadataMatch(titleId);
+            if (row == null || !row.isObject()) return Map.of();
+            Map<String, Object> details = objectMapper.convertValue(row.path("details"), Map.class);
+            Map<String, Object> binding = normalizeMap(details.get("sourceBinding"));
+            Map<String, Object> source = normalizeMap(binding.get("source"));
+            if (!sourceUrl.equals(source.get("url")) || !Integer.valueOf(1).equals(binding.get("version"))) return Map.of();
+            if (!row.path("provider").asText("").equals(binding.get("provider"))
+                || !row.path("providerSeriesId").asText("").equals(binding.get("providerSeriesId"))) {
+                throw new IllegalStateException("Stored binding provider identity changed; repair is required.");
+            }
+            Map<String, Object> selected = new LinkedHashMap<>(details);
+            selected.put("provider", row.path("provider").asText(""));
+            selected.put("providerSeriesId", row.path("providerSeriesId").asText(""));
+            return selected;
+        } catch (Exception error) {
+            if (error instanceof InterruptedException) Thread.currentThread().interrupt();
+            throw new IllegalStateException("Stored source metadata could not be verified.", error);
+        }
+    }
+
+    /** Inspect current source facts for admin comparison without applying a metadata decision. */
+    public Map<String, Object> sourceEvidence(String titleId) {
+        try {
+            LibraryTitle title = libraryService.findTitle(titleId);
+            if (title == null || sourceProviders == null) return Map.of("ok", false, "error", "Source title unavailable.");
+            var provider = sourceProviders.resolve("", title.sourceUrl()).orElseThrow(() -> new IllegalStateException("Source provider unavailable."));
+            var source = provider.getTitleDetails(title.sourceUrl());
+            if (source == null || source.sourceTitle() == null || source.sourceTitle().isBlank()) return Map.of("ok", false, "error", "Source details incomplete.");
+            Map<String, Object> stored = storedSourceSelection(title.id(), title.sourceUrl());
+            return Map.of("ok", true, "source", SourceMetadataFacts.sourceFacts(provider.id(), title.sourceUrl(), source.sourceTitle(), source),
+                "matchesSaved", SourceMetadataFacts.matches(source.sourceTitle(), source, stored), "collectedAt", Instant.now().toString());
+        } catch (RuntimeException error) {
+            return Map.of("ok", false, "error", "Current source metadata could not be verified.");
+        }
+    }
+
+    private Map<String, Object> verifyIdentifiedSource(LibraryTitle title, Map<String, Object> details) {
+        if (sourceProviders == null || title == null || title.sourceUrl() == null || title.sourceUrl().isBlank()) return details;
+        var provider = sourceProviders.resolve("", title.sourceUrl()).orElseThrow(() -> new IllegalStateException("Source provider is unavailable."));
+        var source = provider.getTitleDetails(title.sourceUrl());
+        if (source == null || source.sourceTitle() == null || source.sourceTitle().isBlank()
+            || !SourceMetadataFacts.matches(source.sourceTitle(), source, details)) {
+            throw new IllegalStateException("metadata_source_ambiguous: Selected metadata does not match the source edition.");
+        }
+        return SourceMetadataFacts.bind(provider.id(), title.sourceUrl(), source.sourceTitle(), source, details, "verified-provider");
     }
 
     /**
@@ -100,11 +162,17 @@ public class MetadataService {
      * @return aggregated provider results
      */
     public List<Map<String, Object>> search(String name, String requestedProvider, String libraryId) {
+        return search(name, requestedProvider, libraryId, () -> false);
+    }
+
+    /** Search enabled providers while observing bulk owner cancellation between requests. */
+    public List<Map<String, Object>> search(String name, String requestedProvider, String libraryId, java.util.function.BooleanSupplier cancelled) {
         List<RankedMetadataSearchResult> rankedResults = new ArrayList<>();
         LibraryTitle title = libraryId == null || libraryId.isBlank() ? null : libraryService.findTitle(libraryId);
         int providerOrder = 0;
         int resultOrder = 0;
         for (Map<String, Object> provider : describeProviders()) {
+            if (cancelled.getAsBoolean() || Thread.currentThread().isInterrupted()) throw new java.util.concurrent.CancellationException("Metadata search cancelled.");
             String providerId = String.valueOf(provider.get("id"));
             boolean enabled = Boolean.TRUE.equals(provider.get("enabled"));
             if (!enabled) {
@@ -190,6 +258,7 @@ public class MetadataService {
                 );
             }
 
+            details = verifyIdentifiedSource(title, details);
             brokerClient.putMetadataMatch(effectiveTitleId, Map.of(
                 "provider", provider,
                 "providerSeriesId", providerSeriesId,
@@ -293,6 +362,11 @@ public class MetadataService {
      * @return normalized provider detail payload
      */
     public Map<String, Object> seriesDetails(String provider, String providerSeriesId) {
+        return detailCache.get(provider.toLowerCase(Locale.ROOT) + ":" + providerSeriesId,
+            () -> loadSeriesDetails(provider, providerSeriesId));
+    }
+
+    private Map<String, Object> loadSeriesDetails(String provider, String providerSeriesId) {
         try {
             return switch (provider.toLowerCase(Locale.ROOT)) {
                 case "mangadex" -> fetchMangaDexSeriesDetails(providerSeriesId);
@@ -341,7 +415,7 @@ public class MetadataService {
     private List<Map<String, Object>> searchMangaDex(String name) throws IOException, InterruptedException {
         String encoded = URLEncoder.encode(name, StandardCharsets.UTF_8);
         HttpRequest request = HttpRequest.newBuilder()
-            .uri(URI.create("https://api.mangadex.org/manga?limit=5&title=" + encoded + "&includes[]=cover_art"))
+            .uri(URI.create("https://api.mangadex.org/manga?limit=10&title=" + encoded + "&includes[]=cover_art"))
             .timeout(Duration.ofSeconds(15))
             .GET()
             .build();
@@ -349,24 +423,21 @@ public class MetadataService {
         List<Map<String, Object>> results = new ArrayList<>();
         for (JsonNode entry : root.path("data")) {
             String id = entry.path("id").asText("");
-            String title = preferredLocalizedValue(entry.path("attributes").path("title"), id);
-            results.add(Map.of(
-                "provider", "mangadex",
-                "providerSeriesId", id,
-                "title", title,
-                "url", "https://mangadex.org/title/" + id,
-                "coverUrl", firstNonBlank(
-                    buildMangaDexCoverUrl(id, extractMangaDexCoverFileName(entry.path("relationships"))),
-                    ""
-                )
-            ));
+            String title = mangaDexDisplayTitle(entry.path("attributes"), id);
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("provider", "mangadex"); result.put("providerSeriesId", id); result.put("title", title);
+            result.put("aliases", collectAltTitles(entry.path("attributes").path("altTitles")));
+            result.put("releaseLabel", entry.path("attributes").path("year").asText(""));
+            result.put("url", "https://mangadex.org/title/" + id);
+            result.put("coverUrl", firstNonBlank(buildMangaDexCoverUrl(id, extractMangaDexCoverFileName(entry.path("relationships"))), ""));
+            results.add(result);
         }
         return results;
     }
 
     private Map<String, Object> fetchMangaDexSeriesDetails(String providerSeriesId) throws IOException, InterruptedException {
         HttpRequest request = HttpRequest.newBuilder()
-            .uri(URI.create("https://api.mangadex.org/manga/" + providerSeriesId + "?includes[]=cover_art&includes[]=author"))
+            .uri(URI.create("https://api.mangadex.org/manga/" + providerSeriesId + "?includes[]=cover_art&includes[]=author&includes[]=artist"))
             .timeout(Duration.ofSeconds(15))
             .GET()
             .build();
@@ -375,7 +446,7 @@ public class MetadataService {
         return Map.ofEntries(
             Map.entry("provider", "mangadex"),
             Map.entry("providerSeriesId", providerSeriesId),
-            Map.entry("title", preferredLocalizedValue(attributes.path("title"), providerSeriesId)),
+            Map.entry("title", mangaDexDisplayTitle(attributes, providerSeriesId)),
             Map.entry("url", "https://mangadex.org/title/" + providerSeriesId),
             Map.entry("coverUrl", firstNonBlank(
                 buildMangaDexCoverUrl(providerSeriesId, extractMangaDexCoverFileName(root.path("relationships"))),
@@ -386,6 +457,19 @@ public class MetadataService {
             Map.entry("status", SeriesLifecycle.normalizeStatus(attributes.path("status").asText(""))),
             Map.entry("aliases", collectAltTitles(attributes.path("altTitles"))),
             Map.entry("tags", collectMangaDexTags(attributes)),
+            Map.entry("type", switch (attributes.path("originalLanguage").asText("")) { case "zh", "zh-hk" -> "Manhua"; case "ko" -> "Manhwa"; case "ja" -> "Manga"; default -> ""; }),
+            Map.entry("adultContent", switch (attributes.path("contentRating").asText("")) { case "safe", "suggestive" -> false; case "erotica", "pornographic" -> true; default -> "unknown"; }),
+            Map.entry("contentRating", attributes.path("contentRating").asText("")),
+            Map.entry("demographic", attributes.path("publicationDemographic").asText("")),
+            Map.entry("artists", java.util.stream.StreamSupport.stream(root.path("relationships").spliterator(), false)
+                .filter(person -> "artist".equals(person.path("type").asText(""))).map(person -> person.path("attributes").path("name").asText(""))
+                .filter(name -> !name.isBlank()).toList()),
+            Map.entry("author", java.util.stream.StreamSupport.stream(root.path("relationships").spliterator(), false)
+                .filter(person -> "author".equals(person.path("type").asText(""))).map(person -> person.path("attributes").path("name").asText(""))
+                .filter(name -> !name.isBlank()).collect(java.util.stream.Collectors.joining(", "))),
+            Map.entry("tagGroups", java.util.stream.StreamSupport.stream(attributes.path("tags").spliterator(), false)
+                .map(tag -> Map.of("tag", preferredLocalizedValue(tag.path("attributes").path("name"), ""),
+                    "group", tag.path("attributes").path("group").asText("other"))).toList()),
             Map.entry("books", List.of())
         );
     }
@@ -781,7 +865,7 @@ public class MetadataService {
 
     private Map<String, Object> normalizeAppliedMetadata(Map<String, Object> details) {
         Map<String, Object> normalized = new LinkedHashMap<>();
-        normalized.put("title", String.valueOf(details.getOrDefault("title", "")));
+        normalized.put("title", String.valueOf(details.getOrDefault("displayTitle", details.getOrDefault("title", ""))));
         normalized.put("url", String.valueOf(details.getOrDefault("url", "")));
         normalized.put("summary", String.valueOf(details.getOrDefault("summary", "")));
         normalized.put("coverUrl", String.valueOf(details.getOrDefault("coverUrl", "")));
@@ -792,6 +876,7 @@ public class MetadataService {
         normalized.put("aliases", details.getOrDefault("aliases", List.of()));
         normalized.put("tags", details.getOrDefault("tags", List.of()));
         normalized.put("relations", details.getOrDefault("relations", List.of()));
+        if (details.containsKey("sourceBinding")) normalized.put("sourceBinding", details.get("sourceBinding"));
         return normalized;
     }
 
@@ -1273,6 +1358,15 @@ public class MetadataService {
             }
         }
         return builder.toString();
+    }
+
+    private String mangaDexDisplayTitle(JsonNode attributes, String fallback) {
+        String english = attributes.path("title").path("en").asText("");
+        if (!english.isBlank()) return english;
+        for (JsonNode alias : attributes.path("altTitles")) {
+            english = alias.path("en").asText(""); if (!english.isBlank()) return english;
+        }
+        return preferredLocalizedValue(attributes.path("title"), fallback);
     }
 
     private List<String> collectMangaDexTags(JsonNode attributes) {

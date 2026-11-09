@@ -141,7 +141,7 @@ test("stale queue cleanup inspects durable bulk runs and records recovery action
             tasks: [{
               taskId: "task-stale-1",
               titleName: "Stale Title",
-              status: "queued",
+              status: "running",
               updatedAt: new Date(Date.now() - (3 * 60 * 60 * 1000)).toISOString()
             }]
           }

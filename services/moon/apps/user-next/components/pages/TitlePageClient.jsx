@@ -15,6 +15,7 @@ import {Button, Flex} from "../UiPrimitives.jsx";
 import {useMoonChrome} from "../MoonChromeContext.jsx";
 import {AuthRequiredView, EmptyView, ErrorView} from "../StateView.jsx";
 import CoverImage from "../CoverImage.jsx";
+import {SourceMetadataDetails} from "../SourceMetadataDetails.jsx";
 
 const CHAPTER_PAGE_SIZE = 40;
 const CHAPTER_PAGE_SIZE_MAX = 100;
@@ -721,6 +722,7 @@ export const TitlePageClient = ({titleId, typeSlug = ""}) => {
 
       {activeTab === "details" && title ? (
         <section className="moon-title-detail-grid">
+          <SourceMetadataDetails titleId={titleId} title={title} />
           <div className="moon-title-detail-panel">
             <span className="moon-kicker">Metadata</span>
             <dl>

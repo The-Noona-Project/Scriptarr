@@ -103,6 +103,8 @@ export const MetadataPage = ({user}) => {
   const counts = data?.counts || {};
   const visibleTitles = useMemo(() => filterMetadataRows(titles, {query, gap}), [titles, query, gap]);
   const selectedTitle = titles.find((title) => titleRowKey(title) === selectedId) || null;
+  const {data: evidence, error: evidenceError} = useAdminJson(selectedTitle?.id ? `/api/moon/v3/admin/wanted/metadata/${encodeURIComponent(selectedTitle.id)}/evidence` : null, {fallback: null});
+
 
   useEffect(() => {
     setSelectedId((current) => resolveExistingTitleSelection(titles, current));
@@ -271,6 +273,22 @@ export const MetadataPage = ({user}) => {
               <span><strong>Cover</strong>{selectedTitle.coverUrl ? "configured" : "missing"}</span>
             </div>
 
+            <section className="admin-subsection">
+              <h3>Source and edition evidence</h3>
+              {evidenceError ? <p className="admin-muted">Metadata evidence is unavailable.</p> : null}
+              <div className="admin-detail-grid">
+                <span><strong>Binding</strong>{evidence?.decision || "unverified"}</span>
+                <span><strong>Source edition</strong>{evidence?.source?.title || "Not verified"} · {evidence?.source?.year || "Year unknown"}</span>
+                <span><strong>Provider edition</strong>{evidence?.provider?.title || "Not matched"} · {evidence?.provider?.year || "Year unknown"}</span>
+                <span><strong>Source status</strong>{evidence?.source?.status || "Unknown"}</span>
+                <span><strong>Provider status</strong>{evidence?.provider?.status || "Unknown"}</span>
+                <span><strong>Source creators</strong>{evidence?.source?.authors?.join(", ") || "Unknown"}</span>
+                <span><strong>Provider creators</strong>{[evidence?.provider?.author, ...(evidence?.provider?.artists || [])].filter(Boolean).join(", ") || "Unknown"}</span>
+                <span><strong>Verified</strong>{formatDate(evidence?.verifiedAt)}</span>
+              </div>
+              {(evidence?.conflicts || []).map((warning) => <p key={warning} className="admin-muted">{warning}</p>)}
+              <details><summary>Tag provenance</summary>{(evidence?.tagOrigins || []).map((row, index) => <span className="admin-chip" key={`${row.tag}:${row.provider}:${index}`}>{row.tag} · {row.provider}</span>)}</details>
+            </section>
             <section className="admin-subsection">
               <div className="admin-section-heading">
                 <div>
