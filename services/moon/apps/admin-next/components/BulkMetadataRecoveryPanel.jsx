@@ -14,9 +14,14 @@ export const BulkMetadataRecoveryPanel = () => {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const requestId = useRef("");
+  const inspectedApproval = useRef("");
   const inspect = async () => {
     setBusy(true);
     const result = await requestJson(`/api/moon/v3/admin/activity/bulk-runs/${encodeURIComponent(runId.trim())}`);
+    if (result.ok && result.payload.approvalId !== inspectedApproval.current) {
+      requestId.current = "";
+      inspectedApproval.current = result.payload.approvalId || "";
+    }
     setRun(result.ok ? result.payload : null);
     setMessage(result.ok ? `Run ${result.payload.status}. Metadata skips: ${(result.payload.counts?.skippedNoMetadataCount || 0) + (result.payload.counts?.skippedAmbiguousMetadataCount || 0)}.` : result.payload?.error || "Run inspection failed.");
     setBusy(false);

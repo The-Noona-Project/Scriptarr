@@ -197,13 +197,32 @@ public class DownloadIntakeService {
         return BulkMetadataResolution.matched(best.metadataSnapshot(), best.downloadSnapshot());
     }
 
-    /** Resolve one exact browsed source, preferring a durable verified binding over fresh provider search. */
+    /**
+     * Resolve one exact source using verified provider metadata before source fallback.
+     * @param providerId source provider identity
+     * @param url exact browsed series URL
+     * @param title complete source title
+     * @param type normalized requested media type
+     * @param source fresh source facts
+     * @param catalogId existing canonical identity, if present
+     * @return verified metadata and exact download target
+     */
     public BulkMetadataResolution resolveSourceMetadata(String providerId, String url, String title, String type,
         TitleDetails source, String catalogId) {
         return resolveSourceMetadata(providerId, url, title, type, source, catalogId, () -> false);
     }
 
-    /** Resolve source metadata while checking owner cancellation between every bounded provider operation. */
+    /**
+     * Resolve source metadata with cancellation checks between bounded provider operations.
+     * @param providerId source provider identity
+     * @param url exact browsed series URL
+     * @param title complete source title
+     * @param type normalized requested media type
+     * @param source fresh source facts
+     * @param catalogId existing canonical identity, if present
+     * @param cancelled owner cancellation predicate
+     * @return verified metadata and exact download target
+     */
     public BulkMetadataResolution resolveSourceMetadata(String providerId, String url, String title, String type,
         TitleDetails source, String catalogId, java.util.function.BooleanSupplier cancelled) {
         if (cancelled.getAsBoolean()) throw new java.util.concurrent.CancellationException("Metadata discovery cancelled.");
@@ -250,6 +269,17 @@ public class DownloadIntakeService {
         return sourceResolution(providerId, url, title, type, source, fallback, "source-backed");
     }
 
+    /**
+     * Freeze verified metadata and its exact source download target.
+     * @param providerId source provider identity
+     * @param url exact browsed series URL
+     * @param title complete source title
+     * @param type normalized requested media type
+     * @param source fresh source facts
+     * @param metadata selected provider details
+     * @param decision verified-provider or source-backed decision
+     * @return immutable queue selection snapshots
+     */
     private BulkMetadataResolution sourceResolution(String providerId, String url, String title, String type,
         TitleDetails source, Map<String, Object> metadata, String decision) {
         Map<String, Object> details = com.scriptarr.raven.metadata.SourceMetadataFacts.bind(providerId, url, title, source, metadata, decision);

@@ -227,7 +227,13 @@ public class BulkRunService {
         return decide(runId, "continue", expectedApprovalId, requestId, !stringValue(expectedApprovalId).isBlank());
     }
 
-    /** Reconsider only terminal metadata skips in a captured paused window; never start downloads. */
+    /**
+     * Reconsider terminal metadata skips in a captured pause without starting downloads.
+     * @param runId durable run identity
+     * @param expectedApprovalId current paused approval window
+     * @param decisionRequestId stable idempotency key
+     * @return durable recheck receipt
+     */
     public synchronized Map<String, Object> recheckMetadata(String runId, String expectedApprovalId, String decisionRequestId) {
         runId = normalizeRunId(runId);
         Map<String, Object> job = requireRun(runId);
@@ -262,6 +268,11 @@ public class BulkRunService {
         return new LinkedHashMap<>(normalizeMap(receipt.get("response")));
     }
 
+    /**
+     * Load durable plans independently of local terminal task history.
+     * @param runId durable run identity
+     * @return all persisted child task records
+     */
     private List<Map<String, Object>> loadAllTasks(String runId) {
         try {
             JsonNode rows = brokerClient.listJobTasks(runId, "");
@@ -273,6 +284,10 @@ public class BulkRunService {
         }
     }
 
+    /**
+     * Complete the recorded recheck intent while preserving accepted work and the pause.
+     * @param job mutable durable run snapshot to reconcile
+     */
     private void repairMetadataRecheck(Map<String, Object> job) {
         Map<String, Object> payload = new LinkedHashMap<>(normalizeMap(job.get("payload")));
         Map<String, Object> pending = normalizeMap(payload.get("metadataRecheckPending"));

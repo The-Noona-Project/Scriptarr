@@ -81,7 +81,12 @@ public class MetadataService {
         this.sourceProviders = sourceProviders;
     }
 
-    /** Load only an exact-source durable binding; fresh source facts must still validate its metadata. */
+    /**
+     * Load an exact-source durable binding for revalidation against fresh source facts.
+     * @param titleId existing canonical identity
+     * @param sourceUrl exact source series URL
+     * @return bound metadata or an empty map when no binding exists
+     */
     public Map<String, Object> storedSourceSelection(String titleId, String sourceUrl) {
         if (titleId == null || titleId.isBlank()) return Map.of();
         try {
@@ -105,7 +110,11 @@ public class MetadataService {
         }
     }
 
-    /** Inspect current source facts for admin comparison without applying a metadata decision. */
+    /**
+     * Inspect fresh source facts without applying metadata or writing state.
+     * @param titleId canonical identity to inspect
+     * @return read-only evidence or an unavailable result
+     */
     public Map<String, Object> sourceEvidence(String titleId) {
         try {
             LibraryTitle title = libraryService.findTitle(titleId);
@@ -121,6 +130,12 @@ public class MetadataService {
         }
     }
 
+    /**
+     * Verify selected metadata against the actual source edition before persistence.
+     * @param title existing canonical title
+     * @param details selected provider metadata
+     * @return source-bound metadata details
+     */
     private Map<String, Object> verifyIdentifiedSource(LibraryTitle title, Map<String, Object> details) {
         if (sourceProviders == null || title == null || title.sourceUrl() == null || title.sourceUrl().isBlank()) return details;
         var provider = sourceProviders.resolve("", title.sourceUrl()).orElseThrow(() -> new IllegalStateException("Source provider is unavailable."));

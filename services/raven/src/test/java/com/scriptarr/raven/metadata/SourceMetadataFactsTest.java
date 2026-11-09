@@ -42,6 +42,18 @@ class SourceMetadataFactsTest {
         assertEquals(List.of("action", "Video Games", "Adventure"), result.get("tags"));
         assertEquals(4, ((List<?>) result.get("tagOrigins")).size());
         assertEquals("The King's Avatar (Reboot)", result.get("displayTitle"));
+        Map<String, Object> rebound = SourceMetadataFacts.bind("weebcentral", URL, "The King's Avatar (Reboot)", source(false), result, "verified-provider");
+        assertEquals(result.get("tagOrigins"), rebound.get("tagOrigins"));
+    }
+
+    /** Year aliases establish only a reboot; other edition markers still require provider evidence. */
+    @Test void yearAliasCannotEraseColoredOrNovelEdition() {
+        for (String edition : List.of("Colored", "Novel", "Remake", "Reboot Colored")) {
+            String title = "Clockmaker Journey (" + edition + ")";
+            TitleDetails source = new TitleDetails("A journey.", "Manhua", List.of("Clockmaker Journey (2020)"), "Ongoing", "2020",
+                false, false, false, List.of(), List.of(), title, List.of(), "");
+            assertFalse(SourceMetadataFacts.matches(title, source, Map.of("title", "Clockmaker Journey", "releaseLabel", "2020", "type", "Manhua")));
+        }
     }
 
     private TitleDetails source(Boolean adult) {

@@ -16,7 +16,13 @@ import java.util.Map;
 public final class SourceMetadataFacts {
     private SourceMetadataFacts() { }
 
-    /** Check complete aliases and explicit source years without erasing edition distinctions. */
+    /**
+     * Check complete aliases and explicit years without erasing edition distinctions.
+     * @param title complete source title
+     * @param source fresh source facts
+     * @param metadata candidate provider details
+     * @return whether identity, edition, type and year agree
+     */
     public static boolean matches(String title, TitleDetails source, Map<String, Object> metadata) {
         if (source == null || metadata == null || metadata.containsKey("error")) return false;
         if (!text(source.sourceTitle()).isEmpty() && !normalize(title).equals(normalize(source.sourceTitle()))
@@ -29,7 +35,10 @@ public final class SourceMetadataFacts {
         if (!type.isEmpty() && !java.util.Objects.equals(BulkTitleSelection.type(source.type()), BulkTitleSelection.type(type))) return false;
         if (BulkMetadataAnchor.matches(title, source.associatedNames(), metadata)) return true;
         // A provider-declared year alias can establish a reboot whose provider does not name it "Reboot".
-        if (year.isEmpty() || !year.equals(candidateYear) || source.associatedNames() == null) return false;
+        String edition = normalize(title);
+        if (!List.of(edition.split(" ")).contains("reboot")
+            || List.of(edition.split(" ")).stream().anyMatch(word -> List.of("remake", "colored", "novel").contains(word))
+            || year.isEmpty() || !year.equals(candidateYear) || source.associatedNames() == null) return false;
         List<String> labels = new ArrayList<>(strings(metadata.get("aliases")));
         labels.add(text(metadata.get("title")));
         for (String alias : source.associatedNames()) for (String label : labels) {
@@ -38,7 +47,13 @@ public final class SourceMetadataFacts {
         return false;
     }
 
-    /** Detect adult classification conflicts only after the candidate's actual identity matches. */
+    /**
+     * Detect conflicting adult classification only for an otherwise matching identity.
+     * @param title complete source title
+     * @param source fresh source facts
+     * @param metadata candidate provider details
+     * @return whether a matched provider contradicts explicit non-adult source facts
+     */
     public static boolean adultConflict(String title, TitleDetails source, Map<String, Object> metadata) {
         if (!Boolean.TRUE.equals(metadata.get("adultContent")) || !Boolean.FALSE.equals(source.adultContent())) return false;
         Map<String, Object> identity = new LinkedHashMap<>(metadata);
@@ -46,7 +61,14 @@ public final class SourceMetadataFacts {
         return matches(title, source, identity);
     }
 
-    /** Build a verified source-backed fallback; unknown adult classification never qualifies. */
+    /**
+     * Build fallback metadata only from a complete explicitly non-adult source.
+     * @param provider source provider identity
+     * @param url exact validated series URL
+     * @param title complete source title
+     * @param source fresh source facts
+     * @return verified source-backed details
+     */
     public static Map<String, Object> fallback(String provider, String url, String title, TitleDetails source) {
         if (!BulkTitleSelection.validSeriesUrl(url) || source == null || !Boolean.FALSE.equals(source.adultContent())
             || text(title).isBlank() || BulkTitleSelection.type(source.type()) == null || text(source.summary()).isBlank()
@@ -66,7 +88,16 @@ public final class SourceMetadataFacts {
         return bind(provider, url, title, source, metadata, "source-backed");
     }
 
-    /** Attach original source facts and tag origins to a verified provider detail snapshot. */
+    /**
+     * Attach source facts and retain tag origins when rebinding verified metadata.
+     * @param provider source provider identity
+     * @param url exact source URL
+     * @param title complete source title
+     * @param source fresh source facts
+     * @param metadata verified provider or source details
+     * @param decision verification decision
+     * @return bound details with deduplicated tags and provenance
+     */
     public static Map<String, Object> bind(String provider, String url, String title, TitleDetails source,
         Map<String, Object> metadata, String decision) {
         Map<String, Object> result = new LinkedHashMap<>(metadata);
@@ -77,13 +108,29 @@ public final class SourceMetadataFacts {
             "verifiedAt", Instant.now().toString()));
         List<Map<String, Object>> origins = new ArrayList<>();
         LinkedHashSet<String> tags = new LinkedHashSet<>();
-        for (String tag : strings(metadata.get("tags"))) addTag(tags, origins, tag, text(metadata.get("provider")));
+        if (metadata.get("tagOrigins") instanceof List<?> stored) {
+            for (Object row : stored) if (row instanceof Map<?, ?> origin
+                && origin.get("tag") instanceof String tag && origin.get("provider") instanceof String owner
+                && !tag.isBlank() && !owner.isBlank()) addTag(tags, origins, tag, owner);
+        }
+        for (String tag : strings(metadata.get("tags"))) {
+            if (origins.stream().noneMatch(origin -> normalize(tag).equals(normalize(text(origin.get("tag")))))) {
+                addTag(tags, origins, tag, text(metadata.get("provider")));
+            }
+        }
         if (source.tags() != null) for (String tag : source.tags()) addTag(tags, origins, tag, provider);
         result.put("tags", List.copyOf(tags)); result.put("tagOrigins", origins);
         return result;
     }
 
-    /** Collect source facts without claiming a verified provider binding or writing durable state. */
+    /**
+     * Collect source facts without claiming verification or writing durable state.
+     * @param provider source provider identity
+     * @param url exact source URL
+     * @param title complete source title
+     * @param source fresh source facts
+     * @return source evidence snapshot
+     */
     public static Map<String, Object> sourceFacts(String provider, String url, String title, TitleDetails source) {
         Map<String, Object> facts = new LinkedHashMap<>();
         facts.put("provider", provider); facts.put("url", url); facts.put("title", title);
@@ -96,13 +143,21 @@ public final class SourceMetadataFacts {
         return facts;
     }
 
-    /** Return a four-digit release year when a provider actually supplied one. */
+    /**
+     * Read a four-digit release year actually supplied by the provider.
+     * @param value optional provider year value
+     * @return year or an empty string
+     */
     public static String year(Object value) {
         var matcher = java.util.regex.Pattern.compile("(?<![0-9])(?:19|20)[0-9]{2}(?![0-9])").matcher(text(value));
         return matcher.find() ? matcher.group() : "";
     }
 
-    /** Read bounded string arrays without interpreting provider data as instructions. */
+    /**
+     * Read bounded string arrays without interpreting provider data as instructions.
+     * @param value optional provider array
+     * @return bounded nonblank strings
+     */
     public static List<String> strings(Object value) {
         if (!(value instanceof Iterable<?> values)) return List.of();
         List<String> result = new ArrayList<>();
@@ -112,7 +167,9 @@ public final class SourceMetadataFacts {
 
     private static void addTag(LinkedHashSet<String> tags, List<Map<String, Object>> origins, String tag, String provider) {
         String existing = tags.stream().filter(t -> normalize(t).equals(normalize(tag))).findFirst().orElse(tag);
-        tags.add(existing); origins.add(Map.of("tag", existing, "provider", provider));
+        tags.add(existing);
+        Map<String, Object> origin = Map.of("tag", existing, "provider", provider);
+        if (!origins.contains(origin)) origins.add(origin);
     }
     private static String normalize(String value) {
         return Normalizer.normalize(text(value), Normalizer.Form.NFKC).toLowerCase(Locale.ROOT)
