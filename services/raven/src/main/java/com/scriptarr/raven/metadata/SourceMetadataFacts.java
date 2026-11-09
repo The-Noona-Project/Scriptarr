@@ -54,7 +54,8 @@ public final class SourceMetadataFacts {
             throw new IllegalStateException("Source metadata is incomplete or not explicitly non-adult.");
         }
         Map<String, Object> metadata = new LinkedHashMap<>();
-        metadata.put("provider", "source"); metadata.put("providerSeriesId", url);
+        metadata.put("provider", "source");
+        metadata.put("providerSeriesId", provider + ":" + java.net.URI.create(url).getPath().split("/")[2]);
         metadata.put("title", title); metadata.put("summary", source.summary()); metadata.put("url", url);
         metadata.put("releaseLabel", text(source.released())); metadata.put("status", text(source.status()));
         metadata.put("author", String.join(", ", source.authors() == null ? List.of() : source.authors()));

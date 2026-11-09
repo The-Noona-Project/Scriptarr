@@ -239,3 +239,5 @@ the initial visible subset, which fixes partial-history titles such as Tomb Raid
 Metadata providers remain the first choice. Bulk intake checks the exact source, complete aliases and edition facts before accepting a provider match. Complete, explicitly non-adult source metadata can serve as a clearly labelled fallback. A verified admin correction is saved against its source and reused during bulk recovery. Conflicting editions or adult classifications pause for attention.
 
 From the admin queue, the configured Noona owner can inspect a paused run and recheck its metadata skips. This preserves completed downloads and prior decisions and does not start the run. Continue the same run through Noona after repair.
+
+Rechecking metadata skips also prepares their parent batches, including previously completed batches. Prior results remain in history. Supported MangaDex downloads retain their source identity for metadata repair.

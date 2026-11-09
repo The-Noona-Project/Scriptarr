@@ -229,7 +229,8 @@ public class BulkRunService {
 
     /** Reconsider only terminal metadata skips in a captured paused window; never start downloads. */
     public synchronized Map<String, Object> recheckMetadata(String runId, String expectedApprovalId, String decisionRequestId) {
-        Map<String, Object> job = requireRun(normalizeRunId(runId));
+        runId = normalizeRunId(runId);
+        Map<String, Object> job = requireRun(runId);
         Map<String, Object> payload = new LinkedHashMap<>(normalizeMap(job.get("payload")));
         String requestId = BulkRunIdentity.requestId(decisionRequestId);
         if (requestId.isBlank() || stringValue(expectedApprovalId).isBlank()) throw new IllegalArgumentException("requestId and approvalId are required.");
@@ -282,6 +283,16 @@ public class BulkRunService {
         }
         List<?> ids = pending.get("planIds") instanceof List<?> list ? list : List.of();
         List<Map<String, Object>> tasks = loadAllTasks(runId);
+        Map<String, List<String>> parentPlans = new LinkedHashMap<>();
+        for (Object id : ids) {
+            Map<String, Object> plan = tasks.stream().filter(row -> id.equals(row.get("taskId"))).findFirst()
+                .orElseThrow(() -> new IllegalStateException("A captured metadata plan is missing."));
+            String batchId = stringValue(normalizeMap(plan.get("payload")).get("batchId"));
+            Map<String, Object> batch = tasks.stream().filter(row -> batchId.equals(row.get("taskId")) && "bulk-batch".equals(row.get("taskKey"))).findFirst()
+                .orElseThrow(() -> new IllegalStateException("A metadata plan has no durable parent batch."));
+            if (STATUS_CANCELLED.equals(batch.get("status"))) throw new BulkRunConflictException("Cancelled batches cannot be reopened by metadata repair.");
+            parentPlans.computeIfAbsent(batchId, key -> new ArrayList<>()).add(stringValue(id));
+        }
         for (Object id : ids) {
             Map<String, Object> task = tasks.stream().filter(row -> id.equals(row.get("taskId"))).findFirst()
                 .orElseThrow(() -> new IllegalStateException("A captured metadata plan is missing."));
@@ -298,6 +309,23 @@ public class BulkRunService {
             task.put("payload", plan); task.put("result", Map.of("category", "unresolved", "reason", "Metadata policy recheck requested."));
             task.put("status", "planned"); task.put("finishedAt", null); task.put("updatedAt", now());
             putBatchTask(runId, task);
+        }
+        for (Map.Entry<String, List<String>> entry : parentPlans.entrySet()) {
+            Map<String, Object> batch = tasks.stream().filter(row -> entry.getKey().equals(row.get("taskId"))).findFirst().orElseThrow();
+            Map<String, Object> batchPayload = new LinkedHashMap<>(normalizeMap(batch.get("payload")));
+            Map<String, Object> history = new LinkedHashMap<>(normalizeMap(batchPayload.get("metadataRecheckHistory")));
+            if (history.containsKey(requestId)) continue;
+            Map<String, Object> previous = normalizeMap(batch.get("result"));
+            history.put(requestId, Map.of("status", stringValue(batch.get("status")), "result", previous,
+                "finishedAt", stringValue(batch.get("finishedAt")), "recheckedAt", now()));
+            batchPayload.put("metadataRecheckHistory", history);
+            Map<String, Object> result = new LinkedHashMap<>(previous);
+            Set<String> unresolved = new LinkedHashSet<>(stringList(previous.get("unresolvedPlanIds")));
+            unresolved.addAll(entry.getValue()); result.put("unresolvedPlanIds", List.copyOf(unresolved));
+            batch.put("payload", batchPayload); batch.put("result", result); batch.put("status", STATUS_PAUSED);
+            batch.put("percent", 0); batch.put("finishedAt", null); batch.put("updatedAt", now());
+            batch.put("message", "Metadata skips prepared for rechecking; waiting for owner continuation.");
+            putBatchTask(runId, batch);
         }
         Map<String, Object> response = Map.of("runId", runId, "status", "paused", "recheckedPlanIds", ids,
             "requestId", requestId, "approvalId", pending.get("approvalId"), "started", false);

@@ -30,6 +30,8 @@ class SourceMetadataFactsTest {
         assertThrows(IllegalStateException.class, () -> SourceMetadataFacts.fallback("weebcentral", URL, "Avatar", source(false)));
         Map<String, Object> fallback = SourceMetadataFacts.fallback("weebcentral", URL, "The King's Avatar (Reboot)", source(false));
         assertEquals("source", fallback.get("provider"));
+        assertEquals("weebcentral:01J76XYDQHSY9H2V7050NC7843", fallback.get("providerSeriesId"));
+        assertEquals(fallback.get("providerSeriesId"), SourceMetadataFacts.fallback("weebcentral", URL + "-long-slug".repeat(40), "The King's Avatar (Reboot)", source(false)).get("providerSeriesId"));
         assertEquals("source-backed", ((Map<?, ?>) fallback.get("sourceBinding")).get("decision"));
     }
 
