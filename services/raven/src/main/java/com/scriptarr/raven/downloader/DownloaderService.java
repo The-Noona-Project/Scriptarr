@@ -2100,10 +2100,11 @@ public class DownloaderService {
         if (!explicit.isBlank()) { JsonNode row = brokerClient.getLibraryTitle(explicit); if (row != null && row.isObject() && row.hasNonNull("id")) { LibraryTitle title = objectMapper.treeToValue(row, LibraryTitle.class); candidates.put(title.id(), title); } }
         for (JsonNode row : rows) {
             LibraryTitle title = objectMapper.treeToValue(row, LibraryTitle.class); if (!type.equals(title.libraryTypeSlug())) continue;
-            boolean label = name.equals(LibraryNaming.slugifySegment(title.title())) || title.aliases() != null && title.aliases().stream().anyMatch(alias -> name.equals(LibraryNaming.slugifySegment(alias)));
+            boolean primaryLabel = name.equals(LibraryNaming.slugifySegment(title.title()));
+            boolean label = primaryLabel || title.aliases() != null && title.aliases().stream().anyMatch(alias -> name.equals(LibraryNaming.slugifySegment(alias)));
             boolean sameRoot = root.equals(normalizeString(title.downloadRoot()));
             boolean sameSource = !normalizeString(title.sourceUrl()).isBlank() && CanonicalSourceOwnership.sourceKey(title.sourceUrl()).equals(CanonicalSourceOwnership.sourceKey(request.titleUrl()));
-            if (sameRoot || sameSource) candidates.put(title.id(), title);
+            if (primaryLabel || sameRoot || sameSource) candidates.put(title.id(), title);
             else if (label) aliasCandidates.put(title.id(), title);
         }
         boolean exactSourceOwned = candidates.values().stream().anyMatch(title -> !normalizeString(title.sourceUrl()).isBlank()

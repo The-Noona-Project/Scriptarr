@@ -25,6 +25,30 @@ import static org.mockito.Mockito.*;
 
 /** Verify the real queue cannot start unpersisted owned work or release restoration prematurely. */
 class DownloaderOwnedPersistenceTest {
+    /** Matching primary labels remain unsafe because downstream catalog projection groups them. */
+    @Test void matchingPrimaryTitlesStillRejectDifferentOwners(@TempDir Path root) throws Exception {
+        FakeRavenBrokerClient broker = new FakeRavenBrokerClient();
+        DownloadProvider provider = mock(DownloadProvider.class);
+        when(provider.supportsUrl(anyString())).thenReturn(true);
+        String name = "The King's Avatar", original = "https://weebcentral.com/series/01J76XYCH9QX9GSDFR6959N669/The-Kings-Avatar";
+        broker.putLibraryTitle("original", Map.of("id", "original", "title", name, "sourceUrl", original, "libraryTypeSlug", "manhua", "downloadRoot", root.resolve("original").toString(), "chapters", List.of()));
+        broker.putLibraryTitle("other", Map.of("id", "other", "title", name,
+            "sourceUrl", "https://weebcentral.com/series/01J76XYDQHSY9H2V7050NC7843/The-Kings-Avatar-Reboot", "libraryTypeSlug", "manhua", "downloadRoot", root.resolve("other").toString(), "chapters", List.of()));
+        DownloaderService downloader = service(broker, provider, root);
+        try {
+            downloader.queueBulkOwned("primary-conflict", "run", "batch", "plan", new DownloadRequest(name, original, "Manhua", "owner", "weebcentral", "", Map.of(), Map.of("appendTitleId", "original"), "", "normal"));
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+            Map<String, Object> task = Map.of();
+            while (System.nanoTime() < deadline) {
+                task = downloader.snapshot().stream().filter(t -> "primary-conflict".equals(t.get("taskId"))).findFirst().orElse(Map.of());
+                if ("failed".equals(task.get("status"))) break;
+                Thread.sleep(10);
+            }
+            assertEquals("failed", task.get("status"));
+            assertTrue(String.valueOf(task.get("message")).contains("source_identity_conflict"));
+            verify(provider, never()).getChapters(anyString());
+        } finally {downloader.shutdown();}
+    }
     /** An original's exact owner wins over its separately owned reboot's shared English alias. */
     @Test void originalPassesDespiteRebootAlias(@TempDir Path root) throws Exception {
         FakeRavenBrokerClient broker = new FakeRavenBrokerClient();
