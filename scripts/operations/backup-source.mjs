@@ -7,6 +7,7 @@ import path from "node:path";
 import {pipeline} from "node:stream/promises";
 import {pathToFileURL} from "node:url";
 import {encryptStream} from "./backup-crypto.mjs";
+import {createBackupSshSession} from "./backup-ssh.mjs";
 
 async function exists(filename) { try { await stat(filename); return true; } catch (error) { if (error.code === "ENOENT") return false; throw error; } }
 async function writeJson(filename, data) { const temporary = `${filename}.partial-${process.pid}`; await writeFile(temporary, JSON.stringify(data, null, 2) + "\n", {mode: 0o600}); await rename(temporary, filename); }
@@ -36,10 +37,8 @@ function child(executable, args, {timeout = 120000, input, output, streamOutput 
   return {subprocess, done: complete, kill};
 }
 
-async function receiver(config, command, input, signal) {
-  const remote = config.remote;
-  const args = ["-F", "/dev/null", "-T", "-p", String(remote.port || 22), "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=3", "-o", "StrictHostKeyChecking=yes", "-o", `UserKnownHostsFile=${remote.knownHostsFile}`, "-o", "IdentitiesOnly=yes", "-i", remote.identityFile, `${remote.user}@${remote.host}`, command];
-  const result = await child("ssh", args, {input, signal, timeout: 2 * 3600000}).done;
+async function receiver(session, command, input, signal) {
+  const result = await child("ssh", session.args(command), {input, signal, timeout: 2 * 3600000}).done;
   return JSON.parse(result);
 }
 
@@ -88,7 +87,9 @@ export async function runBackup(config, {signal} = {}) {
   await mkdir(directory, {recursive: true, mode: 0o700});
   const publicKey = await readFile(config.publicKeyFile);
   let phase = "inventory";
+  let session;
   try {
+    session = await createBackupSshSession(config.remote);
     let prior = {};
     const indexFile = path.join(config.workRoot, "last-library-index.json");
     if (await exists(indexFile)) prior = JSON.parse(await readFile(indexFile, "utf8"));
@@ -107,7 +108,7 @@ export async function runBackup(config, {signal} = {}) {
         object = {id: objectId, ...await encryptStream(createReadStream(filename), encrypted, publicKey, {signal})};
         if (fingerprint(await stat(filename)) !== fingerprint(before)) throw new Error("A canonical library file changed during capture.");
         phase = "library-upload";
-        const stored = await receiver(config, `scriptarr-backup object ${objectId}`, createReadStream(encrypted), signal);
+        const stored = await receiver(session, `scriptarr-backup object ${objectId}`, createReadStream(encrypted), signal);
         if (stored.sha256 !== object.sha256 || stored.bytes !== object.bytes) throw new Error("Library upload verification failed.");
         await rm(encrypted);
       }
@@ -153,12 +154,12 @@ export async function runBackup(config, {signal} = {}) {
     const manifestFile = path.join(directory, "manifest.json");
     await writeJson(manifestFile, manifest);
     phase = "snapshot-upload";
-    const uploaded = await receiver(config, `scriptarr-backup snapshot ${id} snapshot.aesgcm`, createReadStream(encryptedPath), signal);
+    const uploaded = await receiver(session, `scriptarr-backup snapshot ${id} snapshot.aesgcm`, createReadStream(encryptedPath), signal);
     if (uploaded.sha256 !== archive.sha256 || uploaded.bytes !== archive.bytes) throw new Error("Snapshot upload verification failed.");
-    await receiver(config, `scriptarr-backup snapshot ${id} manifest.json`, createReadStream(manifestFile), signal);
+    await receiver(session, `scriptarr-backup snapshot ${id} manifest.json`, createReadStream(manifestFile), signal);
     phase = "commit";
     signal?.throwIfAborted();
-    const result = await receiver(config, `scriptarr-backup commit ${id}`, undefined, signal);
+    const result = await receiver(session, `scriptarr-backup commit ${id}`, undefined, signal);
     await writeJson(indexFile, current);
     const status = {...result, databaseKind, libraryFiles: Object.keys(current).length, archiveBytes: archive.bytes};
     await writeJson(path.join(config.workRoot, "latest-status.json"), status);
@@ -168,6 +169,8 @@ export async function runBackup(config, {signal} = {}) {
     // Configuration and logical dumps are plaintext only inside this private staging directory.
     await cleanupFailedBackup(directory, path.join(config.workRoot, "latest-status.json"),
       {state: "failed", id, createdAt, failedAt: new Date().toISOString(), phase, program: error.program, exitCode: error.exitCode}, error);
+  } finally {
+    await session?.close(args => child("ssh", args, {timeout: 10000}).done);
   }
 }
 
