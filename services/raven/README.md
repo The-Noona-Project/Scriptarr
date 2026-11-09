@@ -51,6 +51,8 @@ fallback uses a thumbnail of the whole first page. Source archives and source-qu
 Whole-library WebP migration is opt-in and initially paused. The protected operator controls can start, pause, resume,
 or retry it without restarting Raven. Background work yields after each chapter; fresh/user work takes priority.
 Pausing lets the current chapter checkpoint finish. A failed migration preserves an existing valid AVIF chapter.
+Verified chapters avoid repeated full reads as migration advances. Completion still checks every canonical archive
+and reader file again; changed or missing content cannot be hidden by earlier progress.
 
 Legacy standalone AVIF encoding remains available for compatibility. Set `SCRIPTARR_RAVEN_AVIF_ENCODER` to:
 

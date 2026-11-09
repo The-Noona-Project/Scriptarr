@@ -212,12 +212,6 @@ public final class LibraryIngestRunService {
         return Map.of("enabled", migrationControl.enabled(), "runs", groupedRunSummaries());
     }
 
-    /** @param title current catalog title @return whether canonical content still requires the new format */
-    private boolean needsWebpMigration(LibraryTitle title) {
-        return title != null && title.chapters().stream().anyMatch(chapter -> chapter.available() && chapter.archivePath() != null && !chapter.archivePath().isBlank()
-            && (!"ready".equals(chapter.ingestStatus()) || chapter.ingestRevision() == null || !chapter.ingestRevision().startsWith("webp-") || !libraryService.isReaderReadyChapter(chapter)));
-    }
-
     /**
      * Resume a queued or detached durable ingest run.
      *
@@ -673,18 +667,23 @@ public final class LibraryIngestRunService {
             Map<String, Object> runningTask = withTaskStatus(task, STATUS_RUNNING, "Rebuilding title reader-page pages.", 5, Map.of());
             putTitleTask(normalizedRunId, runningTask);
             try (var context = IngestExecutionContext.enter("migration", Map.of("runId", normalizedRunId, "taskId", stringValue(task.get("taskId")), "requestedBy", stringValue(task.get("requestedBy"))))) {
-                LibraryTitle title = libraryService.ingestTitle(
-                    titleId,
-                    stringValue(task.get("requestedBy")),
-                    () -> cancellationRequestedRunIds.contains(normalizedRunId) || Thread.currentThread().isInterrupted(),
-                    value -> { }, WebpMigrationControl.webp()
-                );
+                LibraryTitle title;
+                boolean pendingMigration;
+                if (WebpMigrationControl.webp()) {
+                    LibraryService.MigrationPass pass = libraryService.ingestMigrationTitle(titleId, stringValue(task.get("requestedBy")),
+                        () -> cancellationRequestedRunIds.contains(normalizedRunId) || Thread.currentThread().isInterrupted(), value -> { });
+                    title = pass.title(); pendingMigration = pass.pending();
+                } else {
+                    title = libraryService.ingestTitle(titleId, stringValue(task.get("requestedBy")),
+                        () -> cancellationRequestedRunIds.contains(normalizedRunId) || Thread.currentThread().isInterrupted(), value -> { }, false);
+                    pendingMigration = false;
+                }
                 if (taskStillWritable(normalizedRunId, stringValue(runningTask.get("taskId")))) {
                     putTitleTask(normalizedRunId, withTaskStatus(
                         runningTask,
-                        WebpMigrationControl.webp() && needsWebpMigration(title) ? STATUS_QUEUED : STATUS_COMPLETED,
-                        WebpMigrationControl.webp() && needsWebpMigration(title) ? "Yielded after one chapter for foreground work." : "Title reader-page rebuild completed.",
-                        WebpMigrationControl.webp() && needsWebpMigration(title) ? 0 : 100,
+                        pendingMigration ? STATUS_QUEUED : STATUS_COMPLETED,
+                        pendingMigration ? "Yielded after one chapter for foreground work." : "Title reader-page rebuild completed.",
+                        pendingMigration ? 0 : 100,
                         Map.of(
                             "titleId", title.id(),
                             "ingestStatus", title.ingestStatus(),

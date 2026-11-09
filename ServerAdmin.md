@@ -178,6 +178,8 @@ scoped cleanup first. Warden-authenticated POSTs to Sage's
 `/api/internal/warden/raven/webp-migration/{start,pause,resume,retry,status}` control and inspect the durable migration.
 Start or resume only after cleanup; fresh downloads and user work take priority over migration between chapter jobs.
 Pausing retains canonical archives, readable revisions, and recorded outcomes.
+Migration avoids rehashing unchanged earlier chapters after each yield. Completion requires a fresh full check of
+canonical archives and reader files; restarts rebuild verification, and missing or corrupt content cannot be skipped.
 
 ### Legacy software AVIF compatibility
 

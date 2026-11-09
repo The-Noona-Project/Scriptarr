@@ -72,6 +72,7 @@ public final class LibraryService {
     private final Map<String, PageValidationResult> readerPageValidations = new ConcurrentHashMap<>();
     private final Map<String, String> ingestTaskStartedAt = new ConcurrentHashMap<>();
     private final LibraryTitleLocks titleOperationLocks = new LibraryTitleLocks();
+    private final MigrationVerificationCursor migrationVerification = new MigrationVerificationCursor();
     private final Object importOperationLock = new Object();
 
     /**
@@ -722,6 +723,16 @@ public final class LibraryService {
 
     /** @param titleId owning title @param requestedBy actor @param cancelled cancellation predicate @param progress actual progress @param migrateToWebp replace valid AVIF only after new WebP succeeds @return preserved or migrated title */
     public LibraryTitle ingestTitle(String titleId, String requestedBy, BooleanSupplier cancelled, Consumer<IngestProgress> progress, boolean migrateToWebp) {
+        return ingestTitlePass(titleId, requestedBy, cancelled, progress, migrateToWebp).title();
+    }
+
+    /** @param titleId owning title @param requestedBy actor @param cancelled cancellation predicate @param progress actual progress @return explicit chapter-fair outcome whose completion includes fresh final verification */
+    MigrationPass ingestMigrationTitle(String titleId, String requestedBy, BooleanSupplier cancelled, Consumer<IngestProgress> progress) {
+        return ingestTitlePass(titleId, requestedBy, cancelled, progress, true);
+    }
+
+    /** @param titleId owning title @param requestedBy actor @param cancelled cancellation predicate @param progress actual progress @param migrateToWebp migration-only proof reuse @return verified pass result */
+    private MigrationPass ingestTitlePass(String titleId, String requestedBy, BooleanSupplier cancelled, Consumer<IngestProgress> progress, boolean migrateToWebp) {
         String normalizedTitleId = firstNonBlank(titleId, "").trim();
         LibraryTitle resolved = loadTitleById(normalizedTitleId); if (resolved != null) normalizedTitleId = resolved.id();
         try (var maintenance = ContentMaintenance.enter("title:" + normalizedTitleId); var lease = titleOperationLocks.acquire(normalizedTitleId)) {
@@ -729,7 +740,7 @@ public final class LibraryService {
         }
     }
 
-    private LibraryTitle ingestTitleLocked(String titleId, String requestedBy, BooleanSupplier cancelled, Consumer<IngestProgress> progress, boolean migrateToWebp) {
+    private MigrationPass ingestTitleLocked(String titleId, String requestedBy, BooleanSupplier cancelled, Consumer<IngestProgress> progress, boolean migrateToWebp) {
         LibraryTitle title = loadTitleById(titleId);
         if (title == null) {
             throw new IllegalArgumentException("Raven title not found.");
@@ -740,20 +751,23 @@ public final class LibraryService {
         }
         String taskId = ingestTaskId(title.id());
         persistIngestTask(taskId, title, "running", "Converting CBZ chapters into reader pages.", 5, requestedBy, "");
-        List<LibraryChapter> updatedChapters = new ArrayList<>();
+        MigrationVerificationCursor.Pass migration = migrateToWebp ? migrationVerification.begin(IngestExecutionContext.current(), title.id(), chapters) : null;
+        int completed = migration == null ? 0 : migration.start();
+        List<LibraryChapter> updatedChapters = new ArrayList<>(chapters.subList(0, completed));
         int total = chapters.size();
-        int completed = 0;
-        boolean yielded = false;
+        LibraryChapter finalVerificationFailure = null;
         int lastTaskPercent = 5;
         long lastTaskProgressAt = System.currentTimeMillis();
         try {
-            for (LibraryChapter chapter : chapters) {
+            for (int chapterIndex = completed; chapterIndex < chapters.size(); chapterIndex++) {
+                LibraryChapter chapter = chapters.get(chapterIndex);
                 throwIfIngestCancelled(cancelled);
                 if (!chapter.available() || chapter.archivePath() == null || chapter.archivePath().isBlank()) {
                     LibraryChapter missingChapter = withIngestState(chapter, "missing", "", "", 0, null, "");
                     LibraryChapter persistedMissing = checkpointIngestChapter(title.id(), missingChapter);
                     updatedChapters.add(persistedMissing);
                     chapters = mergeChapterUpdate(chapters, persistedMissing);
+                    if (migration != null) migration.record(chapterIndex, persistedMissing);
                     completed += 1;
                     continue;
                 }
@@ -764,6 +778,7 @@ public final class LibraryService {
                         chapters = mergeChapterUpdate(chapters, reusable);
                     }
                     updatedChapters.add(reusable);
+                    if (migration != null) migration.record(chapterIndex, reusable);
                     completed += 1;
                     progress.accept(new IngestProgress("ingesting", reusable.pageCount(), reusable.pageCount(), completed, total, true));
                     int percent = 10 + (int) Math.floor((completed / (double) total) * 85);
@@ -791,6 +806,7 @@ public final class LibraryService {
                     : ingestService.commitRemoteChapter(title.id(), readyChapter, result);
                 updatedChapters.set(updatedChapters.size() - 1, persistedReady);
                 chapters = mergeChapterUpdate(chapters, persistedReady);
+                if (migration != null) migration.record(chapterIndex, persistedReady);
                 completed += 1;
                 progress.accept(new IngestProgress("ingesting", result.pageCount(), result.pageCount(), completed, total, true));
                 int percent = 10 + (int) Math.floor((completed / (double) total) * 85);
@@ -799,15 +815,27 @@ public final class LibraryService {
                     lastTaskPercent = percent;
                     lastTaskProgressAt = System.currentTimeMillis();
                 }
-                if (migrateToWebp) { yielded = true; break; }
+                if (migrateToWebp) break;
             }
             throwIfIngestCancelled(cancelled);
+            boolean pending = migrateToWebp && completed < total;
+            if (migrateToWebp && !pending) {
+                for (LibraryChapter chapter : chapters) {
+                    throwIfIngestCancelled(cancelled);
+                    if (!chapter.available() || chapter.archivePath() == null || chapter.archivePath().isBlank()) continue;
+                    if (chapter.ingestRevision() == null || !chapter.ingestRevision().startsWith("webp-") || !ingestService.canReuseReadyChapter(chapter)) {
+                        finalVerificationFailure = chapter;
+                        throw new LibraryIngestException("migration_verification_failed", "Final WebP content verification failed; retry this title from its canonical archives.");
+                    }
+                }
+                migration.discard();
+            }
             LibraryTitle refreshed = persistIngestTitleState(title, chapters);
-            boolean pending = yielded && chapters.stream().anyMatch(value -> value.available() && (!"ready".equals(value.ingestStatus()) || !value.ingestRevision().startsWith("webp-")));
             persistIngestTask(taskId, refreshed, pending ? "queued" : "completed", pending ? "Yielded after a chapter checkpoint." : "Reader-page ingest completed.", pending ? Math.min(95, completed * 100 / total) : 100, requestedBy, "");
-            return refreshed;
+            return new MigrationPass(refreshed, pending);
         } catch (LibraryIngestException error) {
-            LibraryChapter failedChapter = updatedChapters.isEmpty() ? chapters.get(0) : updatedChapters.get(updatedChapters.size() - 1);
+            if (migration != null) migration.discard();
+            LibraryChapter failedChapter = finalVerificationFailure != null ? finalVerificationFailure : updatedChapters.isEmpty() ? chapters.get(0) : updatedChapters.get(updatedChapters.size() - 1);
             LibraryChapter failedState = withIngestState(
                 failedChapter,
                 "failed",
@@ -822,6 +850,7 @@ public final class LibraryService {
             persistIngestTask(taskId, refreshed, "failed", userSafeIngestMessage(error.getMessage()), Math.max(10, completed * 100 / total), requestedBy, error.failureCode());
             throw error;
         } catch (RuntimeException error) {
+            if (migration != null) migration.discard();
             LibraryChapter failedChapter = updatedChapters.isEmpty() ? chapters.get(0) : updatedChapters.get(updatedChapters.size() - 1);
             String message = sanitizeError(firstNonBlank(error.getMessage(), "Unexpected reader-page ingest failure."));
             LibraryChapter failedState = withIngestState(
@@ -839,6 +868,9 @@ public final class LibraryService {
             throw error;
         }
     }
+
+    /** @param title acknowledged catalog snapshot @param pending whether another quantum or final strict sweep is required */
+    record MigrationPass(LibraryTitle title, boolean pending) { }
 
     /**
      * Build the admin-facing ingest backlog payload.

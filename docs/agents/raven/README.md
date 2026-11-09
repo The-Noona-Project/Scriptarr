@@ -62,6 +62,13 @@
 - Migration defaults disabled. Protected `/v1/ingest/migration/{start,pause,resume,retry,status}` persists intent in a
   generic control job. Whole-library runs include ready AVIF, yield the fair title lock after each chapter, preserve old
   readable state on failures, and leave failed title work for explicit retry. Pause lets the current chapter finish.
+- Migration-only verification hints are process-local and scoped to the exact run/task/canonical title and ordered
+  chapter content checkpoints. Bind canonical/manifest/every tile/thumbnail file key, size and full-resolution mtime;
+  changed identity/order/stats invalidate the affected prefix. Never persist or trust a cursor across restart. Bound
+  abandoned scopes and discard on terminal/error/cancel. Advance only after strict validation and acknowledged writes.
+  The locked `MigrationPass(title, pending)` outcome drives scheduler state once: even all-ready catalog rows can still
+  require another quantum. A fresh strict all-chapter content sweep is mandatory before completion, including unchanged
+  stat evidence, so same-size/restored-mtime corruption fails closed. Foreground and reader validation stay strict.
 - Scoped cleanup uses the Warden/Sage wrapper to `/v1/system/scoped-content-reset/{preview,apply}`. Resolve durable
   plans to deduplicated catalog IDs and orphan roots; never assume plan count equals UUID count. Save the original
   inventory locally in `.content-maintenance/<operation>.proof`, expose a compact preview, restore fences before startup
