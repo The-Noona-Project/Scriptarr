@@ -67,6 +67,9 @@
   letters, sorting, and pagination so library pages stay resilient while durable duplicate cleanup runs.
 - Vault owns Raven catalog aliases. Any retired duplicate title id should resolve to its canonical title for exact card
   lookup, title summary, chapter page, reader target, metadata-match, and catalog write paths.
+- Resolve an existing raw title ID before consulting retained alias mappings, and retain that ID on title upsert before
+  catalog-key matching. Never rewrite alias rows or merge source editions as a side effect of this precedence rule.
+  Alias-only IDs keep the existing redirect and catalog-key write behavior; this is not an alias migration.
 - Keep duplicate preview/merge maintenance service-only. Merge must write alias mappings and an audit result after
   preserving best title metadata, chapters, metadata matches, quality/ingest state, reader progress, read state,
   follows, and bookmarks on the canonical title. For large libraries, keep preview title-row-only and use bounded

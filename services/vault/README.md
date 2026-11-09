@@ -47,6 +47,8 @@ projection deduplicates by library type plus normalized title before counts, sor
 does not show stale duplicate catalog rows while cleanup is rolling out.
 Vault stores `catalog_key` on Raven titles and a `raven_title_aliases` map for retired duplicate ids. Exact-id card
 lookups, title summaries, chapter pages, reader targets, and metadata-match reads resolve aliases to the canonical title.
+An existing title ID takes precedence over a retained alias or another title's matching display name. Distinct catalogued
+source editions retain their IDs; retired aliases whose original title row is absent continue to redirect.
 The service-only duplicate preview and merge endpoints are intended for Sage/Warden maintenance only; merges write an
 audit setting after moving chapters, metadata, read/progress state, follows, and bookmarks to the canonical title.
 Large catalog cleanups can pass a `limit` so Vault previews title rows cheaply and hydrates chapter rows only for the

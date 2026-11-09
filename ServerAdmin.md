@@ -250,8 +250,10 @@ without forcing a re-download. Startup recovery reads one complete catalog snaps
 folders rather than repeating full-catalog reads for each folder. Browser and backlog lists remain compact. Raven and Vault also share a
 logical catalog identity of library type plus normalized title, so downloads, imports, rescans, and ingest setup reuse
 the existing canonical title instead of creating a new visible row. Startup scans also match each saved canonical path
-before the display name, so a metadata rename keeps the original title and chapter identities. Background scanning
-retains only a small identity index from that snapshot; display-name-deduplicated cards are insufficient to detect all
+before the display name, so a metadata rename keeps the original title and chapter identities. Vault keeps existing
+raw catalog IDs authoritative over retained aliases or a matching display name on another title; an
+alias whose original row was removed still redirects normally. No alias or reading-history rows are rewritten by this rule.
+Background scanning retains only a small identity index from that snapshot; display-name-deduplicated cards are insufficient to detect all
 folder owners. If multiple titles claim one path, Raven leaves them and
 their files untouched, records a failed rescan with recovery diagnostics, and continues scanning unrelated folders.
 Resolve that ownership conflict before retrying the scan; it is not a reason to delete or merge records automatically.

@@ -1329,10 +1329,17 @@ const createMemoryStore = (options = {}) => {
     if (!normalizedTitleId) {
       return "";
     }
+    if (state.ravenTitles.has(normalizedTitleId)) {
+      return normalizedTitleId;
+    }
     const canonicalId = state.ravenTitleAliases.get(normalizedTitleId);
     return normalizeString(canonicalId, normalizedTitleId);
   };
   const findMemoryCanonicalTitleId = (title) => {
+    const requestedTitleId = normalizeString(title?.id);
+    if (state.ravenTitles.has(requestedTitleId)) {
+      return requestedTitleId;
+    }
     const key = ravenCatalogKeyFor(title);
     if (!key) {
       return normalizeString(title?.id);
@@ -2987,6 +2994,13 @@ const createMysqlStore = (config) => {
         return current;
       }
       seen.add(current);
+      const [existingRows] = await queryWith(connection).query(
+        "SELECT title_id FROM raven_titles WHERE title_id = ? LIMIT 1",
+        [current]
+      );
+      if (existingRows[0]) {
+        return current;
+      }
       const [rows] = await queryWith(connection).query(
         "SELECT canonical_title_id FROM raven_title_aliases WHERE alias_title_id = ? LIMIT 1",
         [current]
@@ -3018,6 +3032,15 @@ const createMysqlStore = (config) => {
   };
   const findMysqlCanonicalRavenTitleId = async (title, connection = null) => {
     const requestedTitleId = normalizeString(title?.id);
+    if (requestedTitleId) {
+      const [existingRows] = await queryWith(connection).query(
+        "SELECT title_id FROM raven_titles WHERE title_id = ? LIMIT 1",
+        [requestedTitleId]
+      );
+      if (existingRows[0]) {
+        return requestedTitleId;
+      }
+    }
     const catalogKey = ravenCatalogKeyFor(title);
     if (!catalogKey) {
       return requestedTitleId;
