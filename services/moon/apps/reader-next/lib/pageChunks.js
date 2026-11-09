@@ -204,6 +204,17 @@ export const hasReaderPageRequestForChapter = (inFlight, {epoch = 0, chapterId})
 };
 
 /**
+ * Fence only the changed chapter's old metadata responses.
+ * @param {Set<string>} inFlight Active completion tokens.
+ * @param {{epoch?:number,chapterId:string}} options Current route epoch and changed chapter.
+ * @returns {void}
+ */
+export const invalidateReaderPageRequestsForChapter = (inFlight, {epoch = 0, chapterId}) => {
+  const prefix = [epoch, chapterId].map((part) => String(part ?? "")).join(REQUEST_TOKEN_SEPARATOR) + REQUEST_TOKEN_SEPARATOR;
+  for (const token of inFlight) if (token.startsWith(prefix)) inFlight.delete(token);
+};
+
+/**
  * Resolve page metadata and image warm-up work around the active reader page.
  *
  * @param {{layoutMode?: string, activeIndex?: number, pageCount?: number, loadedPages?: Array<{index?: number}>, chunkSize?: number, aheadCount?: number, previousCushion?: number}} options
@@ -433,6 +444,7 @@ export default {
   createReaderPageRequestToken,
   hasReaderPageWindow,
   hasReaderPageRequestForChapter,
+  invalidateReaderPageRequestsForChapter,
   hasReaderPageImages,
   mergeReaderPageRequestPages,
   mergeReaderPages,

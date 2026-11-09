@@ -785,6 +785,8 @@ by Moon as derived WebP files under the Moon cover-cache storage folder. The
 Tasks page has an `Optimize cover images` action that scans Sage-approved artwork, converts missing or stale cache
 entries, and is safe to rerun. Titles retain provider cover art when downloads resume from existing archives.
 Filling a missing cover during reader processing preserves it through later checkpoints and library scans.
+Reader live updates keep the active chapter, logical page and viewing preferences when its content revision is unchanged.
+Changed chapter content reloads only that chapter, while route or account changes still initialize a new reader session.
 If a cover is missing or cannot be loaded, Moon uses the first page of the earliest readable chapter as the cover.
 That fallback becomes available after reader processing finishes for a chapter and follows the same sign-in checks
 as reader pages; it does not modify reading progress or replace the canonical archives.

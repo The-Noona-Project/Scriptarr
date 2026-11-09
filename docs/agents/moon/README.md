@@ -59,6 +59,12 @@
   decode. Preserve the legacy single-image path for existing AVIF. Segment and whole-page-thumbnail selectors belong
   in both image cache identities and current-session status authorization. A tile-zero probe never authorizes another
   tile or a whole-page thumbnail. WebP cover fallback requires the `thumbnail=true` first-page variant.
+- Reader live invalidations still refresh authenticated session data. Separate route/user bootstrap from same-content
+  metadata refresh: retain active/paged chapter, logical position, preferences, loaded windows and decode state. A changed
+  revision/count invalidates only that chapter's request tokens, session promises, pages and warm images; reject late
+  responses and navigation against the old content identity. True route/user transitions and authorization failures
+  retain bootstrap clearing. Pending Webtoon seeks are observable chapter-scoped requests, including repeated seeks;
+  retry DOM scrolling when missing metadata arrives rather than waiting for unrelated state changes.
 - Paged composite width needs a definite native/viewport basis before its auto-sized flex/grid frame can resolve.
   Never use that frame's cyclic `100%` as an intrinsic minimum: absolutely positioned tiles contribute no intrinsic
   width and can collapse the whole page to zero. Preserve source aspect ratio, segment geometry, frame caps and

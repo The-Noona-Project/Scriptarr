@@ -20,6 +20,7 @@ import {
   hasReaderPageImages,
   hasReaderPageWindow,
   hasReaderPageRequestForChapter,
+  invalidateReaderPageRequestsForChapter,
   mergeReaderPageRequestPages,
   resolvePagedReaderWindowIndexes,
   resolveReaderPreloadConfig,
@@ -36,6 +37,9 @@ import ReaderSettings from "./ReaderSettings.jsx";
 import ReaderStage from "./ReaderStage.jsx";
 import {readerPageImageKey} from "../lib/pageSegments.js";
 import {ReaderInitialSkeleton} from "./ReaderSkeleton.jsx";
+import {readerRouteKey, readerSessionContentKey, planReaderSessionRefresh, mergeReaderSessionMetadata,
+  mergeReaderSessionBookmarks, dropReaderChapterPages, clearReaderChapterCaches, isReaderSessionCurrent,
+  createReaderSeekRequest, applyReaderSeekRequest} from "../lib/sessionRefresh.js";
 
 const PAGE_CHUNK_SIZE = 18;
 const CHAPTER_RAIL_PAGE_SIZE = 60;
@@ -239,7 +243,12 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = "", initialSessi
   const pointerStartRef = useRef(/** @type {{x: number, y: number} | null} */ (null));
   const inputStateRef = useRef(createReaderInputState());
   const settingsRef = useRef(/** @type {HTMLElement | null} */ (null));
-  const pendingScrollRef = useRef(null);
+  const [pendingScroll, setPendingScroll] = useState(null);
+  const sessionRefreshRef = useRef(null);
+  const sessionVersionsRef = useRef(new Map(bootSession ? [[bootChapterId, readerSessionContentKey(bootSession)]] : []));
+  const readingPositionRef = useRef(null);
+  readingPositionRef.current = {activeChapterId, activePageIndex, pagedChapterId, pagedPageIndex, layoutMode};
+  const routeKey = readerRouteKey({userId: chrome.auth?.discordUserId || "", titleId, chapterId});
   const scrollDirectionRef = useRef("forward");
   const activeWebtoonPageRef = useRef({chapterId: bootChapterId, pageIndex: 0});
   const bootPagesPendingRef = useRef(bootPageState.size > 0);
@@ -341,7 +350,7 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = "", initialSessi
       return null;
     }
     const existing = sessionMap.get(key);
-    if (existing) {
+    if (existing && isReaderSessionCurrent(sessionVersionsRef.current, existing)) {
       return existing;
     }
     const cached = sessionCache.current.get(key);
@@ -351,9 +360,11 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = "", initialSessi
     const promise = requestJson(sessionUrlFor(titleId, key), {
       telemetry: {type: "session-fetch", titleId, chapterId: key}
     }).then((result) => {
+      if (sessionCache.current.get(key) !== promise) return null;
       if (!result.ok) {
         throw new Error(result.payload?.error || "Could not load that chapter.");
       }
+      sessionVersionsRef.current.set(result.payload.chapter.id, readerSessionContentKey(result.payload));
       setSession(result.payload);
       return result.payload;
     });
@@ -365,6 +376,7 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = "", initialSessi
     if (!session?.chapter?.id) {
       return null;
     }
+    if (!isReaderSessionCurrent(sessionVersionsRef.current, session)) return null;
     const key = session.chapter.id;
     const requestEpoch = pageLoadEpochRef.current;
     pageRequestSeqRef.current += 1;
@@ -400,6 +412,7 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = "", initialSessi
     if (!completeReaderPageRequest(pageRequestTokensRef.current, requestToken)) {
       return null;
     }
+    if (!isReaderSessionCurrent(sessionVersionsRef.current, session)) return null;
     const stillLoading = hasReaderPageRequestForChapter(pageRequestTokensRef.current, {
       epoch: requestEpoch,
       chapterId: key
@@ -564,6 +577,7 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = "", initialSessi
       return false;
     }
     const startedAt = readerTelemetryNow();
+    const requestEpoch = pageLoadEpochRef.current;
     let ready = false;
     let reason = "ready";
     setPreparingMessage(message);
@@ -574,7 +588,8 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = "", initialSessi
         return false;
       }
       const results = await warmPageImages(session, indexes, {retryFailures: true});
-      ready = indexes.every((index) => results.some((result) => result.index === index && result.ok));
+      ready = requestEpoch === pageLoadEpochRef.current && isReaderSessionCurrent(sessionVersionsRef.current, session)
+        && indexes.every((index) => results.some((result) => result.index === index && result.ok));
       reason = ready ? "ready" : "decode_unavailable";
       return ready;
     } finally {
@@ -703,6 +718,33 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = "", initialSessi
     if (!initialSession?.chapter?.id) {
       return;
     }
+    const denied = status === 401 || status === 403;
+    if (status && status !== 200 && !denied) return;
+    const position = readingPositionRef.current;
+    const plan = planReaderSessionRefresh({previous: sessionRefreshRef.current, routeKey, session: initialSession, ...position});
+    sessionRefreshRef.current = denied ? null : {routeKey, session: initialSession};
+    if (!denied && plan.kind !== "bootstrap") {
+      setSessionMap((current) => mergeReaderSessionMetadata(current, initialSession));
+      setBookmarks((current) => mergeReaderSessionBookmarks(current, initialSession, {titleId, chapterId}));
+      if (plan.kind === "invalidate") {
+        const changedId = initialSession.chapter.id;
+        sessionVersionsRef.current.set(changedId, readerSessionContentKey(initialSession));
+        clearReaderChapterCaches({chapterId: changedId, sessionCache: sessionCache.current, warmState: imageWarmStateRef.current});
+        invalidateReaderPageRequestsForChapter(pageRequestTokensRef.current, {epoch: pageLoadEpochRef.current, chapterId: changedId});
+        pageStateRef.current = dropReaderChapterPages(pageStateRef.current, changedId);
+        setReaderPageState((current) => dropReaderChapterPages(current, changedId));
+        if (position.activeChapterId === changedId) {
+          setActivePageIndex(plan.activePageIndex);
+          activeWebtoonPageRef.current = {chapterId: changedId, pageIndex: plan.activePageIndex};
+        }
+        if (position.pagedChapterId === changedId) setPagedPageIndex(plan.pagedPageIndex);
+        if (position.layoutMode === "webtoon") setPendingScroll(createReaderSeekRequest(position.activeChapterId, plan.activePageIndex));
+        const selected = position.layoutMode === "webtoon" ? position.activeChapterId === changedId : position.pagedChapterId === changedId;
+        const cursor = selected ? (position.layoutMode === "webtoon" ? plan.activePageIndex : plan.pagedPageIndex) : 0;
+        void loadPages(initialSession, {cursor, replace: true});
+      }
+      return;
+    }
     const preferences = initialSession.preferences || {};
     const nextLayoutMode = normalizeLayoutMode(preferences.layoutMode || (preferences.readingMode === "paged" ? "single" : "webtoon"));
     const bookmarkPage = clampPage(
@@ -714,11 +756,14 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = "", initialSessi
     bootPagesPendingRef.current = false;
     sessionCache.current.clear();
     pageLoadEpochRef.current += 1;
+    sessionVersionsRef.current.clear();
+    sessionVersionsRef.current.set(initialSession.chapter.id, readerSessionContentKey(initialSession));
     pageRequestTokensRef.current.clear();
     clearImageWarmState(imageWarmStateRef.current);
     setSessionMap(new Map([[initialSession.chapter.id, initialSession]]));
     setReaderPageState(() => hydratedBootPageState);
     setWebtoonChapterIds([initialSession.chapter.id]);
+    setPendingScroll(null);
     setBookmarks(Array.isArray(initialSession.bookmarks) ? initialSession.bookmarks : []);
     setLayoutMode(nextLayoutMode);
     setReadingDirection(DIRECTIONS.includes(preferences.readingDirection) ? preferences.readingDirection : "ltr");
@@ -735,7 +780,7 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = "", initialSessi
     if (!hasHydratedBootPages || firstCursor > 0) {
       void loadPages(initialSession, {cursor: firstCursor, replace: true});
     }
-  }, [initialPagesData, initialSession, loadPages, setReaderPageState]);
+  }, [initialPagesData, initialSession, loadPages, routeKey, setReaderPageState, status]);
 
   useEffect(() => {
     if (!title || !activeChapterId) {
@@ -879,16 +924,13 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = "", initialSessi
   ]);
 
   useEffect(() => {
-    const pending = pendingScrollRef.current;
-    if (pending == null || isPaged) {
+    if (pendingScroll && pendingScroll.chapterId !== activeChapterId) {
+      setPendingScroll(null);
       return;
     }
-    const target = document.querySelector(`[data-chapter-id="${cssEscape(activeChapterId)}"][data-page-index="${pending}"]`);
-    if (target) {
-      pendingScrollRef.current = null;
-      target.scrollIntoView({block: "center", behavior: "smooth"});
-    }
-  }, [activeChapterId, isPaged, pageState]);
+    if (applyReaderSeekRequest(pendingScroll, {activeChapterId, isPaged, findPage: (request) =>
+      document.querySelector(`[data-chapter-id="${cssEscape(request.chapterId)}"][data-page-index="${request.pageIndex}"]`)})) setPendingScroll(null);
+  }, [activeChapterId, isPaged, pageState, pendingScroll]);
 
   const persistPreference = useCallback(async (next = {}) => {
     if (!title) {
@@ -1075,7 +1117,7 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = "", initialSessi
       return;
     }
     setActivePageIndex(safeIndex);
-    pendingScrollRef.current = safeIndex;
+    setPendingScroll(createReaderSeekRequest(activeChapterId, safeIndex));
     const current = pageState.get(activeChapterId);
     if (!current || !current.pages.some((page) => page.index === safeIndex)) {
       recordReaderTelemetry({
