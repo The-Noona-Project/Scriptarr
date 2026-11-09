@@ -68,6 +68,8 @@ Raven is Scriptarr's Java download, library, metadata, and VPN-aware download en
 - Whole-library migration defaults disabled, persists explicit start/pause/resume/retry intent, and yields its title
   lock after each chapter. Fresh interactive/bulk work outranks migration. Preserve valid old-format reader state on
   migration failure and reconcile uncertain completion responses before writing older snapshots.
+- Remote WebP migration must enumerate the complete raw canonical catalog, independently of compact-card deduplication
+  and paging. Failed or malformed census/reload data must fail preparation rather than silently complete partial work.
 - Scoped cleanup requires durable plan scope plus an immutable reviewed filesystem inventory, a restart-restored
   maintenance fence and actual thread/process quiescence. Replay permits only missing reviewed entries, never new or
   changed files. Retain title/alias identities, metadata, covers, follows, progress and all run/task/job history.

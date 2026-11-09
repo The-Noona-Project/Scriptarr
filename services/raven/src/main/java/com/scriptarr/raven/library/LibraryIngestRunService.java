@@ -8,6 +8,7 @@ import com.scriptarr.raven.support.ScriptarrLogger;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
 
 import java.time.Instant;
 import java.util.ArrayList;
@@ -76,6 +77,7 @@ public final class LibraryIngestRunService {
     private final ScriptarrLogger logger;
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final WebpMigrationControl migrationControl;
+    private final boolean strictMigrationCensus;
     private final ScheduledExecutorService recovery = Executors.newSingleThreadScheduledExecutor(runnable -> { Thread thread = new Thread(runnable, "raven-migration-recovery"); thread.setDaemon(true); return thread; });
     private final Set<String> pausedRunIds = ConcurrentHashMap.newKeySet();
     private final int titleLaneCount = resolveConfiguredTitleLanes();
@@ -99,15 +101,22 @@ public final class LibraryIngestRunService {
      * @param brokerClient Sage-backed durable job broker
      * @param logger shared Raven logger
      */
+    @Autowired
     public LibraryIngestRunService(
         LibraryService libraryService,
         RavenBrokerClient brokerClient,
         ScriptarrLogger logger
     ) {
+        this(libraryService, brokerClient, logger, WebpMigrationControl.webp());
+    }
+
+    /** @param libraryService existing ingest boundary @param brokerClient strict Sage broker @param logger shared logger @param strictMigrationCensus captured remote WebP policy; explicit only for isolated contract tests */
+    LibraryIngestRunService(LibraryService libraryService, RavenBrokerClient brokerClient, ScriptarrLogger logger, boolean strictMigrationCensus) {
         this.libraryService = libraryService;
         this.brokerClient = brokerClient;
         this.logger = logger;
         this.migrationControl = new WebpMigrationControl(brokerClient);
+        this.strictMigrationCensus = strictMigrationCensus;
     }
 
     /**
@@ -201,11 +210,7 @@ public final class LibraryIngestRunService {
                     updateJob(job, STATUS_QUEUED, "Queued for the chapter-fair migration scheduler.", runSummaryFromTasks(loadTitleTasks(id)), false);
                 }
             }
-            Set<String> types = new LinkedHashSet<>();
-            for (Map<String, Object> row : libraryService.listCompactTitleRows(Map.of())) {
-                String type = LibraryNaming.normalizeTypeSlug(stringValue(row.get("libraryTypeSlug")));
-                if (ALLOWED_TYPE_SLUGS.contains(type) && toInt(row.get("chapterCount"), 0) > 0) types.add(type);
-            }
+            Set<String> types = migrationTypes();
             for (String type : orderedLibraryTypes(types)) if (activeRunForType(type).isEmpty()) createPreparingRun(type, actor);
             scheduleRunWorker();
         }
@@ -600,10 +605,7 @@ public final class LibraryIngestRunService {
             Map<String, Object> payload = normalizeMap(job.get("payload"));
             if (!STATUS_SUPERSEDED.equals(job.get("status")) && INGEST_FORMAT.equals(payload.get("format")) && INGEST_MODE.equals(payload.get("mode"))) known.add(stringValue(payload.get("libraryTypeSlug")));
         }
-        for (Map<String, Object> row : libraryService.listCompactTitleRows(Map.of())) {
-            String type = LibraryNaming.normalizeTypeSlug(stringValue(row.get("libraryTypeSlug")));
-            if (ALLOWED_TYPE_SLUGS.contains(type) && toInt(row.get("chapterCount"), 0) > 0 && known.add(type)) createPreparingRun(type, "scriptarr-migration-recovery");
-        }
+        for (String type : migrationTypes()) if (known.add(type)) createPreparingRun(type, "scriptarr-migration-recovery");
     }
 
     /**
@@ -1166,6 +1168,12 @@ public final class LibraryIngestRunService {
     }
 
     private List<LibraryTitle> titlesForType(String libraryTypeSlug) {
+        if (strictMigrationCensus) return MigrationCatalogCensus.read(brokerClient).stream()
+            .filter(row -> row.eligible() && libraryTypeSlug.equals(row.type()))
+            .sorted(Comparator.comparing((MigrationCatalogCensus.Title row) -> row.title().toLowerCase(Locale.ROOT)).thenComparing(MigrationCatalogCensus.Title::id))
+            .map(MigrationCatalogCensus.Title::id).map(this::loadIngestTitle)
+            .filter(title -> title.chapters().stream().anyMatch(chapter -> chapter.available() && chapter.archivePath() != null && !chapter.archivePath().isBlank()))
+            .toList();
         return libraryService.listCompactTitleRows(Map.of("type", libraryTypeSlug)).stream()
             .sorted(Comparator.comparing((row) -> stringValue(row.get("title")).toLowerCase(Locale.ROOT)))
             .map((row) -> stringValue(row.get("id")))
@@ -1176,12 +1184,25 @@ public final class LibraryIngestRunService {
             .toList();
     }
 
+    /** @return eligible library types from a complete WebP census, preserving the standalone AVIF compatibility path */
+    private Set<String> migrationTypes() {
+        Set<String> types = new LinkedHashSet<>();
+        if (strictMigrationCensus) {
+            for (var row : MigrationCatalogCensus.read(brokerClient)) if (row.eligible() && ALLOWED_TYPE_SLUGS.contains(row.type())) types.add(row.type());
+        } else for (Map<String, Object> row : libraryService.listCompactTitleRows(Map.of())) {
+            String type = LibraryNaming.normalizeTypeSlug(stringValue(row.get("libraryTypeSlug")));
+            if (ALLOWED_TYPE_SLUGS.contains(type) && toInt(row.get("chapterCount"), 0) > 0) types.add(type);
+        }
+        return types;
+    }
+
     /** @param titleId exact canonical card identity @return full title without silently omitting broker failures @throws IllegalStateException when migration ownership cannot be loaded */
     private LibraryTitle loadIngestTitle(String titleId) {
-        if (!WebpMigrationControl.webp()) return libraryService.findTitleById(titleId);
+        if (!strictMigrationCensus) return libraryService.findTitleById(titleId);
         try {
             JsonNode row = brokerClient.getLibraryTitle(titleId);
             if (row == null || !row.isObject() || !titleId.equals(row.path("id").asText()) || !row.path("chapters").isArray()) throw new IllegalStateException("Migration catalog scope is unavailable.");
+            MigrationCatalogCensus.describe(row);
             return objectMapper.treeToValue(row, LibraryTitle.class);
         } catch (Exception unavailable) { throw new IllegalStateException("Could not load a complete migration title snapshot.", unavailable); }
     }
