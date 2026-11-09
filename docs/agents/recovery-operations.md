@@ -13,6 +13,10 @@ automatic failover.
   objects, immutable snapshots, status/verification, and ciphertext fetches; original SSH commands are never executed.
 - Pin the receiver's SSH host key. Never use `StrictHostKeyChecking=no`, a shared administrator key, or a password in
   command arguments. The receiver binaries are root-owned and the store is writable only by its dedicated account.
+- Each capture owns a private temporary SSH control socket. Object uploads, snapshot uploads and commit use separate
+  forced-command channels over that connection; close it on success or failure. The socket directory contains no
+  recovery data, and cleanup must preserve unexpected entries rather than deleting recursively. Do not replace
+  connection reuse with broader firewall access or relaxed host verification.
 - RSA-OAEP wraps a new AES-256-GCM key for each artifact. The sender stores the public recovery key only. The private
   recovery key is escrowed separately with Windows DPAPI under the operator account. Preserve that Windows profile or
   export a separately protected recovery key before retiring the workstation.

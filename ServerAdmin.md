@@ -207,6 +207,10 @@ helpers under `scripts/operations` support verified recovery data and independen
 four weekly recovery points and test restoration in an isolated environment. A second host holding backups is recovery
 capacity, not automatic database failover; keep one writable production MySQL instance.
 
+The sender reuses one private SSH connection per backup run so large libraries do not trip the receiver's
+new-connection rate limit. Preserve the pinned host key, dedicated sender identity and firewall rules; a failed
+upload should be diagnosed instead of weakening those protections.
+
 Warden now boots an almost full Scriptarr stack on first install:
 
 - MySQL
