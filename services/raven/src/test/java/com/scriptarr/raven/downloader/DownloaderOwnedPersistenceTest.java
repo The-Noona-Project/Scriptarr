@@ -25,6 +25,29 @@ import static org.mockito.Mockito.*;
 
 /** Verify the real queue cannot start unpersisted owned work or release restoration prematurely. */
 class DownloaderOwnedPersistenceTest {
+    /** An original's exact owner wins over its separately owned reboot's shared English alias. */
+    @Test void originalPassesDespiteRebootAlias(@TempDir Path root) throws Exception {
+        FakeRavenBrokerClient broker = new FakeRavenBrokerClient();
+        DownloadProvider provider = mock(DownloadProvider.class);
+        when(provider.supportsUrl(anyString())).thenReturn(true);
+        CountDownLatch reached = new CountDownLatch(1);
+        when(provider.getChapters(anyString())).thenAnswer(call -> {reached.countDown(); return List.of();});
+        String original = "https://weebcentral.com/series/01J76XYCH9QX9GSDFR6959N669/The-Kings-Avatar";
+        String reboot = "https://weebcentral.com/series/01J76XYDQHSY9H2V7050NC7843/The-Kings-Avatar-Reboot";
+        String name = "The King's Avatar";
+        broker.putLibraryTitle("original", Map.of("id", "original", "title", name, "sourceUrl", original, "libraryTypeSlug", "manhua", "chapters", List.of()));
+        broker.putLibraryTitle("reboot", Map.of("id", "reboot", "title", name + " (Reboot)", "aliases", List.of(name),
+            "sourceUrl", reboot, "libraryTypeSlug", "manhua", "chapters", List.of()));
+        TitleDetails source = new TitleDetails("Glory returns.", "Manhua", List.of("Quan Zhi Gao Shou"), "Canceled", "2015",
+            false, false, false, List.of(), List.of(), name, List.of(), "");
+        Map<String, Object> metadata = com.scriptarr.raven.metadata.SourceMetadataFacts.bind("weebcentral", original, name, source,
+            Map.of("provider", "mangadex", "providerSeriesId", "original", "title", name, "releaseLabel", "2015", "type", "Manhua"), "verified-provider");
+        DownloaderService downloader = service(broker, provider, root);
+        try {
+            downloader.queueBulkOwned("bound-original", "run", "batch", "plan", new DownloadRequest(name, original, "Manhua", "owner", "weebcentral", "", metadata, Map.of("appendTitleId", "original"), "", "normal"));
+            assertTrue(reached.await(5, TimeUnit.SECONDS));
+        } finally {downloader.shutdown();}
+    }
     /** A verified year-backed reboot reaches real execution instead of exhausting retries at the legacy anchor. */
     @Test void boundRebootPassesExecutionFence(@TempDir Path root) throws Exception {
         FakeRavenBrokerClient broker = new FakeRavenBrokerClient();
@@ -39,6 +62,10 @@ class DownloaderOwnedPersistenceTest {
         Map<String, Object> metadata = com.scriptarr.raven.metadata.SourceMetadataFacts.bind("weebcentral", url, name, source,
             Map.of("provider", "mangadex", "providerSeriesId", "reboot", "title", "The King's Avatar", "releaseLabel", "2020", "type", "Manhua"), "verified-provider");
         assertFalse(BulkMetadataAnchor.matches(name, source.associatedNames(), metadata));
+        broker.putLibraryTitle("original", Map.of("id", "original", "title", "The King's Avatar", "aliases", List.of("The King's Avatar"),
+            "sourceUrl", "https://weebcentral.com/series/01J76XYCH9QX9GSDFR6959N669/The-Kings-Avatar", "libraryTypeSlug", "manhua", "chapters", List.of()));
+        broker.putLibraryTitle("reboot", Map.of("id", "reboot", "title", name, "aliases", List.of("The King's Avatar"),
+            "sourceUrl", url, "libraryTypeSlug", "manhua", "chapters", List.of()));
         DownloaderService downloader = service(broker, provider, root);
         try {
             downloader.queueBulkOwned("bound-reboot", "run", "batch", "plan", new DownloadRequest(name, url, "Manhua", "owner", "weebcentral", "", metadata, Map.of(), "", "normal"));

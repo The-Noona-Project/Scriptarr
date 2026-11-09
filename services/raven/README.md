@@ -243,3 +243,5 @@ From the admin queue, the configured Noona owner can inspect a paused run and re
 Rechecking metadata skips also prepares their parent batches, including previously completed batches. Prior results remain in history. Supported MangaDex downloads retain their source identity for metadata repair.
 
 Source metadata reads one title heading even when the provider repeats it for mobile and desktop layouts. Linked creator and tag fields remain attached to their original source provenance.
+
+Original and reboot editions can share translated aliases while retaining separate source identities. Shared aliases do not merge those editions or authorize writing into another edition's folder.

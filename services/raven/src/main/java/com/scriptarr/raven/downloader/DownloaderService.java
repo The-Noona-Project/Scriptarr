@@ -2096,13 +2096,21 @@ public class DownloaderService {
         String root = normalizeString(task.get("downloadRoot")); if (root.isBlank()) root = resolveTitleRoot(DOWNLOADED_FOLDER_NAME, request.titleName(), type).toString();
         JsonNode rows = brokerClient.listLibraryTitles(); if (rows == null || !rows.isArray()) throw new IllegalStateException("Canonical source ownership could not be verified.");
         Map<String, LibraryTitle> candidates = new LinkedHashMap<>();
+        Map<String, LibraryTitle> aliasCandidates = new LinkedHashMap<>();
         if (!explicit.isBlank()) { JsonNode row = brokerClient.getLibraryTitle(explicit); if (row != null && row.isObject() && row.hasNonNull("id")) { LibraryTitle title = objectMapper.treeToValue(row, LibraryTitle.class); candidates.put(title.id(), title); } }
         for (JsonNode row : rows) {
             LibraryTitle title = objectMapper.treeToValue(row, LibraryTitle.class); if (!type.equals(title.libraryTypeSlug())) continue;
             boolean label = name.equals(LibraryNaming.slugifySegment(title.title())) || title.aliases() != null && title.aliases().stream().anyMatch(alias -> name.equals(LibraryNaming.slugifySegment(alias)));
             boolean sameRoot = root.equals(normalizeString(title.downloadRoot()));
             boolean sameSource = !normalizeString(title.sourceUrl()).isBlank() && CanonicalSourceOwnership.sourceKey(title.sourceUrl()).equals(CanonicalSourceOwnership.sourceKey(request.titleUrl()));
-            if (label || sameRoot || sameSource) candidates.put(title.id(), title);
+            if (sameRoot || sameSource) candidates.put(title.id(), title);
+            else if (label) aliasCandidates.put(title.id(), title);
+        }
+        boolean exactSourceOwned = candidates.values().stream().anyMatch(title -> !normalizeString(title.sourceUrl()).isBlank()
+            && CanonicalSourceOwnership.sourceKey(title.sourceUrl()).equals(CanonicalSourceOwnership.sourceKey(request.titleUrl())));
+        for (LibraryTitle title : aliasCandidates.values()) {
+            // Shared aliases cannot override an exact source owner, but unknown ownership still fails closed.
+            if (!exactSourceOwned || normalizeString(title.sourceUrl()).isBlank()) candidates.put(title.id(), title);
         }
         if (candidates.size() > 1) throw new IllegalStateException("source_identity_conflict: More than one canonical identity claims this source or storage root.");
         if (!candidates.isEmpty()) {
