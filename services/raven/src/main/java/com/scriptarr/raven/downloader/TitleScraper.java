@@ -394,7 +394,7 @@ public class TitleScraper {
                 parseBooleanFlag(extractLabeledValue(doc, "Anime Adaptation")),
                 extractTags(doc),
                 extractRelatedSeries(doc),
-                doc.select("h1").text(),
+                doc.select("h1").stream().map(Element::text).filter(text -> !text.isBlank()).findFirst().orElse(""),
                 extractLabeledList(doc, "Author(s)"),
                 doc.select("img[alt$=cover]").stream().map(image -> image.absUrl("src")).findFirst().orElse("")
             );
@@ -669,12 +669,19 @@ public class TitleScraper {
                 values.add(text);
             }
         }
+        if (values.isEmpty()) {
+            for (Element link : section.select("a")) {
+                String text = cleanExtractedValue(link.text());
+                if (text != null && !values.contains(text)) values.add(text);
+            }
+        }
         return values.isEmpty() ? List.of() : List.copyOf(values);
     }
 
     private List<String> extractTags(Document doc) {
         Set<String> tags = new HashSet<>();
         tags.addAll(extractLabeledList(doc, "Tags"));
+        tags.addAll(extractLabeledList(doc, "Tags(s)"));
         tags.addAll(extractLabeledList(doc, "Genres"));
         tags.addAll(extractLabeledList(doc, "Genre(s)"));
         return tags.stream()
