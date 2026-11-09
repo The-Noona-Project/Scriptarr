@@ -62,6 +62,11 @@
 - Migration defaults disabled. Protected `/v1/ingest/migration/{start,pause,resume,retry,status}` persists intent in a
   generic control job. Whole-library runs include ready AVIF, yield the fair title lock after each chapter, preserve old
   readable state on failures, and leave failed title work for explicit retry. Pause lets the current chapter finish.
+- Remote WebP migration scope uses `MigrationCatalogCensus`: one strict, uncapped raw Sage catalog read per enumeration,
+  retaining only tiny canonical descriptors. Preserve different IDs with equal display names; reject duplicate IDs,
+  malformed eligibility fields, error envelopes and unavailable reads. Exact-ID reloads remain strict. A failed census
+  must fail preparation/recovery, never become a completed empty or truncated run. Public card/backlog projections
+  and explicit standalone AVIF compatibility stay unchanged.
 - Migration-only verification hints are process-local and scoped to the exact run/task/canonical title and ordered
   chapter content checkpoints. Bind canonical/manifest/every tile/thumbnail file key, size and full-resolution mtime;
   changed identity/order/stats invalidate the affected prefix. Never persist or trust a cursor across restart. Bound

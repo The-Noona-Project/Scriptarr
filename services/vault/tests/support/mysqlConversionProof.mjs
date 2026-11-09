@@ -4,6 +4,7 @@ import mysql from "mysql2/promise";
 import {createStore} from "../../lib/createStore.mjs";
 import {createCachedStore} from "../../lib/createCachedStore.mjs";
 import {proveScopedReset} from "./scopedResetProof.mjs";
+import {proveCanonicalTitleIdentity} from "./canonicalTitleIdentityProof.mjs";
 
 try {
   const parsed = new URL(process.env.SCRIPTARR_TEST_MYSQL_URL), database = "vault_conversion_" + randomUUID().replaceAll("-", "");
@@ -95,11 +96,15 @@ try {
     await first.cancelConversionJob(versioned.jobId, {expectedCoordinatorGeneration: versioned.spec.coordinatorGeneration});
     await second.cancelConversionJob(reordered.jobId, {expectedCoordinatorGeneration: reordered.spec.coordinatorGeneration});
     await proveScopedReset(createCachedStore(first));
+    await proveCanonicalTitleIdentity(createCachedStore(second), {readAliases: async () => {
+      const [rows] = await inspector.query("SELECT * FROM raven_title_aliases WHERE alias_title_id IN (?,?) ORDER BY alias_title_id", ["6639ab89-297c-4516-9228-913f0f020cb4", "merged-alias"]);
+      return rows;
+    }});
   } finally {
     await first.close?.(); await second.close?.(); await inspector?.end();
     if (/^vault_conversion_[a-f0-9]{32}$/.test(database)) await admin.query("DROP DATABASE IF EXISTS ??", [database]);
     await admin.end();
   }
-  console.log(JSON.stringify({passed:true,concurrentClaims:12,encodingCapacity:1,rollbackProved:true,scopedResetPreservationProved:true,coordinatorCancellationRaceProved:true,versionedOrderingRoundtripProved:true}));
+  console.log(JSON.stringify({passed:true,concurrentClaims:12,encodingCapacity:1,rollbackProved:true,scopedResetPreservationProved:true,coordinatorCancellationRaceProved:true,versionedOrderingRoundtripProved:true,canonicalTitleIdentityProved:true}));
   process.exit(0);
 } catch(error) { console.error(error.stack); process.exit(1); }
