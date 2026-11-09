@@ -241,3 +241,5 @@ Metadata providers remain the first choice. Bulk intake checks the exact source,
 From the admin queue, the configured Noona owner can inspect a paused run and recheck its metadata skips. This preserves completed downloads and prior decisions and does not start the run. Continue the same run through Noona after repair.
 
 Rechecking metadata skips also prepares their parent batches, including previously completed batches. Prior results remain in history. Supported MangaDex downloads retain their source identity for metadata repair.
+
+Source metadata reads one title heading even when the provider repeats it for mobile and desktop layouts. Linked creator and tag fields remain attached to their original source provenance.
