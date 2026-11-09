@@ -228,6 +228,129 @@ public class BulkRunService {
     }
 
     /**
+     * Reconsider terminal metadata skips in a captured pause without starting downloads.
+     * @param runId durable run identity
+     * @param expectedApprovalId current paused approval window
+     * @param decisionRequestId stable idempotency key
+     * @return durable recheck receipt
+     */
+    public synchronized Map<String, Object> recheckMetadata(String runId, String expectedApprovalId, String decisionRequestId) {
+        runId = normalizeRunId(runId);
+        Map<String, Object> job = requireRun(runId);
+        Map<String, Object> payload = new LinkedHashMap<>(normalizeMap(job.get("payload")));
+        String requestId = BulkRunIdentity.requestId(decisionRequestId);
+        if (requestId.isBlank() || stringValue(expectedApprovalId).isBlank()) throw new IllegalArgumentException("requestId and approvalId are required.");
+        Map<String, Object> receipts = new LinkedHashMap<>(normalizeMap(payload.get("metadataRechecks")));
+        Map<String, Object> prior = normalizeMap(receipts.get(requestId));
+        if (!prior.isEmpty()) {
+            if (!expectedApprovalId.equals(prior.get("approvalId"))) throw new BulkRunConflictException("Recheck request belongs to another approval window.");
+            return new LinkedHashMap<>(normalizeMap(prior.get("response")));
+        }
+        if (!STATUS_PAUSED.equals(job.get("status")) || activeRunIds.contains(runId) || !expectedApprovalId.equals(approvalId(job))) {
+            throw new BulkRunConflictException("Metadata recheck requires the current idle paused approval window.");
+        }
+        Map<String, Object> pending = normalizeMap(payload.get("metadataRecheckPending"));
+        if (!pending.isEmpty() && !requestId.equals(pending.get("requestId"))) throw new BulkRunConflictException("Another metadata recheck needs reconciliation.");
+        if (pending.isEmpty()) {
+            List<String> selected = new ArrayList<>();
+            for (Map<String, Object> task : loadAllTasks(runId)) {
+                Map<String, Object> plan = normalizeMap(task.get("payload"));
+                String category = stringValue(normalizeMap(task.get("result")).get("category"));
+                if ("bulk-title-plan".equals(plan.get("kind")) && Set.of("noMetadata", "ambiguous").contains(category)
+                    && !plan.containsKey("request")) selected.add(stringValue(task.get("taskId")));
+            }
+            payload.put("metadataRecheckPending", Map.of("requestId", requestId, "approvalId", expectedApprovalId,
+                "planIds", selected, "startedAt", now()));
+            job.put("payload", payload); putJob(runId, job);
+        }
+        repairMetadataRecheck(job);
+        Map<String, Object> receipt = normalizeMap(normalizeMap(normalizeMap(job.get("payload")).get("metadataRechecks")).get(requestId));
+        return new LinkedHashMap<>(normalizeMap(receipt.get("response")));
+    }
+
+    /**
+     * Load durable plans independently of local terminal task history.
+     * @param runId durable run identity
+     * @return all persisted child task records
+     */
+    private List<Map<String, Object>> loadAllTasks(String runId) {
+        try {
+            JsonNode rows = brokerClient.listJobTasks(runId, "");
+            if (rows == null || !rows.isArray()) throw new IllegalStateException("Bulk task records are unavailable.");
+            List<Map<String, Object>> tasks = new ArrayList<>(); rows.forEach(row -> tasks.add(jsonToMap(row))); return tasks;
+        } catch (Exception error) {
+            if (error instanceof InterruptedException) Thread.currentThread().interrupt();
+            throw new IllegalStateException("Metadata recheck could not load durable plans.", error);
+        }
+    }
+
+    /**
+     * Complete the recorded recheck intent while preserving accepted work and the pause.
+     * @param job mutable durable run snapshot to reconcile
+     */
+    private void repairMetadataRecheck(Map<String, Object> job) {
+        Map<String, Object> payload = new LinkedHashMap<>(normalizeMap(job.get("payload")));
+        Map<String, Object> pending = normalizeMap(payload.get("metadataRecheckPending"));
+        if (pending.isEmpty()) return;
+        String runId = stringValue(job.get("jobId")), requestId = stringValue(pending.get("requestId"));
+        if (!STATUS_PAUSED.equals(job.get("status")) || !approvalId(job).equals(pending.get("approvalId"))) {
+            throw new BulkRunConflictException("Metadata recheck state changed before reconciliation.");
+        }
+        List<?> ids = pending.get("planIds") instanceof List<?> list ? list : List.of();
+        List<Map<String, Object>> tasks = loadAllTasks(runId);
+        Map<String, List<String>> parentPlans = new LinkedHashMap<>();
+        for (Object id : ids) {
+            Map<String, Object> plan = tasks.stream().filter(row -> id.equals(row.get("taskId"))).findFirst()
+                .orElseThrow(() -> new IllegalStateException("A captured metadata plan is missing."));
+            String batchId = stringValue(normalizeMap(plan.get("payload")).get("batchId"));
+            Map<String, Object> batch = tasks.stream().filter(row -> batchId.equals(row.get("taskId")) && "bulk-batch".equals(row.get("taskKey"))).findFirst()
+                .orElseThrow(() -> new IllegalStateException("A metadata plan has no durable parent batch."));
+            if (STATUS_CANCELLED.equals(batch.get("status"))) throw new BulkRunConflictException("Cancelled batches cannot be reopened by metadata repair.");
+            parentPlans.computeIfAbsent(batchId, key -> new ArrayList<>()).add(stringValue(id));
+        }
+        for (Object id : ids) {
+            Map<String, Object> task = tasks.stream().filter(row -> id.equals(row.get("taskId"))).findFirst()
+                .orElseThrow(() -> new IllegalStateException("A captured metadata plan is missing."));
+            Map<String, Object> plan = new LinkedHashMap<>(normalizeMap(task.get("payload")));
+            Map<String, Object> history = new LinkedHashMap<>(normalizeMap(plan.get("metadataRecheckHistory")));
+            if (history.containsKey(requestId)) continue;
+            Map<String, Object> result = normalizeMap(task.get("result"));
+            if (!"bulk-title-plan".equals(plan.get("kind")) || plan.containsKey("request")
+                || !Set.of("noMetadata", "ambiguous").contains(stringValue(result.get("category")))) {
+                throw new BulkRunConflictException("A captured metadata plan now owns different work.");
+            }
+            history.put(requestId, Map.of("status", stringValue(task.get("status")), "result", result, "recheckedAt", now()));
+            plan.put("metadataRecheckHistory", history); plan.put("metadataPolicy", "provider-first-source-fallback-v1");
+            task.put("payload", plan); task.put("result", Map.of("category", "unresolved", "reason", "Metadata policy recheck requested."));
+            task.put("status", "planned"); task.put("finishedAt", null); task.put("updatedAt", now());
+            putBatchTask(runId, task);
+        }
+        for (Map.Entry<String, List<String>> entry : parentPlans.entrySet()) {
+            Map<String, Object> batch = tasks.stream().filter(row -> entry.getKey().equals(row.get("taskId"))).findFirst().orElseThrow();
+            Map<String, Object> batchPayload = new LinkedHashMap<>(normalizeMap(batch.get("payload")));
+            Map<String, Object> history = new LinkedHashMap<>(normalizeMap(batchPayload.get("metadataRecheckHistory")));
+            if (history.containsKey(requestId)) continue;
+            Map<String, Object> previous = normalizeMap(batch.get("result"));
+            history.put(requestId, Map.of("status", stringValue(batch.get("status")), "result", previous,
+                "finishedAt", stringValue(batch.get("finishedAt")), "recheckedAt", now()));
+            batchPayload.put("metadataRecheckHistory", history);
+            Map<String, Object> result = new LinkedHashMap<>(previous);
+            Set<String> unresolved = new LinkedHashSet<>(stringList(previous.get("unresolvedPlanIds")));
+            unresolved.addAll(entry.getValue()); result.put("unresolvedPlanIds", List.copyOf(unresolved));
+            batch.put("payload", batchPayload); batch.put("result", result); batch.put("status", STATUS_PAUSED);
+            batch.put("percent", 0); batch.put("finishedAt", null); batch.put("updatedAt", now());
+            batch.put("message", "Metadata skips prepared for rechecking; waiting for owner continuation.");
+            putBatchTask(runId, batch);
+        }
+        Map<String, Object> response = Map.of("runId", runId, "status", "paused", "recheckedPlanIds", ids,
+            "requestId", requestId, "approvalId", pending.get("approvalId"), "started", false);
+        Map<String, Object> receipts = new LinkedHashMap<>(normalizeMap(payload.get("metadataRechecks")));
+        receipts.put(requestId, Map.of("approvalId", pending.get("approvalId"), "response", response));
+        payload.put("metadataRechecks", receipts); payload.remove("metadataRecheckPending");
+        job.put("payload", payload); job.put("updatedAt", now()); putJob(runId, job);
+    }
+
+    /**
      * Load a deterministic durable bulk-run status response.
      *
      * @param runId durable bulk run id
@@ -245,6 +368,7 @@ public class BulkRunService {
         response.put("active", activeRunIds.contains(normalizedRunId));
         response.put("filters", publicFilters(job));
         response.put("approvalId", approvalId(job));
+        response.put("metadataRecheckPending", normalizeMap(normalizeMap(job.get("payload")).get("metadataRecheckPending")));
         response.put("recoveryReady", restoreReady());
         response.put("recoveryError", restoreFailure());
         Map<String, Object> summary = buildRunSummary(batches);
@@ -307,6 +431,7 @@ public class BulkRunService {
                     String runId = stringValue(job.get("jobId"));
                     String status = stringValue(job.get("status")).toLowerCase(Locale.ROOT);
                     Map<String, Object> payload = normalizeMap(job.get("payload"));
+                    if (restored && payload.containsKey("metadataRecheckPending")) repairMetadataRecheck(job);
                     if (!restored) {
                         if (STATUS_RUNNING.equals(status) || (STATUS_QUEUED.equals(status)
                             && booleanValue(payload.get("startRequested")))) {
@@ -343,6 +468,7 @@ public class BulkRunService {
                                       String decisionRequestId, boolean tokened) {
         String normalizedRunId = normalizeRunId(runId);
         Map<String, Object> job = requireRun(normalizedRunId);
+        repairMetadataRecheck(job);
         Map<String, Object> payload = new LinkedHashMap<>(normalizeMap(job.get("payload")));
         String requestId = BulkRunIdentity.requestId(decisionRequestId);
         String expected = stringValue(expectedApprovalId);

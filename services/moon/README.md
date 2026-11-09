@@ -258,3 +258,7 @@ downloads, and results without an enabled download target before queueing the su
 
 Moon now treats title art as first-class metadata too. Cover images from Raven intake and library state are rendered in
 admin Add Title, requests, queue or history, and library surfaces as well as the user browse and title views.
+
+### Metadata and edition details
+
+A title’s Details tab shows its edition, creators, aliases and complete expandable tag groups. Admin metadata repair compares source and metadata-provider facts and shows tag provenance. Metadata providers are preferred when their edition matches; verified source metadata is labelled when used as fallback. Existing tag preferences are retained. The admin queue includes owner-only metadata-skip recovery for paused Noona bulk runs.

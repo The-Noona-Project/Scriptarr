@@ -722,6 +722,19 @@ public class RavenController {
         return resumeBulkRun(runId, body);
     }
 
+    /** Recheck captured metadata skips without advancing the paused approval window. */
+    @PostMapping("/v1/downloads/bulk-runs/{runId}/recheck-metadata")
+    public ResponseEntity<Map<String, Object>> recheckBulkMetadata(@PathVariable("runId") String runId, @RequestBody Map<String, Object> body) {
+        try {
+            return ResponseEntity.ok(bulkRunService.recheckMetadata(runId,
+                String.valueOf(body.getOrDefault("approvalId", "")), String.valueOf(body.getOrDefault("requestId", ""))));
+        } catch (IllegalArgumentException error) {
+            return ResponseEntity.badRequest().body(Map.of("error", error.getMessage()));
+        } catch (BulkRunConflictException error) {
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("error", error.getMessage()));
+        } catch (IllegalStateException error) { return bulkStateError(error); }
+    }
+
     /**
      * Cancel a durable Raven mega downloadall run.
      *
@@ -916,6 +929,12 @@ public class RavenController {
             String.valueOf(body.getOrDefault("seriesId", "")),
             String.valueOf(body.getOrDefault("libraryId", ""))
         );
+    }
+
+    /** Inspect live source facts without applying an identification or changing a run. */
+    @GetMapping("/v1/metadata/source-evidence/{titleId}")
+    public Map<String, Object> sourceMetadataEvidence(@PathVariable("titleId") String titleId) {
+        return metadataService.sourceEvidence(titleId);
     }
 
     /**

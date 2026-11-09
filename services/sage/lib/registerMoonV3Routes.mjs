@@ -2,6 +2,7 @@
  * @file Scriptarr Sage module: services/sage/lib/registerMoonV3Routes.mjs.
  */
 import {createHash, randomBytes} from "node:crypto";
+import {registerSourceMetadataRoutes} from "./registerSourceMetadataRoutes.mjs";
 import {Readable} from "node:stream";
 import {hasReadyReaderRevision, readerPageRow, readerVariantQuery} from "./readerVariants.mjs";
 import {ADMIN_ACCESS_DOMAINS} from "@scriptarr/access";
@@ -1251,6 +1252,7 @@ export const registerMoonV3Routes = (app, {
         kind: normalizeString(details.kind),
         failureCode: normalizeString(details.failureCode),
         recoveryAction: normalizeString(details.recoveryAction),
+        stage: normalizeString(details.stage), actualProgressAt: normalizeString(details.actualProgressAt),
         downloadSpeedBytesPerSecond: Number(details.downloadSpeedBytesPerSecond || 0) || 0,
         startedAt: normalizeString(details.startedAt),
         sortOrder: Number.parseInt(String(details.sortOrder ?? 0), 10) || 0
@@ -2699,6 +2701,12 @@ export const registerMoonV3Routes = (app, {
     const titles = await loadLibrary();
     res.json(buildMissingChapterPayload(titles));
   }));
+
+  registerSourceMetadataRoutes(app, {
+    userRead: (handler) => withUser(requireUser, handler), adminRead: requireWantedRead, ownerWrite: requireActivityRoot,
+    loadUserSummary: loadUserTitleSummaryState, loadTitle: loadLibraryTitle, readOwnerId: readOwnerDiscordId,
+    vaultClient, serviceJson, ravenBaseUrl: config.ravenBaseUrl
+  });
 
   app.get("/api/moon-v3/admin/wanted/metadata", requireWantedRead(async (_req, res) => {
     const titles = await loadLibrary();

@@ -111,7 +111,13 @@ public class MangaDexDownloadProvider implements DownloadProvider {
                 Boolean.TRUE,
                 false,
                 extractTags(attributes),
-                List.of()
+                List.of(),
+                preferredLocalizedValue(attributes.path("title"), mangaId),
+                java.util.stream.StreamSupport.stream(entry.path("relationships").spliterator(), false)
+                    .filter(person -> "author".equals(person.path("type").asText("")))
+                    .map(person -> person.path("attributes").path("name").asText(""))
+                    .filter(name -> !name.isBlank()).toList(),
+                buildCoverUrl(mangaId, extractCoverFileName(entry.path("relationships")))
             );
         } catch (Exception ignored) {
             return null;
@@ -218,7 +224,14 @@ public class MangaDexDownloadProvider implements DownloadProvider {
             .build();
     }
 
-    private JsonNode sendJson(HttpRequest request) throws IOException, InterruptedException {
+    /**
+     * Read provider JSON, with a fixture seam for source-contract tests.
+     * @param request public provider HTTP request
+     * @return provider JSON response
+     * @throws IOException when provider transport or JSON fails
+     * @throws InterruptedException when the request is interrupted
+     */
+    protected JsonNode sendJson(HttpRequest request) throws IOException, InterruptedException {
         HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
         if (response.statusCode() >= 400) {
             throw new IOException("MangaDex returned HTTP " + response.statusCode() + ".");

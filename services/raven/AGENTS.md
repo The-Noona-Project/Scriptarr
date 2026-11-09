@@ -85,7 +85,7 @@ Raven is Scriptarr's Java download, library, metadata, and VPN-aware download en
   large catalog or slow broker write cannot keep the container unhealthy.
 - Old Noona Raven and Komf code are reference material only. Port behavior intentionally, but do not restore Selenium
   or browser-driven scraping.
-- Manual metadata overrides are admin-visible contracts and should stay documented.
+- Manual metadata overrides are admin-visible contracts and should stay documented. Source-backed fallback requires an exact complete source identity and explicit non-adult classification. Reuse only source-bound verified metadata; never fabricate edition aliases or use finder queries as evidence. Metadata rechecks preserve prior decisions and accepted work, remain paused, and must reconcile durable intents without enqueueing from GET.
 - Preserve saved cover URLs through both canonical-ingest and already-ready completion recovery, independently of
   metadata-provider availability. Fill only missing catalog artwork with title-summary writes; never replace chapter
   rows or ready pages for a cover repair. Append plans retain browsed art only after existing selected cover sources.

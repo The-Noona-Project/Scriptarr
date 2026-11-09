@@ -18,6 +18,7 @@ import {
 } from "../lib/adminWanted.js";
 import {formatDate, formatDisplayValue} from "../lib/format.js";
 import {AdminActionBanner, AdminDenseTable, AdminDrawer, AdminFilterBar, AdminStatusBadge} from "./AdminUi.jsx";
+import {MetadataEvidence} from "./MetadataEvidence.jsx";
 import {useAdminToast} from "./AdminToasts.jsx";
 
 const emptyPayload = Object.freeze({
@@ -103,6 +104,7 @@ export const MetadataPage = ({user}) => {
   const counts = data?.counts || {};
   const visibleTitles = useMemo(() => filterMetadataRows(titles, {query, gap}), [titles, query, gap]);
   const selectedTitle = titles.find((title) => titleRowKey(title) === selectedId) || null;
+
 
   useEffect(() => {
     setSelectedId((current) => resolveExistingTitleSelection(titles, current));
@@ -271,6 +273,7 @@ export const MetadataPage = ({user}) => {
               <span><strong>Cover</strong>{selectedTitle.coverUrl ? "configured" : "missing"}</span>
             </div>
 
+            <MetadataEvidence key={selectedTitle.id} titleId={selectedTitle.id} />
             <section className="admin-subsection">
               <div className="admin-section-heading">
                 <div>

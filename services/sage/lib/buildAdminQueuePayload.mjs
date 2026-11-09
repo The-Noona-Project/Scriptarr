@@ -2,7 +2,7 @@
  * @file Build the live Moon admin queue payload from normalized Raven tasks.
  */
 
-const STALE_THRESHOLD_MS = 30 * 60 * 1000;
+const STALE_THRESHOLD_MS = 45 * 60 * 1000;
 const MIN_ACTIVE_ETA_PROGRESS = 1;
 const MAX_ACTIVE_ETA_PROGRESS = 99;
 const MIN_ACTIVE_ETA_ELAPSED_MS = 30 * 1000;
@@ -98,10 +98,10 @@ const sortNewestFirst = (tasks = []) => [...normalizeArray(tasks)].sort((left, r
 
 const isStaleActiveTask = (task) => {
   const status = normalizeString(task.status);
-  if (!["queued", "running"].includes(status)) {
-    return false;
-  }
-  return Date.now() - parseTimestamp(task.updatedAt || task.queuedAt) >= STALE_THRESHOLD_MS;
+  if (status !== "running") return false;
+  if (["waiting-for-encoder", "waiting-for-worker"].includes(normalizeString(task.details?.stage))) return false;
+  const progress = task.details?.actualProgressAt || task.actualProgressAt || task.updatedAt || task.startedAt;
+  return Boolean(parseTimestamp(progress)) && Date.now() - parseTimestamp(progress) >= STALE_THRESHOLD_MS;
 };
 
 const isRetriableAttentionTask = (task) => {
@@ -172,7 +172,15 @@ export const buildAdminQueuePayload = (tasks = [], {concurrency = 2} = {}) => {
   const running = addRunningEtas(sortRunningTasks(normalizedTasks.filter((task) => normalizeString(task.status) === "running")));
   const queued = sortQueuedTasks(normalizedTasks.filter((task) => normalizeString(task.status) === "queued"));
   const staleActiveTasks = normalizedTasks.filter((task) => isStaleActiveTask(task));
-  const failedTasks = normalizedTasks.filter((task) => normalizeString(task.status) === "failed");
+  const historicalFailures = normalizedTasks.filter((task) => normalizeString(task.status) === "failed" && (
+    ["Cancelled by admin.", "AVIF ingest cancelled by admin."].includes(normalizeString(task.message))
+    || normalizedTasks.some((newer) => newer.taskId !== task.taskId && task.titleId && task.titleId === newer.titleId
+      && ["running", "queued", "completed"].includes(normalizeString(newer.status))
+      && normalizeString(task.selectedDownload?.titleUrl || task.titleUrl)
+      && normalizeString(task.selectedDownload?.titleUrl || task.titleUrl) === normalizeString(newer.selectedDownload?.titleUrl || newer.titleUrl)
+      && parseTimestamp(newer.updatedAt || newer.queuedAt) > parseTimestamp(task.updatedAt || task.queuedAt))
+  ));
+  const failedTasks = normalizedTasks.filter((task) => normalizeString(task.status) === "failed" && !historicalFailures.includes(task));
   const needsAttention = sortNewestFirst([
     ...failedTasks.map((task) => ({...task, attentionReason: "failed", retriable: true, removable: !isIngestTask(task)})),
     ...staleActiveTasks
@@ -191,13 +199,15 @@ export const buildAdminQueuePayload = (tasks = [], {concurrency = 2} = {}) => {
       runningCount: running.length,
       queuedCount: queued.length,
       needsAttentionCount: needsAttention.length,
+      historicalFailureCount: historicalFailures.length,
       activeSlots: running.length,
       totalSlots: concurrency,
       retryableAttentionCount
     },
     running,
     queued,
-    needsAttention
+    needsAttention,
+    historicalFailures: historicalFailures.map((task) => ({...task, recoveryState: "historical", retriable: false, removable: false}))
   };
 };
 

@@ -2086,7 +2086,10 @@ public class DownloaderService {
         Map<String, Object> task = tasks.get(taskId), download = normalizeMap(request.selectedDownload()), metadata = normalizeMap(request.selectedMetadata());
         if (!normalizeString(task.get("bulkRunId")).isBlank() && !metadata.isEmpty()) {
             List<String> aliases = new ArrayList<>(); Object raw = download.get("sourceAliases"); if (raw instanceof List<?> list) for (Object value : list) if (value instanceof String text) aliases.add(text);
-            if (!BulkMetadataAnchor.matches(request.titleName(), aliases, metadata)) throw new IllegalStateException("metadata_source_ambiguous: Original source labels do not anchor the selected metadata.");
+            boolean anchored = metadata.containsKey("sourceBinding")
+                ? com.scriptarr.raven.metadata.SourceMetadataFacts.matchesBoundSelection(request.titleUrl(), request.titleName(), metadata)
+                : BulkMetadataAnchor.matches(request.titleName(), aliases, metadata);
+            if (!anchored) throw new IllegalStateException("metadata_source_ambiguous: Original source labels do not anchor the selected metadata.");
         }
         String explicit = firstNonBlank(normalizeString(task.get("titleId")), normalizeString(download.get("appendTitleId")), normalizeString(request.replacementTitleId()));
         String type = LibraryNaming.normalizeTypeSlug(request.requestType()), name = LibraryNaming.slugifySegment(request.titleName());

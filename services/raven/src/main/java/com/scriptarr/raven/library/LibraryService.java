@@ -1022,11 +1022,9 @@ public final class LibraryService {
             existing.chapterCount(),
             existing.chaptersDownloaded(),
             firstNonBlank(stringValue(details.get("author")), existing.author()),
-            mergeTagLists(
-                existing.tags(),
-                objectMapper.convertValue(details.getOrDefault("tags", List.of()), new TypeReference<List<String>>() {
-                })
-            ),
+            details.containsKey("sourceBinding")
+                ? objectMapper.convertValue(details.getOrDefault("tags", List.of()), new TypeReference<List<String>>() { })
+                : mergeTagLists(existing.tags(), objectMapper.convertValue(details.getOrDefault("tags", List.of()), new TypeReference<List<String>>() { })),
             mergeAliases(existing.aliases(), objectMapper.convertValue(details.getOrDefault("aliases", List.of()), new TypeReference<List<String>>() {
             })),
             provider,
@@ -1034,7 +1032,8 @@ public final class LibraryService {
             objectMapper.convertValue(details.getOrDefault("relations", existing.relations()), new TypeReference<List<Map<String, String>>>() {
             }),
             existing.sourceUrl(),
-            firstNonBlank(existing.coverUrl(), stringValue(details.get("coverUrl"))),
+            details.containsKey("sourceBinding") ? firstNonBlank(stringValue(details.get("coverUrl")), existing.coverUrl())
+                : firstNonBlank(existing.coverUrl(), stringValue(details.get("coverUrl"))),
             existing.workingRoot(),
             existing.downloadRoot(),
             Optional.ofNullable(existing.chapters()).orElse(List.of()),

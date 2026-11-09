@@ -233,3 +233,11 @@ Raven keeps `/v1/ingest` and Appa preview paths on compact title-card projection
 hydrate full chapter arrays; full title payloads stay reserved for single-title, reader, and actual ingest work.
 For long-running WeebCentral series, Raven now follows the source page's HTMX full-chapter-list flow instead of only
 the initial visible subset, which fixes partial-history titles such as Tomb Raider King.
+
+### Source-verified metadata recovery
+
+Metadata providers remain the first choice. Bulk intake checks the exact source, complete aliases and edition facts before accepting a provider match. Complete, explicitly non-adult source metadata can serve as a clearly labelled fallback. A verified admin correction is saved against its source and reused during bulk recovery. Conflicting editions or adult classifications pause for attention.
+
+From the admin queue, the configured Noona owner can inspect a paused run and recheck its metadata skips. This preserves completed downloads and prior decisions and does not start the run. Continue the same run through Noona after repair.
+
+Rechecking metadata skips also prepares their parent batches, including previously completed batches. Prior results remain in history. Supported MangaDex downloads retain their source identity for metadata repair.

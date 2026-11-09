@@ -348,3 +348,7 @@
   automations need to avoid NSFW, duplicate, or already-active downloads.
 - The signed-in Moon shell should prefer the Discord-backed `avatarUrl` when it exists and fall back to initials
   instead of leaving the admin identity surface text-only.
+
+### Source metadata views
+
+Reader edition and grouped-tag details load on demand from the authenticated title metadata endpoint. Admin evidence compares retained provider facts with a fresh Raven source read through Sage. Bulk metadata recovery requires the configured owner plus activity-root access, captures a durable request/approval identity and prepares skipped plans without continuing the run. A retry after reload reuses a pending request ID reported by status.

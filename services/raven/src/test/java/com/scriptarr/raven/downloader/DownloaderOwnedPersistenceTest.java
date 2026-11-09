@@ -25,6 +25,26 @@ import static org.mockito.Mockito.*;
 
 /** Verify the real queue cannot start unpersisted owned work or release restoration prematurely. */
 class DownloaderOwnedPersistenceTest {
+    /** A verified year-backed reboot reaches real execution instead of exhausting retries at the legacy anchor. */
+    @Test void boundRebootPassesExecutionFence(@TempDir Path root) throws Exception {
+        FakeRavenBrokerClient broker = new FakeRavenBrokerClient();
+        DownloadProvider provider = mock(DownloadProvider.class);
+        when(provider.supportsUrl(anyString())).thenReturn(true);
+        CountDownLatch reached = new CountDownLatch(1);
+        when(provider.getChapters(anyString())).thenAnswer(call -> {reached.countDown(); return List.of();});
+        String url = "https://weebcentral.com/series/01J76XYDQHSY9H2V7050NC7843/The-Kings-Avatar-Reboot";
+        String name = "The King's Avatar (Reboot)";
+        TitleDetails source = new TitleDetails("Glory returns.", "Manhua", List.of("The King's Avatar (2020)"), "Ongoing", "2020",
+            false, false, false, List.of(), List.of(), name, List.of(), "");
+        Map<String, Object> metadata = com.scriptarr.raven.metadata.SourceMetadataFacts.bind("weebcentral", url, name, source,
+            Map.of("provider", "mangadex", "providerSeriesId", "reboot", "title", "The King's Avatar", "releaseLabel", "2020", "type", "Manhua"), "verified-provider");
+        assertFalse(BulkMetadataAnchor.matches(name, source.associatedNames(), metadata));
+        DownloaderService downloader = service(broker, provider, root);
+        try {
+            downloader.queueBulkOwned("bound-reboot", "run", "batch", "plan", new DownloadRequest(name, url, "Manhua", "owner", "weebcentral", "", metadata, Map.of(), "", "normal"));
+            assertTrue(reached.await(5, TimeUnit.SECONDS));
+        } finally {downloader.shutdown();}
+    }
     /** Verify restart cannot complete an unfinished append merely because its older catalog title exists. */
     @Test
     void unfinishedAppendWhoseSourceChapterDisappearedDoesNotRecoverAsComplete(@TempDir Path root) throws Exception {

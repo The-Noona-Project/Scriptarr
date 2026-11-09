@@ -301,3 +301,13 @@
   - keep filesystem import scanning so existing archives can backfill the reader catalog
   - keep metadata identify as a real apply-and-persist flow, not a "record for later" stub
   - use old Noona Raven and old Komf as reference inputs only; do not restore Selenium, Kavita coupling, or Komf as a runtime dependency
+
+### Source-bound metadata
+
+Metadata match details retain versioned `sourceBinding`, original source facts, grouped tags and tag origins in existing JSON storage. Saved selections are scoped to an exact source URL and checked against fresh source facts on reuse. Admin identification fetches source and provider data server-side; client claims cannot establish a binding. Year aliases supplied by the source can distinguish a reboot whose metadata provider omits the word Reboot. Broader search queries are finders only and never anchors. Bound metadata repairs replace contaminated catalog tags and can update incorrect artwork without replacing chapter rows.
+
+`POST /v1/downloads/bulk-runs/{runId}/recheck-metadata` requires the current approval ID and stable request ID. It journals the selected terminal metadata skips before updating plans, preserves old decisions, excludes prepared/accepted work, and stays paused. Startup and explicit decisions reconcile pending intents; status GETs only expose them. Duplicate requests return their saved receipt and stale approval windows conflict.
+
+Metadata rechecking also reopens each affected parent batch with durable unresolved plan IDs. Preserve its prior completion/result and accepted task receipts in the recheck history; checkpoint parent recovery before acknowledging the operation. A completed batch must never hide rechecked child plans. Supported MangaDex source details include the actual source title, creators and artwork for the same identification checks as other providers.
+
+Source-backed provider-series keys use the bounded provider ID plus source series ID; retain the full source URL in binding evidence rather than putting an arbitrarily long slug in the metadata-match key.
