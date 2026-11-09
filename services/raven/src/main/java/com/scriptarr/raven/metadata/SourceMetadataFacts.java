@@ -62,6 +62,27 @@ public final class SourceMetadataFacts {
     }
 
     /**
+     * Revalidate frozen source evidence before archive reuse or download execution.
+     * @param url exact queued series URL
+     * @param title complete queued source title
+     * @param metadata frozen selected metadata
+     * @return whether the saved binding anchors the same source and provider edition
+     */
+    public static boolean matchesBoundSelection(String url, String title, Map<String, Object> metadata) {
+        if (!(metadata.get("sourceBinding") instanceof Map<?, ?> binding)
+            || !Integer.valueOf(1).equals(binding.get("version"))
+            || !(binding.get("source") instanceof Map<?, ?> facts)
+            || !url.equals(facts.get("url"))
+            || text(metadata.get("provider")).isBlank() || text(metadata.get("providerSeriesId")).isBlank()
+            || !metadata.get("provider").equals(binding.get("provider"))
+            || !metadata.get("providerSeriesId").equals(binding.get("providerSeriesId"))) return false;
+        TitleDetails source = new TitleDetails(text(facts.get("summary")), text(facts.get("type")), strings(facts.get("aliases")),
+            text(facts.get("status")), text(facts.get("year")), facts.get("adultContent") instanceof Boolean adult ? adult : null,
+            null, null, strings(facts.get("tags")), List.of(), text(facts.get("title")), strings(facts.get("authors")), text(facts.get("coverUrl")));
+        return !source.sourceTitle().isBlank() && matches(title, source, metadata);
+    }
+
+    /**
      * Build fallback metadata only from a complete explicitly non-adult source.
      * @param provider source provider identity
      * @param url exact validated series URL

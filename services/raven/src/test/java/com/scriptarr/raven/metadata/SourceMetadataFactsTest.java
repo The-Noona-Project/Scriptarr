@@ -56,6 +56,19 @@ class SourceMetadataFactsTest {
         }
     }
 
+    /** Execution accepts the same year-backed edition while rejecting altered source or provider identities. */
+    @Test void executionRequiresTheExactFrozenBinding() {
+        String title = source(false).sourceTitle();
+        Map<String, Object> bound = SourceMetadataFacts.bind("weebcentral", URL, title, source(false), Map.of(
+            "provider", "mangadex", "providerSeriesId", "reboot", "title", "The King's Avatar", "releaseLabel", "2020", "type", "Manhua"), "verified-provider");
+        assertTrue(SourceMetadataFacts.matchesBoundSelection(URL, title, bound));
+        assertFalse(SourceMetadataFacts.matchesBoundSelection(URL + "-other", title, bound));
+        Map<String, Object> changed = new java.util.LinkedHashMap<>(bound); changed.put("providerSeriesId", "other");
+        assertFalse(SourceMetadataFacts.matchesBoundSelection(URL, title, changed));
+        changed = new java.util.LinkedHashMap<>(bound); changed.put("releaseLabel", "2015");
+        assertFalse(SourceMetadataFacts.matchesBoundSelection(URL, title, changed));
+    }
+
     private TitleDetails source(Boolean adult) {
         return new TitleDetails("Ye Qiu returns to Glory.", "Manhua", List.of("The King's Avatar (2020)"), "Ongoing", "2020",
             adult, true, false, List.of("Action", "Adventure"), List.of(), "The King's Avatar (Reboot)", List.of("Hudie Lan"), "https://example.org/cover.jpg");
