@@ -80,9 +80,12 @@ public final class RemoteChapterProcessor {
                 .sorted(Comparator.comparingInt((ZipEntry e) -> LibraryNaming.extractPageOrder(e.getName(), naming, title.libraryTypeSlug())).thenComparing(ZipEntry::getName)).map(ZipEntry::getName).toList();
         }
         if (entries.isEmpty()) throw new IOException("Canonical input has no source pages.");
-        String id = jobId(title.id(), chapter.id(), hash);
-        Map<String, Object> input = Map.of("titleId", title.id(), "chapterId", chapter.id(), "sourceFingerprint", Map.of("sha256", hash, "size", Files.size(archive)),
-            "sourcePageCount", entries.size(), "archiveName", "chapter.cbz", "entries", entries);
+        String id = jobId(title.id(), chapter.id(), hash, entries);
+        Map<String, Object> input = new LinkedHashMap<>(Map.of("titleId", title.id(), "chapterId", chapter.id(), "sourceFingerprint", Map.of("sha256", hash, "size", Files.size(archive)),
+            "sourcePageCount", entries.size(), "archiveName", "chapter.cbz", "entries", entries));
+        String legacyId = jobId(title.id(), chapter.id(), hash);
+        if (reattachLegacy(legacyId, input)) id = legacyId;
+        else input.putAll(OrderedPageIdentity.create(entries));
         Map<String, Object> owner = new LinkedHashMap<>(IngestExecutionContext.current()); owner.put("titleId", title.id()); owner.put("chapterId", chapter.id());
         JsonNode job = unwrap(client.json("POST", "/jobs", Map.of("jobId", id, "priority", owner.get("kind"), "spec", Map.of("input", input, "profile", PROFILE, "owner", owner)), null));
         Path descriptor = root.resolve(id); Files.createDirectories(descriptor); json.writeValue(descriptor.resolve("job.json").toFile(), job);
@@ -110,6 +113,7 @@ public final class RemoteChapterProcessor {
                 Path directory = jobRoot(id, epoch).resolve("files");
                 if (!Files.isRegularFile(directory.resolve("bundle.json"))) throw new IOException("Accepted chapter artifact is missing from coordinator storage.");
                 JsonNode bundle = json.readTree(directory.resolve("bundle.json").toFile());
+                OrderedPageIdentity.requireBundle(bundle, job.path("spec").path("input"));
                 if (!WebpChapterEncoder.sha256(archive).equals(hash)) throw new IOException("Canonical input changed while conversion was pending.");
                 if (!"completed".equals(status)) client.json("POST", "/jobs/" + id + "/publish", Map.of("epoch", epoch, "artifactSha256", artifact.path("sha256").asText()), null);
                 JsonNode completedChapter = "completed".equals(status) ? job.path("result").path("chapter") : null;
@@ -119,6 +123,32 @@ public final class RemoteChapterProcessor {
             Thread.sleep(1000); job = unwrap(client.json("GET", "/jobs/" + id, null, null));
         }
         } catch (InterruptedException cancelledWork) { cancelAfterInterrupt(id, generation); throw cancelledWork; }
+    }
+
+    /** @param id exact old content identity @param expected current source and ordered entries @return whether a strictly matching legacy job can recover through normal create fencing @throws Exception when lookup or stored ownership data is malformed */
+    private boolean reattachLegacy(String id, Map<String, Object> expected) throws Exception {
+        JsonNode job;
+        try { job = unwrap(client.json("GET", "/jobs/" + id, null, null)); }
+        catch (IngestBrokerClient.Rejected rejected) { if (rejected.status() == 404) return false; throw rejected; }
+        JsonNode wanted = json.valueToTree(expected);
+        if (job == null || !job.isObject() || !id.equals(job.path("jobId").asText())
+            || !List.of("queued", "running", "result-ready", "publishing", "completed", "failed", "cancelled").contains(job.path("status").asText())
+            || !job.path("spec").path("profile").equals(json.valueToTree(PROFILE))
+            || !job.path("spec").path("coordinatorGeneration").isTextual() || job.path("spec").path("coordinatorGeneration").asText().isBlank()) throw new IOException("Legacy conversion lookup is malformed.");
+        JsonNode saved = job.path("spec").path("input"), names = saved.path("entries");
+        if (!OrderedPageIdentity.fields(saved).isEmpty() || !saved.path("titleId").equals(wanted.path("titleId")) || !saved.path("chapterId").equals(wanted.path("chapterId"))
+            || !saved.path("archiveName").equals(wanted.path("archiveName")) || !saved.path("sourceFingerprint").path("sha256").equals(wanted.path("sourceFingerprint").path("sha256"))
+            || !saved.path("sourceFingerprint").path("size").isIntegralNumber() || !saved.path("sourceFingerprint").path("size").canConvertToLong() || saved.path("sourceFingerprint").path("size").asLong() != wanted.path("sourceFingerprint").path("size").asLong()
+            || !names.isArray() || names.isEmpty() || !saved.path("sourcePageCount").isIntegralNumber() || !saved.path("sourcePageCount").canConvertToInt()
+            || saved.path("sourcePageCount").asInt() != names.size()) throw new IOException("Legacy conversion source identity differs.");
+        java.util.Set<String> unique = new java.util.HashSet<>();
+        for (JsonNode name : names) {
+            String value = name.asText();
+            if (!name.isTextual() || value.isBlank() || value.length() > 2048 || value.indexOf('\\') >= 0 || value.indexOf('\0') >= 0 || value.indexOf('\r') >= 0 || value.indexOf('\n') >= 0 || value.startsWith("/") || value.matches("^[A-Za-z]:.*")
+                || java.util.Arrays.stream(value.split("/", -1)).anyMatch(part -> part.equals(".") || part.equals(".."))
+                || !unique.add(value) || !ArchiveImageEntries.isImage(value)) throw new IOException("Legacy conversion page order is malformed.");
+        }
+        return names.equals(wanted.path("entries"));
     }
 
     /** @param id exact child job to cancel after an interrupted coordinator wait @param generation captured server-issued owning execution token */
@@ -254,6 +284,7 @@ public final class RemoteChapterProcessor {
             ZipEntry metadata = zip.getEntry("bundle.json"); if (metadata == null || metadata.getSize() <= 0 || metadata.getSize() > 8_388_608) throw new IOException("Invalid artifact manifest.");
             try (InputStream in = zip.getInputStream(metadata)) { WebpChapterEncoder.copyBounded(in, target.resolve("bundle.json"), metadata.getSize(), 8_388_608); }
             JsonNode bundle = json.readTree(target.resolve("bundle.json").toFile());
+            OrderedPageIdentity.requireBundle(bundle, spec.path("input"));
             if (!"webp".equals(bundle.path("format").asText()) || !"image/webp".equals(bundle.path("mediaType").asText())
                 || !"ffmpeg/libwebp".equals(bundle.path("encoder").asText()) || !bundle.path("profile").equals(spec.path("profile"))
                 || bundle.path("pageCount").asInt() != spec.path("input").path("sourcePageCount").asInt()
@@ -296,6 +327,13 @@ public final class RemoteChapterProcessor {
     public static String jobId(String titleId, String chapterId, String sourceHash) throws Exception {
         ObjectMapper json = new ObjectMapper(); Object identity = canonical(Map.of("titleId", titleId, "chapterId", chapterId, "sourceSha256", sourceHash, "profile", PROFILE));
         return "raven_webp_" + HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(json.writeValueAsBytes(identity)));
+    }
+
+    /** @param titleId logical title @param chapterId logical chapter @param sourceHash immutable input @param entries frozen logical page order @return versioned content/order identity @throws Exception when hashing fails */
+    public static String jobId(String titleId, String chapterId, String sourceHash, List<String> entries) throws Exception {
+        Map<String, Object> identity = new LinkedHashMap<>(Map.of("titleId", titleId, "chapterId", chapterId, "sourceSha256", sourceHash, "profile", PROFILE));
+        identity.putAll(OrderedPageIdentity.create(entries));
+        return "raven_webp_" + HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(new ObjectMapper().writeValueAsBytes(canonical(identity))));
     }
 
     /** @param value JSON-like identity @return recursively key-sorted identity */

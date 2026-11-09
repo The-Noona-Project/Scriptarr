@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import {randomUUID} from "node:crypto";
+import {createHash, randomUUID} from "node:crypto";
 import mysql from "mysql2/promise";
 import {createStore} from "../../lib/createStore.mjs";
 import {createCachedStore} from "../../lib/createCachedStore.mjs";
@@ -78,12 +78,28 @@ try {
     await assert.rejects(first.cancelConversionJob(cancellationJob.jobId, {expectedCoordinatorGeneration: capturedGeneration}), error => error.status === 409);
     assert.equal((await second.getConversionJob(cancellationJob.jobId)).status, "running");
     assert.equal((await first.cancelConversionJob(cancellationJob.jobId, {expectedEpoch: newLease.lease.epoch})).status, "cancelled", "The legacy explicit epoch guard remains supported.");
+    const originalCompletion = await first.getConversionJob(jobId);
+    const entries = ["001_p2.png", "002_p1.png"];
+    const versionedRequest = {...request("ordered-pages"), profile: {segmentationVersion: 2}, input: {...request("ordered-pages").input,
+      sourcePageCount: 2, entries, contentIdentityVersion: 2, orderedEntriesSha256: createHash("sha256").update(JSON.stringify(entries)).digest("hex")}};
+    const versioned = await first.createConversionJob(versionedRequest);
+    assert.deepEqual(await second.getConversionJob(versioned.jobId), versioned, "An independent broker must read the exact versioned ordering from MySQL.");
+    assert.deepEqual(await second.createConversionJob(versionedRequest), versioned, "Lost-response replay must preserve the ordering identity and generation.");
+    const reversed = [...entries].reverse();
+    const reordered = await second.createConversionJob({...versionedRequest, input: {...versionedRequest.input, entries: reversed,
+      orderedEntriesSha256: createHash("sha256").update(JSON.stringify(reversed)).digest("hex")}});
+    assert.notEqual(reordered.jobId, versioned.jobId); assert.notEqual(reordered.specHash, versioned.specHash);
+    assert.deepEqual((await first.getConversionJob(versioned.jobId)).spec.input.entries, entries);
+    assert.deepEqual((await first.getConversionJob(reordered.jobId)).spec.input.entries, reversed);
+    assert.deepEqual(await second.getConversionJob(jobId), originalCompletion, "Versioned ordering must not rewrite a legacy completed receipt.");
+    await first.cancelConversionJob(versioned.jobId, {expectedCoordinatorGeneration: versioned.spec.coordinatorGeneration});
+    await second.cancelConversionJob(reordered.jobId, {expectedCoordinatorGeneration: reordered.spec.coordinatorGeneration});
     await proveScopedReset(createCachedStore(first));
   } finally {
     await first.close?.(); await second.close?.(); await inspector?.end();
     if (/^vault_conversion_[a-f0-9]{32}$/.test(database)) await admin.query("DROP DATABASE IF EXISTS ??", [database]);
     await admin.end();
   }
-  console.log(JSON.stringify({passed:true,concurrentClaims:12,encodingCapacity:1,rollbackProved:true,scopedResetPreservationProved:true,coordinatorCancellationRaceProved:true}));
+  console.log(JSON.stringify({passed:true,concurrentClaims:12,encodingCapacity:1,rollbackProved:true,scopedResetPreservationProved:true,coordinatorCancellationRaceProved:true,versionedOrderingRoundtripProved:true}));
   process.exit(0);
 } catch(error) { console.error(error.stack); process.exit(1); }

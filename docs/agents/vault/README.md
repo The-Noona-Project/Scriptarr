@@ -94,6 +94,11 @@
   encoding slot using the durable pool-row lock, use DB time for 120-second leases, increment epochs on reassignment,
   retain claim/retry receipts and hashed lease secrets, and reject stale worker operations. Queue priority is
   interactive, bulk, then migration; only queued work can be promoted with new owner attribution.
+- Versioned conversion input requires both `contentIdentityVersion: 2` and `orderedEntriesSha256`, the SHA256 of the
+  UTF-8 compact JSON string-array in `input.entries`, preserving array order and exact entry names. Validate the digest
+  and include both fields in normalized input, spec hash and deterministic content identity. Partial pairs, unknown
+  versions and mismatched digests fail closed. Absent both fields must retain the exact legacy normalized input,
+  content job ID and spec hash; never rewrite existing jobs or completion history when page order changes.
 - Keep coordinator cancellation independent of worker claim epochs: issue `spec.coordinatorGeneration` on create and
   rotate it on queued promotion and every explicit retry, preserving it across claims/lease reassignments. Validate
   captured `expectedCoordinatorGeneration` atomically before cancellation; never let an old waiter fetch a newer token

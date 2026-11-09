@@ -59,6 +59,8 @@ state, and admin toast preferences are normal Vault settings and survive content
 
 Chapter conversion has a separate transactional store under the Sage-only `/api/service/raven-ingest` routes.
 Deterministic `raven_webp_<sha256>` identities bind the title, chapter, source archive SHA256, and fixed WebP profile.
+New conversions also bind the exact source-page order, so a corrected ordering creates distinct output while existing
+conversion jobs and history retain their original identities.
 MySQL serializes claims through one InnoDB pool-row lock: the entire network has one encoding lease, lasting 120
 seconds with 20-second renewals. Claims retain durable replay receipts and hashed lease secrets; reassignment increments
 the epoch and rejects stale uploads, heartbeats, failures, and publication. Fresh interactive work precedes bulk work,

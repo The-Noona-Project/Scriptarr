@@ -276,7 +276,8 @@ public final class LibraryIngestService {
             RemoteChapterProcessor.Result result = remote.convert(title, chapter, archive, settingsService.getNamingSettings(), cancelled, progress);
             var bundle = result.bundle(); int count = bundle.path("pageCount").asInt();
             int version = bundle.path("profile").path("segmentationVersion").asInt();
-            String revision = DerivedPageManifest.revision(archive, count, "webp", bundle.path("encoder").asText(), 85, version);
+            String revision = DerivedPageManifest.revision(archive, count, "webp", bundle.path("encoder").asText(), 85, version,
+                (String) OrderedPageIdentity.fields(bundle).get("orderedEntriesSha256"));
             Path chapterRoot = resolveDataRoot().resolve(INGESTED_FOLDER_NAME).resolve(safeSegment(title.libraryTypeSlug(), "manga"))
                 .resolve(safeSegment(title.id(), "title")).resolve(safeSegment(chapter.id(), "chapter"));
             Path destination = chapterRoot.resolve(revision), manifest = destination.resolve("manifest.json");

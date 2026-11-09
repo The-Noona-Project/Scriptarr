@@ -39,6 +39,8 @@ page at a time and one chapter at a time. Its container is limited to two CPUs a
 active encoding lease across all workers. The worker has disposable scratch only and reaches Sage over verified TLS.
 Chapter input and result-upload requests use Sage's fifteen-minute binary transfer budget, including result validation.
 Control requests retain their two-minute deadline; lease expiry and cancellation still stop stale work.
+New conversion jobs and reader revisions also bind the frozen logical page order. Changing page naming settings can
+produce a separate ordered revision when conversion is requested; existing WebP and AVIF output remains readable.
 
 Source images are split into exact two-dimensional WebP segments, each at most 16383 pixels per side and 64 Mi pixels.
 Native header and sequential region processing avoid decoding the full oversized image in Java or passing an image

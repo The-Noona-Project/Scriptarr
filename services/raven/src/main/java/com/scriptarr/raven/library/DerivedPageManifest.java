@@ -45,6 +45,7 @@ public final class DerivedPageManifest {
         if (!List.of("avif", "webp").contains(format) || !chapter.ingestRevision().equals(manifest.path("revision").asText())
             || !chapter.id().equals(manifest.path("chapterId").asText()) || !("image/" + format).equals(manifest.path("mediaType").asText())
             || manifest.path("pageCount").asInt() != chapter.ingestedPageCount()) throw new IOException("Reader manifest identity differs.");
+        if ("webp".equals(format)) OrderedPageIdentity.fields(manifest);
         return manifest;
     }
 
@@ -113,7 +114,7 @@ public final class DerivedPageManifest {
             String format = manifest.path("format").asText(), encoder = manifest.path("encoder").asText(); int quality = "webp".equals(format) ? 85 : 50;
             int version = "webp".equals(format) ? manifest.path("segmentationVersion").asInt() : 1;
             if (count <= 0 || count != chapter.ingestedPageCount() || encoder.isBlank() || manifest.path("quality").asInt() != quality
-                || !revision(archive, count, format, encoder, quality, version).equals(chapter.ingestRevision())) return false;
+                || !revision(archive, count, format, encoder, quality, version, (String) OrderedPageIdentity.fields(manifest).get("orderedEntriesSha256")).equals(chapter.ingestRevision())) return false;
             JsonNode pages = manifest.path("pages"); if (!pages.isArray() || pages.size() != count) return false;
             for (int index = 0; index < count; index++) {
                 JsonNode page = pages.get(index); if (page.path("index").asInt(-1) != index) return false;
@@ -155,11 +156,18 @@ public final class DerivedPageManifest {
 
     /** @param archive canonical source @param count logical pages @param format saved output format @param encoder saved encoder @param quality quality policy @param version saved segmentation profile @return content/profile revision retaining legacy identities @throws Exception when hashing fails */
     public static String revision(Path archive, int count, String format, String encoder, int quality, int version) throws Exception {
+        return revision(archive, count, format, encoder, quality, version, null);
+    }
+
+    /** @param archive canonical source @param count logical pages @param format saved output format @param encoder saved encoder @param quality quality policy @param version segmentation profile @param orderHash version2 order digest, or null for legacy identity @return immutable content/order revision @throws Exception when identity cannot be verified */
+    public static String revision(Path archive, int count, String format, String encoder, int quality, int version, String orderHash) throws Exception {
+        if (orderHash != null && (!"webp".equals(format) || !orderHash.matches("[a-f0-9]{64}"))) throw new IOException("Unsupported source page identity.");
         MessageDigest hash = MessageDigest.getInstance("SHA-256");
         List<String> identity = "webp".equals(format)
             ? List.of(WebpChapterEncoder.sha256(archive), Integer.toString(count), format, encoder, Integer.toString(quality), "method4-segmentation" + version)
             : List.of(archive.toString(), Long.toString(Files.size(archive)), Long.toString(Files.getLastModifiedTime(archive).toMillis()), Integer.toString(count), format, encoder, Integer.toString(quality));
         for (String value : identity) hash.update(value.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        if (orderHash != null) { hash.update("contentIdentityVersion2".getBytes(java.nio.charset.StandardCharsets.UTF_8)); hash.update(orderHash.getBytes(java.nio.charset.StandardCharsets.UTF_8)); }
         return format + "-" + HexFormat.of().formatHex(hash.digest()).substring(0, 16);
     }
 }

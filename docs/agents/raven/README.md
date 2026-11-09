@@ -11,9 +11,16 @@
   Explicit standalone `avif` without remote policy retains compatibility. Canonical CBZs and publication
   stay coordinator-owned. Worker q85/m4, two threads, one page/chapter and 2CPU/4GiB combine with Vault's one active
   encoding lease. The private CA file is `SCRIPTARR_RAVEN_WORKER_CA_FILE`. No local encode fallback.
-- Conversion traffic uses `/api/internal/raven-ingest` through Sage. Content IDs hash recursively sorted compact
-  JSON `{titleId,chapterId,sourceSha256,profile}` with prefix `raven_webp_`; the exact profile is format/quality/method/
-  threads/pageConcurrency/maxDimension/segmentationVersion. Ordered archive entries are immutable spec data.
+- Conversion traffic uses `/api/internal/raven-ingest` through Sage. New content IDs hash recursively sorted compact
+  JSON `{titleId,chapterId,sourceSha256,profile,contentIdentityVersion:2,orderedEntriesSha256}` with prefix `raven_webp_`.
+  The order digest hashes the UTF-8 compact JSON array of exact ordered ZIP names; concatenated/delimited names are
+  insufficient. The exact profile remains format/quality/method/threads/pageConcurrency/maxDimension/segmentationVersion.
+  Absent both order fields preserves the byte-exact legacy job identity; partial or unsupported identity data fails closed.
+  Worker artifacts and immutable manifests must echo the validated order identity. Page naming settings alone are not
+  identity data: only a changed frozen ordered list allocates another content job/revision.
+  Before creating new output, GET the exact legacy ID once. Reattach only matching source/profile/ordered entries,
+  still through normal create ownership/generation fencing; an authoritative 404 or a different valid order selects
+  version2. Malformed or unavailable lookup must suppress dispatch. Legacy accepted/completed artifacts remain repairable.
 - Claims use worker-generated idempotency IDs and transient lease secrets; only secret hashes persist. Renew every
   20 seconds under a 120-second epoch fence. Only real segment/page increments advance `actualProgressAt`. Interactive
   and bulk jobs outrank migration. Cancel uses the captured server coordinatorGeneration; claims retain it, while
@@ -25,7 +32,8 @@
   plus the canonical fingerprint of the exact raw current failed/pending chapter. Validate restored files first; retain
   the original completion receipt and source/quality data, use a separate repair receipt, and never enqueue or direct-PUT
   a repaired catalog row. Missing, reset, superseded or changed chapter identities fail closed.
-- WebP revisions use source SHA/profile, never CBZ mtime. Immutable output lives under
+- New WebP revisions use source SHA/profile plus versioned frozen page-order digest, never CBZ mtime; older saved
+  WebP/AVIF revisions retain their original derivation and remain readable. Immutable output lives under
   `ingested/<type>/<title>/<chapter>/<webp-revision>/`. Identical content in a new transfer epoch retains its files and
   manifest. Different page/profile hashes cannot overwrite it. Existing AVIF identity and reads remain supported.
 - Complete chapter validation parses one validated manifest snapshot for all logical pages, segments and completion

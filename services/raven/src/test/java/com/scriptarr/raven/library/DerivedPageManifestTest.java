@@ -50,6 +50,19 @@ class DerivedPageManifestTest {
         assertTrue(DerivedPageManifest.reusable(chapter(root)));
     }
 
+    /** New order-aware saved manifests remain readable and reject partial identity data without changing legacy output. */
+    @Test void orderAwareManifestRetainsValidatedReadiness(@TempDir Path root) throws Exception {
+        LibraryChapter legacy = chapter(root); Path manifest = Path.of(legacy.ingestManifestPath());
+        String order = OrderedPageIdentity.digest(List.of("001.png"));
+        String revision = DerivedPageManifest.revision(Path.of(legacy.archivePath()), 1, "webp", "ffmpeg/libwebp", 85, 1, order);
+        ObjectMapper json = new ObjectMapper(); var saved = (com.fasterxml.jackson.databind.node.ObjectNode) json.readTree(manifest.toFile());
+        saved.put("revision", revision).put("contentIdentityVersion", 2).put("orderedEntriesSha256", order); json.writeValue(manifest.toFile(), saved);
+        LibraryChapter ordered = ready(Path.of(legacy.archivePath()), manifest, revision);
+        assertTrue(DerivedPageManifest.reusable(ordered)); assertEquals(2, DerivedPageManifest.catalogFields(ordered).get("expectedSegmentCount"));
+        saved.remove("orderedEntriesSha256"); json.writeValue(manifest.toFile(), saved);
+        assertFalse(DerivedPageManifest.reusable(ordered)); assertThrows(java.io.IOException.class, () -> DerivedPageManifest.read(ordered));
+    }
+
     /** Every segment belongs to the same logical page; no-selector reads cannot silently return its top. */
     @Test void segmentedLogicalPageRequiresExplicitIdentity(@TempDir Path root) throws Exception {
         LibraryChapter chapter = chapter(root);

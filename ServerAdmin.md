@@ -164,6 +164,8 @@ Apply the current `scripts/deployment/lan-policy.sh core` policy before publishi
 primary LAN address accepts only the assigned worker host. The existing 3004 and 4401 rules remain in place; the
 worker publishes no inbound port.
 Chapter and result transfers have a 15-minute window; control requests retain their shorter two-minute limit.
+New conversions bind their frozen page order into both job identity and reader revision. If changed page naming
+settings change that order, a requested conversion creates separate output; existing saved revisions remain readable.
 
 WebP's dimension limit is handled by lossless geometric segmentation, not shrinking text: oversized images become
 ordered WebP tiles, with the original logical page index retained for bookmarks and reading progress. All tiles must

@@ -66,13 +66,23 @@ export const normalizeConversionSpec = body => {
       || name.startsWith("/") || /^[a-z]:/i.test(name) || name.split("/").some(part => part === ".." || part === "."))) {
     fail(400, "CONVERSION_INVALID", "Ordered ZIP image entries are required.");
   }
+  const orderingIdentity = {};
+  const hasVersion = Object.hasOwn(input, "contentIdentityVersion"), hasOrder = Object.hasOwn(input, "orderedEntriesSha256");
+  if (hasVersion !== hasOrder) fail(400, "CONVERSION_INVALID", "Both content identity fields are required.");
+  if (hasVersion) {
+    if (input.contentIdentityVersion !== 2) fail(400, "CONVERSION_INVALID", "Unsupported content identity version.");
+    const orderedEntriesSha256 = sha(input.orderedEntriesSha256, "ordered entries SHA256");
+    if (orderedEntriesSha256 !== hash(JSON.stringify(entries))) fail(400, "CONVERSION_INVALID", "The ordered entries digest does not match the input pages.");
+    orderingIdentity.contentIdentityVersion = 2;
+    orderingIdentity.orderedEntriesSha256 = orderedEntriesSha256;
+  }
   const normalizedInput = {
     titleId: identifier(input.titleId, "title id"), chapterId: identifier(input.chapterId, "chapter id"),
     sourceFingerprint: {sha256: sha(input.sourceFingerprint?.sha256, "source SHA256"), size: integer(input.sourceFingerprint?.size, "source size", 1, 20 * 1024 ** 3)},
-    sourcePageCount: integer(input.sourcePageCount, "logical page count", 1, 100000), archiveName, entries: [...entries]
+    sourcePageCount: integer(input.sourcePageCount, "logical page count", 1, 100000), archiveName, entries: [...entries], ...orderingIdentity
   };
   const profileHash = hash(canonical(profile));
-  const jobId = `raven_webp_${hash(canonical({titleId: normalizedInput.titleId, chapterId: normalizedInput.chapterId, sourceSha256: normalizedInput.sourceFingerprint.sha256, profile}))}`;
+  const jobId = `raven_webp_${hash(canonical({titleId: normalizedInput.titleId, chapterId: normalizedInput.chapterId, sourceSha256: normalizedInput.sourceFingerprint.sha256, profile, ...orderingIdentity}))}`;
   if (body.jobId && body.jobId !== jobId) fail(409, "CONVERSION_ID_CONFLICT", "The conversion id does not match its immutable inputs.");
   const owner = ownerValue(body.owner || body.spec?.owner);
   const priority = priorityValue(body.priority || owner.kind || "interactive");

@@ -47,6 +47,8 @@ Wide segmented pages shrink within that frame so the whole logical page remains 
 Live reader updates retain the current chapter, page and viewing preferences when content is unchanged. A changed
 chapter revision reloads that chapter's pages without resetting another open chapter. Webtoon seeks also work when
 the target page is already loaded or the same page is selected again.
+Webtoon progress follows the visible logical page on wide and tall screens. Seeking keeps the selected page in view
+as delayed page metadata loads; scrolling, touch, or another navigation action immediately gives control back to you.
 Moon's request and admin add-title flows now share the same metadata-first intake engine. Readers pick metadata only,
 and Scriptarr saves that metadata snapshot with the request so moderators can review the upstream metadata site and
 choose the exact Raven source later. Admin add-title uses the same intake base but lets staff pick a concrete source

@@ -57,6 +57,7 @@ public final class WebpChapterEncoder {
         Map<String, Object> legacy = new LinkedHashMap<>(RemoteChapterProcessor.PROFILE); legacy.put("segmentationVersion", 1);
         if (!profile.equals(json.valueToTree(RemoteChapterProcessor.PROFILE)) && !profile.equals(json.valueToTree(legacy))) throw new IOException("Unsupported immutable WebP profile.");
         if (!sha256(archive).equals(spec.path("input").path("sourceFingerprint").path("sha256").asText())) throw new IOException("Input archive fingerprint differs.");
+        Map<String, Object> contentIdentity = OrderedPageIdentity.validateInput(spec.path("input"));
         Files.createDirectories(scratch);
         List<Map<String, Object>> pages = new ArrayList<>();
         int completedSegments = 0, totalSegments = 0;
@@ -99,8 +100,9 @@ public final class WebpChapterEncoder {
                 } finally { Files.deleteIfExists(source); }
             }
         }
-        Map<String, Object> bundle = Map.of("schemaVersion", 2, "format", "webp", "mediaType", "image/webp", "encoder", "ffmpeg/libwebp",
-            "profile", json.convertValue(profile, Map.class), "pageCount", pages.size(), "pages", pages);
+        Map<String, Object> bundle = new LinkedHashMap<>(Map.of("schemaVersion", 2, "format", "webp", "mediaType", "image/webp", "encoder", "ffmpeg/libwebp",
+            "profile", json.convertValue(profile, Map.class), "pageCount", pages.size(), "pages", pages));
+        bundle.putAll(contentIdentity);
         Path metadata = scratch.resolve("bundle.json"); json.writeValue(metadata.toFile(), bundle);
         Path artifact = scratch.resolve("artifact.zip");
         try (ZipOutputStream out = new ZipOutputStream(Files.newOutputStream(artifact))) {

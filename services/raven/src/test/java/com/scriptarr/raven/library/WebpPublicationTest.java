@@ -20,6 +20,21 @@ import static org.mockito.Mockito.*;
 
 /** Content revisions survive new transfer epochs without mutable reader artifacts. */
 class WebpPublicationTest {
+    /** Order-aware output gets its own immutable destination and retains the exact validated digest in its manifest. */
+    @Test void orderedBundlePublishesSeparateImmutableRevision(@TempDir Path root) throws Exception {
+        try (Fixture f = new Fixture(root)) {
+            LibraryIngestResult legacy = f.service.ingestChapter(f.title, f.chapter); Path oldManifest = Path.of(legacy.manifestPath());
+            String oldHash = WebpChapterEncoder.sha256(oldManifest);
+            f.bundle.setAll((ObjectNode) new ObjectMapper().valueToTree(OrderedPageIdentity.create(List.of("001.png"))));
+            when(f.remote.convert(any(), any(), any(), any(), any(), any())).thenReturn(new RemoteChapterProcessor.Result("raven_webp_" + "b".repeat(64), 1, "b".repeat(64), f.files, f.bundle));
+            LibraryIngestResult ordered = f.service.ingestChapter(f.title, f.chapter);
+            assertNotEquals(legacy.revision(), ordered.revision()); assertEquals(oldHash, WebpChapterEncoder.sha256(oldManifest));
+            var saved = new ObjectMapper().readTree(Path.of(ordered.manifestPath()).toFile());
+            assertEquals(OrderedPageIdentity.create(List.of("001.png")), OrderedPageIdentity.fields(saved));
+            assertEquals(DerivedPageManifest.revision(Path.of(f.chapter.archivePath()), 1, "webp", "ffmpeg/libwebp", 85, 2, OrderedPageIdentity.digest(List.of("001.png"))), ordered.revision());
+        }
+    }
+
     /** A process death after a prepared copy must leave its private stage recoverable without polluting immutable output. */
     @Test void interruptedPreparedCopyDoesNotPoisonRetry(@TempDir Path root) throws Exception {
         try (Fixture f = new Fixture(root)) {

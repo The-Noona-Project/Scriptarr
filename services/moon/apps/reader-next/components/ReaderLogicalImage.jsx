@@ -21,7 +21,10 @@ export default function ReaderLogicalImage({page, onLoad, onError, ...attributes
     active.current = true;
     return () => { active.current = false; };
   }, []);
-  if (images.length <= 1) return images.length ? <img {...attributes} src={images[0].src} onLoad={onLoad} onError={onError} /> : null;
+  if (images.length <= 1) return images.length ? <img {...attributes} src={images[0].src}
+    width={Number.isFinite(page.width) && page.width > 0 ? page.width : undefined}
+    height={Number.isFinite(page.height) && page.height > 0 ? page.height : undefined}
+    onLoad={onLoad} onError={onError} /> : null;
   const fail = (event) => {
     if (!failed.current) {
       failed.current = true;

@@ -39,7 +39,9 @@ import {readerPageImageKey} from "../lib/pageSegments.js";
 import {ReaderInitialSkeleton} from "./ReaderSkeleton.jsx";
 import {readerRouteKey, readerSessionContentKey, planReaderSessionRefresh, mergeReaderSessionMetadata,
   mergeReaderSessionBookmarks, dropReaderChapterPages, clearReaderChapterCaches, isReaderSessionCurrent,
-  createReaderSeekRequest, applyReaderSeekRequest} from "../lib/sessionRefresh.js";
+  createReaderSeekRequest} from "../lib/sessionRefresh.js";
+import {webtoonSeekWindow, updateWebtoonCandidates, selectWebtoonPage, visibleWebtoonPage, createWebtoonSeekAnchor,
+  alignWebtoonSeekAnchor, cancelsWebtoonSeek} from "../lib/webtoonPosition.js";
 
 const PAGE_CHUNK_SIZE = 18;
 const CHAPTER_RAIL_PAGE_SIZE = 60;
@@ -225,7 +227,7 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = "", initialSessi
   const [webtoonChapterIds, setWebtoonChapterIds] = useState(() => bootSession ? [bootSession.chapter.id] : []);
   const [bookmarks, setBookmarks] = useState(() => Array.isArray(bootSession?.bookmarks) ? bootSession.bookmarks : []);
   const [activeChapterId, setActiveChapterId] = useState(bootChapterId);
-  const [activePageIndex, setActivePageIndex] = useState(bootLayoutMode === "webtoon" ? 0 : bootBookmarkPage);
+  const [activePageIndex, setActivePageIndex] = useState(bootBookmarkPage);
   const [pagedChapterId, setPagedChapterId] = useState(bootChapterId);
   const [pagedPageIndex, setPagedPageIndex] = useState(bootBookmarkPage);
   const [chapterRows, setChapterRows] = useState([]);
@@ -243,14 +245,25 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = "", initialSessi
   const pointerStartRef = useRef(/** @type {{x: number, y: number} | null} */ (null));
   const inputStateRef = useRef(createReaderInputState());
   const settingsRef = useRef(/** @type {HTMLElement | null} */ (null));
-  const [pendingScroll, setPendingScroll] = useState(null);
+  const [pendingScroll, setPendingScrollState] = useState(null);
+  const pendingScrollRef = useRef(null);
+  const preparingSeekRef = useRef(null);
+  const passiveSeekAnchorRef = useRef(null);
   const sessionRefreshRef = useRef(null);
   const sessionVersionsRef = useRef(new Map(bootSession ? [[bootChapterId, readerSessionContentKey(bootSession)]] : []));
   const readingPositionRef = useRef(null);
   readingPositionRef.current = {activeChapterId, activePageIndex, pagedChapterId, pagedPageIndex, layoutMode};
   const routeKey = readerRouteKey({userId: chrome.auth?.discordUserId || "", titleId, chapterId});
+  const setPendingScroll = useCallback((request) => {
+    pendingScrollRef.current = request;
+    passiveSeekAnchorRef.current = null;
+    preparingSeekRef.current = request ? {...createWebtoonSeekAnchor(request), startedAt: Date.now(),
+      version: sessionVersionsRef.current.get(request.chapterId)} : null;
+    setPendingScrollState(request);
+  }, []);
+  const cancelWebtoonSeek = useCallback(() => setPendingScroll(null), [setPendingScroll]);
   const scrollDirectionRef = useRef("forward");
-  const activeWebtoonPageRef = useRef({chapterId: bootChapterId, pageIndex: 0});
+  const activeWebtoonPageRef = useRef({chapterId: bootChapterId, pageIndex: bootBookmarkPage});
   const bootPagesPendingRef = useRef(bootPageState.size > 0);
   const loginRedirectingRef = useRef(false);
   const chromeRetryCountRef = useRef(0);
@@ -738,7 +751,7 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = "", initialSessi
           activeWebtoonPageRef.current = {chapterId: changedId, pageIndex: plan.activePageIndex};
         }
         if (position.pagedChapterId === changedId) setPagedPageIndex(plan.pagedPageIndex);
-        if (position.layoutMode === "webtoon") setPendingScroll(createReaderSeekRequest(position.activeChapterId, plan.activePageIndex));
+        if (position.layoutMode === "webtoon" && position.activeChapterId === changedId) setPendingScroll(createReaderSeekRequest(changedId, plan.activePageIndex));
         const selected = position.layoutMode === "webtoon" ? position.activeChapterId === changedId : position.pagedChapterId === changedId;
         const cursor = selected ? (position.layoutMode === "webtoon" ? plan.activePageIndex : plan.pagedPageIndex) : 0;
         void loadPages(initialSession, {cursor, replace: true});
@@ -771,16 +784,24 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = "", initialSessi
     setShowSidebar(preferences.showSidebar === true);
     setShowPageNumbers(preferences.showPageNumbers !== false);
     setActiveChapterId(initialSession.chapter.id);
-    activeWebtoonPageRef.current = {chapterId: initialSession.chapter.id, pageIndex: 0};
+    activeWebtoonPageRef.current = {chapterId: initialSession.chapter.id, pageIndex: bookmarkPage};
     scrollDirectionRef.current = "forward";
-    setActivePageIndex(nextLayoutMode === "webtoon" ? 0 : bookmarkPage);
+    setActivePageIndex(bookmarkPage);
     setPagedChapterId(initialSession.chapter.id);
     setPagedPageIndex(bookmarkPage);
-    const firstCursor = nextLayoutMode === "webtoon" ? 0 : Math.max(0, bookmarkPage - (bookmarkPage % pagesPerStep(nextLayoutMode)));
-    if (!hasHydratedBootPages || firstCursor > 0) {
-      void loadPages(initialSession, {cursor: firstCursor, replace: true});
+    const initialWindow = nextLayoutMode === "webtoon" ? webtoonSeekWindow({pageIndex: bookmarkPage,
+      pageCount: initialSession.pageCount, chunkSize: PAGE_CHUNK_SIZE,
+      previousCushion: DEFAULT_PRELOAD_CONFIG.previousCushion, aheadCount: DEFAULT_PRELOAD_CONFIG.aheadCount})
+      : {cursor: Math.max(0, bookmarkPage - (bookmarkPage % pagesPerStep(nextLayoutMode))), pageSize: PAGE_CHUNK_SIZE};
+    const bootPages = hydratedBootPageState.get(initialSession.chapter.id)?.pages || [];
+    const needsWindow = nextLayoutMode === "webtoon" && bookmarkPage > 0
+      ? !hasReaderPageWindow(bootPages, initialWindow.cursor, initialWindow.pageSize, initialSession.pageCount || 1)
+      : !hasHydratedBootPages || initialWindow.cursor > 0;
+    if (needsWindow) {
+      void loadPages(initialSession, {...initialWindow, replace: true});
     }
-  }, [initialPagesData, initialSession, loadPages, routeKey, setReaderPageState, status]);
+    if (!denied && nextLayoutMode === "webtoon" && bookmarkPage > 0) setPendingScroll(createReaderSeekRequest(initialSession.chapter.id, bookmarkPage));
+  }, [initialPagesData, initialSession, loadPages, routeKey, setPendingScroll, setReaderPageState, status]);
 
   useEffect(() => {
     if (!title || !activeChapterId) {
@@ -793,7 +814,7 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = "", initialSessi
   }, [activeChapterId, title, typeSlug]);
 
   useEffect(() => {
-    if (!title || !activeSession?.chapter?.id) {
+    if (!title || !activeSession?.chapter?.id || pendingScroll) {
       return;
     }
     const pageCount = Math.max(1, Number.parseInt(String(activeSession.pageCount || 1), 10) || 1);
@@ -814,46 +835,83 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = "", initialSessi
       });
     }, 350);
     return () => clearTimeout(timer);
-  }, [activePageDisplayIndex, activeSession, title]);
+  }, [activePageDisplayIndex, activeSession, pendingScroll, title]);
 
   useEffect(() => {
-    if (isPaged) {
+    const cancel = (event) => { if (cancelsWebtoonSeek(event)) cancelWebtoonSeek(); };
+    for (const type of ["wheel", "touchstart", "pointerdown", "keydown"]) window.addEventListener(type, cancel, {capture: true, passive: true});
+    return () => { for (const type of ["wheel", "touchstart", "pointerdown", "keydown"]) window.removeEventListener(type, cancel, true); };
+  }, [cancelWebtoonSeek]);
+
+  useEffect(() => {
+    if (isPaged || typeof IntersectionObserver === "undefined") {
       pageObserverRef.current?.disconnect();
       pageObserverRef.current = null;
       return;
     }
     const nodes = Array.from(document.querySelectorAll("[data-reader-page]"));
-    if (!nodes.length) {
-      return;
-    }
-    pageObserverRef.current?.disconnect();
-    const observer = new IntersectionObserver((entries) => {
-      const visible = entries
-        .filter((entry) => entry.isIntersecting)
-        .sort((left, right) => right.intersectionRatio - left.intersectionRatio)[0];
-      if (!visible) {
-        return;
-      }
-      const target = /** @type {HTMLElement} */ (visible.target);
-      const nextChapterId = target.dataset.chapterId || chapterId;
-      const nextPageIndex = Number.parseInt(target.dataset.pageIndex || "0", 10) || 0;
+    const candidates = new Set();
+    let frame = 0, closed = false, realign = true;
+    const findPage = (request) => document.querySelector(`[data-reader-page][data-chapter-id="${cssEscape(request.chapterId)}"][data-page-index="${request.pageIndex}"]`);
+    const geometry = () => ({findPage, viewportHeight: window.innerHeight,
+      scrollBy: (options) => window.scrollBy(options), getScrollY: () => window.scrollY,
+      getMaxScrollY: () => Math.max(0, document.documentElement.scrollHeight - window.innerHeight)});
+    const update = () => {
+      frame = 0;
+      if (closed || pendingScrollRef.current) return;
+      const anchor = passiveSeekAnchorRef.current;
+      const currentAnchor = anchor && anchor.version === sessionVersionsRef.current.get(anchor.request.chapterId)
+        && anchor.request.chapterId === readingPositionRef.current.activeChapterId ? anchor : null;
+      if (anchor && !currentAnchor) passiveSeekAnchorRef.current = null;
+      if (currentAnchor && realign) alignWebtoonSeekAnchor(currentAnchor, geometry());
+      realign = false;
+      const selected = (currentAnchor && visibleWebtoonPage(findPage(currentAnchor.request), window.innerHeight))
+        || selectWebtoonPage(candidates, window.innerHeight);
+      if (!selected) return;
       const previous = activeWebtoonPageRef.current;
-      activeWebtoonPageRef.current = {chapterId: nextChapterId, pageIndex: nextPageIndex};
-      scrollDirectionRef.current = nextChapterId === previous.chapterId && nextPageIndex < previous.pageIndex ? "backward" : "forward";
-      setActiveChapterId(nextChapterId);
-      setActivePageIndex(nextPageIndex);
-    }, {
-      rootMargin: "-20% 0px -55% 0px",
-      threshold: [0.15, 0.35, 0.65]
-    });
-    for (const node of nodes) {
-      observer.observe(node);
-    }
-    pageObserverRef.current = observer;
-    return () => observer.disconnect();
-  }, [chapterId, isPaged, pageState, webtoonChapterIds]);
+      if (previous.chapterId === selected.chapterId && previous.pageIndex === selected.pageIndex) return;
+      activeWebtoonPageRef.current = {chapterId: selected.chapterId, pageIndex: selected.pageIndex};
+      scrollDirectionRef.current = selected.chapterId === previous.chapterId && selected.pageIndex < previous.pageIndex ? "backward" : "forward";
+      setActiveChapterId(selected.chapterId);
+      setActivePageIndex(selected.pageIndex);
+    };
+    const schedule = (withAlignment = false) => {
+      realign ||= withAlignment;
+      if (!closed && !frame) frame = window.requestAnimationFrame(update);
+    };
+    const rebuild = () => {
+      pageObserverRef.current?.disconnect();
+      candidates.clear();
+      // Observe the whole viewport, including short pages at document edges. Rank using a height-based pixel band.
+      const observer = new IntersectionObserver((entries) => {
+        if (closed || pageObserverRef.current !== observer) return;
+        updateWebtoonCandidates(candidates, entries);
+        schedule(false);
+      }, {rootMargin: "0px", threshold: 0});
+      pageObserverRef.current = observer;
+      for (const node of nodes) observer.observe(node);
+      schedule(true);
+    };
+    const onScroll = () => schedule(false);
+    const onResize = () => rebuild();
+    rebuild();
+    const resize = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(() => schedule(true));
+    const flow = document.querySelector(".reader-webtoon-flow");
+    if (flow) resize?.observe(flow);
+    window.addEventListener("scroll", onScroll, {passive: true});
+    window.addEventListener("resize", onResize);
+    return () => {
+      closed = true;
+      pageObserverRef.current?.disconnect();
+      resize?.disconnect();
+      if (frame) window.cancelAnimationFrame(frame);
+      window.removeEventListener("scroll", onScroll);
+      window.removeEventListener("resize", onResize);
+    };
+  }, [chapterId, isPaged, pageState, pendingScroll, webtoonChapterIds]);
 
   useEffect(() => {
+    if (!isPaged && pendingScrollRef.current) return;
     const session = isPaged ? currentPagedSession : activeSession;
     const activeIndex = isPaged ? pagedPageIndex : activePageIndex;
     if (!session?.chapter?.id) {
@@ -917,6 +975,7 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = "", initialSessi
     loadPages,
     pageState,
     pagedPageIndex,
+    pendingScroll,
     preloadConfig.aheadCount,
     preloadConfig.previousCushion,
     title?.id,
@@ -924,13 +983,32 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = "", initialSessi
   ]);
 
   useEffect(() => {
-    if (pendingScroll && pendingScroll.chapterId !== activeChapterId) {
-      setPendingScroll(null);
-      return;
-    }
-    if (applyReaderSeekRequest(pendingScroll, {activeChapterId, isPaged, findPage: (request) =>
-      document.querySelector(`[data-chapter-id="${cssEscape(request.chapterId)}"][data-page-index="${request.pageIndex}"]`)})) setPendingScroll(null);
-  }, [activeChapterId, isPaged, pageState, pendingScroll]);
+    if (!pendingScroll) return;
+    const anchor = preparingSeekRef.current;
+    if (isPaged || !anchor || pendingScroll.chapterId !== activeChapterId
+      || anchor.version !== sessionVersionsRef.current.get(pendingScroll.chapterId)) { cancelWebtoonSeek(); return; }
+    let frame = 0, closed = false;
+    const align = () => {
+      if (closed || preparingSeekRef.current !== anchor) return;
+      if (Date.now() - anchor.startedAt > 30000) { cancelWebtoonSeek(); return; }
+      const result = alignWebtoonSeekAnchor(anchor, {
+        findPage: (request) => document.querySelector(`[data-reader-page][data-chapter-id="${cssEscape(request.chapterId)}"][data-page-index="${request.pageIndex}"]`),
+        viewportHeight: window.innerHeight, scrollBy: (options) => window.scrollBy(options), getScrollY: () => window.scrollY,
+        getMaxScrollY: () => Math.max(0, document.documentElement.scrollHeight - window.innerHeight),
+        metadataLoading: hasReaderPageRequestForChapter(pageRequestTokensRef.current, {epoch: pageLoadEpochRef.current, chapterId: pendingScroll.chapterId})
+      });
+      if (result.settled) {
+        passiveSeekAnchorRef.current = anchor;
+        preparingSeekRef.current = null;
+        pendingScrollRef.current = null;
+        setPendingScrollState(null);
+        return;
+      }
+      frame = window.requestAnimationFrame(align);
+    };
+    frame = window.requestAnimationFrame(align);
+    return () => { closed = true; window.cancelAnimationFrame(frame); };
+  }, [activeChapterId, cancelWebtoonSeek, isPaged, pageState, pendingScroll]);
 
   const persistPreference = useCallback(async (next = {}) => {
     if (!title) {
@@ -975,6 +1053,7 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = "", initialSessi
   }, [chapterRows.length, chapterRowsLoading, loadChapterRows, settingsOpen, showSidebar, title?.id]);
 
   const openPagedChapter = useCallback(async (nextChapterId, nextPageIndex = 0) => {
+    cancelWebtoonSeek();
     const session = await fetchSession(nextChapterId);
     if (!session || !title) {
       return;
@@ -989,7 +1068,7 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = "", initialSessi
     setActiveChapterId(nextChapterId);
     setActivePageIndex(safePageIndex);
     window.history.replaceState(null, "", buildReaderPathForTitle(title, nextChapterId));
-  }, [fetchSession, preparePagedPage, title]);
+  }, [cancelWebtoonSeek, fetchSession, preparePagedPage, title]);
 
   const goPreviousPaged = useCallback(async () => {
     const step = pagesPerStep(layoutMode);
@@ -1030,20 +1109,22 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = "", initialSessi
   }, [currentPagedSession, layoutMode, openPagedChapter, pagedPageIndex, preparePagedPage]);
 
   const goVisualNext = useCallback(() => {
+    cancelWebtoonSeek();
     if (!isPaged) {
       window.scrollBy({top: Math.round(window.innerHeight * 0.88), behavior: "smooth"});
       return;
     }
     void (visualRtl ? goPreviousPaged() : goNextPaged());
-  }, [goNextPaged, goPreviousPaged, isPaged, visualRtl]);
+  }, [cancelWebtoonSeek, goNextPaged, goPreviousPaged, isPaged, visualRtl]);
 
   const goVisualPrevious = useCallback(() => {
+    cancelWebtoonSeek();
     if (!isPaged) {
       window.scrollBy({top: -Math.round(window.innerHeight * 0.88), behavior: "smooth"});
       return;
     }
     void (visualRtl ? goNextPaged() : goPreviousPaged());
-  }, [goNextPaged, goPreviousPaged, isPaged, visualRtl]);
+  }, [cancelWebtoonSeek, goNextPaged, goPreviousPaged, isPaged, visualRtl]);
 
   const addBookmark = useCallback(async () => {
     if (!title || !activeSession?.chapter?.id) {
@@ -1068,6 +1149,7 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = "", initialSessi
   }, [activePageIndex, activeSession, isPaged, pagedPageIndex, title]);
 
   const loadMoreWebtoon = useCallback(async () => {
+    if (pendingScrollRef.current) return null;
     const lastChapterId = webtoonChapterIds[webtoonChapterIds.length - 1];
     const lastSession = sessionMap.get(lastChapterId);
     const current = pageState.get(lastChapterId);
@@ -1119,7 +1201,9 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = "", initialSessi
     setActivePageIndex(safeIndex);
     setPendingScroll(createReaderSeekRequest(activeChapterId, safeIndex));
     const current = pageState.get(activeChapterId);
-    if (!current || !current.pages.some((page) => page.index === safeIndex)) {
+    const {cursor, pageSize} = webtoonSeekWindow({pageIndex: safeIndex, pageCount: activePageCount, chunkSize: PAGE_CHUNK_SIZE,
+      previousCushion: preloadConfig.previousCushion, aheadCount: preloadConfig.aheadCount});
+    if (!hasReaderPageWindow(current?.pages || [], cursor, pageSize, activePageCount)) {
       recordReaderTelemetry({
         type: "caught-buffer",
         titleId: title?.id || "",
@@ -1131,11 +1215,12 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = "", initialSessi
         ok: false,
         reason: "seek_metadata_missing"
       });
-      void loadPages(activeSession, {cursor: safeIndex});
+      void loadPages(activeSession, {cursor, pageSize});
     }
-  }, [activeChapterId, activePageCount, activePageIndex, activeSession, currentPagedSession, isPaged, layoutMode, loadPages, pageState, preparePagedPage, title?.id]);
+  }, [activeChapterId, activePageCount, activePageIndex, activeSession, currentPagedSession, isPaged, layoutMode, loadPages, pageState, preloadConfig.aheadCount, preloadConfig.previousCushion, preparePagedPage, setPendingScroll, title?.id]);
 
   const updateLayoutMode = (value) => {
+    cancelWebtoonSeek();
     const nextValue = normalizeLayoutMode(value);
     setLayoutMode(nextValue);
     void persistPreference({layoutMode: nextValue, readingMode: nextValue === "webtoon" ? "infinite" : "paged"});
@@ -1148,6 +1233,7 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = "", initialSessi
   };
 
   const updatePageFit = (value) => {
+    cancelWebtoonSeek();
     const nextValue = PAGE_FITS.includes(value) ? value : "width";
     setPageFit(nextValue);
     void persistPreference({pageFit: nextValue});
@@ -1327,7 +1413,7 @@ export const ReaderAppClient = ({titleId, chapterId, typeSlug = "", initialSessi
         webtoonChapters={webtoonChapters}
         showPageNumbers={showPageNumbers}
         loadingPages={currentPageEntry.loading}
-        loadMoreReady={webtoonLoadMoreReady}
+        loadMoreReady={webtoonLoadMoreReady && !pendingScroll}
         loadMoreKey={webtoonLoadMoreKey}
         loadMore={loadMoreWebtoon}
       />

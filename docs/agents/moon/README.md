@@ -65,6 +65,13 @@
   responses and navigation against the old content identity. True route/user transitions and authorization failures
   retain bootstrap clearing. Pending Webtoon seeks are observable chapter-scoped requests, including repeated seeks;
   retry DOM scrolling when missing metadata arrives rather than waiting for unrelated state changes.
+  Webtoon tracking observes the full viewport at threshold zero, retains the complete intersecting set, and ranks its
+  current rectangles against a viewport-height pixel reading band. Scroll callbacks measure only those candidates;
+  resize rebuilds observation. Explicit seeks pause automatic metadata work until their bounded target window drains
+  and settles, then retain a passive one-target anchor for later gap insertion or layout changes. Cancel preparing and
+  passive anchors before manual wheel/touch/pointer/keyboard navigation, mode/route/content changes, and explicit chapter
+  navigation. Do not clear a seek merely because smooth scrolling started. Single-image dimensions reserve their aspect
+  ratio before lazy decode; segmented pages retain their existing logical geometry.
 - Paged composite width needs a definite native/viewport basis before its auto-sized flex/grid frame can resolve.
   Never use that frame's cyclic `100%` as an intrinsic minimum: absolutely positioned tiles contribute no intrinsic
   width and can collapse the whole page to zero. Preserve source aspect ratio, segment geometry, frame caps and

@@ -17,4 +17,5 @@ test("MySQL 8.4 serializes conversion claims and atomically publishes chapters w
   assert.equal(proof.rollbackProved, true);
   assert.equal(proof.scopedResetPreservationProved, true);
   assert.equal(proof.coordinatorCancellationRaceProved, true);
+  assert.equal(proof.versionedOrderingRoundtripProved, true);
 });
