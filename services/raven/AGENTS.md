@@ -16,7 +16,7 @@ Raven is Scriptarr's Java download, library, metadata, and VPN-aware download en
   of reintroducing local-only or Komf-owned storage.
 - Keep Raven on Sage's internal broker routes for first-party shared state. Raven should not call Vault directly.
 - Keep Raven's dynamic library type labels and managed storage lifecycle intact: active work belongs under
-  `downloading/<type>/...`, canonical CBZ archives under `downloaded/<type>/...`, and derived AVIF reader pages under
+  `downloading/<type>/...`, canonical CBZ archives under `downloaded/<type>/...`, and derived reader pages under
   `ingested/<type>/<titleId>/<chapterId>/...`.
 - Keep download intake metadata-first and provider-based. Metadata providers should resolve first, then enabled
   download-provider implementations should match aliases and produce the concrete queue target.
@@ -25,10 +25,10 @@ Raven is Scriptarr's Java download, library, metadata, and VPN-aware download en
 - Keep chapter/page naming configurable only through the Sage-backed `raven.naming` setting. Title-folder naming stays
   Raven-owned and compatible with rescans unless product requirements explicitly expand that contract.
 - Keep VPN-backed downloads fail-closed when Raven VPN is enabled and Raven cannot safely confirm or establish the tunnel.
-- Raven download tasks must not hit `100%` until file promotion, brokered catalog persistence, and AVIF ingest all
+- Raven download tasks must not hit `100%` until file promotion, brokered catalog persistence, and reader ingest all
   succeed. If persistence or ingest fails, fail the task with the real error instead of leaving it hanging at `90%`.
-- `/downloadall` must skip completed catalog titles, append only missing/new chapters for existing non-completed
-  titles, reject invalid provider URLs, and persist discovery/title plans before owned enqueue. Incomplete browse
+- `/downloadall` must skip only verified complete local chapter sets, append missing/new chapters regardless of source
+  publication status, reject invalid provider URLs, and persist discovery/title plans before owned enqueue. Incomplete browse
   results and unresolved owned work must pause with durable task/plan identities; never silently mark them completed
   or remove failed work to advance a run. Each explicit approval gives unresolved titles three attempts, while
   cumulative attempts and completed outcomes survive restarts and local terminal-history pruning.
@@ -51,12 +51,29 @@ Raven is Scriptarr's Java download, library, metadata, and VPN-aware download en
   stable status receipts. Keep legacy explicit internal action overloads compatible.
 - Never expire a queued title merely because it has waited a long time. Active-stall detection uses actual work
   progress and respects encoder wait. Keep title downloads below 100% until their planned chapter set, canonical
-  archives, catalog state, and AVIF manifests have been verified; an existing title row is not completion evidence.
+  archives, catalog state, and complete reader manifests have been verified; an existing title row is not completion evidence.
 - Page-level source damage should become catalog quality data, not a whole-title dead end: refresh page lists after
   image 404s, generate Scriptarr missing-page placeholders when needed, and mark partial, missing-content, or
   bad-source quality states deterministically.
-- Reader page serving is AVIF-first. Do not extract CBZ pages on demand for normal reads; LibraryService should serve
-  ready chapters from ingested manifests and stable `p000001.avif`-style page files while keeping controllers thin.
+- Reader serving supports existing AVIF and new WebP manifests. Do not extract CBZ pages on demand. New WebP revisions
+  are content-addressed and immutable; preserve logical source-page counts while serving every exact two-dimensional
+  segment. Full-first-page thumbnails are separate variants, never a cropped first segment.
+- `ingest-worker` branches before Spring bootstrap and cannot instantiate providers, VPN, downloader, recovery, or
+  catalog writers. It uses verified Sage TLS, scratch only, real WebP encode/decode readiness, q85/m4, two threads,
+  one page/chapter and the single durable pool lease. The coordinator waits without local encode fallback.
+- Conversion claims and progress use Sage/Vault leases and epochs; publication checkpoints the chapter atomically
+  with completion. Cancel uses the captured server coordinatorGeneration, so an older waiter cannot cancel a newer
+  retry. Accept exact immutable artifact replay, reject changed hashes, bound actual streamed/extracted bytes, and
+  never mark complete until all source pages, segments and whole-page thumbnail validate.
+- Whole-library migration defaults disabled, persists explicit start/pause/resume/retry intent, and yields its title
+  lock after each chapter. Fresh interactive/bulk work outranks migration. Preserve valid old-format reader state on
+  migration failure and reconcile uncertain completion responses before writing older snapshots.
+- Scoped cleanup requires durable plan scope plus an immutable reviewed filesystem inventory, a restart-restored
+  maintenance fence and actual thread/process quiescence. Replay permits only missing reviewed entries, never new or
+  changed files. Retain title/alias identities, metadata, covers, follows, progress and all run/task/job history.
+- Bulk metadata must match full original/provider-declared source labels and edition evidence, never matchedQuery
+  alone. Retained empty placeholders must revalidate. Distinct source identities cannot concurrently write a shared
+  metadata/canonical/folder scope; conflicts stay durable and need operator resolution.
 - AVIF encoder policy is `auto`, strict `nvenc`, or `cpu`. CPU mode must work without NVIDIA devices; automatic
   selection tests real encoding and stays fixed until restart. Preserve usable ready chapters when changing backends.
 - Manual CBZ import is separate from AVIF ingest. `/v1/imports` should copy approved Raven-visible CBZs into the

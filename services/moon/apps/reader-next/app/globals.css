@@ -363,6 +363,29 @@ a {
   user-select: none;
 }
 
+.reader-logical-image {
+  position: relative;
+  width: min(100%, var(--reader-page-width));
+  max-width: 100%;
+}
+
+.reader-app[data-fit="height"] .reader-logical-image,
+.reader-app[data-fit="contain"] .reader-logical-image {
+  width: min(100%, var(--reader-page-width), calc(100vh * var(--reader-page-ratio)));
+}
+
+.reader-app .reader-spread .reader-page-frame .reader-logical-image {
+  width: min(var(--reader-page-width), calc((100vh - 170px) * var(--reader-page-ratio)));
+}
+
+.reader-app .reader-page-frame .reader-logical-image img.reader-page-segment {
+  position: absolute;
+  display: block;
+  max-width: none;
+  max-height: none;
+  object-fit: fill;
+}
+
 .reader-page-retry {
   display: grid;
   place-items: center;
@@ -418,6 +441,7 @@ a {
 }
 
 .reader-spread .reader-page-frame {
+  grid-template-columns: minmax(0, 1fr);
   max-width: min(50vw, 760px);
   max-height: calc(100vh - 170px);
   align-content: center;

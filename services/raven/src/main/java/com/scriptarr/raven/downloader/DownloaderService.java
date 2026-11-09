@@ -1,5 +1,7 @@
 package com.scriptarr.raven.downloader;
 
+import com.fasterxml.jackson.databind.JsonNode;
+
 import com.scriptarr.raven.library.LibraryChapter;
 import com.scriptarr.raven.library.ArchiveImageEntries;
 import com.scriptarr.raven.library.LibraryNaming;
@@ -263,7 +265,7 @@ public class DownloaderService {
                     }
                     copyIfPresent(detailsNode, task, "startedAt");
                     copyNumberIfPresent(detailsNode, task, "downloadSpeedBytesPerSecond");
-                    for (String key : List.of("bulkRunId", "bulkBatchId", "bulkPlanId", "bulkRetryAttempt", "actualProgressAt", "stage", "ingestCompletedPages", "ingestTotalPages", "ingestCompletedChapters", "ingestTotalChapters")) {
+                    for (String key : List.of("bulkRunId", "bulkBatchId", "bulkPlanId", "bulkRetryAttempt", "actualProgressAt", "stage", "ingestCompletedPages", "ingestTotalPages", "ingestCompletedChapters", "ingestTotalChapters", "ingestCompletedSegments", "ingestTotalSegments")) {
                         if (detailsNode.has(key)) task.put(key, brokerClientValue(detailsNode.path(key)));
                     }
                     if (restoredSortOrder < 0) {
@@ -613,6 +615,8 @@ public class DownloaderService {
         task.put("ingestTotalPages", progress.totalPages());
         task.put("ingestCompletedChapters", progress.completedChapters());
         task.put("ingestTotalChapters", progress.totalChapters());
+        task.put("ingestCompletedSegments", progress.completedSegments());
+        task.put("ingestTotalSegments", progress.totalSegments());
         task.put("updatedAt", Instant.now().toString());
         if (progress.advanced()) task.put("actualProgressAt", Instant.now().toString());
         long now = System.currentTimeMillis();
@@ -687,6 +691,15 @@ public class DownloaderService {
                 .thenComparingLong(this::taskSortOrder))
             .map(Map::copyOf)
             .toList();
+    }
+
+    /** @param taskIds exact selected historical task identities @return actual executable work, never inferred from cancelled status labels */
+    public Map<String, Object> scopedExecutionActivity(Set<String> taskIds) {
+        long threads = runningTaskThreads.keySet().stream().filter(taskIds::contains).count();
+        long queued = queuedTasks.keySet().stream().filter(taskIds::contains).count();
+        long reserved = bulkTaskDispatches.keySet().stream().filter(taskIds::contains).count();
+        long pages = pageDownloadWorker instanceof ThreadPoolExecutor pool ? pool.getActiveCount() + pool.getQueue().size() : 0;
+        return Map.of("executionThreads", threads, "queuedExecutions", queued, "dispatchReservations", reserved, "pageDownloadWork", pages);
     }
 
     /**
@@ -1039,9 +1052,12 @@ public class DownloaderService {
     private void process(String taskId, DownloadRequest request) {
         queuedTasks.remove(taskId);
         runningTaskThreads.put(taskId, Thread.currentThread());
-        try {
+        try (var maintenance = com.scriptarr.raven.library.ContentMaintenance.enter("task:" + taskId,
+            "logical:" + LibraryNaming.normalizeTypeSlug(request.requestType()) + ":" + LibraryNaming.sanitizeTitleFolder(request.titleName()));
+             var attribution = conversionContext(taskId, request); var sourceClaim = claimCanonicalSource(request)) {
             throwIfCancelled(taskId);
             update(taskId, "running", "Preparing Raven download.", 5);
+            verifyCanonicalSourceOwner(taskId, request);
             if (recoverCompletedTask(taskId)) return;
             LibraryTitle canonicalTitle = canonicalArchiveRecovery.inspect(tasks.get(taskId), request, expectedChapters(tasks.get(taskId)),
                 logger.getDownloadsRoot(), settingsService.getNamingSettings(), () -> isCancellationRequested(taskId));
@@ -1134,12 +1150,12 @@ public class DownloaderService {
             }
             title = persistSelectedMetadata(title, request);
             throwIfCancelled(taskId);
-            update(taskId, "running", "Converting downloaded CBZ files into reader-ready AVIF pages.", 98);
+            update(taskId, "running", "Converting downloaded CBZ files into reader-ready pages.", 98);
             tasks.get(taskId).put("titleId", title.id());
             title = libraryService.ingestTitle(title.id(), request.requestedBy(), () -> isCancellationRequested(taskId), progress -> rememberIngestProgress(taskId, progress));
             if (title == null || ((isAppendDownload(request) || !normalizeString(tasks.get(taskId).get("bulkRunId")).isBlank())
                 && !completionVerifier.complete(title, expectedChapters(tasks.get(taskId))))) {
-                throw new IllegalStateException("Download completion could not verify every expected chapter, CBZ archive and reader-ready AVIF manifest.");
+                throw new IllegalStateException("Download completion could not verify every expected chapter, CBZ archive and reader-ready manifest.");
             }
             if (title != null) {
                 Map<String, Object> task = tasks.get(taskId);
@@ -1714,7 +1730,7 @@ public class DownloaderService {
         details.put("sortOrder", taskSortOrder(task));
         details.put("startedAt", String.valueOf(task.getOrDefault("startedAt", "")));
         details.put("downloadSpeedBytesPerSecond", toLong(task.get("downloadSpeedBytesPerSecond")));
-        for (String key : List.of("bulkRunId", "bulkBatchId", "bulkPlanId", "bulkRetryAttempt", "actualProgressAt", "stage", "ingestCompletedPages", "ingestTotalPages", "ingestCompletedChapters", "ingestTotalChapters")) {
+        for (String key : List.of("bulkRunId", "bulkBatchId", "bulkPlanId", "bulkRetryAttempt", "actualProgressAt", "stage", "ingestCompletedPages", "ingestTotalPages", "ingestCompletedChapters", "ingestTotalChapters", "ingestCompletedSegments", "ingestTotalSegments")) {
             if (task.containsKey(key)) details.put(key, task.get(key));
         }
         return details;
@@ -2056,6 +2072,66 @@ public class DownloaderService {
             stringValue(metadataDetails.get("coverUrl")),
             stringValue(metadataDetails.get("coverImageUrl"))
         );
+    }
+
+    /**
+     * Fence provider-series ownership before archive recovery, reuse, creation or promotion.
+     * Metadata search shortcuts never authorize a different original source or edition.
+     * @param taskId exact execution identity
+     * @param request immutable requested source
+     * @throws Exception when the durable catalog or source binding cannot be verified
+     */
+    private void verifyCanonicalSourceOwner(String taskId, DownloadRequest request) throws Exception {
+        var objectMapper = new com.fasterxml.jackson.databind.ObjectMapper();
+        Map<String, Object> task = tasks.get(taskId), download = normalizeMap(request.selectedDownload()), metadata = normalizeMap(request.selectedMetadata());
+        if (!normalizeString(task.get("bulkRunId")).isBlank() && !metadata.isEmpty()) {
+            List<String> aliases = new ArrayList<>(); Object raw = download.get("sourceAliases"); if (raw instanceof List<?> list) for (Object value : list) if (value instanceof String text) aliases.add(text);
+            if (!BulkMetadataAnchor.matches(request.titleName(), aliases, metadata)) throw new IllegalStateException("metadata_source_ambiguous: Original source labels do not anchor the selected metadata.");
+        }
+        String explicit = firstNonBlank(normalizeString(task.get("titleId")), normalizeString(download.get("appendTitleId")), normalizeString(request.replacementTitleId()));
+        String type = LibraryNaming.normalizeTypeSlug(request.requestType()), name = LibraryNaming.slugifySegment(request.titleName());
+        String root = normalizeString(task.get("downloadRoot")); if (root.isBlank()) root = resolveTitleRoot(DOWNLOADED_FOLDER_NAME, request.titleName(), type).toString();
+        JsonNode rows = brokerClient.listLibraryTitles(); if (rows == null || !rows.isArray()) throw new IllegalStateException("Canonical source ownership could not be verified.");
+        Map<String, LibraryTitle> candidates = new LinkedHashMap<>();
+        if (!explicit.isBlank()) { JsonNode row = brokerClient.getLibraryTitle(explicit); if (row != null && row.isObject() && row.hasNonNull("id")) { LibraryTitle title = objectMapper.treeToValue(row, LibraryTitle.class); candidates.put(title.id(), title); } }
+        for (JsonNode row : rows) {
+            LibraryTitle title = objectMapper.treeToValue(row, LibraryTitle.class); if (!type.equals(title.libraryTypeSlug())) continue;
+            boolean label = name.equals(LibraryNaming.slugifySegment(title.title())) || title.aliases() != null && title.aliases().stream().anyMatch(alias -> name.equals(LibraryNaming.slugifySegment(alias)));
+            boolean sameRoot = root.equals(normalizeString(title.downloadRoot()));
+            boolean sameSource = !normalizeString(title.sourceUrl()).isBlank() && CanonicalSourceOwnership.sourceKey(title.sourceUrl()).equals(CanonicalSourceOwnership.sourceKey(request.titleUrl()));
+            if (label || sameRoot || sameSource) candidates.put(title.id(), title);
+        }
+        if (candidates.size() > 1) throw new IllegalStateException("source_identity_conflict: More than one canonical identity claims this source or storage root.");
+        if (!candidates.isEmpty()) {
+            LibraryTitle title = candidates.values().iterator().next();
+            if (normalizeString(task.get("bulkRunId")).isBlank() && !normalizeString(request.replacementTitleId()).isBlank() && request.replacementTitleId().equals(title.id())) {
+                task.put("titleId", title.id()); persistTask(taskId); return;
+            }
+            CanonicalSourceOwnership.assertCompatible(title, request.titleUrl()); task.put("titleId", title.id()); persistTask(taskId);
+        }
+    }
+
+    /** @param request frozen source and selected metadata @return exclusive source binding across all actual concurrent writers */
+    private CanonicalSourceClaims claimCanonicalSource(DownloadRequest request) {
+        String type = LibraryNaming.normalizeTypeSlug(request.requestType()); Map<String, Object> metadata = normalizeMap(request.selectedMetadata()), selected = normalizeMap(request.selectedDownload());
+        List<String> keys = new ArrayList<>(); keys.add("root:" + resolveTitleRoot(DOWNLOADED_FOLDER_NAME, request.titleName(), type));
+        String provider = normalizeString(metadata.get("provider")), series = normalizeString(metadata.get("providerSeriesId"));
+        if (!provider.isBlank() && !series.isBlank()) keys.add("metadata:" + type + ":" + provider + ":" + series);
+        String canonical = firstNonBlank(normalizeString(selected.get("appendTitleId")), normalizeString(request.replacementTitleId())); if (!canonical.isBlank()) keys.add("title:" + canonical);
+        return CanonicalSourceClaims.acquire(request.titleUrl(), keys);
+    }
+
+    /** @param taskId durable title execution @param request frozen source request @return conversion-only attribution without request mutation */
+    private com.scriptarr.raven.library.IngestExecutionContext conversionContext(String taskId, DownloadRequest request) {
+        Map<String, Object> task = tasks.get(taskId), owner = new LinkedHashMap<>(); owner.put("requestedBy", normalizeString(request.requestedBy())); owner.put("downloadTaskId", taskId);
+        String run = normalizeString(task.get("bulkRunId"));
+        if (!run.isBlank()) {
+            owner.put("runId", run); owner.put("batchId", normalizeString(task.get("bulkBatchId"))); owner.put("planId", normalizeString(task.get("bulkPlanId")));
+            BulkRetryAttemptReceipt receipt = BulkRetryAttemptReceipt.from(task);
+            if (receipt != null) owner.putAll(receipt.payload());
+            else { owner.put("cumulativeAttempt", 1); owner.put("approvalGeneration", 0); owner.put("approvalAttempt", 1); }
+        }
+        return com.scriptarr.raven.library.IngestExecutionContext.enter(run.isBlank() ? "interactive" : "bulk", owner);
     }
 
     private TitleDetails mergeRequestTagsIntoDetails(TitleDetails details, DownloadRequest request) {

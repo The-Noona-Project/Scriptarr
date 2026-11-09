@@ -1298,7 +1298,7 @@ public class BulkRunService {
     }
 
     private boolean isTitleTaskStale(Map<String, Object> task) {
-        if ("waiting-for-encoder".equals(stringValue(task.get("stage")))) {
+        if (Set.of("waiting-for-encoder", "waiting-for-worker").contains(stringValue(task.get("stage")))) {
             return false;
         }
         return olderThan(firstNonBlank(stringValue(task.get("actualProgressAt")),

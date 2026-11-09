@@ -139,6 +139,18 @@ export const createCachedStore = (
 
   const cachedStore = {
     ...baseStore,
+    async completeConversionJob(jobId, payload) {
+      const result = await baseStore.completeConversionJob(jobId, payload);
+      invalidatePrefix("raven-title:", "raven-title-summary:", "raven-title-chapters:", "raven-title-cards:", "reader-targets:");
+      invalidate("raven-titles:list");
+      return result;
+    },
+    async applyScopedContentReset(payload) {
+      const result = await baseStore.applyScopedContentReset(payload);
+      invalidatePrefix("raven-title:", "raven-title-summary:", "raven-title-chapters:", "raven-title-cards:", "reader-targets:");
+      invalidate("raven-titles:list");
+      return result;
+    },
     cacheTtlMs: ttlMs,
     cacheMaxEntries,
     cacheSize: () => cache.size,

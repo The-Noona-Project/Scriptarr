@@ -47,10 +47,25 @@
   honoring explicit `SCRIPTARR_VAULT_AUTH_TIMEOUT_MS` or legacy `SCRIPTARR_AUTH_VAULT_TIMEOUT_MS` overrides.
 - Warden should launch Raven with the VPN runtime device/capability contract (`NET_ADMIN` and `/dev/net/tun`) when not
   explicitly disabled, and drift detection should recreate Raven when those flags disappear.
-- Warden should pass Raven ingest NVIDIA runtime env and args for AVIF when `SCRIPTARR_RAVEN_INGEST_GPU_PROFILE=nvidia`,
-  `SCRIPTARR_RAVEN_AVIF_REQUIRE_NVIDIA=true`, or the shared GPU hint asks for NVIDIA. Missing GPU should be reported by
-  Raven ingest as `hardware_missing`, not as a full stack health failure. Raven's NVIDIA driver capabilities must include
-  `video` so FFmpeg `av1_nvenc` can load `libnvidia-encode.so.1`.
+- Raven's new output is WebP q85/method4, CPU-only even with legacy AVIF/shared NVIDIA hints. Existing AVIF remains a
+  reader compatibility concern. Oracle GPU/model mounts and resource settings remain independent and unchanged.
+- Optional placement `scriptarr-raven-worker` activates the same image's early `ingest-worker` role on a remote host;
+  the normal `scriptarr-raven` remains the coordinator beside Sage/Vault. Do not add a separate worker image build.
+  `SCRIPTARR_RAVEN_WORKER_IMAGE` may independently pin the Raven artifact; otherwise it inherits `SCRIPTARR_RAVEN_IMAGE`.
+- The worker gets only its own credential, HTTPS Sage URL, exact read-only CA and scratch/log paths. Its credential
+  enters only Sage's service-token map, never Portal or Vault's maps. No Docker socket, canonical downloads, VPN,
+  metadata/provider credentials, NVIDIA grants or NET_ADMIN belong in the worker.
+- Fix worker CPU/memory/combined memory-swap at 2 CPUs/4 GiB/4 GiB, heap 1536 MiB, encode threads 2, pages 1, chapters 1. Check swap and read-only
+  mount drift, in addition to the existing CPU/memory/device checks. Broker unavailability is diagnostic liveness;
+  unhealthy optional initialization must not fail other services or cause recreation storms.
+  Docker checks the worker's explicit `ready:true` (real WebP codec probe plus recent authenticated Sage traffic),
+  while HTTP `/health` remains process liveness. No job is needed to register idle worker readiness.
+- The managed WebP coordinator always receives `SCRIPTARR_RAVEN_REMOTE_INGEST_REQUIRED=true`, even without a worker
+  assignment or with a legacy false override. Normalize its compatibility AVIF encoder to `cpu`, avoiding strict NVENC
+  without GPU grants. Lack of worker capacity sets `ingestDegraded` while core health remains healthy and conversion
+  waits; never enable local AVIF/Plex encoding or change the six-title setting to bypass worker backpressure.
+- Sage's worker-only HTTPS port 3444 binds to the core LAN IP in Docker, with dedicated read-only leaf certificate/key
+  mounts. Existing HTTP 3004 and all Oracle/Portal URLs stay unchanged. Verify server CA/name on worker outbound calls.
 - Warden should mount Moon's derived cover-cache folder at `/app/cover-cache` and set
   `SCRIPTARR_MOON_COVER_CACHE_DIR` for the Moon container. The cache is rebuildable and separate from Vault/Raven
   authoritative catalog state.

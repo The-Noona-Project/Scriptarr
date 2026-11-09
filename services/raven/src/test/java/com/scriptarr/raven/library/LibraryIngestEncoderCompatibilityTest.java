@@ -60,6 +60,7 @@ class LibraryIngestEncoderCompatibilityTest {
         LibraryChapter chapter = mock(LibraryChapter.class);
         when(chapter.id()).thenReturn("chapter-1");
         when(chapter.archivePath()).thenReturn(archive.toString());
+        when(chapter.available()).thenReturn(true);
         try {
             LibraryIngestResult result = gpu.ingestChapter(title, chapter);
             when(chapter.ingestStatus()).thenReturn("ready");

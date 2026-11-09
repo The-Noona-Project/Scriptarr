@@ -79,7 +79,7 @@ class DownloaderServiceRetryTest {
 
         service.queueDownload(new DownloadRequest(
             "Retry Series",
-            "https://weebcentral.com/series/retry-series",
+            "https://weebcentral.com/series/9F5B016A9C17CF7B9ED4E6B5D6",
             "Manga",
             "tester",
             "weebcentral",
@@ -113,7 +113,7 @@ class DownloaderServiceRetryTest {
 
         service.queueDownload(new DownloadRequest(
             "Rate Limit Series",
-            "https://weebcentral.com/series/rate-limit-series",
+            "https://weebcentral.com/series/77C832CD5F464257F045D4051B",
             "Manga",
             "tester",
             "weebcentral",
@@ -160,7 +160,7 @@ class DownloaderServiceRetryTest {
 
         service.queueDownload(new DownloadRequest(
             "Refresh Series",
-            "https://weebcentral.com/series/refresh-series",
+            "https://weebcentral.com/series/6347263A6BE04C0445C93CE25F",
             "Manga",
             "tester",
             "weebcentral",
@@ -195,7 +195,7 @@ class DownloaderServiceRetryTest {
 
         service.queueDownload(new DownloadRequest(
             "Broken Series",
-            "https://weebcentral.com/series/broken-series",
+            "https://weebcentral.com/series/3094FC766F7BD8698221F95901",
             "Manga",
             "tester",
             "weebcentral",
@@ -237,7 +237,7 @@ class DownloaderServiceRetryTest {
 
         service.queueDownload(new DownloadRequest(
             "Metadata Series",
-            "https://weebcentral.com/series/metadata-series",
+            "https://weebcentral.com/series/AD88A45392A3E17573B8859A2B",
             "Manga",
             "tester",
             "weebcentral",
@@ -309,7 +309,7 @@ class DownloaderServiceRetryTest {
             Map.entry("jobId", "failed-task"),
             Map.entry("titleId", ""),
             Map.entry("titleName", "A Common Story of a Lady's New Life"),
-            Map.entry("titleUrl", "https://weebcentral.com/series/common-story"),
+            Map.entry("titleUrl", "https://weebcentral.com/series/32AE423410A6CBC71506DB5248"),
             Map.entry("requestType", "Manhwa"),
             Map.entry("requestedBy", "tester"),
             Map.entry("status", "failed"),

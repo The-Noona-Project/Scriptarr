@@ -24,6 +24,8 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
@@ -41,8 +43,8 @@ public final class LibraryIngestRunService {
     private static final String STATUS_FAILED = "failed";
     private static final String STATUS_CANCELLED = "cancelled";
     private static final String STATUS_SUPERSEDED = "superseded";
-    private static final String INGEST_FORMAT = "avif";
-    private static final String INGEST_MODE = "avif-force-rebuild";
+    private static final String INGEST_FORMAT = WebpMigrationControl.webp() ? "webp" : "avif";
+    private static final String INGEST_MODE = WebpMigrationControl.webp() ? "webp-migrate" : "avif-force-rebuild";
     private static final int RECENT_RUN_LIMIT = 6;
     private static final int MIN_ETA_PERCENT = 1;
     private static final int MAX_ETA_PERCENT = 99;
@@ -73,6 +75,9 @@ public final class LibraryIngestRunService {
     private final RavenBrokerClient brokerClient;
     private final ScriptarrLogger logger;
     private final ObjectMapper objectMapper = new ObjectMapper();
+    private final WebpMigrationControl migrationControl;
+    private final ScheduledExecutorService recovery = Executors.newSingleThreadScheduledExecutor(runnable -> { Thread thread = new Thread(runnable, "raven-migration-recovery"); thread.setDaemon(true); return thread; });
+    private final Set<String> pausedRunIds = ConcurrentHashMap.newKeySet();
     private final int titleLaneCount = resolveConfiguredTitleLanes();
     private final ExecutorService worker = Executors.newFixedThreadPool(titleLaneCount, new TitleLaneThreadFactory());
     private final ExecutorService preparationWorker = Executors.newFixedThreadPool(PREPARATION_WORKER_COUNT, (runnable) -> {
@@ -102,15 +107,17 @@ public final class LibraryIngestRunService {
         this.libraryService = libraryService;
         this.brokerClient = brokerClient;
         this.logger = logger;
+        this.migrationControl = new WebpMigrationControl(brokerClient);
     }
 
     /**
-     * Create and start an AVIF rebuild run for one library type slug.
+     * Create and start an reader-page rebuild run for one library type slug.
      *
      * @param body caller payload with libraryTypeSlug/type and requestedBy
      * @return durable run status payload
      */
     public synchronized Map<String, Object> createRun(Map<String, Object> body) {
+        if (!migrationControl.enabled()) throw new IllegalStateException("WebP migration is paused; explicitly start it after scoped cleanup.");
         Map<String, Object> request = body == null ? Map.of() : body;
         String libraryTypeSlug = resolveLibraryTypeSlug(request);
         String requestedBy = firstNonBlank(stringValue(request.get("requestedBy")), "scriptarr-admin");
@@ -143,8 +150,8 @@ public final class LibraryIngestRunService {
         job.put("kind", RUN_JOB_KIND);
         job.put("ownerService", OWNER_SERVICE);
         job.put("status", STATUS_QUEUED);
-        job.put("label", "Raven AVIF rebuild");
-        job.put("message", "Queued AVIF rebuild from existing canonical CBZ archives.");
+        job.put("label", "Raven reader-page rebuild");
+        job.put("message", "Queued reader-page rebuild from existing canonical CBZ archives.");
         job.put("requestedBy", requestedBy);
         job.put("payload", payload);
         job.put("result", runSummary(titles.size(), 0, 0, List.of(), List.of()));
@@ -163,6 +170,49 @@ public final class LibraryIngestRunService {
     }
 
     /**
+     * Apply an explicit durable migration decision without restarting the coordinator or changing reader state.
+     * @param action start, pause, resume, retry or status
+     * @param body operator attribution
+     * @return scheduler intent and durable migration runs
+     */
+    public synchronized Map<String, Object> migrationAction(String action, Map<String, Object> body) {
+        String actor = firstNonBlank(stringValue(body == null ? null : body.get("requestedBy")), "scriptarr-admin");
+        if (!Set.of("start", "pause", "resume", "retry", "status").contains(action)) throw new IllegalArgumentException("Unknown migration action.");
+        if ("status".equals(action)) return Map.of("enabled", migrationControl.enabled(), "runs", groupedRunSummaries());
+        if ("pause".equals(action)) {
+            migrationControl.set(false, actor);
+            for (Map<String, Object> job : loadRunJobs()) if (isDurableActive(job)) {
+                String id = stringValue(job.get("jobId")); pausedRunIds.add(id);
+                updateJob(job, "paused", "Paused; current chapter may finish before the scheduler yields.", runSummaryFromTasks(loadTitleTasks(id)), false);
+            }
+        } else {
+            migrationControl.set(true, actor);
+            for (Map<String, Object> job : loadRunJobs()) {
+                String id = stringValue(job.get("jobId")), state = stringValue(job.get("status"));
+                if (activeRunIds.contains(id) && pausedRunIds.contains(id)) continue;
+                if ("paused".equals(state) || "retry".equals(action) && STATUS_FAILED.equals(state)) {
+                    pausedRunIds.remove(id);
+                    if (Boolean.TRUE.equals(normalizeMap(job.get("payload")).get("preparing"))) {
+                        updateJob(job, STATUS_PREPARING, "Resuming durable migration task preparation.", runSummaryFromTasks(loadTitleTasks(id)), false);
+                        scheduleRunPreparation(id, stringValue(normalizeMap(job.get("payload")).get("libraryTypeSlug")), actor); continue;
+                    }
+                    for (Map<String, Object> task : loadTitleTasks(id)) if (STATUS_RUNNING.equals(task.get("status")) || "retry".equals(action) && Set.of(STATUS_FAILED, STATUS_CANCELLED).contains(stringValue(task.get("status"))))
+                        putTitleTask(id, withTaskStatus(task, STATUS_QUEUED, "Queued for explicitly approved migration.", 0, Map.of("titleId", titleIdForTask(task))));
+                    updateJob(job, STATUS_QUEUED, "Queued for the chapter-fair migration scheduler.", runSummaryFromTasks(loadTitleTasks(id)), false);
+                }
+            }
+            Set<String> types = new LinkedHashSet<>();
+            for (Map<String, Object> row : libraryService.listCompactTitleRows(Map.of())) {
+                String type = LibraryNaming.normalizeTypeSlug(stringValue(row.get("libraryTypeSlug")));
+                if (ALLOWED_TYPE_SLUGS.contains(type) && toInt(row.get("chapterCount"), 0) > 0) types.add(type);
+            }
+            for (String type : orderedLibraryTypes(types)) if (activeRunForType(type).isEmpty()) createPreparingRun(type, actor);
+            scheduleRunWorker();
+        }
+        return Map.of("enabled", migrationControl.enabled(), "runs", groupedRunSummaries());
+    }
+
+    /**
      * Resume a queued or detached durable ingest run.
      *
      * @param runId durable run id
@@ -170,6 +220,9 @@ public final class LibraryIngestRunService {
      */
     public synchronized Map<String, Object> resumeRun(String runId) {
         String normalizedRunId = normalizeRunId(runId);
+        if (!migrationControl.enabled()) throw new IllegalStateException("WebP migration is paused.");
+        if (pausedRunIds.contains(normalizedRunId) && activeRunIds.contains(normalizedRunId)) throw new IllegalStateException("Migration is still winding down.");
+        pausedRunIds.remove(normalizedRunId);
         Map<String, Object> job = requireRun(normalizedRunId);
         if (isRunTerminal(job)) {
             return status(normalizedRunId);
@@ -191,7 +244,7 @@ public final class LibraryIngestRunService {
         updateJob(
             job,
             STATUS_QUEUED,
-            "Queued AVIF rebuild for the fair ingest scheduler.",
+            "Queued reader-page rebuild for the fair ingest scheduler.",
             runSummaryFromTasks(tasks),
             false
         );
@@ -217,7 +270,7 @@ public final class LibraryIngestRunService {
                 putTitleTask(normalizedRunId, withTaskStatus(
                     task,
                     STATUS_CANCELLED,
-                    "AVIF rebuild cancelled by admin.",
+                    "reader-page rebuild cancelled by admin.",
                     100,
                     Map.of("titleId", titleIdForTask(task))
                 ));
@@ -227,7 +280,7 @@ public final class LibraryIngestRunService {
         updateJob(
             job,
             STATUS_CANCELLED,
-            "AVIF rebuild cancelled by admin.",
+            "reader-page rebuild cancelled by admin.",
             runSummaryFromTasks(loadTitleTasks(normalizedRunId)),
             true
         );
@@ -247,7 +300,7 @@ public final class LibraryIngestRunService {
     }
 
     /**
-     * Supersede noisy active AVIF runs, cooperatively stop active title work,
+     * Supersede noisy active reader-page runs, cooperatively stop active title work,
      * and start fresh runs in Scriptarr's preferred library order.
      *
      * @param body optional body with requestedBy
@@ -265,7 +318,7 @@ public final class LibraryIngestRunService {
                 if (!type.isBlank()) {
                     libraryTypes.add(type);
                 }
-                supersedeRunJobOnly(job, "Superseded by clean AVIF ingest restart.");
+                supersedeRunJobOnly(job, "Superseded by clean reader-page ingest restart.");
                 supersededCount += 1;
             } else if (STATUS_SUPERSEDED.equals(stringValue(job.get("status")).toLowerCase(Locale.ROOT))) {
                 compactedCount += compactSupersededRun(job);
@@ -281,7 +334,7 @@ public final class LibraryIngestRunService {
             "startedCount", runs.size(),
             "order", runs.stream().map((run) -> stringValue(run.get("libraryTypeSlug"))).toList(),
             "runs", runs,
-            "message", "Clean-started durable AVIF ingest runs across " + runs.size() + " library type(s)."
+            "message", "Clean-started durable reader-page ingest runs across " + runs.size() + " library type(s)."
         );
     }
 
@@ -317,8 +370,8 @@ public final class LibraryIngestRunService {
         job.put("kind", RUN_JOB_KIND);
         job.put("ownerService", OWNER_SERVICE);
         job.put("status", STATUS_PREPARING);
-        job.put("label", "Raven AVIF rebuild");
-        job.put("message", "Preparing title tasks for the fair AVIF scheduler.");
+        job.put("label", "Raven reader-page rebuild");
+        job.put("message", "Preparing title tasks for the fair reader-page scheduler.");
         job.put("requestedBy", requestedBy);
         job.put("payload", payload);
         job.put("result", runSummary(0, 0, 0, List.of(), List.of()));
@@ -339,14 +392,14 @@ public final class LibraryIngestRunService {
                 updateJob(
                     requireRun(runId),
                     STATUS_FAILED,
-                    "Raven could not prepare title tasks for the AVIF rebuild.",
+                    "Raven could not prepare title tasks for the reader-page rebuild.",
                     runSummary(0, 0, 1, List.of(), List.of(runId)),
                     true
                 );
             } catch (Exception updateError) {
-                logger.warn("LIBRARY", "Raven could not persist failed AVIF run preparation state.", updateError.getMessage());
+                logger.warn("LIBRARY", "Raven could not persist failed reader-page run preparation state.", updateError.getMessage());
             }
-            logger.warn("LIBRARY", "Raven AVIF run preparation worker rejected work.", error.getMessage());
+            logger.warn("LIBRARY", "Raven reader-page run preparation worker rejected work.", error.getMessage());
         }
     }
 
@@ -361,7 +414,7 @@ public final class LibraryIngestRunService {
                 updateJob(
                     job,
                     STATUS_COMPLETED,
-                    "No ready titles were eligible for AVIF rebuild.",
+                    "No ready titles were eligible for reader-page rebuild.",
                     runSummary(0, 0, 0, List.of(), List.of()),
                     true
                 );
@@ -370,13 +423,13 @@ public final class LibraryIngestRunService {
 
             logger.info(
                 "LIBRARY",
-                "Preparing durable AVIF title tasks.",
+                "Preparing durable reader-page title tasks.",
                 "runId=" + runId + " type=" + libraryTypeSlug + " titles=" + titles.size()
             );
             String now = Instant.now().toString();
             Map<String, Object> payload = new LinkedHashMap<>(normalizeMap(job.get("payload")));
             payload.put("titleCount", titles.size());
-            payload.put("preparing", false);
+            payload.put("preparing", true);
             job = new LinkedHashMap<>(job);
             job.put("payload", payload);
             job.put("result", runSummary(titles.size(), 0, 0, List.of(), List.of()));
@@ -387,52 +440,49 @@ public final class LibraryIngestRunService {
                 if (Thread.currentThread().isInterrupted()) {
                     return;
                 }
-                if (index % 25 == 0 && isRunTerminal(requireRun(runId))) {
+                if (index % 25 == 0 && (isRunTerminal(requireRun(runId)) || "paused".equals(requireRun(runId).get("status")) || !migrationControl.enabled())) {
                     return;
                 }
                 putTitleTask(runId, buildTitleTask(runId, titles.get(index), requestedBy, index, now));
                 if ((index + 1) % 250 == 0) {
                     logger.info(
                         "LIBRARY",
-                        "Prepared AVIF title tasks.",
+                        "Prepared reader-page title tasks.",
                         "runId=" + runId + " prepared=" + (index + 1) + "/" + titles.size()
                     );
                 }
             }
 
-            job = requireRun(runId);
-            if (isRunTerminal(job)) {
-                return;
+            List<Map<String, Object>> tasks;
+            synchronized (this) {
+                job = requireRun(runId);
+                if (isRunTerminal(job) || "paused".equals(job.get("status")) || !migrationControl.enabled()) return;
+                Map<String, Object> preparedPayload = new LinkedHashMap<>(normalizeMap(job.get("payload"))); preparedPayload.put("preparing", false);
+                job = new LinkedHashMap<>(job); job.put("payload", preparedPayload); putJob(runId, job);
+                tasks = loadTitleTasks(runId);
+                updateJob(job, STATUS_QUEUED, "Queued reader-page rebuild for the fair ingest scheduler.", runSummaryFromTasks(tasks), false);
             }
-            List<Map<String, Object>> tasks = loadTitleTasks(runId);
-            updateJob(
-                job,
-                STATUS_QUEUED,
-                "Queued AVIF rebuild for the fair ingest scheduler.",
-                runSummaryFromTasks(tasks),
-                false
-            );
             logger.info(
                 "LIBRARY",
-                "Queued durable AVIF run for fair scheduler.",
+                "Queued durable reader-page run for fair scheduler.",
                 "runId=" + runId + " type=" + libraryTypeSlug + " titles=" + tasks.size()
             );
             scheduleRunWorker();
         } catch (Exception error) {
-            logger.error("LIBRARY", "Raven could not prepare AVIF rebuild title tasks.", error);
+            logger.error("LIBRARY", "Raven could not prepare reader-page rebuild title tasks.", error);
             try {
                 Map<String, Object> job = requireRun(runId);
                 if (!isRunTerminal(job)) {
                     updateJob(
                         job,
                         STATUS_FAILED,
-                        firstNonBlank(rootMessage(error), "Raven could not prepare AVIF rebuild title tasks."),
+                        firstNonBlank(rootMessage(error), "Raven could not prepare reader-page rebuild title tasks."),
                         runSummaryFromTasks(loadTitleTasks(runId)),
                         true
                     );
                 }
             } catch (Exception updateError) {
-                logger.warn("LIBRARY", "Raven could not persist failed AVIF preparation state.", updateError.getMessage());
+                logger.warn("LIBRARY", "Raven could not persist failed reader-page preparation state.", updateError.getMessage());
             }
         }
     }
@@ -509,19 +559,50 @@ public final class LibraryIngestRunService {
      */
     @PostConstruct
     public void resumeInterruptedRuns() {
+        recovery.scheduleWithFixedDelay(this::recoverMigration, 30, 30, TimeUnit.SECONDS);
+        recoverMigration();
+    }
+
+    /** Reconcile durable scheduling intent periodically without interpreting a status read as a start request. */
+    private void recoverMigration() {
         try {
+            if (!migrationControl.enabled()) return;
             List<Map<String, Object>> jobs = loadRunJobs();
             for (Map<String, Object> job : jobs) {
                 if (isLegacyActiveRun(job)) {
-                    supersedeRun(job, "Superseded by AVIF reader-page migration.");
+                    supersedeRun(job, "Superseded by the current reader-page migration.");
                 }
             }
             jobs = collapseDuplicateActiveRuns(loadRunJobs());
             for (Map<String, Object> job : jobs) {
+                String id = stringValue(job.get("jobId"));
+                if ("paused".equals(job.get("status")) && !activeRunIds.contains(id)) {
+                    pausedRunIds.remove(id); List<Map<String, Object>> tasks = resetRunningTasksToQueued(id, loadTitleTasks(id));
+                    updateJob(job, Boolean.TRUE.equals(normalizeMap(job.get("payload")).get("preparing")) ? STATUS_PREPARING : STATUS_QUEUED, "Resumed after the previous chapter checkpoint finished.", runSummaryFromTasks(tasks), false); job = requireRun(id);
+                }
                 reconcileRun(job);
             }
-        } catch (IllegalStateException error) {
+            if (WebpMigrationControl.webp()) ensureMigrationTypes(loadRunJobs());
+        } catch (RuntimeException error) {
             logger.warn("LIBRARY", "Raven could not inspect durable library ingest runs during startup.", error.getMessage());
+        }
+    }
+
+    /**
+     * Repair a crash between persisted migration intent and creation of every library-type run.
+     * Existing failed/completed runs are evidence of scheduling, not permission to retry them automatically.
+     * @param jobs current durable ingest runs
+     */
+    synchronized void ensureMigrationTypes(List<Map<String, Object>> jobs) {
+        if (!migrationControl.enabled()) return;
+        Set<String> known = new LinkedHashSet<>();
+        for (Map<String, Object> job : jobs) {
+            Map<String, Object> payload = normalizeMap(job.get("payload"));
+            if (!STATUS_SUPERSEDED.equals(job.get("status")) && INGEST_FORMAT.equals(payload.get("format")) && INGEST_MODE.equals(payload.get("mode"))) known.add(stringValue(payload.get("libraryTypeSlug")));
+        }
+        for (Map<String, Object> row : libraryService.listCompactTitleRows(Map.of())) {
+            String type = LibraryNaming.normalizeTypeSlug(stringValue(row.get("libraryTypeSlug")));
+            if (ALLOWED_TYPE_SLUGS.contains(type) && toInt(row.get("chapterCount"), 0) > 0 && known.add(type)) createPreparingRun(type, "scriptarr-migration-recovery");
         }
     }
 
@@ -530,6 +611,7 @@ public final class LibraryIngestRunService {
      */
     @PreDestroy
     public void shutdown() {
+        recovery.shutdownNow();
         worker.shutdownNow();
         preparationWorker.shutdownNow();
     }
@@ -558,7 +640,7 @@ public final class LibraryIngestRunService {
         List<String> failedTitleIds = new ArrayList<>();
         try {
             Map<String, Object> job = requireRun(normalizedRunId);
-            if (isRunTerminal(job)) {
+            if (isRunTerminal(job) || "paused".equals(stringValue(job.get("status"))) || !migrationControl.enabled()) {
                 return;
             }
             List<Map<String, Object>> tasks = loadTitleTasks(normalizedRunId);
@@ -578,24 +660,30 @@ public final class LibraryIngestRunService {
             updateJob(
                 job,
                 STATUS_RUNNING,
-                "Rebuilding AVIF pages from existing canonical CBZ archives.",
+                "Rebuilding reader-page pages from existing canonical CBZ archives.",
                 runSummary(tasks.size(), completedTitleIds.size(), failedTitleIds.size(), completedTitleIds, failedTitleIds),
                 false
             );
-            Map<String, Object> runningTask = withTaskStatus(task, STATUS_RUNNING, "Rebuilding title AVIF pages.", 5, Map.of());
+            Map<String, Object> runningTask = withTaskStatus(task, STATUS_RUNNING, "Rebuilding title reader-page pages.", 5, Map.of());
             putTitleTask(normalizedRunId, runningTask);
-            try {
-                LibraryTitle title = libraryService.ingestTitle(
-                    titleId,
-                    stringValue(task.get("requestedBy")),
-                    () -> cancellationRequestedRunIds.contains(normalizedRunId) || Thread.currentThread().isInterrupted()
-                );
+            try (var context = IngestExecutionContext.enter("migration", Map.of("runId", normalizedRunId, "taskId", stringValue(task.get("taskId")), "requestedBy", stringValue(task.get("requestedBy"))))) {
+                LibraryTitle title;
+                boolean pendingMigration;
+                if (WebpMigrationControl.webp()) {
+                    LibraryService.MigrationPass pass = libraryService.ingestMigrationTitle(titleId, stringValue(task.get("requestedBy")),
+                        () -> cancellationRequestedRunIds.contains(normalizedRunId) || Thread.currentThread().isInterrupted(), value -> { });
+                    title = pass.title(); pendingMigration = pass.pending();
+                } else {
+                    title = libraryService.ingestTitle(titleId, stringValue(task.get("requestedBy")),
+                        () -> cancellationRequestedRunIds.contains(normalizedRunId) || Thread.currentThread().isInterrupted(), value -> { }, false);
+                    pendingMigration = false;
+                }
                 if (taskStillWritable(normalizedRunId, stringValue(runningTask.get("taskId")))) {
                     putTitleTask(normalizedRunId, withTaskStatus(
                         runningTask,
-                        STATUS_COMPLETED,
-                        "Title AVIF rebuild completed.",
-                        100,
+                        pendingMigration ? STATUS_QUEUED : STATUS_COMPLETED,
+                        pendingMigration ? "Yielded after one chapter for foreground work." : "Title reader-page rebuild completed.",
+                        pendingMigration ? 0 : 100,
                         Map.of(
                             "titleId", title.id(),
                             "ingestStatus", title.ingestStatus(),
@@ -604,6 +692,10 @@ public final class LibraryIngestRunService {
                     ));
                 }
             } catch (LibraryIngestException error) {
+                if (pausedRunIds.contains(normalizedRunId)) {
+                    putTitleTask(normalizedRunId, withTaskStatus(runningTask, STATUS_QUEUED, "Paused without replacing readable pages.", 0, Map.of("titleId", titleId)));
+                    return;
+                }
                 String status = "ingest_cancelled".equals(error.failureCode()) ? STATUS_CANCELLED : STATUS_FAILED;
                 if (taskStillWritable(normalizedRunId, stringValue(runningTask.get("taskId")))) {
                     putTitleTask(normalizedRunId, withTaskStatus(
@@ -645,7 +737,7 @@ public final class LibraryIngestRunService {
                     updateJob(
                         job,
                         STATUS_FAILED,
-                        firstNonBlank(error.getMessage(), "Raven AVIF rebuild failed."),
+                        firstNonBlank(error.getMessage(), "Raven reader-page rebuild failed."),
                         runSummaryFromTasks(tasks),
                         true
                     );
@@ -682,7 +774,7 @@ public final class LibraryIngestRunService {
                 updateJob(
                     job,
                     STATUS_QUEUED,
-                    "Recovered detached AVIF rebuild for the fair ingest scheduler.",
+                    "Recovered detached reader-page rebuild for the fair ingest scheduler.",
                     runSummaryFromTasks(tasks),
                     false
                 );
@@ -697,6 +789,7 @@ public final class LibraryIngestRunService {
     }
 
     private boolean hasRunnableJobs() {
+        if (!migrationControl.enabled()) return false;
         try {
             for (Map<String, Object> job : loadRunJobs()) {
                 if (!isDurableActive(job)) {
@@ -764,7 +857,7 @@ public final class LibraryIngestRunService {
 
     private void refreshRunAfterTitle(String runId) {
         Map<String, Object> job = requireRun(runId);
-        if (isRunTerminal(job)) {
+        if (isRunTerminal(job) || "paused".equals(job.get("status")) || !migrationControl.enabled()) {
             return;
         }
         List<Map<String, Object>> tasks = loadTitleTasks(runId);
@@ -774,7 +867,7 @@ public final class LibraryIngestRunService {
             updateJob(
                 job,
                 failed ? STATUS_FAILED : STATUS_COMPLETED,
-                failed ? "Raven AVIF rebuild completed with failed title(s)." : "Raven AVIF rebuild completed.",
+                failed ? "Raven reader-page rebuild completed with failed title(s)." : "Raven reader-page rebuild completed.",
                 summary,
                 true
             );
@@ -784,7 +877,7 @@ public final class LibraryIngestRunService {
         updateJob(
             job,
             STATUS_QUEUED,
-            "Waiting for the fair AVIF ingest scheduler after rebuilding " + finished + " of " + tasks.size() + " title(s).",
+            "Waiting for the fair reader-page ingest scheduler after rebuilding " + finished + " of " + tasks.size() + " title(s).",
             summary,
             false
         );
@@ -818,7 +911,7 @@ public final class LibraryIngestRunService {
             updateJob(
                 job,
                 STATUS_QUEUED,
-                "Recovered detached AVIF rebuild for the fair ingest scheduler.",
+                "Recovered detached reader-page rebuild for the fair ingest scheduler.",
                 runSummaryFromTasks(tasks),
                 false
             );
@@ -840,14 +933,14 @@ public final class LibraryIngestRunService {
         updateJob(
             job,
             failed ? STATUS_FAILED : STATUS_COMPLETED,
-            failed ? "Raven AVIF rebuild completed with failed title(s)." : "Raven AVIF rebuild completed.",
+            failed ? "Raven reader-page rebuild completed with failed title(s)." : "Raven reader-page rebuild completed.",
             runSummaryFromTasks(tasks),
             true
         );
     }
 
     private synchronized boolean scheduleRunWorker() {
-        if (worker.isShutdown()) {
+        if (worker.isShutdown() || !migrationControl.enabled()) {
             return false;
         }
         boolean scheduled = false;
@@ -894,7 +987,7 @@ public final class LibraryIngestRunService {
                 Map<String, Object> reset = withTaskStatus(
                     task,
                     STATUS_QUEUED,
-                    "Recovered stale title AVIF rebuild for the fair ingest scheduler.",
+                    "Recovered stale title reader-page rebuild for the fair ingest scheduler.",
                     Math.max(0, Math.min(95, toInt(task.get("percent"), 0))),
                     normalizeMap(task.get("result"))
                 );
@@ -975,7 +1068,7 @@ public final class LibraryIngestRunService {
         task.put("taskKey", title.id());
         task.put("status", STATUS_QUEUED);
         task.put("label", title.title());
-        task.put("message", "Queued title AVIF rebuild.");
+        task.put("message", "Queued title reader-page rebuild.");
         task.put("requestedBy", requestedBy);
         task.put("sortOrder", sortOrder);
         task.put("percent", 0);
@@ -1077,9 +1170,20 @@ public final class LibraryIngestRunService {
             .sorted(Comparator.comparing((row) -> stringValue(row.get("title")).toLowerCase(Locale.ROOT)))
             .map((row) -> stringValue(row.get("id")))
             .filter((titleId) -> !titleId.isBlank())
-            .map(libraryService::findTitleById)
+            .map(this::loadIngestTitle)
             .filter((title) -> title != null)
+            .filter((title) -> !WebpMigrationControl.webp() || title.chapters().stream().anyMatch(chapter -> chapter.available() && chapter.archivePath() != null && !chapter.archivePath().isBlank()))
             .toList();
+    }
+
+    /** @param titleId exact canonical card identity @return full title without silently omitting broker failures @throws IllegalStateException when migration ownership cannot be loaded */
+    private LibraryTitle loadIngestTitle(String titleId) {
+        if (!WebpMigrationControl.webp()) return libraryService.findTitleById(titleId);
+        try {
+            JsonNode row = brokerClient.getLibraryTitle(titleId);
+            if (row == null || !row.isObject() || !titleId.equals(row.path("id").asText()) || !row.path("chapters").isArray()) throw new IllegalStateException("Migration catalog scope is unavailable.");
+            return objectMapper.treeToValue(row, LibraryTitle.class);
+        } catch (Exception unavailable) { throw new IllegalStateException("Could not load a complete migration title snapshot.", unavailable); }
     }
 
     private Map<String, Object> activeRunForType(String libraryTypeSlug) {
@@ -1092,7 +1196,7 @@ public final class LibraryIngestRunService {
         }
         activeRuns.sort(this::compareDuplicateActiveRuns);
         for (int index = 1; index < activeRuns.size(); index += 1) {
-            supersedeRunJobOnly(activeRuns.get(index), "Superseded duplicate active AVIF rebuild for " + libraryTypeSlug + ".");
+            supersedeRunJobOnly(activeRuns.get(index), "Superseded duplicate active reader-page rebuild for " + libraryTypeSlug + ".");
         }
         return activeRuns.isEmpty() ? Map.of() : activeRuns.getFirst();
     }
@@ -1118,7 +1222,7 @@ public final class LibraryIngestRunService {
         for (Map<String, Object> job : loadRunJobs()) {
             String jobType = stringValue(normalizeMap(job.get("payload")).get("libraryTypeSlug")).toLowerCase(Locale.ROOT);
             if (libraryTypeSlug.equals(jobType) && isLegacyActiveRun(job)) {
-                supersedeRun(job, "Superseded by AVIF reader-page migration.");
+                supersedeRun(job, "Superseded by reader-page reader-page migration.");
             }
         }
     }
@@ -1211,14 +1315,14 @@ public final class LibraryIngestRunService {
             }
             activeRuns.sort(this::compareDuplicateActiveRuns);
             for (int index = 1; index < activeRuns.size(); index += 1) {
-                supersedeRunJobOnly(activeRuns.get(index), "Superseded duplicate active AVIF rebuild for " + entry.getKey() + ".");
+                supersedeRunJobOnly(activeRuns.get(index), "Superseded duplicate active reader-page rebuild for " + entry.getKey() + ".");
                 supersededCount += 1;
             }
         }
         if (supersededCount > 0) {
             logger.warn(
                 "LIBRARY",
-                "Raven superseded duplicate active AVIF ingest runs.",
+                "Raven superseded duplicate active reader-page ingest runs.",
                 "count=" + supersededCount
             );
             return loadRunJobs();
@@ -1302,14 +1406,14 @@ public final class LibraryIngestRunService {
     private String messageForRunStatus(String status) {
         String normalized = stringValue(status).toLowerCase(Locale.ROOT);
         return switch (normalized) {
-            case STATUS_PREPARING -> "Preparing title tasks for the fair AVIF scheduler.";
-            case STATUS_QUEUED -> "Waiting for AVIF worker slot.";
-            case STATUS_RUNNING -> "Running current title AVIF rebuild.";
-            case STATUS_COMPLETED -> "AVIF rebuild completed.";
-            case STATUS_FAILED -> "AVIF rebuild completed with failed title(s).";
-            case STATUS_CANCELLED -> "AVIF rebuild cancelled.";
-            case STATUS_SUPERSEDED -> "AVIF rebuild superseded.";
-            default -> "AVIF rebuild state updated.";
+            case STATUS_PREPARING -> "Preparing title tasks for the fair reader-page scheduler.";
+            case STATUS_QUEUED -> "Waiting for reader-page worker slot.";
+            case STATUS_RUNNING -> "Running current title reader-page rebuild.";
+            case STATUS_COMPLETED -> "reader-page rebuild completed.";
+            case STATUS_FAILED -> "reader-page rebuild completed with failed title(s).";
+            case STATUS_CANCELLED -> "reader-page rebuild cancelled.";
+            case STATUS_SUPERSEDED -> "reader-page rebuild superseded.";
+            default -> "reader-page rebuild state updated.";
         };
     }
 
@@ -1584,16 +1688,26 @@ public final class LibraryIngestRunService {
         payload.put("compactedAt", Instant.now().toString());
         Map<String, Object> compacted = new LinkedHashMap<>(job);
         compacted.put("payload", payload);
-        compacted.put("message", firstNonBlank(stringValue(job.get("message")), "Superseded AVIF rebuild compacted."));
+        compacted.put("message", firstNonBlank(stringValue(job.get("message")), "Superseded reader-page rebuild compacted."));
         compacted.put("updatedAt", Instant.now().toString());
         putJob(stringValue(job.get("jobId")), compacted);
         return 1;
     }
 
+    /** @return bounded title lanes from the process environment */
     private static int resolveConfiguredTitleLanes() {
-        String raw = Optional.ofNullable(System.getenv("SCRIPTARR_RAVEN_AVIF_TITLE_LANES"))
+        return resolveConfiguredTitleLanes(System.getenv());
+    }
+
+    /**
+     * Resolve the established title-lane policy without mutating the process environment.
+     * @param env process environment or isolated test values
+     * @return configured lanes bounded to one through three, or the existing default
+     */
+    static int resolveConfiguredTitleLanes(Map<String, String> env) {
+        String raw = Optional.ofNullable(env.get("SCRIPTARR_RAVEN_AVIF_TITLE_LANES"))
             .filter((value) -> !value.isBlank())
-            .orElseGet(() -> Optional.ofNullable(System.getenv("SCRIPTARR_RAVEN_INGEST_TITLE_LANES")).orElse(""));
+            .orElseGet(() -> Optional.ofNullable(env.get("SCRIPTARR_RAVEN_INGEST_TITLE_LANES")).orElse(""));
         try {
             return raw == null || raw.isBlank()
                 ? DEFAULT_TITLE_LANES

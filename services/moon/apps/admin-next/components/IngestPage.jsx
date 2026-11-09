@@ -51,6 +51,9 @@ export const IngestPage = ({user}) => {
   });
   const summary = data?.summary || {};
   const hardware = summary.hardware || {};
+  const conversionPool = summary.conversionPool || null;
+  const workers = normalizeArray(conversionPool?.workers);
+  const readyWorkers = workers.filter((worker) => worker.ready === true).length;
   const titles = normalizeArray(data?.titles);
   const activeRuns = normalizeArray(data?.runs?.active);
   const hasActiveRuns = activeRuns.length > 0;
@@ -79,7 +82,8 @@ export const IngestPage = ({user}) => {
         ...(current || {}),
         summary: {
           ...(current?.summary || {}),
-          hardware: result.payload?.summary?.hardware || current?.summary?.hardware || {}
+          hardware: result.payload?.summary?.hardware || current?.summary?.hardware || {},
+          conversionPool: result.payload?.summary?.conversionPool ?? current?.summary?.conversionPool ?? null
         },
         runs: result.payload?.runs || current?.runs || {}
       }));
@@ -106,7 +110,7 @@ export const IngestPage = ({user}) => {
     setBusyTitleId("__all__");
     const result = await requestJson("/api/moon/v3/admin/ingest/retry-all", {method: "POST"});
     notify({
-      message: result.ok ? result.payload?.message || "AVIF rebuilds started." : result.payload?.error || "Moon could not start AVIF rebuilds.",
+      message: result.ok ? result.payload?.message || "WebP rebuilds started." : result.payload?.error || "The rebuilds could not be started.",
       tone: result.ok && Number(result.payload?.failedCount || 0) === 0 ? "good" : "bad",
       category: "job"
     });
@@ -123,8 +127,8 @@ export const IngestPage = ({user}) => {
     const result = await requestJson(`/api/moon/v3/admin/ingest/runs/${encodeURIComponent(runId)}/${action}`, {method: "POST"});
     notify({
       message: result.ok
-        ? `${action === "cancel" ? "Cancelled" : "Resumed"} AVIF run.`
-        : result.payload?.error || `Moon could not ${action} that AVIF run.`,
+        ? `${action === "cancel" ? "Cancelled" : "Resumed"} reader-page run.`
+        : result.payload?.error || `Could not ${action} the reader-page run.`,
       tone: result.ok ? "good" : "bad",
       category: "job"
     });
@@ -169,7 +173,7 @@ export const IngestPage = ({user}) => {
         <div className="admin-section-heading">
           <div>
             <div className="admin-kicker">Import</div>
-            <h2>AVIF ingest</h2>
+            <h2>WebP ingest</h2>
           </div>
           <AdminStatusBadge tone={refreshTone}>
             {refreshLabel}
@@ -184,14 +188,31 @@ export const IngestPage = ({user}) => {
       </section>
 
       {normalizeString(hardware.state) === "hardware_missing" ? (
-        <AdminActionBanner tone="bad">NVIDIA runtime access is missing for Raven ingest.</AdminActionBanner>
+        <AdminActionBanner tone="bad">The configured page encoder is unavailable.</AdminActionBanner>
       ) : null}
+
+      <section className="admin-panel" aria-label="Ingest workers">
+        <div className="admin-section-heading"><div><div className="admin-kicker">Conversion pool</div><h2>Ingest workers</h2></div>
+          <AdminStatusBadge tone={readyWorkers ? "good" : "warning"}>{conversionPool ? `${readyWorkers} ready` : "Status unavailable"}</AdminStatusBadge>
+        </div>
+        {conversionPool ? <>
+          <p>{conversionPool.activeJobs ?? 0}/{conversionPool.capacity ?? 1} encoding · {conversionPool.queuedJobs ?? 0} queued · {(conversionPool.resultReadyJobs ?? 0) + (conversionPool.publishingJobs ?? 0)} awaiting publication</p>
+          {!readyWorkers ? <AdminActionBanner tone="warning">Conversion jobs wait safely until a worker is ready. Existing reader pages remain available.</AdminActionBanner> : null}
+          <AdminDenseTable rows={workers} getKey={(row) => `${row.workerId}:${row.instanceId}`} columns={[
+            {key: "worker", label: "Worker", render: (row) => normalizeString(row.workerId, "Unknown")},
+            {key: "host", label: "Host", render: (row) => normalizeString(row.hostId, "—")},
+            {key: "format", label: "Output", render: (row) => normalizeString(row.format, "unknown").toUpperCase()},
+            {key: "ready", label: "State", render: (row) => <AdminStatusBadge tone={row.ready ? "good" : "warning"}>{row.ready ? "Ready" : "Unavailable"}</AdminStatusBadge>},
+            {key: "seen", label: "Last seen", render: (row) => formatDate(row.lastSeenAt)}
+          ]} />
+        </> : <p className="admin-muted">The conversion pool has not reported its status.</p>}
+      </section>
 
       <IngestRunsPanel
         runs={data?.runs || {}}
-        title="AVIF runs"
+        title="Reader-page runs"
         kicker="Library ingest"
-        empty="No durable AVIF ingest runs are active right now."
+        empty="No durable reader-page ingest runs are active right now."
         canWrite={canWrite}
         busyRunId={busyTitleId.includes(":") ? busyTitleId.split(":").pop() : ""}
         onResume={(run) => runAction("resume", run)}

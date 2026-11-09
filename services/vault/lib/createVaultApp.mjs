@@ -4,6 +4,7 @@ import {resolveVaultConfig} from "./config.mjs";
 import {serviceAuth} from "./serviceAuth.mjs";
 import {createStore} from "./createStore.mjs";
 import {DEFAULT_EVENT_RETENTION_DAYS} from "./vaultEvents.mjs";
+import {registerConversionRoutes} from "./registerConversionRoutes.mjs";
 
 const JSON_BODY_LIMIT = "10mb";
 const EVENT_PRUNE_INTERVAL_MS = 24 * 60 * 60 * 1000;
@@ -666,6 +667,8 @@ export const createVaultApp = async ({
   app.put("/api/service/raven/metadata-matches/:titleId", requireJson, async (req, res) => {
     res.json(await store.setRavenMetadataMatch(req.params.titleId, req.body || {}));
   });
+
+  registerConversionRoutes(app, {store, requireJson});
 
   app.get("/api/service/jobs", async (req, res) => {
     res.json(await store.listJobs({

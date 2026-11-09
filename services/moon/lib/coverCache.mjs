@@ -3,6 +3,7 @@ import {createHash, randomUUID} from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import sharp from "sharp";
+import {readerResponseMatchesSelector} from "./readerImageIdentity.mjs";
 
 const MAX_BYTES = 8 * 1024 * 1024;
 const TIMEOUT_MS = 10_000;
@@ -15,13 +16,14 @@ const RASTER_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/av
  * @param {{status: number, headers: Record<string, string>, body: Buffer}} response Authenticated page-status response.
  * @returns {void}
  */
-const requireReaderCoverAuthorization = (response) => {
+const requireReaderCoverAuthorization = (response, pagePath = "") => {
   let payload = null;
   try {payload = JSON.parse(response.body.toString("utf8"));} catch {}
   if (response.status === 200 && /^application\/json\b/i.test(response.headers["content-type"] || "")
     && payload?.ok === true && payload.status === 200 && payload.pageIndex === 0
     && payload.contentTypeFamily === "image" && Number.isInteger(payload.contentLength)
-    && payload.contentLength > 0 && payload.contentLength <= MAX_BYTES && payload.cacheable === true) return;
+    && payload.contentLength > 0 && payload.contentLength <= MAX_BYTES && payload.cacheable === true
+    && (!pagePath.includes("thumbnail=true") || payload.thumbnail === true && payload.segmentIndex === 0)) return;
   const error = new Error("Reader cover authorization unavailable.");
   error.status = Number.isInteger(response.status) && response.status >= 400 && response.status <= 599 ? response.status
     : Number.isInteger(payload?.status) && payload.status >= 400 && payload.status <= 599 ? payload.status : 503;
@@ -38,10 +40,11 @@ export const validateCoverFallbackPath = (titleId, value = "") => {
   if (!value) return "";
   const prefix = `/api/moon-v3/user/reader/title/${encodeURIComponent(titleId)}/chapter/`;
   if (typeof value !== "string" || !value.startsWith(prefix)) throw new Error("Invalid cover fallback path.");
-  const match = /^([^/?#]+)\/page\/0\?rev=(avif-[a-f0-9]{16})$/.exec(value.slice(prefix.length));
+  const match = /^([^/?#]+)\/page\/0\?rev=((?:avif|webp)-[a-f0-9]{16})(?:(&thumbnail=true))?$/.exec(value.slice(prefix.length));
   let chapterId = "";
   try {chapterId = match ? decodeURIComponent(match[1]) : "";} catch {}
-  if (!match || !chapterId || chapterId === "." || chapterId === ".." || /[\\/\u0000-\u001f\u007f]/.test(chapterId)
+  if (!match || (match[2].startsWith("webp-") && !match[3]) || (match[2].startsWith("avif-") && match[3])
+    || !chapterId || chapterId === "." || chapterId === ".." || /[\\/\u0000-\u001f\u007f]/.test(chapterId)
     || encodeURIComponent(chapterId) !== match[1]) throw new Error("Invalid cover fallback path.");
   return value;
 };
@@ -122,7 +125,7 @@ export const createCoverCache = ({cacheDir, fetchImpl = fetch, now = Date.now}) 
       // A cache hit still requires current authorization, without redownloading discarded AVIF bytes.
       try {
         if (!authorizeFallback) throw new Error("Missing reader cover authorization probe.");
-        requireReaderCoverAuthorization(await authorizeFallback(fallback));
+        requireReaderCoverAuthorization(await authorizeFallback(fallback), fallback);
       } catch (error) {
         if (!Number.isInteger(error.status) || error.status < 400 || error.status > 599) error.status = 503;
         throw error;
@@ -135,6 +138,9 @@ export const createCoverCache = ({cacheDir, fetchImpl = fetch, now = Date.now}) 
       const error = new Error("Reader cover fallback unavailable.");
       error.status = response.status;
       throw error;
+    }
+    if (fallback.includes("thumbnail=true") && !readerResponseMatchesSelector(response.headers, {segmentIndex: 0, thumbnail: true})) {
+      throw new Error("Reader cover thumbnail identity differs.");
     }
     if (!RASTER_TYPES.has(String(response.headers["content-type"] || "").split(";")[0].trim().toLowerCase())
       || !Buffer.isBuffer(response.body) || !response.body.length || response.body.length > MAX_BYTES) {

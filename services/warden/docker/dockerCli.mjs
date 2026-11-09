@@ -358,7 +358,7 @@ export const removeDockerNetwork = async (networkName, {ignoreMissing = true} = 
  *   networkName: string,
  *   networkAliases?: string[],
  *   dnsServers?: string[],
- *   mounts?: Array<{hostPath: string, containerPath: string | null}>,
+ *   mounts?: Array<{hostPath: string, containerPath: string | null, readOnly?: boolean}>,
  *   publishedPorts?: Array<{hostPort: number, containerPort: number}>,
  *   extraArgs?: string[],
  *   healthCheck?: {
@@ -423,7 +423,7 @@ export const runDetachedContainer = async ({
     if (!mount?.hostPath || !mount?.containerPath) {
       continue;
     }
-    args.push("-v", `${toDockerDesktopHostPath(mount.hostPath)}:${mount.containerPath}`);
+    args.push("-v", `${toDockerDesktopHostPath(mount.hostPath)}:${mount.containerPath}${mount.readOnly ? ":ro" : ""}`);
   }
 
   for (const publishedPort of publishedPorts) {

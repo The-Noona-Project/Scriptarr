@@ -233,14 +233,14 @@ class LibraryServiceTest {
     }
 
     /**
-     * Verify startup rescans use compact title-card indexes instead of pulling
-     * the full chapter catalog for every existing folder.
+     * Verify background rescans load one complete ownership census rather than
+     * repeatedly pulling the catalog for each folder or hiding duplicate ids behind cards.
      *
      * @param tempDir temporary test directory
      * @throws Exception when the test fixture cannot be prepared
      */
     @Test
-    void rescanDownloadedFilesUsesCompactIndexForExistingFolders(@TempDir Path tempDir) throws Exception {
+    void rescanDownloadedFilesUsesOneOwnershipCensusForMultipleFolders(@TempDir Path tempDir) throws Exception {
         FakeRavenBrokerClient brokerClient = new FakeRavenBrokerClient();
         ScriptarrLogger logger = mock(ScriptarrLogger.class);
         when(logger.getDownloadsRoot()).thenReturn(tempDir);
@@ -259,13 +259,13 @@ class LibraryServiceTest {
             null,
             titleFolder
         );
+        Path second = tempDir.resolve("downloaded/manga/Unowned_Source");
+        writeArchive(second.resolve("Unowned Source c001.cbz"));
         int fullCallsBeforeRescan = brokerClient.listLibraryTitlesCalls();
-        int cardCallsBeforeRescan = brokerClient.listLibraryTitleCardsCalls();
 
         service.rescanDownloadedFiles();
 
-        assertEquals(fullCallsBeforeRescan, brokerClient.listLibraryTitlesCalls());
-        assertTrue(brokerClient.listLibraryTitleCardsCalls() > cardCallsBeforeRescan);
+        assertEquals(fullCallsBeforeRescan + 1, brokerClient.listLibraryTitlesCalls());
     }
 
     /**
@@ -478,7 +478,7 @@ class LibraryServiceTest {
         service.ingestTitle(title.id(), "test");
 
         JsonNode task = brokerClient.listDownloadTasks().get(0);
-        assertEquals("AVIF ingest completed.", task.path("message").asText());
+        assertEquals("Reader-page ingest completed.", task.path("message").asText());
         assertFalse(task.path("startedAt").asText("").isBlank());
         assertFalse(task.path("updatedAt").asText("").isBlank());
         assertEquals(task.path("startedAt").asText(), task.path("details").path("startedAt").asText());
@@ -1074,7 +1074,7 @@ class LibraryServiceTest {
     }
 
     private LibraryChapter readyChapter(String id, String label, String chapterNumber, int pageCount, String releaseDate, String archivePath) {
-        return readyChapterWithRevision(id, label, chapterNumber, pageCount, releaseDate, archivePath, "avif-test-revision");
+        return readyChapterWithRevision(id, label, chapterNumber, pageCount, releaseDate, archivePath, "avif-1111111111111111");
     }
 
     private LibraryChapter readyChapterWithRevision(String id, String label, String chapterNumber, int pageCount, String releaseDate, String archivePath, String revision) {

@@ -20,24 +20,44 @@ import static org.mockito.Mockito.*;
 
 /** Verify durable replay, checked persistence, cancellation and uncapped ownership evidence. */
 class BulkQueueCoordinatorTest {
+    /** An emptied completed placeholder cannot reuse a shortened, unrelated metadata match. */
+    @Test void emptyCompletedPlaceholderRequiresOriginalSourceAnchor() {
+        Fixture f = new Fixture(new FakeRavenBrokerClient()); var title = mock(com.scriptarr.raven.library.LibraryTitle.class);
+        when(title.id()).thenReturn("canonical"); when(title.title()).thenReturn("Alpha"); when(title.sourceUrl()).thenReturn("https://weebcentral.com/series/01J76XYCH9QX9GSDFR6959N669");
+        when(title.status()).thenReturn("completed"); when(title.chapters()).thenReturn(List.of()); when(f.library.listTitles()).thenReturn(List.of(title));
+        when(f.intake.resolveBulkMetadata(anyString(), anyString(), anyString(), anyString(), anyList())).thenReturn(new DownloadIntakeService.BulkMetadataResolution("matched", Map.of("title", "Unrelated", "matchedQuery", "Alpha"), Map.of()));
+        assertEquals(1, f.queue().failedCount()); verify(f.downloader, never()).queueBulkOwned(anyString(), anyString(), anyString(), anyString(), any());
+        assertTrue(f.broker.listJobTasks("run", "").toString().contains("metadata_source_ambiguous"));
+    }
+
+    /** Distinct provider editions that map to one retained canonical title cannot enqueue an overwrite. */
+    @Test void existingCanonicalSourceRejectsDifferentEdition() {
+        Fixture f = new Fixture(new FakeRavenBrokerClient()); var title = mock(com.scriptarr.raven.library.LibraryTitle.class);
+        when(title.id()).thenReturn("canonical"); when(title.title()).thenReturn("Alpha"); when(title.libraryTypeSlug()).thenReturn("manhua");
+        when(title.sourceUrl()).thenReturn("https://weebcentral.com/series/01J76XYDQHSY9H2V7050NC7843"); when(f.library.listTitles()).thenReturn(List.of(title));
+        assertEquals(1, f.queue().failedCount()); verify(f.downloader, never()).queueBulkOwned(anyString(), anyString(), anyString(), anyString(), any());
+        assertTrue(f.broker.listJobTasks("run", "").toString().contains("source_identity_conflict"));
+    }
+
     /** An append with no metadata snapshot must keep source art already found during browse. */
     @Test
     void appendRetainsBrowsedCoverInItsFrozenRequest() {
         Fixture f = new Fixture(new FakeRavenBrokerClient());
         var title = mock(com.scriptarr.raven.library.LibraryTitle.class);
-        when(title.sourceUrl()).thenReturn("https://weebcentral.com/series/alpha");
-        when(title.status()).thenReturn("active");
+        when(title.sourceUrl()).thenReturn("https://weebcentral.com/series/01J76XYCH9QX9GSDFR6959N669");
+        when(title.id()).thenReturn("canonical-alpha");
+        when(title.status()).thenReturn("completed");
         when(title.chapters()).thenReturn(List.of());
         when(f.library.listTitles()).thenReturn(List.of(title));
         when(f.provider.browseTitlesAlphabetically(anyString(), anyBoolean(), anyString(), any(), any())).thenReturn(
-            new BulkBrowseResult(List.of(Map.of("title", "Alpha", "href", "https://weebcentral.com/series/alpha", "type", "Manhua",
+            new BulkBrowseResult(List.of(Map.of("title", "Alpha", "href", "https://weebcentral.com/series/01J76XYCH9QX9GSDFR6959N669", "type", "Manhua",
                 "coverUrl", "https://images.example/browse.jpg")), 1));
         assertEquals(1, f.queue().appendedCount());
         var request = org.mockito.ArgumentCaptor.forClass(DownloadRequest.class);
         verify(f.downloader).queueBulkOwned(anyString(), anyString(), anyString(), anyString(), request.capture());
         assertEquals("https://images.example/browse.jpg", request.getValue().selectedDownload().get("coverUrl"));
-        assertTrue(request.getValue().selectedMetadata().isEmpty());
-        verify(f.intake, never()).resolveBulkMetadata(anyString(), anyString(), anyString(), anyString());
+        assertEquals("Alpha", request.getValue().selectedMetadata().get("title"));
+        verify(f.intake).resolveBulkMetadata(anyString(), anyString(), anyString(), anyString(), anyList());
     }
 
     /** Browse artwork is a final fallback and cannot override an earlier metadata cover selection. */
@@ -48,9 +68,9 @@ class BulkQueueCoordinatorTest {
             Map.of("details", Map.of("coverImageUrl", "https://images.example/metadata.jpg")))) {
             Fixture f = new Fixture(new FakeRavenBrokerClient());
             when(f.provider.browseTitlesAlphabetically(anyString(), anyBoolean(), anyString(), any(), any())).thenReturn(
-                new BulkBrowseResult(List.of(Map.of("title", "Alpha", "href", "https://weebcentral.com/series/alpha", "type", "Manhua",
+                new BulkBrowseResult(List.of(Map.of("title", "Alpha", "href", "https://weebcentral.com/series/01J76XYCH9QX9GSDFR6959N669", "type", "Manhua",
                     "coverUrl", "https://images.example/browse.jpg")), 1));
-            when(f.intake.resolveBulkMetadata(anyString(), anyString(), anyString(), anyString())).thenReturn(
+            when(f.intake.resolveBulkMetadata(anyString(), anyString(), anyString(), anyString(), anyList())).thenReturn(
                 new DownloadIntakeService.BulkMetadataResolution("matched", metadata, Map.of()));
             assertEquals(1, f.queue().queuedCount());
             var request = org.mockito.ArgumentCaptor.forClass(DownloadRequest.class);
@@ -187,10 +207,10 @@ class BulkQueueCoordinatorTest {
             when(downloader.restorationCompletion()).thenReturn(CompletableFuture.completedFuture(null));
             when(downloader.bulkTaskSnapshots()).thenReturn(List.of());
             when(library.listTitles()).thenReturn(List.of());
-            when(provider.browseTitlesAlphabetically(anyString(),anyBoolean(),anyString(),any(),any())).thenReturn(new BulkBrowseResult(List.of(Map.of("title","Alpha","href","https://weebcentral.com/series/alpha","type","Manhua")),1));
+            when(provider.browseTitlesAlphabetically(anyString(),anyBoolean(),anyString(),any(),any())).thenReturn(new BulkBrowseResult(List.of(Map.of("title","Alpha","href","https://weebcentral.com/series/01J76XYCH9QX9GSDFR6959N669","type","Manhua")),1));
             when(provider.getTitleDetails(anyString())).thenReturn(new TitleDetails("","Manhua",List.of(),"Ongoing","",false,false,false,List.of(),List.of()));
             when(provider.getChapters(anyString())).thenReturn(List.of(Map.of("chapter_number","1","href","https://weebcentral.com/chapters/one")));
-            when(intake.resolveBulkMetadata(anyString(),anyString(),anyString(),anyString())).thenReturn(new DownloadIntakeService.BulkMetadataResolution("matched",Map.of("provider","mangadex","providerSeriesId","alpha"),Map.of()));
+            when(intake.resolveBulkMetadata(anyString(),anyString(),anyString(),anyString(),anyList())).thenReturn(new DownloadIntakeService.BulkMetadataResolution("matched",Map.of("provider","mangadex","providerSeriesId","alpha","title","Alpha"),Map.of()));
             when(downloader.queueBulkOwned(anyString(),anyString(),anyString(),anyString(),any())).thenAnswer(this::accept);
         }
 

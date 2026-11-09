@@ -34,7 +34,19 @@ managed services.
 - Multi-host planning must reject missing or development-default service credentials before creating published services.
 - Multi-host mode must reject legacy standalone LocalAI mutations on both hosts. Oracle owns its embedded backend;
   retain legacy Warden LocalAI read diagnostics and single-host compatibility only.
-- CPU AVIF mode must omit NVIDIA runtime requirements; Oracle GPU planning remains independent of Raven encoding.
+- New Raven output is CPU WebP; legacy AVIF remains readable. Never inherit Oracle/shared GPU grants for Raven.
+  Oracle GPU planning remains independent of Raven encoding.
+- Managed WebP coordinators are always remote-required, even without worker placement or with a legacy false override.
+  Normalize the compatibility AVIF encoder to CPU so strict legacy NVENC cannot disable the CPU-only deployment.
+  Unassigned worker capacity degrades ingest and waits; it must not trigger local AVIF/Plex encoding or fail core health.
+- `scriptarr-raven-worker` is optional and must belong to a remote host. It reuses the Raven image in `ingest-worker`
+  role, with a distinct worker token present only in Sage's token map. Its only persistent mounts are scratch, logs,
+  and the exact read-only Sage CA file. Never grant canonical storage, Docker socket, provider/VPN secrets or NET_ADMIN.
+- Worker limits are fixed at 2 CPUs/4 GiB (swap ceiling also 4 GiB), JVM heap 1536 MiB, one chapter job, one page encoder,
+  two encode threads, WebP q85/method4. A missing/unhealthy worker degrades ingest; matching unhealthy containers must
+  not be repeatedly recreated. Worker placement makes coordinator ingest remote-required with no local fallback.
+- Worker artifacts use Sage's dedicated HTTPS3444 listener on the core LAN IP; ordinary Sage3004 stays unchanged.
+  Mount only the dedicated Sage leaf certificate/key into Sage and CA into the worker, read-only. Never share Warden's key.
 - Keep `npm run docker:healthcheck` aligned with Warden's real runtime plan; it is the default cross-service smoke path
   for contributors and agents.
 - Keep Moon -> Sage -> Warden managed-service updates scoped to the sibling first-party services. Warden and MySQL stay
@@ -53,9 +65,8 @@ managed services.
     `SCRIPTARR_NVIDIA_DEVICE_BINDINGS=true` when the host requires and exposes those paths
   - `intel`: `--device /dev/dri --group-add video`
   - `amd`: `--device /dev/kfd --device /dev/dri --group-add video`
-- When Raven ingest requests NVIDIA through `SCRIPTARR_RAVEN_INGEST_GPU_PROFILE=nvidia` or the shared GPU hint, pass
-  Oracle-style NVIDIA runtime args and env to Raven. Missing GPU should surface as Raven ingest `hardware_missing`, not
-  whole-stack unhealthy.
+- Retain legacy AVIF configuration data for compatibility, but do not let it select NVIDIA runtime/device grants or
+  change new WebP output. Keep encoder, page and title concurrency separate; Warden does not change Sage's title limit.
 - If service boot order, network topology, embedded LocalAI runtime planning, first-boot auth, or Docker test mode changes,
   update the Warden docs.
 

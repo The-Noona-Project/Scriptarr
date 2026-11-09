@@ -3,6 +3,7 @@
 /**
  * @file Reader page-chunk state helpers.
  */
+import {resolveReaderPageImages} from "./pageSegments.js";
 
 const REQUEST_TOKEN_SEPARATOR = "\u001f";
 
@@ -67,7 +68,7 @@ export const hasReaderPageImages = (pages = [], indexes = []) => {
   const byIndex = new Map(pages.map((page) => [page?.index, page]));
   return indexes.length > 0 && indexes.every((index) => {
     const page = byIndex.get(index);
-    return Boolean(page?.src);
+    return resolveReaderPageImages(page).length > 0;
   });
 };
 
@@ -203,6 +204,17 @@ export const hasReaderPageRequestForChapter = (inFlight, {epoch = 0, chapterId})
 };
 
 /**
+ * Fence only the changed chapter's old metadata responses.
+ * @param {Set<string>} inFlight Active completion tokens.
+ * @param {{epoch?:number,chapterId:string}} options Current route epoch and changed chapter.
+ * @returns {void}
+ */
+export const invalidateReaderPageRequestsForChapter = (inFlight, {epoch = 0, chapterId}) => {
+  const prefix = [epoch, chapterId].map((part) => String(part ?? "")).join(REQUEST_TOKEN_SEPARATOR) + REQUEST_TOKEN_SEPARATOR;
+  for (const token of inFlight) if (token.startsWith(prefix)) inFlight.delete(token);
+};
+
+/**
  * Resolve page metadata and image warm-up work around the active reader page.
  *
  * @param {{layoutMode?: string, activeIndex?: number, pageCount?: number, loadedPages?: Array<{index?: number}>, chunkSize?: number, aheadCount?: number, previousCushion?: number}} options
@@ -286,7 +298,8 @@ export const warmReaderPageImages = async (
     return [];
   }
   const wanted = new Set(indexes);
-  const pageEntries = pages.filter((page) => Number.isInteger(page?.index) && wanted.has(page.index) && page.src);
+  const logicalPages = pages.filter((page) => Number.isInteger(page?.index) && wanted.has(page.index));
+  const pageEntries = logicalPages.flatMap((page) => resolveReaderPageImages(page).map((image) => ({...page, src: image.src, segmentIndex: image.index})));
   const results = await Promise.all(pageEntries.map((page) => new Promise((resolve) => {
     const image = new imageFactory();
     const startedAt = now();
@@ -350,7 +363,7 @@ export const warmReaderPageImages = async (
       });
       if (typeof image.decode === "function") {
         const decodeStartedAt = now();
-        Promise.resolve(image.decode()).then(() => {
+        Promise.resolve().then(() => image.decode()).then(() => {
           if (settled) {
             return;
           }
@@ -392,7 +405,11 @@ export const warmReaderPageImages = async (
     };
     image.src = page.src;
   })));
-  return results;
+  return logicalPages.map((page) => {
+    const expected = resolveReaderPageImages(page).length;
+    const completed = results.filter((result) => result.index === page.index);
+    return {index: page.index, ok: expected > 0 && completed.length === expected && completed.every((result) => result.ok)};
+  });
 };
 
 /**
@@ -427,6 +444,7 @@ export default {
   createReaderPageRequestToken,
   hasReaderPageWindow,
   hasReaderPageRequestForChapter,
+  invalidateReaderPageRequestsForChapter,
   hasReaderPageImages,
   mergeReaderPageRequestPages,
   mergeReaderPages,

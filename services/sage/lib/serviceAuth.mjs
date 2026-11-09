@@ -19,6 +19,10 @@ const getBearerToken = (header) => {
  * @returns {(allowedServices: string | string[]) => import("express").RequestHandler}
  */
 export const createServiceAuth = (config) => {
+  const workerToken = config.serviceTokens?.["scriptarr-raven-worker"];
+  if (workerToken && Object.entries(config.serviceTokens).some(([name, token]) => name !== "scriptarr-raven-worker" && token === workerToken)) {
+    throw new Error("The conversion worker service token must be distinct from every other service identity.");
+  }
   const tokenToService = new Map(
     Object.entries(config.serviceTokens || {})
       .filter(([, token]) => typeof token === "string" && token.trim())

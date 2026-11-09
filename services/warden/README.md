@@ -158,22 +158,38 @@ and remove obsolete containers deliberately. Standalone installs without a topol
 
 ## Raven Ingest Runtime
 
-Raven supports `SCRIPTARR_RAVEN_AVIF_ENCODER=auto|nvenc|cpu`. Auto selects a working encoder by a real encode test;
-strict `nvenc` requires hardware AV1 support, and `cpu` uses software AVIF without NVIDIA device/runtime arguments.
-CPU mode works on servers whose GPU cannot encode AV1, including P2000-equipped hosts. For household background
-ingest, start with `SCRIPTARR_RAVEN_AVIF_ENCODER=cpu`, `SCRIPTARR_RAVEN_INGEST_GPU_PROFILE=cpu`,
-`SCRIPTARR_RAVEN_AVIF_THREADS=2`, and one slot/page through `SCRIPTARR_RAVEN_AVIF_ENCODER_SLOTS=1` and
-`SCRIPTARR_RAVEN_AVIF_PAGE_CONCURRENCY=1`.
+New reader pages use CPU WebP at quality 85/method 4. Existing AVIF remains readable during migration. Legacy AVIF/GPU
+settings no longer grant Raven NVIDIA devices or change new output; Oracle's independent GPU/model settings remain
+unchanged. Download-title concurrency remains Sage-owned, separately from encoding capacity.
+Warden always marks its WebP coordinator as remote-required, including when no worker is assigned. Conversion waits
+for worker capacity instead of falling back to local AVIF or encoding on Plex. The compatibility AVIF encoder setting
+inside the managed container is normalized to `cpu`; saved deployment settings and existing AVIF files are retained.
 
-GPU-capable auto/nvenc profiles can use FFmpeg `av1_nvenc`. Explicit runtime env still wins:
-`SCRIPTARR_RAVEN_INGEST_GPU_PROFILE=nvidia`, `SCRIPTARR_GPU_HINT=nvidia`, or
-the Docker runtime detection make Warden give Raven the same NVIDIA runtime args, `--gpus all`, and env
-style used for Oracle GPU planning. Raven also receives the NVIDIA `video` driver capability because FFmpeg NVENC needs
-`libnvidia-encode.so.1` in addition to compute/utility access. Explicit `/dev/nvidia*` device binds are opt-in with
-`SCRIPTARR_NVIDIA_DEVICE_BINDINGS=true` for hosts that need them. When Warden cannot run `nvidia-smi` from inside its own
-container, it also checks Docker's runtime metadata so hosts with the NVIDIA Docker runtime are still detected. A
-missing or incompatible NVIDIA runtime makes strict NVENC ingest unavailable; auto can select the software encoder.
-Neither case should make Raven's ordinary health endpoint fail solely because GPU encoding is unavailable.
+To offload encoding, add optional service `scriptarr-raven-worker` to the remote host's topology list. Keep
+`scriptarr-raven` beside Sage/Vault on the primary host. Warden runs the worker from the same Raven artifact in
+`ingest-worker` role, without provider, downloader, VPN, catalog or reader startup. `SCRIPTARR_RAVEN_WORKER_IMAGE`
+can independently pin that artifact; it otherwise inherits the coordinator image. It has no public port, canonical
+download mount, Docker socket, GPU access or VPN capability.
+
+Worker CPU/memory limits are fixed at 2 CPUs and 4 GiB, with a 4 GiB combined memory/swap ceiling. Its JVM heap is 1536 MiB to retain
+encoder/native headroom. Encoding uses one chapter job, one page at a time and two threads. Only `raven-worker/scratch`
+and `raven-worker/logs` are writable mounts. Missing worker capacity waits without enabling Plex encoding; reader
+services remain available. A matching unhealthy worker is reported rather than repeatedly recreated.
+An unassigned or unhealthy worker sets `ingestDegraded` without failing the platform health check.
+
+Configure these values consistently on both Wardens before enabling its topology placement:
+
+- `SCRIPTARR_RAVEN_WORKER_SERVICE_TOKEN`: a dedicated credential different from every existing service token.
+- `SCRIPTARR_RAVEN_WORKER_SAGE_BASE_URL=https://192.168.50.6:3444`: HTTPS on the primary topology address.
+- `SCRIPTARR_RAVEN_WORKER_CA_FILE`: absolute host path to the trusted CA certificate (`.crt`/`.pem`). Only this exact
+  file is mounted read-only into the worker at `/app/worker-tls/ca.crt`.
+- `SCRIPTARR_SAGE_WORKER_TLS_CERT_FILE` and `SCRIPTARR_SAGE_WORKER_TLS_KEY_FILE`: absolute host paths to a dedicated
+  Sage leaf certificate/key. Mounts into Sage are read-only exact files, not the Warden TLS directory or private key.
+- `SCRIPTARR_SAGE_WORKER_TLS_PORT`: optional listener override, default 3444; it must match the worker URL.
+
+Issue the dedicated Sage certificate with the primary IP in its SAN. Restrict the new LAN port to the worker host;
+normal Sage HTTP 3004, Portal and Oracle URLs remain unchanged. The worker token appears only in Sage's token map,
+whose worker routes enforce lease/ownership permissions. Warden's existing control-plane mTLS is separate.
 
 ## LocalAI
 

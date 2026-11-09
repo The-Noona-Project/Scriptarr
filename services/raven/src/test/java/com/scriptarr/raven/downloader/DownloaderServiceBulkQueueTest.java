@@ -41,10 +41,10 @@ class DownloaderServiceBulkQueueTest {
         DownloadProviderRegistry providerRegistry = new DownloadProviderRegistry(List.of(new FakeDownloadProvider()), settingsService);
         DownloadIntakeService downloadIntakeService = mock(DownloadIntakeService.class);
         MetadataService metadataService = mock(MetadataService.class);
-        when(downloadIntakeService.resolveBulkMetadata("weebcentral", "https://weebcentral.com/series/alpha-start", "Alpha Start", "Manga"))
-            .thenReturn(matchedResolution("Alpha Start", "alpha-md", "https://weebcentral.com/series/alpha-start"));
-        when(downloadIntakeService.resolveBulkMetadata("weebcentral", "https://weebcentral.com/series/another-dawn", "Another Dawn", "Manga"))
-            .thenReturn(matchedResolution("Another Dawn", "another-md", "https://weebcentral.com/series/another-dawn"));
+        when(downloadIntakeService.resolveBulkMetadata("weebcentral", "https://weebcentral.com/series/71D8AAC0FC2D6473A317A11DC2", "Alpha Start", "Manga", List.of()))
+            .thenReturn(matchedResolution("Alpha Start", "alpha-md", "https://weebcentral.com/series/71D8AAC0FC2D6473A317A11DC2"));
+        when(downloadIntakeService.resolveBulkMetadata("weebcentral", "https://weebcentral.com/series/94BCAAA6BC4C9854003CEA081B", "Another Dawn", "Manga", List.of()))
+            .thenReturn(matchedResolution("Another Dawn", "another-md", "https://weebcentral.com/series/94BCAAA6BC4C9854003CEA081B"));
         RecordingDownloaderService service = new RecordingDownloaderService(
             providerRegistry,
             downloadIntakeService,
@@ -172,7 +172,7 @@ class DownloaderServiceBulkQueueTest {
         RavenSettingsService settingsService = new RavenSettingsService(brokerClient, logger, List.of());
         DownloadProviderRegistry providerRegistry = new DownloadProviderRegistry(List.of(new SingleTitleDownloadProvider()), settingsService);
         DownloadIntakeService downloadIntakeService = mock(DownloadIntakeService.class);
-        when(downloadIntakeService.resolveBulkMetadata("weebcentral", "https://weebcentral.com/series/alpha-start", "Alpha Start", "Manga"))
+        when(downloadIntakeService.resolveBulkMetadata("weebcentral", "https://weebcentral.com/series/71D8AAC0FC2D6473A317A11DC2", "Alpha Start", "Manga", List.of()))
             .thenReturn(new DownloadIntakeService.BulkMetadataResolution("unmatched", Map.of(), Map.of()));
         RecordingDownloaderService service = new RecordingDownloaderService(
             providerRegistry,
@@ -209,7 +209,7 @@ class DownloaderServiceBulkQueueTest {
         RavenSettingsService settingsService = new RavenSettingsService(brokerClient, logger, List.of());
         DownloadProviderRegistry providerRegistry = new DownloadProviderRegistry(List.of(new SingleTitleDownloadProvider()), settingsService);
         DownloadIntakeService downloadIntakeService = mock(DownloadIntakeService.class);
-        when(downloadIntakeService.resolveBulkMetadata("weebcentral", "https://weebcentral.com/series/alpha-start", "Alpha Start", "Manga"))
+        when(downloadIntakeService.resolveBulkMetadata("weebcentral", "https://weebcentral.com/series/71D8AAC0FC2D6473A317A11DC2", "Alpha Start", "Manga", List.of()))
             .thenReturn(new DownloadIntakeService.BulkMetadataResolution("ambiguous", Map.of(), Map.of()));
         RecordingDownloaderService service = new RecordingDownloaderService(
             providerRegistry,
@@ -314,8 +314,8 @@ class DownloaderServiceBulkQueueTest {
         RavenSettingsService settingsService = new RavenSettingsService(brokerClient, logger, List.of());
         DownloadProviderRegistry providerRegistry = new DownloadProviderRegistry(List.of(new SingleTitleDownloadProvider(true)), settingsService);
         DownloadIntakeService downloadIntakeService = mock(DownloadIntakeService.class);
-        when(downloadIntakeService.resolveBulkMetadata("weebcentral", "https://weebcentral.com/series/alpha-start", "Alpha Start", "Manga"))
-            .thenReturn(matchedResolution("Alpha Start", "alpha-md", "https://weebcentral.com/series/alpha-start"));
+        when(downloadIntakeService.resolveBulkMetadata("weebcentral", "https://weebcentral.com/series/71D8AAC0FC2D6473A317A11DC2", "Alpha Start", "Manga", List.of()))
+            .thenReturn(matchedResolution("Alpha Start", "alpha-md", "https://weebcentral.com/series/71D8AAC0FC2D6473A317A11DC2"));
         RecordingDownloaderService service = new RecordingDownloaderService(
             providerRegistry,
             downloadIntakeService,
@@ -399,12 +399,12 @@ class DownloaderServiceBulkQueueTest {
             return new BulkBrowseResult(List.of(
                 Map.of(
                     "title", "Alpha Start",
-                    "href", "https://weebcentral.com/series/alpha-start",
+                    "href", "https://weebcentral.com/series/71D8AAC0FC2D6473A317A11DC2",
                     "type", "Manga"
                 ),
                 Map.of(
                     "title", "Another Dawn",
-                    "href", "https://weebcentral.com/series/another-dawn",
+                    "href", "https://weebcentral.com/series/94BCAAA6BC4C9854003CEA081B",
                     "type", "Manga"
                 )
             ), 1);
@@ -464,7 +464,7 @@ class DownloaderServiceBulkQueueTest {
         public BulkBrowseResult browseTitlesAlphabetically(String type, boolean adultContent, String titlePrefix) {
             return new BulkBrowseResult(List.of(Map.of(
                 "title", "Alpha Start",
-                "href", "https://weebcentral.com/series/alpha-start",
+                "href", "https://weebcentral.com/series/71D8AAC0FC2D6473A317A11DC2",
                 "type", "Manga"
             )), 1);
         }

@@ -22,32 +22,11 @@ import {resolveServiceDnsServers} from "./containerDns.mjs";
 import {resolveLocalAiProfile} from "./localAiProfiles.mjs";
 import {resolveMysqlConfig, toInternalMysqlEnv} from "./mysqlConfig.mjs";
 import {resolveClusterServiceUrl, resolveClusterTopology} from "./clusterTopology.mjs";
-import {buildScriptarrStorageLayout, resolveScriptarrDataRoot} from "../filesystem/storageLayout.mjs";
+import {resolveRavenWorkerPlan} from "./ravenWorkerPlan.mjs";
+import path from "node:path";
+import {buildScriptarrStorageLayout, resolveScriptarrDataRoot, isWindowsAbsolutePath} from "../filesystem/storageLayout.mjs";
 
 const normalizeString = (value) => String(value ?? "").trim();
-
-/**
- * Ensure an NVIDIA driver capability list includes the capabilities a service
- * needs in addition to any operator-provided defaults.
- *
- * @param {string} value
- * @param {string[]} required
- * @returns {string}
- */
-const withRequiredNvidiaCapabilities = (value, required = []) => {
-  const seen = new Set();
-  return [...String(value || "").split(","), ...required]
-    .map((entry) => entry.trim().toLowerCase())
-    .filter(Boolean)
-    .filter((entry) => {
-      if (seen.has(entry)) {
-        return false;
-      }
-      seen.add(entry);
-      return true;
-    })
-    .join(",");
-};
 
 const DEFAULT_HTTP_HEALTH_CHECK = Object.freeze({
   interval: "15s",
@@ -209,7 +188,8 @@ export const resolveStackMode = ({env = process.env} = {}) =>
  *     containerName: string,
  *     image: string,
  *     env: Record<string, string>,
- *     mounts: Array<{hostPath: string, containerPath: string | null}>,
+ *     mounts: Array<{hostPath: string, containerPath: string | null, readOnly?: boolean}>,
+ *     optional?: boolean,
  *     networkAliases: string[],
  *     dnsServers?: string[],
  *     publishedPorts: Array<{hostPort: number, containerPort: number}>,
@@ -273,35 +253,34 @@ export const resolveServicePlan = ({env = process.env, containerNamePrefix = ""}
   if (!["auto", "nvenc", "cpu"].includes(ravenEncoderPolicy)) {
     throw new Error("SCRIPTARR_RAVEN_AVIF_ENCODER must be auto, nvenc or cpu.");
   }
-  const explicitRavenGpuProfile = normalizeString(env.SCRIPTARR_RAVEN_INGEST_GPU_PROFILE).toLowerCase();
-  if (ravenEncoderPolicy === "nvenc" && explicitRavenGpuProfile && explicitRavenGpuProfile !== "nvidia") {
-    throw new Error("Strict NVENC encoding requires the NVIDIA Raven ingest profile.");
-  }
-  const ravenIngestGpuProfile = resolveLocalAiProfile({
-    env: {
-      ...env,
-      SCRIPTARR_GPU_HINT: ravenEncoderPolicy === "cpu" ? "cpu" : ravenEncoderPolicy === "nvenc" ? "nvidia"
-        : normalizeString(env.SCRIPTARR_RAVEN_INGEST_GPU_PROFILE || env.SCRIPTARR_GPU_HINT)
-    }
-  });
-  const ravenGpuEnv = ravenIngestGpuProfile.key === "nvidia"
-    ? {
-      SCRIPTARR_RAVEN_INGEST_GPU_PROFILE: "nvidia",
-      SCRIPTARR_RAVEN_INGEST_REQUIRE_NVIDIA: ravenEncoderPolicy === "nvenc" ? "true" : "false",
-      NVIDIA_VISIBLE_DEVICES: env.NVIDIA_VISIBLE_DEVICES || "all",
-      NVIDIA_DRIVER_CAPABILITIES: withRequiredNvidiaCapabilities(
-        env.SCRIPTARR_RAVEN_NVIDIA_DRIVER_CAPABILITIES || env.NVIDIA_DRIVER_CAPABILITIES || "compute,utility",
-        ["compute", "utility", "video"]
-      )
-    }
-    : {
-      SCRIPTARR_RAVEN_INGEST_GPU_PROFILE: ravenIngestGpuProfile.key
-    };
+  // AVIF remains a reader compatibility contract; all new derived output is CPU WebP.
   const ravenVpnExtraArgs = normalizeString(env.SCRIPTARR_RAVEN_VPN_RUNTIME_DISABLED).toLowerCase() === "true"
     ? []
     : ["--cap-add", "NET_ADMIN", "--device", normalizeString(env.SCRIPTARR_RAVEN_TUN_DEVICE) || "/dev/net/tun"];
-  const ravenIngestExtraArgs = ravenIngestGpuProfile.key === "nvidia" ? ravenIngestGpuProfile.runtimeArgs || [] : [];
   const resolvedContainerNamePrefix = resolveContainerNamePrefix({env, containerNamePrefix});
+  const worker = resolveRavenWorkerPlan({env, topology, serviceTokens, storageLayout,
+    containerName: resolveContainerName("scriptarr-raven-worker", resolvedContainerNamePrefix)});
+  const sageTokens = worker ? {...serviceTokens, "scriptarr-raven-worker": worker.env.SCRIPTARR_SERVICE_TOKEN} : serviceTokens;
+  let sageWorkerTls = {};
+  let sageWorkerMounts = [];
+  let sageWorkerPort;
+  if (worker) {
+    sageWorkerPort = Number(env.SCRIPTARR_SAGE_WORKER_TLS_PORT || 3444);
+    if (!Number.isInteger(sageWorkerPort) || sageWorkerPort < 1 || sageWorkerPort > 65535
+      || sageWorkerPort === sagePort || Number(new URL(worker.env.SCRIPTARR_SAGE_BASE_URL).port || 443) !== sageWorkerPort) {
+      throw new Error("Raven worker Sage URL must match its dedicated HTTPS listener port.");
+    }
+    for (const key of ["CERT", "KEY"]) {
+      const source = normalizeString(env[`SCRIPTARR_SAGE_WORKER_TLS_${key}_FILE`]);
+      if ((!path.isAbsolute(source) && !isWindowsAbsolutePath(source)) || /[\0\r\n]/.test(source)) throw new Error("Sage worker HTTPS requires explicit absolute certificate/key paths.");
+      if (key === "KEY" && source === normalizeString(env.SCRIPTARR_WARDEN_TLS_KEY_FILE)) throw new Error("Sage worker HTTPS must not share a Warden agent private key.");
+      const containerPath = `/app/worker-tls/server.${key === "CERT" ? "crt" : "key"}`;
+      sageWorkerTls[`SCRIPTARR_SAGE_WORKER_TLS_${key}_FILE`] = containerPath;
+      sageWorkerMounts.push({hostPath: source, containerPath, readOnly: true});
+    }
+    sageWorkerTls.SCRIPTARR_SAGE_WORKER_TLS_PORT = String(sageWorkerPort);
+    sageWorkerTls.SCRIPTARR_SAGE_WORKER_TLS_HOST = "0.0.0.0";
+  }
 
   /** @type {ReturnType<typeof resolveServicePlan>["services"]} */
   const services = [];
@@ -356,7 +335,8 @@ export const resolveServicePlan = ({env = process.env, containerNamePrefix = ""}
       SCRIPTARR_RAVEN_BASE_URL: serviceUrl("scriptarr-raven", ravenPort),
       SCRIPTARR_PUBLIC_BASE_URL: publicBaseUrl,
       SCRIPTARR_SERVICE_TOKEN: serviceTokens["scriptarr-sage"],
-      SCRIPTARR_SERVICE_TOKENS: JSON.stringify(serviceTokens),
+      SCRIPTARR_SERVICE_TOKENS: JSON.stringify(sageTokens),
+      ...sageWorkerTls,
       SCRIPTARR_DISCORD_CALLBACK_URL: callbackUrl,
       SCRIPTARR_SAGE_PORT: String(sagePort),
       SUPERUSER_ID: env.SUPERUSER_ID || "",
@@ -369,7 +349,7 @@ export const resolveServicePlan = ({env = process.env, containerNamePrefix = ""}
       SCRIPTARR_APPA_DISCORD_CLIENT_ID: env.SCRIPTARR_APPA_DISCORD_CLIENT_ID || "",
       SCRIPTARR_AUTO_PROVISION_DISCORD_USERS: env.SCRIPTARR_AUTO_PROVISION_DISCORD_USERS || "true"
     },
-    mounts: resolveFolderMounts(storageLayout, "scriptarr-sage", ["logs"]),
+    mounts: [...resolveFolderMounts(storageLayout, "scriptarr-sage", ["logs"]), ...sageWorkerMounts],
     networkAliases: ["scriptarr-sage"],
     publishedPorts: [],
     healthCheck: buildNodeHttpHealthCheck(sagePort),
@@ -404,19 +384,25 @@ export const resolveServicePlan = ({env = process.env, containerNamePrefix = ""}
       SCRIPTARR_SERVICE_TOKEN: serviceTokens["scriptarr-raven"],
       SCRIPTARR_RAVEN_DATA_ROOT: "/downloads",
       SCRIPTARR_RAVEN_LOG_DIR: "/app/logs",
-      SCRIPTARR_RAVEN_DERIVED_IMAGE_FORMAT: "avif",
-      SCRIPTARR_RAVEN_AVIF_ENCODER: ravenEncoderPolicy,
-      SCRIPTARR_RAVEN_AVIF_REQUIRE_NVIDIA: ravenEncoderPolicy === "nvenc" ? "true" : "false",
-      SCRIPTARR_RAVEN_INGEST_REQUIRE_NVIDIA: ravenEncoderPolicy === "nvenc" ? "true" : "false",
+      SCRIPTARR_RAVEN_ROLE: "coordinator",
+      SCRIPTARR_RAVEN_DERIVED_IMAGE_FORMAT: "webp",
+      SCRIPTARR_RAVEN_REMOTE_INGEST_REQUIRED: "true",
+      SCRIPTARR_RAVEN_WEBP_QUALITY: "85",
+      SCRIPTARR_RAVEN_WEBP_METHOD: "4",
+      SCRIPTARR_RAVEN_WEBP_THREADS: "2",
+      SCRIPTARR_RAVEN_WEBP_PAGE_CONCURRENCY: "1",
+      SCRIPTARR_RAVEN_AVIF_ENCODER: "cpu",
+      SCRIPTARR_RAVEN_AVIF_REQUIRE_NVIDIA: "false",
+      SCRIPTARR_RAVEN_INGEST_REQUIRE_NVIDIA: "false",
       SCRIPTARR_RAVEN_AVIF_THREADS: normalizeString(env.SCRIPTARR_RAVEN_AVIF_THREADS) || "2",
-      SCRIPTARR_RAVEN_AVIF_ENCODER_SLOTS: normalizeString(env.SCRIPTARR_RAVEN_AVIF_ENCODER_SLOTS) || (ravenIngestGpuProfile.key === "nvidia" ? "6" : "1"),
-      SCRIPTARR_RAVEN_AVIF_PAGE_CONCURRENCY: normalizeString(env.SCRIPTARR_RAVEN_AVIF_PAGE_CONCURRENCY) || (ravenIngestGpuProfile.key === "nvidia" ? "4" : "1"),
-      ...ravenGpuEnv
+      SCRIPTARR_RAVEN_AVIF_ENCODER_SLOTS: normalizeString(env.SCRIPTARR_RAVEN_AVIF_ENCODER_SLOTS) || "1",
+      SCRIPTARR_RAVEN_AVIF_PAGE_CONCURRENCY: normalizeString(env.SCRIPTARR_RAVEN_AVIF_PAGE_CONCURRENCY) || "1",
+      SCRIPTARR_RAVEN_INGEST_GPU_PROFILE: "cpu"
     },
     mounts: resolveFolderMounts(storageLayout, "scriptarr-raven", ["downloads", "logs"]),
     networkAliases: ["scriptarr-raven"],
     publishedPorts: [],
-    extraArgs: [...ravenVpnExtraArgs, ...ravenIngestExtraArgs],
+    extraArgs: ravenVpnExtraArgs,
     healthCheck: buildCurlHttpHealthCheck(ravenPort, {startPeriod: "25s"}),
     containerPort: ravenPort
   });
@@ -492,6 +478,8 @@ export const resolveServicePlan = ({env = process.env, containerNamePrefix = ""}
     containerPort: oraclePort
   });
 
+  if (worker) services.push(worker);
+
   for (const service of services) {
     const dnsServers = resolveServiceDnsServers(service.name, env);
     if (dnsServers !== undefined) service.dnsServers = dnsServers;
@@ -502,6 +490,9 @@ export const resolveServicePlan = ({env = process.env, containerNamePrefix = ""}
     if (topology.enabled && ["scriptarr-sage", "scriptarr-portal", "scriptarr-oracle"].includes(service.name)) {
       const owner = topology.hosts.find((host) => host.id === service.hostId);
       service.publishedPorts = [{hostIp: owner.address, hostPort: service.containerPort, containerPort: service.containerPort}];
+      if (service.name === "scriptarr-sage" && worker) {
+        service.publishedPorts.push({hostIp: owner.address, hostPort: sageWorkerPort, containerPort: sageWorkerPort});
+      }
     }
     if (service.name === "scriptarr-moon" && normalizeString(env.SCRIPTARR_PUBLISH_HOST)) {
       service.publishedPorts = service.publishedPorts.map((port) => ({...port, hostIp: normalizeString(env.SCRIPTARR_PUBLISH_HOST)}));

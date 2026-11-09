@@ -28,7 +28,7 @@ final class LibraryTitleLocks {
 
     /** One reentrant lock shared by all active and waiting leases for a title. */
     private static final class Entry {
-        private final ReentrantLock lock = new ReentrantLock();
+        private final ReentrantLock lock = new ReentrantLock(true);
         private int references;
     }
 

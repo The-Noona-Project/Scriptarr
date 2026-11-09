@@ -11,4 +11,9 @@ package com.scriptarr.raven.library;
  * @param advanced whether a page or chapter actually completed
  */
 public record IngestProgress(String stage, int completedPages, int totalPages,
-    int completedChapters, int totalChapters, boolean advanced) { }
+    int completedChapters, int totalChapters, boolean advanced, int completedSegments, int totalSegments) {
+    /** @param stage work stage @param completedPages logical completed pages @param totalPages logical page count @param completedChapters completed chapters @param totalChapters title chapter count @param advanced actual content progress */
+    public IngestProgress(String stage, int completedPages, int totalPages, int completedChapters, int totalChapters, boolean advanced) {
+        this(stage, completedPages, totalPages, completedChapters, totalChapters, advanced, 0, 0);
+    }
+}

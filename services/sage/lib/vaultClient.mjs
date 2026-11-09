@@ -147,6 +147,11 @@ export const createVaultClient = (config) => {
     : 5000;
 
   return {
+    async ravenIngest(method, path, body) {
+      return requestJson(baseUrl, headers, `/api/service/raven-ingest${path}`, {
+        method, body, timeoutMs: 20000, context: "Conversion storage request failed"
+      });
+    },
     async getBootstrapStatus({timeoutMs = authTimeoutMs, retries = 1, retryDelayMs = 0} = {}) {
       return (await requestJson(baseUrl, {}, "/api/public/bootstrap-status", {
         timeoutMs,

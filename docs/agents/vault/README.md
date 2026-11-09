@@ -84,3 +84,42 @@
 - Vault's content reset path must stay content-only. It may clear requests, request work locks, progress, read state,
   follows, bookmarks, Raven catalog rows, Raven download tasks, and Raven-owned jobs, but it must not delete users,
   permission groups, API keys, sessions, settings, secrets, or durable events.
+
+- The selected-run reset is a different, narrower contract: preserve stable title/alias rows, metadata/covers/source
+  publication state, every user's reading state, requests, download tasks, jobs and receipts. Fence the exact selected
+  durable plans before filesystem deletion; canonical IDs require actual task/append references or exact source/type
+  identity, never metadata aliases. Reject ambiguous source ownership. Clear only chapters/roots/content counters after
+  the coordinator's quiescent removal proof, then explicitly finish. Finished replay must not clear newly created data.
+- Conversion state lives in `conversionJobs.mjs` with a MySQL transaction adapter. Serialize the network's single
+  encoding slot using the durable pool-row lock, use DB time for 120-second leases, increment epochs on reassignment,
+  retain claim/retry receipts and hashed lease secrets, and reject stale worker operations. Queue priority is
+  interactive, bulk, then migration; only queued work can be promoted with new owner attribution.
+- Versioned conversion input requires both `contentIdentityVersion: 2` and `orderedEntriesSha256`, the SHA256 of the
+  UTF-8 compact JSON string-array in `input.entries`, preserving array order and exact entry names. Validate the digest
+  and include both fields in normalized input, spec hash and deterministic content identity. Partial pairs, unknown
+  versions and mismatched digests fail closed. Absent both fields must retain the exact legacy normalized input,
+  content job ID and spec hash; never rewrite existing jobs or completion history when page order changes.
+- Keep coordinator cancellation independent of worker claim epochs: issue `spec.coordinatorGeneration` on create and
+  rotate it on queued promotion and every explicit retry, preserving it across claims/lease reassignments. Validate
+  captured `expectedCoordinatorGeneration` atomically before cancellation; never let an old waiter fetch a newer token
+  merely to cancel it. Idempotent create/retry replays retain their accepted token; retry may promote but never demote
+  foreground priority/attribution. Preserve the legacy optional explicit epoch guard.
+- Root publication validates all segments and commits the chapter and conversion completion in one transaction. Preserve
+  AVIF compatibility, logical page counts, explicit WebP segment checkpoints, metadata-only field preservation, and
+  catalogue/reader cache invalidation. Use `SCRIPTARR_TEST_MYSQL_URL` against an isolated MySQL 8.4 instance to exercise
+  concurrent claims, forced post-chapter rollback, lost-response replay, and scoped-reset preservation.
+- Completed-artifact repair uses the existing coordinator-only `/jobs/:jobId/complete` operation, with top-level
+  `expectedCoordinatorGeneration` and `repair: {requestId, expectedCurrentChapterFingerprint}`. Fingerprint the raw
+  public Vault chapter JSON using recursively sorted compact JSON plus SHA256; the locked adapter must use exactly
+  the same normalized public projection, including null/default/omitted fields. Epoch, generation, artifact, maintenance
+  and original source/archive/revision/manifest/logical/physical identity remain fenced on both repair and replay.
+  Only failed/pending current checkpoints can repair. Preserve current metadata/quality and the original job completion
+  hash, result, timestamps and history; retain separate private request receipts. Identical replay returns its stable
+  acknowledgment only while current identity remains ready. Changed requests, later failures and superseded output
+  conflict. Catalog `updatedAt` advances to a fresh stable second even for two repairs within one DB second. Ordinary
+  chapter writes lock rows and advance changed checkpoints monotonically; unchanged replacement siblings retain theirs.
+  Repair must serialize UTC fractional timestamps exactly like publication and ordinary chapter writes, preserving the
+  database's existing precision/rounding of `ingestedAt` while advancing only the repair's `updatedAt` checkpoint.
+- Fixed profiles accept segmentation versions 1 and 2 with otherwise identical seven fields. Version 2 has a distinct
+  profile hash and content job ID; worker capability `profileVersion: 1` describes the transport protocol. Do not mutate
+  an existing version-1 job into different tile geometry or infer durable segment readiness from DTO defaults.

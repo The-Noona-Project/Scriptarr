@@ -59,6 +59,7 @@ public final class LibraryIngestService {
     private final int encoderSlots;
     private final ExecutorService pageExecutor;
     private final ObjectMapper objectMapper = new ObjectMapper();
+    private RemoteChapterProcessor remote;
 
     /**
      * Create the shared derived-page ingest service.
@@ -67,9 +68,20 @@ public final class LibraryIngestService {
      * @param logger Raven logger and data-root owner
      * @param transcoder page transcoder implementation
      */
-    @Autowired
     public LibraryIngestService(RavenSettingsService settingsService, ScriptarrLogger logger, PageTranscoder transcoder) {
         this(settingsService, logger, transcoder, resolveConfiguredPageConcurrency(), resolveConfiguredEncoderSlots());
+    }
+
+    /**
+     * Configure the coordinator's remote-only processing path while preserving local test construction.
+     * @param settingsService naming settings
+     * @param logger canonical data-root owner
+     * @param transcoder legacy local encoder for compatibility reads and isolated tests
+     * @param remote fenced WebP chapter processor
+     */
+    @Autowired
+    public LibraryIngestService(RavenSettingsService settingsService, ScriptarrLogger logger, PageTranscoder transcoder, RemoteChapterProcessor remote) {
+        this(settingsService, logger, transcoder); this.remote = remote;
     }
 
     /**
@@ -136,6 +148,7 @@ public final class LibraryIngestService {
      */
     public LibraryIngestResult ingestChapter(LibraryTitle title, LibraryChapter chapter, BooleanSupplier cancelled,
         Consumer<IngestProgress> progress) {
+        if (remote != null && remote.required()) return ingestRemoteChapter(title, chapter, cancelled, progress);
         assertHardwareReady();
         throwIfCancelled(cancelled);
         Path archivePath = resolveArchivePath(chapter);
@@ -210,6 +223,9 @@ public final class LibraryIngestService {
      * @return hardware status payload
      */
     public Map<String, Object> hardwareStatus() {
+        if (remote != null && remote.required()) return Map.of("profile", "remote-webp", "required", false, "state", "ready",
+            "encoder", "worker/ffmpeg-libwebp", "format", "webp", "mediaType", "image/webp", "pageConcurrency", 1, "encoderSlots", 1,
+            "message", "Conversion waits for an assigned remote worker; Plex never encodes locally.");
         PageTranscoder.Readiness encoder = transcoder.readiness();
         boolean required = transcoder.requiresNvidiaRuntime();
         Map<String, Object> status = new LinkedHashMap<>();
@@ -231,6 +247,7 @@ public final class LibraryIngestService {
      * @return reader page media type
      */
     public String readerPageMediaType() {
+        if (remote != null && remote.required()) return "image/webp";
         return transcoder.mediaType();
     }
 
@@ -240,8 +257,118 @@ public final class LibraryIngestService {
      * @return ingest revision prefix
      */
     public String readerPageRevisionPrefix() {
+        if (remote != null && remote.required()) return "webp-";
         return transcoder.format() + "-";
     }
+
+    /**
+     * Wait for validated WebP output, then publish one immutable revision without replacing older ready files.
+     * @param title owning title
+     * @param chapter source chapter
+     * @param cancelled owner cancellation
+     * @param progress logical-page progress
+     * @return fenced result awaiting atomic catalog checkpoint
+     */
+    private LibraryIngestResult ingestRemoteChapter(LibraryTitle title, LibraryChapter chapter, BooleanSupplier cancelled, Consumer<IngestProgress> progress) {
+        Path stage = null;
+        try {
+            throwIfCancelled(cancelled); Path archive = resolveArchivePath(chapter);
+            RemoteChapterProcessor.Result result = remote.convert(title, chapter, archive, settingsService.getNamingSettings(), cancelled, progress);
+            var bundle = result.bundle(); int count = bundle.path("pageCount").asInt();
+            int version = bundle.path("profile").path("segmentationVersion").asInt();
+            String revision = DerivedPageManifest.revision(archive, count, "webp", bundle.path("encoder").asText(), 85, version,
+                (String) OrderedPageIdentity.fields(bundle).get("orderedEntriesSha256"));
+            Path chapterRoot = resolveDataRoot().resolve(INGESTED_FOLDER_NAME).resolve(safeSegment(title.libraryTypeSlug(), "manga"))
+                .resolve(safeSegment(title.id(), "title")).resolve(safeSegment(chapter.id(), "chapter"));
+            Path destination = chapterRoot.resolve(revision), manifest = destination.resolve("manifest.json");
+            String ingestedAt;
+            if (Files.isSymbolicLink(destination) || Files.isSymbolicLink(manifest)) throw new IOException("Immutable reader publication must not follow a link.");
+            if (Files.isRegularFile(manifest)) {
+                var saved = objectMapper.readTree(manifest.toFile());
+                if (!result.jobId().equals(saved.path("conversionJobId").asText()) || !revision.equals(saved.path("revision").asText())
+                    || !saved.path("pages").equals(bundle.path("pages")) || !saved.path("profile").equals(bundle.path("profile"))) throw new IOException("Immutable output revision has different content or profile.");
+                ingestedAt = saved.path("ingestedAt").asText();
+                try (var files = Files.list(result.directory())) {
+                    for (Path file : files.filter(p -> p.getFileName().toString().endsWith(".webp")).toList()) {
+                        Path target = destination.resolve(file.getFileName());
+                        if (!Files.isRegularFile(target) || !WebpChapterEncoder.sha256(target).equals(WebpChapterEncoder.sha256(file))) {
+                            if (Files.isSymbolicLink(target)) throw new IOException("Immutable output target must not be a link.");
+                            Path repair = Files.createTempFile(destination, "repair-", ".tmp");
+                            try { Files.copy(file, repair, StandardCopyOption.REPLACE_EXISTING); Files.move(repair, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE); }
+                            finally { Files.deleteIfExists(repair); }
+                        }
+                    }
+                }
+            } else {
+                stage = resolveDataRoot().resolve(INGEST_STAGING_FOLDER_NAME).resolve(safeSegment(title.id(), "title"))
+                    .resolve(safeSegment(chapter.id(), "chapter") + "-" + result.epoch() + "-" + System.nanoTime());
+                Files.createDirectories(stage);
+                try (var files = Files.list(result.directory())) { for (Path file : files.filter(p -> p.getFileName().toString().endsWith(".webp")).toList()) Files.copy(file, stage.resolve(file.getFileName())); }
+                ingestedAt = publicationTimestamp(result, chapter, archive, revision, manifest, count); Map<String, Object> metadata = objectMapper.convertValue(bundle, new com.fasterxml.jackson.core.type.TypeReference<>() { });
+                metadata.putAll(Map.of("titleId", title.id(), "chapterId", chapter.id(), "libraryTypeSlug", title.libraryTypeSlug(), "sourceArchivePath", archive.toString(),
+                    "quality", 85, "method", 4, "segmentationVersion", version, "revision", revision, "ingestedAt", ingestedAt));
+                metadata.put("conversionJobId", result.jobId()); metadata.put("conversionEpoch", result.epoch()); metadata.put("artifactSha256", result.artifactSha256());
+                metadata.put("derivedFileCount", bundle.path("pages").findValues("segments").stream().mapToInt(com.fasterxml.jackson.databind.JsonNode::size).sum());
+                objectMapper.writerWithDefaultPrettyPrinter().writeValue(stage.resolve("manifest.json").toFile(), metadata);
+                throwIfCancelled(cancelled); Files.createDirectories(chapterRoot);
+                if (Files.exists(destination, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+                    ImmutableManifestRecovery.restore(stage, destination, resolveDataRoot().resolve(INGESTED_FOLDER_NAME), cancelled);
+                } else {
+                    try { Files.move(stage, destination, StandardCopyOption.ATOMIC_MOVE); }
+                    catch (java.nio.file.AtomicMoveNotSupportedException unsupported) { Files.move(stage, destination); }
+                    stage = null;
+                }
+            }
+            return new LibraryIngestResult("ready", revision, count, ingestedAt, manifest.toString(), List.of(), result.jobId(), result.epoch(), result.artifactSha256());
+        } catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); throw new LibraryIngestException("ingest_cancelled", "Reader processing was cancelled."); }
+        catch (Exception failure) { throw new LibraryIngestException("remote_ingest_failed", "Remote reader processing could not be committed: " + sanitizeError(failure.getMessage())); }
+        finally { deleteTreeQuietly(stage); }
+    }
+
+    /** @param result accepted immutable output and optional original completed receipt @param chapter owning checkpoint @param archive validated canonical source @param revision derived content identity @param manifest exact destination @param count logical pages @return original completed timestamp or a new unpublished timestamp @throws IOException when completed identity differs */
+    private String publicationTimestamp(RemoteChapterProcessor.Result result, LibraryChapter chapter, Path archive, String revision, Path manifest, int count) throws IOException {
+        var original = result.completedChapter();
+        if (original == null) return Instant.now().toString();
+        int segments = 0; for (var page : result.bundle().path("pages")) segments += page.path("segments").size();
+        if (!chapter.id().equals(original.path("id").asText()) || !"ready".equals(original.path("ingestStatus").asText())
+            || !revision.equals(original.path("ingestRevision").asText()) || !original.path("available").asBoolean()
+            || original.path("pageCount").asInt() != count || original.path("sourcePageCount").asInt() != count || original.path("ingestedPageCount").asInt() != count
+            || original.path("expectedSegmentCount").asInt() != segments || original.path("ingestedSegmentCount").asInt() != segments || !original.path("segmentsReady").asBoolean()
+            || !archive.toAbsolutePath().normalize().equals(Path.of(original.path("archivePath").asText()).toAbsolutePath().normalize())
+            || !manifest.toAbsolutePath().normalize().equals(Path.of(original.path("ingestManifestPath").asText()).toAbsolutePath().normalize())) throw new IOException("Original completion does not match the immutable reader revision.");
+        String saved = original.path("ingestedAt").asText();
+        try { Instant.parse(saved); }
+        catch (java.time.format.DateTimeParseException invalid) { throw new IOException("Original completion timestamp is unavailable."); }
+        return saved;
+    }
+
+    /**
+     * Checkpoint remote output and its job atomically under the current conversion epoch.
+     * @param titleId owning title
+     * @param chapter final chapter state
+     * @param result accepted worker result
+     * @return fenced catalog acknowledgement
+     */
+    public LibraryChapter commitRemoteChapter(String titleId, LibraryChapter chapter, LibraryIngestResult result) {
+        try {
+            if (remote == null || result.conversionJobId().isBlank()) throw new IOException("Remote conversion receipt is unavailable.");
+            return remote.complete(new RemoteChapterProcessor.Result(result.conversionJobId(), result.conversionEpoch(), result.artifactSha256(), null, null), chapter);
+        } catch (Exception failure) { throw new IllegalStateException("Could not commit the fenced reader chapter.", failure); }
+    }
+
+    /** @param chapter saved chapter @param pageIndex logical index @param segment segment selector @param thumbnail full-page thumbnail selector @return saved page bytes @throws IOException when unavailable */
+    public byte[] readIngestedPage(LibraryChapter chapter, int pageIndex, Integer segment, boolean thumbnail) throws IOException {
+        return Files.readAllBytes(DerivedPageManifest.page(chapter, pageIndex, segment, thumbnail));
+    }
+
+    /** @param chapter saved chapter @return the saved format's MIME, independently of the new output backend */
+    public String readerPageMediaType(LibraryChapter chapter) { return chapter != null && chapter.ingestRevision() != null && chapter.ingestRevision().startsWith("webp-") ? "image/webp" : "image/avif"; }
+
+    /** @return actual active or queued page work, including cancelled work still winding down */
+    public long activePageWork() { return pageExecutor instanceof java.util.concurrent.ThreadPoolExecutor pool ? pool.getActiveCount() + pool.getQueue().size() : 0; }
+
+    /** @return whether publication is protected by the remote conversion broker */
+    public boolean remoteRequired() { return remote != null && remote.required(); }
 
     private List<PageManifestEntry> transcodeArchivePages(
         LibraryTitle title,
@@ -368,6 +495,15 @@ public final class LibraryIngestService {
      * @return true when the existing derived pages match the current archive
      */
     public boolean canReuseReadyChapter(LibraryChapter chapter) {
+        return DerivedPageManifest.reusable(chapter);
+    }
+
+    /**
+     * Keep the original verifier for compatibility comparisons while saved-format reads use the shared validator.
+     * @param chapter saved chapter
+     * @return whether the legacy current-backend contract matches
+     */
+    private boolean legacyCanReuseReadyChapter(LibraryChapter chapter) {
         if (chapter == null
             || !"ready".equals(Optional.ofNullable(chapter.ingestStatus()).orElse("").toLowerCase(Locale.ROOT))
             || chapter.ingestRevision() == null
@@ -457,6 +593,17 @@ public final class LibraryIngestService {
     }
 
     private Path ingestedPagePath(LibraryChapter chapter, int pageIndex) {
+        try { return DerivedPageManifest.page(chapter, pageIndex, null, false); }
+        catch (IOException unavailable) { return null; }
+    }
+
+    /**
+     * Resolve the original one-file layout for historical diagnostics.
+     * @param chapter saved chapter
+     * @param pageIndex logical page
+     * @return legacy derived filename
+     */
+    private Path legacyIngestedPagePath(LibraryChapter chapter, int pageIndex) {
         if (chapter == null || chapter.ingestManifestPath() == null || chapter.ingestManifestPath().isBlank()) {
             return null;
         }

@@ -201,3 +201,30 @@ store `lastBaselineSha` and `latestSkipped` when an operator intentionally skips
 posting; use `services/sage/scripts/skip-github-update-digest.mjs --skip-pending-update-digest --reason=future-only`
 with `--apply` from a Sage-compatible environment for that maintenance action. Portal acknowledges release and update
 notifications through Sage only after Discord accepts the channel message.
+
+Raven's remote WebP encoder uses the dedicated `scriptarr-raven-worker` identity and verified HTTPS broker on port
+3444. Existing HTTP 3004 transport is unchanged. Enable the listener with `SCRIPTARR_SAGE_WORKER_TLS_PORT`,
+`SCRIPTARR_SAGE_WORKER_TLS_HOST`, `SCRIPTARR_SAGE_WORKER_TLS_CERT_FILE`, and `SCRIPTARR_SAGE_WORKER_TLS_KEY_FILE`;
+mount a dedicated leaf certificate/key read-only. Workers receive only their distinct service token and trusted CA,
+never Raven's coordinator token, the full token registry, provider credentials or library mounts. Plaintext worker calls
+are rejected. The worker listener exposes only health, authenticated worker status/liveness, claim, own-lease heartbeat,
+input, binary artifact upload and failure routes; it excludes settings, catalogue writes and operator controls.
+
+`/api/internal/raven-ingest` brokers Vault's atomic conversion jobs. Claims use stable `workerId`, `claimId` and a
+random transient `leaseToken`; subsequent transfers use `X-Scriptarr-Lease-Token` plus the current epoch. Input and
+artifacts stream as binary through Sage to protected Raven endpoints with bounded size/time and abort propagation.
+The worker never calls Raven directly. Main Raven validates the output before submit, then uses publish and atomic
+complete to commit the all-segment chapter checkpoint. `/admin/ingest` and `/admin/ingest/overview` expose the compact
+`summary.conversionPool` with capacity, queued/encoding/result-ready counts and actual worker self-test/liveness.
+
+Warden-only operator routes are `POST /api/internal/warden/raven/content-reset/{preview,apply}` and
+`POST /api/internal/warden/raven/webp-migration/{start,pause,resume,retry,status}`. They forward only those fixed operations
+with Raven's coordinator credential. Initial cleanup preview takes `{operationId,runId,planIds}`; reviewed apply takes
+`{operationId,scopeDigest,filesystemScopeDigest}`. Existing-operation preview recovers its saved immutable inventory by
+operation ID. Raven owns filesystem guards and proof; Vault owns the durable maintenance fence and content-only
+checkpoint. Preserve user state and all old run/delivery/approval records; never substitute the global reset.
+
+Reader routes preserve `rev`, `segment`, and `thumbnail` selectors on both byte streams and status probes, reject
+malformed variants, and forward exact segment/thumbnail identity headers. Logical page metadata contains ordered
+same-origin segment URLs without changing the source-page count. WebP cover fallback requests a whole logical-page
+thumbnail (`thumbnail=true`), rather than showing the first cropped tile; AVIF fallback remains compatible.

@@ -38,12 +38,14 @@ final class AppendChapterMerger {
     }
 
     private static LibraryChapter preserveIdentity(LibraryChapter previous, LibraryChapter incoming) {
-        if (previous == incoming || previous.id() == null || previous.id().isBlank()
-            || previous.id().equals(incoming.id())) return incoming;
+        if (previous == incoming || previous.id() == null || previous.id().isBlank()) return incoming;
+        if (previous.id().equals(incoming.id())) return incoming.preserveSegmentCheckpointFrom(previous);
         return new LibraryChapter(previous.id(), incoming.label(), incoming.chapterNumber(), incoming.pageCount(),
             incoming.releaseDate(), incoming.available(), incoming.archivePath(), incoming.sourceUrl(),
             incoming.qualityStatus(), incoming.expectedPageCount(), incoming.missingPageCount(), incoming.missingPages(),
             incoming.qualityNotes(), incoming.ingestStatus(), incoming.ingestRevision(), incoming.ingestedPageCount(),
-            incoming.ingestedAt(), incoming.ingestError(), incoming.ingestManifestPath(), incoming.updatedAt());
+            incoming.ingestedAt(), incoming.ingestError(), incoming.ingestManifestPath(), incoming.updatedAt(),
+            incoming.sourcePageCount(), incoming.expectedSegmentCount(), incoming.ingestedSegmentCount(), incoming.segmentsReady())
+            .preserveSegmentCheckpointFrom(previous);
     }
 }

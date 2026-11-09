@@ -1,11 +1,94 @@
 # Raven AI Notes
 
+## Distributed WebP ingest
+
+- `SCRIPTARR_RAVEN_ROLE=ingest-worker` branches before Spring bootstrap. Workers instantiate only the lease loop,
+  verified-TLS Sage transport, health server and FFmpeg WebP converter. They have no provider, VPN, downloader,
+  canonical mounts, catalog writer, Docker socket or direct Vault connection. `ready` requires real encode/decode
+  self-test and recent authenticated Sage availability; HTTP liveness remains 200 when degraded.
+- Coordinator output is remote-only with `SCRIPTARR_RAVEN_REMOTE_INGEST_REQUIRED=true` or configured output `webp`,
+  independently of worker assignment. Use that same derivation for migration defaults/mode; missing workers wait.
+  Explicit standalone `avif` without remote policy retains compatibility. Canonical CBZs and publication
+  stay coordinator-owned. Worker q85/m4, two threads, one page/chapter and 2CPU/4GiB combine with Vault's one active
+  encoding lease. The private CA file is `SCRIPTARR_RAVEN_WORKER_CA_FILE`. No local encode fallback.
+- Conversion traffic uses `/api/internal/raven-ingest` through Sage. New content IDs hash recursively sorted compact
+  JSON `{titleId,chapterId,sourceSha256,profile,contentIdentityVersion:2,orderedEntriesSha256}` with prefix `raven_webp_`.
+  The order digest hashes the UTF-8 compact JSON array of exact ordered ZIP names; concatenated/delimited names are
+  insufficient. The exact profile remains format/quality/method/threads/pageConcurrency/maxDimension/segmentationVersion.
+  Absent both order fields preserves the byte-exact legacy job identity; partial or unsupported identity data fails closed.
+  Worker artifacts and immutable manifests must echo the validated order identity. Page naming settings alone are not
+  identity data: only a changed frozen ordered list allocates another content job/revision.
+  Before creating new output, GET the exact legacy ID once. Reattach only matching source/profile/ordered entries,
+  still through normal create ownership/generation fencing; an authoritative 404 or a different valid order selects
+  version2. Malformed or unavailable lookup must suppress dispatch. Legacy accepted/completed artifacts remain repairable.
+- Claims use worker-generated idempotency IDs and transient lease secrets; only secret hashes persist. Renew every
+  20 seconds under a 120-second epoch fence. Only real segment/page increments advance `actualProgressAt`. Interactive
+  and bulk jobs outrank migration. Cancel uses the captured server coordinatorGeneration; claims retain it, while
+  owner promotion and approved retry rotate it. Never refetch a newer token solely to cancel.
+- Stream/extraction byte bounds, exact entries, hashes, dimensions and full decode precede artifact acceptance.
+  Submit releases the encode slot; result-ready/publishing jobs are not worker-reassigned. Vault atomically checks
+  epoch and checkpoints the final chapter at complete. Exact artifact/current catalog replays preserve lost responses.
+- Completed-artifact repair uses that same complete route with the captured coordinator generation, epoch and artifact,
+  plus the canonical fingerprint of the exact raw current failed/pending chapter. Validate restored files first; retain
+  the original completion receipt and source/quality data, use a separate repair receipt, and never enqueue or direct-PUT
+  a repaired catalog row. Missing, reset, superseded or changed chapter identities fail closed.
+- New WebP revisions use source SHA/profile plus versioned frozen page-order digest, never CBZ mtime; older saved
+  WebP/AVIF revisions retain their original derivation and remain readable. Immutable output lives under
+  `ingested/<type>/<title>/<chapter>/<webp-revision>/`. Identical content in a new transfer epoch retains its files and
+  manifest. Different page/profile hashes cannot overwrite it. Existing AVIF identity and reads remain supported.
+- Complete chapter validation parses one validated manifest snapshot for all logical pages, segments and completion
+  counters; do not reopen the full manifest inside a per-page or per-tile loop. Reader byte delivery still verifies all
+  siblings of the selected logical page and keeps selector/symlink checks.
+- Missing-manifest publication validates every retained entry against the staged accepted artifact before writing.
+  Install only absent expected files using private-stage temporary copies and ordinary moves without replacement,
+  then install the manifest last under the title/maintenance lease. Retain valid file identities and reuse the already
+  completed job's exact chapter timestamp; never rewrite its completion receipt or accept foreign/differing paths.
+- Logical pages retain source count/index. Segmentation profile2 bounds every native raster to 64Mi pixels and ≤16383
+  per side; row width=min(width,16383), row height=min(16383,floor(64Mi/rowWidth)). Keep profile1 geometry/revisions
+  readable, and create distinct profile2 content jobs/revisions instead of overwriting older immutable output.
+  `vipsheader` reads dimensions; sequential `vips crop` emits one bounded lossless PNG before unchanged FFmpeg q85/m4
+  encoding/decoding. Native operations use two threads, zero operation cache and 64MiB memory/disc thresholds; delete
+  intermediates after each segment. Whole thumbnails use native full-page scaling and exact bounded fit dimensions.
+  Two-dimensional segments cover every pixel, with at most
+  1024 segments/page and a 300M-pixel bound. `segment` selects exact bytes; `thumbnail=true` is the whole first logical
+  page. Probes include both selectors. WebP-ready requires matching logical counts, all physical segments and thumbnail;
+  valid files alone do not make a failed/pending DTO ready.
+- Reader descriptors parse one saved manifest for all descriptors, then project every logical page from that snapshot.
+  Variant file resolution independently parses the manifest once. A valid
+  missing WebP tile records source-quality/failed-ingest recovery from the canonical CBZ; malformed or out-of-range
+  selectors never mark content damaged. Variant status remains scoped to the selected tile or whole-page thumbnail.
+- A manual import's path writer lease covers its filesystem copy and both catalog checkpoints, including the final
+  ingestion checkpoint. Releasing the path fence before those writes finish is not actual maintenance quiescence.
+- Migration defaults disabled. Protected `/v1/ingest/migration/{start,pause,resume,retry,status}` persists intent in a
+  generic control job. Whole-library runs include ready AVIF, yield the fair title lock after each chapter, preserve old
+  readable state on failures, and leave failed title work for explicit retry. Pause lets the current chapter finish.
+- Migration-only verification hints are process-local and scoped to the exact run/task/canonical title and ordered
+  chapter content checkpoints. Bind canonical/manifest/every tile/thumbnail file key, size and full-resolution mtime;
+  changed identity/order/stats invalidate the affected prefix. Never persist or trust a cursor across restart. Bound
+  abandoned scopes and discard on terminal/error/cancel. Advance only after strict validation and acknowledged writes.
+  The locked `MigrationPass(title, pending)` outcome drives scheduler state once: even all-ready catalog rows can still
+  require another quantum. A fresh strict all-chapter content sweep is mandatory before completion, including unchanged
+  stat evidence, so same-size/restored-mtime corruption fails closed. Foreground and reader validation stay strict.
+- Scoped cleanup uses the Warden/Sage wrapper to `/v1/system/scoped-content-reset/{preview,apply}`. Resolve durable
+  plans to deduplicated catalog IDs and orphan roots; never assume plan count equals UUID count. Save the original
+  inventory locally in `.content-maintenance/<operation>.proof`, expose a compact preview, restore fences before startup
+  writers, and check actual queues/threads/processes before deleting. Replay permits missing reviewed entries but no
+  changed/new files. Preserve metadata/covers/aliases, user progress/follows, configuration and all run/task/job history.
+- Bulk metadata must anchor full original/provider-declared labels and editions, including empty placeholders.
+  `matchedQuery` and self-added catalog aliases are not anchors. Distinct sources cannot write shared metadata,
+  canonical or folder scopes; unresolved conflicts remain durable. Never use global reset for a scoped operation.
+
+## Other Raven contracts
+
 - Raven stays Java-first and now runs on Spring Boot with a Java 24 toolchain.
 - Raven owns downloader, library, metadata, PIA/OpenVPN download support, and provider orchestration.
 - Raven must not call Vault directly anymore. Shared settings, secrets, titles, chapters, metadata matches, and task
   snapshots all flow through Sage's internal broker routes.
 - Raven's internal Sage broker client should use plain HTTP/1.1. Do not let Java's default HTTP version negotiation
   stall Raven-to-Sage calls against Sage's Node HTTP server.
+- The ingest broker keeps a ten-second connection deadline and 120-second JSON/control request deadline. Binary input
+  downloads and artifact uploads use fifteen-minute request deadlines to match Sage's stream budget, including the
+  upload's coordinator-validation response. Preserve verified TLS, lease/cancellation fences and stream byte limits.
 - Launch defaults keep MangaDex enabled first, Anime-Planet enabled ahead of MangaUpdates for scrape-based enrichment,
   and AniList, MyAnimeList, and ComicVine following the configured priority and credential gates.
 - Download-provider selection is now explicit. Raven intake should search enabled metadata providers first, expand
@@ -17,8 +100,8 @@
   metadata snapshot into the queued download, and report already-active, adult-content, no-metadata,
   ambiguous-metadata, and failed outcomes separately. For `nsfw:false`, queue only concrete WeebCentral targets whose
   detail page explicitly says `Adult Content: No`; skip adult and unknown adult flags.
-- `/downloadall` should skip already-completed catalog titles, append only missing or new chapters for existing
-  non-completed titles, skip already-current titles, and reject invalid/bare provider URLs before queueing. Append
+- `/downloadall` should skip only verified current local chapter sets, append missing or new chapters for existing
+  titles regardless of source publication status, and reject invalid/bare provider URLs before queueing. Append
   downloads must merge new archives into the existing title without replacing clean chapters.
 - Raven is the canonical tag merge point. Metadata-provider tags plus download-provider tags should be normalized and
   merged case-insensitively once inside Raven, preserved with clean display casing, and forwarded through Sage so Moon
@@ -48,10 +131,12 @@
   existing canonical CBZ archives, create durable per-title tasks, continue through individual title failures, and
   return the existing run id when the same type already has a queued or running rebuild. Startup recovery and duplicate
   same-type requests must reattach detached queued/running runs, preserve already failed title tasks, and continue only
-  unfinished queued or stale-running tasks. Legacy WebP-format active runs should be marked `superseded` before the
-  AVIF run starts. If duplicate active same-type durable runs are found at startup or scheduling time, keep the
+  unfinished queued or stale-running tasks. Older active runs with a different output format should be marked `superseded` before the
+  selected-format run starts. If duplicate active same-type durable runs are found at startup or scheduling time, keep the
   preferred run and mark the rest `superseded` before any title work can run for both.
 - Keep type-wide AVIF rebuilds on bounded fair title lanes (`SCRIPTARR_RAVEN_AVIF_TITLE_LANES`, default `2`, max `3`).
+  Preserve that legacy environment name first, with `SCRIPTARR_RAVEN_INGEST_TITLE_LANES` only as the unset/blank fallback;
+  selected invalid values retain default `2`, and integer values remain clamped to `1..3`.
   Only leased run/tasks should be marked `running`; unfinished runs beyond the lane count should remain queued or
   waiting with a bounded queue position. Summaries may expose scheduler state, current title text, last progress, and
   ETA, but never full child task arrays or storage paths. Resume, cancel, restart-active, and clean-restart controls
@@ -64,7 +149,7 @@
   supersede the stale active run and queue a fresh AVIF rebuild over canonical title ids only.
 - Keep `/v1/ingest` backlog and Appa preview/count paths lightweight. They should use compact title-card projections
   and must not pull full title records with chapter arrays just to count eligible library types.
-- Reader serving is AVIF-first. A chapter is readable only after ingest writes stable `p000001.avif`-style page slugs,
+- Reader serving supports saved AVIF and new WebP. A chapter is readable only after ingest writes stable `p000001.avif`-style page slugs,
   a `manifest.json`, and ready ingest metadata with a current `avif-` revision into the catalog.
 - Ingest failures keep the CBZ, delete only staged or derived ingest output, and surface as retryable Needs attention
   work with `recoveryAction: retry-ingest`.
@@ -137,6 +222,14 @@
 - Startup catalog scans preserve each validated ready chapter when its archive path, number, page count, and AVIF
   revision still match. `LibraryTitleLocks` counts active and waiting title operations so scan writes cannot erase
   newer ingest checkpoints. Keep the service monitor out of the wait for a title lease to avoid lock inversion.
+- `ScanCatalogOwnership` takes one strict raw title census in the background, retaining only small normalized-root/name
+  indexes without chapter DTO deserialization. Public cards omit roots and deduplicate display names, so they cannot
+  prove complete ownership. This is a startup-only linear catalog-read tradeoff; browser/backlog card paths stay compact.
+  Unique absolute normalized
+  `downloadRoot` ownership precedes the legacy type/name fallback; preserve metadata display names and reload the owner
+  strictly under its title lease, including its indexed root. Failed or incomplete identity reads are not an empty catalog. Multiple IDs claiming one
+  root leave their rows/files unchanged and fail the durable rescan job/task with bounded diagnostics and recovery counts;
+  unrelated folders still scan. Never choose, merge, delete or create another owner to conceal that ambiguity.
 - `ArchiveImageEntries` defines supported CBZ image entries for import, scans, ingest, recovery, and completion.
   Metadata such as `ComicInfo.xml` is not a page. Correct legacy inflated counts only after validating existing ready
   manifests; preserve AVIF revisions, timestamps, files, and quality evidence. Prefer a persisted archive path's known

@@ -91,3 +91,18 @@ test("warden initialize refreshes the LocalAI runtime after stack reconciliation
   await runtime.initialize();
   assert.deepEqual(calls, ["stack", "localai"]);
 });
+
+test("an unassigned WebP worker degrades only ingest while the local platform stays healthy", async () => {
+  const runtime = createWardenRuntime({
+    env: {SCRIPTARR_GPU_HINT: "cpu"},
+    loggerFactory: () => ({info() {}, warn() {}, error() {}}),
+    localAiRuntimeFactory: () => ({getStatus: () => ({})}),
+    managedStackRuntimeFactory: () => ({refreshStatus: async () => ({
+      warden: {dockerSocketAvailable: true, lastError: null}, managedServices: []
+    })}),
+    updateRuntimeFactory: () => ({})
+  });
+  const health = await runtime.getHealth();
+  assert.equal(health.ok, true);
+  assert.equal(health.ingestDegraded, true);
+});

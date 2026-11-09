@@ -2,6 +2,7 @@
  * @file Scriptarr Sage module: services/sage/lib/registerInternalBrokerRoutes.mjs.
  */
 import {createDownloadAllBroker, downloadAllRequestIdError, registerDownloadAllNotificationRoutes} from "./downloadAllBroker.mjs";
+import {registerRavenIngestBroker} from "./registerRavenIngestBroker.mjs";
 import {appendDurableEvent, buildServiceActor} from "./adminEvents.mjs";
 import {knownPortalDiscordCommands, readPortalDiscordSettings} from "./portalDiscordSettings.mjs";
 import {createPortalTriviaService} from "./portalTrivia.mjs";
@@ -1075,6 +1076,7 @@ export const registerInternalBrokerRoutes = (app, {
   serviceJson,
   logger
 }) => {
+  registerRavenIngestBroker(app, {config, vaultClient, requireService});
   const downloadAllBroker = createDownloadAllBroker({config, vaultClient, serviceJson});
   const triviaService = createPortalTriviaService({
     config,

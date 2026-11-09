@@ -29,7 +29,7 @@ test("service plan exposes the fixed Scriptarr network and selfhost mysql by def
   assert.equal(plan.services.find((service) => service.name === "scriptarr-vault").env.SUPERUSER_ID, "owner-1");
   assert.equal(plan.services.find((service) => service.name === "scriptarr-raven").env.SCRIPTARR_RAVEN_LOG_DIR, "/app/logs");
   assert.equal(plan.services.find((service) => service.name === "scriptarr-raven").env.SCRIPTARR_SAGE_BASE_URL, "http://scriptarr-sage:3004");
-  assert.equal(plan.services.find((service) => service.name === "scriptarr-raven").env.SCRIPTARR_RAVEN_DERIVED_IMAGE_FORMAT, "avif");
+  assert.equal(plan.services.find((service) => service.name === "scriptarr-raven").env.SCRIPTARR_RAVEN_DERIVED_IMAGE_FORMAT, "webp");
   assert.equal(plan.services.find((service) => service.name === "scriptarr-raven").env.SCRIPTARR_RAVEN_AVIF_REQUIRE_NVIDIA, "false");
   assert.deepEqual(plan.services.find((service) => service.name === "scriptarr-raven").extraArgs, ["--cap-add", "NET_ADMIN", "--device", "/dev/net/tun"]);
   assert.equal(plan.services.find((service) => service.name === "scriptarr-portal").env.SCRIPTARR_SAGE_BASE_URL, "http://scriptarr-sage:3004");
@@ -102,7 +102,7 @@ test("service plan gives embedded Oracle LocalAI NVIDIA runtime args when hinted
   assert.equal(oracle.env.SCRIPTARR_LOCALAI_BASE_URL, "http://127.0.0.1:8080/v1");
 });
 
-test("service plan gives Raven ingest NVIDIA runtime args when hinted", () => {
+test("legacy GPU hints do not grant NVIDIA devices to the WebP coordinator", () => {
   const plan = resolveServicePlan({
     env: {
       SCRIPTARR_MYSQL_URL: "SELFHOST",
@@ -115,26 +115,27 @@ test("service plan gives Raven ingest NVIDIA runtime args when hinted", () => {
   const raven = plan.services.find((service) => service.name === "scriptarr-raven");
   assert.deepEqual(raven.extraArgs, [
     "--cap-add", "NET_ADMIN",
-    "--device", "/dev/net/tun",
-    "--runtime", "nvidia",
-    "--gpus", "all"
+    "--device", "/dev/net/tun"
   ]);
-  assert.equal(raven.env.SCRIPTARR_RAVEN_INGEST_GPU_PROFILE, "nvidia");
+  assert.equal(raven.env.SCRIPTARR_RAVEN_INGEST_GPU_PROFILE, "cpu");
   assert.equal(raven.env.SCRIPTARR_RAVEN_INGEST_REQUIRE_NVIDIA, "false");
-  assert.equal(raven.env.NVIDIA_VISIBLE_DEVICES, "all");
-  assert.equal(raven.env.NVIDIA_DRIVER_CAPABILITIES, "compute,utility,video");
+  assert.equal(raven.env.NVIDIA_VISIBLE_DEVICES, undefined);
+  assert.equal(raven.env.NVIDIA_DRIVER_CAPABILITIES, undefined);
 });
 
-test("strict NVENC selects the NVIDIA runtime without requiring a separate GPU hint", () => {
-  const plan = resolveServicePlan({env: {SCRIPTARR_RAVEN_AVIF_ENCODER: "nvenc", SCRIPTARR_GPU_HINT: "cpu"}});
+test("legacy NVENC selection cannot override the new CPU WebP runtime", () => {
+  const plan = resolveServicePlan({env: {SCRIPTARR_RAVEN_AVIF_ENCODER: "nvenc", SCRIPTARR_GPU_HINT: "cpu",
+    SCRIPTARR_RAVEN_REMOTE_INGEST_REQUIRED: "false"}});
   const raven = plan.services.find((service) => service.name === "scriptarr-raven");
-  assert.equal(raven.extraArgs.includes("--gpus"), true);
-  assert.equal(raven.env.SCRIPTARR_RAVEN_AVIF_REQUIRE_NVIDIA, "true");
-  assert.equal(raven.env.SCRIPTARR_RAVEN_INGEST_REQUIRE_NVIDIA, "true");
-  assert.throws(() => resolveServicePlan({env: {SCRIPTARR_RAVEN_AVIF_ENCODER: "nvenc", SCRIPTARR_RAVEN_INGEST_GPU_PROFILE: "cpu"}}), /requires the NVIDIA/);
+  assert.equal(raven.extraArgs.includes("--gpus"), false);
+  assert.equal(raven.env.SCRIPTARR_RAVEN_AVIF_ENCODER, "cpu");
+  assert.equal(raven.env.SCRIPTARR_RAVEN_DERIVED_IMAGE_FORMAT, "webp");
+  assert.equal(raven.env.SCRIPTARR_RAVEN_REMOTE_INGEST_REQUIRED, "true");
+  assert.equal(raven.env.SCRIPTARR_RAVEN_AVIF_REQUIRE_NVIDIA, "false");
+  assert.equal(raven.env.SCRIPTARR_RAVEN_INGEST_REQUIRE_NVIDIA, "false");
 });
 
-test("service plan preserves Raven NVENC video capability when NVIDIA caps are overridden", () => {
+test("legacy NVIDIA capability overrides are not forwarded to WebP", () => {
   const plan = resolveServicePlan({
     env: {
       SCRIPTARR_MYSQL_URL: "SELFHOST",
@@ -146,10 +147,10 @@ test("service plan preserves Raven NVENC video capability when NVIDIA caps are o
   });
 
   const raven = plan.services.find((service) => service.name === "scriptarr-raven");
-  assert.equal(raven.env.NVIDIA_DRIVER_CAPABILITIES, "compute,utility,video");
+  assert.equal(raven.env.NVIDIA_DRIVER_CAPABILITIES, undefined);
 });
 
-test("service plan gives Oracle and Raven NVIDIA runtime args when Docker exposes the NVIDIA runtime", () => {
+test("Oracle retains NVIDIA runtime while the WebP coordinator remains CPU-only", () => {
   const plan = resolveServicePlan({
     env: {
       SCRIPTARR_MYSQL_URL: "SELFHOST",
@@ -165,11 +166,11 @@ test("service plan gives Oracle and Raven NVIDIA runtime args when Docker expose
   const oracle = plan.services.find((service) => service.name === "scriptarr-oracle");
   const raven = plan.services.find((service) => service.name === "scriptarr-raven");
   assert.equal(oracle.extraArgs.includes("--gpus"), true);
-  assert.equal(raven.extraArgs.includes("--gpus"), true);
+  assert.equal(raven.extraArgs.includes("--gpus"), false);
   assert.equal(oracle.env.NVIDIA_VISIBLE_DEVICES, "all");
   assert.equal(oracle.env.SCRIPTARR_ORACLE_LOCALAI_GPU_PROFILE, "nvidia");
-  assert.equal(raven.env.NVIDIA_VISIBLE_DEVICES, "all");
-  assert.equal(raven.env.SCRIPTARR_RAVEN_DERIVED_IMAGE_FORMAT, "avif");
+  assert.equal(raven.env.NVIDIA_VISIBLE_DEVICES, undefined);
+  assert.equal(raven.env.SCRIPTARR_RAVEN_DERIVED_IMAGE_FORMAT, "webp");
   assert.equal(raven.env.SCRIPTARR_RAVEN_AVIF_REQUIRE_NVIDIA, "false");
 });
 

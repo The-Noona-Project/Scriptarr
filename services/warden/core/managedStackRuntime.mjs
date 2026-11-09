@@ -61,6 +61,10 @@ const actualMountsFor = (inspect) =>
     .map((mount) => `${mount.Source}=>${mount.Destination}`)
     .sort();
 
+const readOnlyMountsMatch = (mounts, inspect) => (mounts || []).filter(mount => mount.readOnly).every(mount =>
+  (inspect?.Mounts || []).some(actual => actual.Type === "bind" && actual.Source === toDockerDesktopHostPath(mount.hostPath)
+    && actual.Destination === mount.containerPath && actual.RW === false));
+
 const normalizeHostIp = (ip) => !ip || ip === "0.0.0.0" || ip === "::" ? "*" : ip;
 const desiredPortsFor = (ports) =>
   (ports || [])
@@ -134,6 +138,13 @@ export const resourceLimitsMatchExtraArgs = (extraArgs = [], inspect = {}) => {
     const multiplier = {b: 1, k: 1024, m: 1024 ** 2, g: 1024 ** 3}[String(match[2] || "b").toLowerCase()];
     if (Math.round(Number(match[1]) * multiplier) !== Number(inspect.HostConfig?.Memory || 0)) return false;
   } else if (Number(inspect.HostConfig?.Memory || 0) !== 0) return false;
+  const swap = valuesForOption(extraArgs, "--memory-swap")[0];
+  if (swap) {
+    const match = /^([\d.]+)([bkmg])?b?$/i.exec(swap);
+    if (!match) return false;
+    const multiplier = {b: 1, k: 1024, m: 1024 ** 2, g: 1024 ** 3}[String(match[2] || "b").toLowerCase()];
+    if (Math.round(Number(match[1]) * multiplier) !== Number(inspect.HostConfig?.MemorySwap || 0)) return false;
+  }
   return true;
 };
 
@@ -421,6 +432,7 @@ const buildServiceStatus = ({
     name: descriptor.name,
     containerName: descriptor.containerName,
     image: descriptor.image,
+    optional: descriptor.optional === true,
     running: Boolean(state?.Running),
     status: state?.Status || "missing",
     health,
@@ -564,7 +576,7 @@ export const createManagedStackRuntime = ({env = process.env, logger, resolvePla
       }
     }
 
-    if (!sameList(actualMountsFor(inspect), desiredMountsFor(descriptor.mounts))) {
+    if (!sameList(actualMountsFor(inspect), desiredMountsFor(descriptor.mounts)) || !readOnlyMountsMatch(descriptor.mounts, inspect)) {
       reasons.push("mounts");
     }
 
@@ -603,6 +615,9 @@ export const createManagedStackRuntime = ({env = process.env, logger, resolvePla
     if (!resourceLimitsMatchExtraArgs(descriptor.extraArgs, inspect)) {
       reasons.push("resourceLimits");
     }
+    if (descriptor.name === "scriptarr-raven-worker" && (inspect.HostConfig?.Privileged
+      || actualCapabilitiesForInspect(inspect).length || actualDevicesForInspect(inspect).length
+      || !(inspect.HostConfig?.CapDrop || []).includes("ALL"))) reasons.push("workerIsolation");
 
     if (normalizeString(inspect?.HostConfig?.RestartPolicy?.Name || "no") !== resolveRestartPolicy(descriptor)) {
       reasons.push("restartPolicy");
@@ -897,7 +912,13 @@ export const createManagedStackRuntime = ({env = process.env, logger, resolvePla
 
       const statuses = [];
       for (const descriptor of descriptors) {
-        statuses.push(await reconcileDescriptor(descriptor));
+        try {
+          statuses.push(await reconcileDescriptor(descriptor));
+        } catch (error) {
+          if (!descriptor.optional) throw error;
+          logger.warn("Optional ingest worker is unavailable; reader services remain independent.", {service: descriptor.name});
+          statuses.push(buildServiceStatus({descriptor, inspect: await inspectDockerContainer(descriptor.containerName)}));
+        }
         if (descriptor.name === "scriptarr-mysql" && plan.mysql.mode === "selfhost") {
           await waitForMySqlReady({
             containerName: descriptor.containerName,
@@ -913,7 +934,7 @@ export const createManagedStackRuntime = ({env = process.env, logger, resolvePla
 
       state.managedServices = statuses;
       state.lastReconciledAt = new Date().toISOString();
-      state.lastError = statuses.find((entry) => entry.conflict)?.conflict || null;
+      state.lastError = statuses.find((entry) => entry.conflict && !entry.optional)?.conflict || null;
       state.initialized = true;
       logger.info("Managed Scriptarr stack reconciliation completed.", {
         managedServices: statuses.length,

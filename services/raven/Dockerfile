@@ -20,13 +20,17 @@ FROM eclipse-temurin:24-jre
 WORKDIR /app
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends curl ffmpeg openvpn iproute2 unzip \
+  && apt-get install -y --no-install-recommends curl ffmpeg libvips-tools openvpn iproute2 unzip \
   && rm -rf /var/lib/apt/lists/*
 
 COPY services/raven/scripts/verify-avif.sh /usr/local/bin/scriptarr-verify-avif
+COPY services/raven/scripts/verify-webp.sh /usr/local/bin/scriptarr-verify-webp
 RUN sed -i 's/\r$//' /usr/local/bin/scriptarr-verify-avif \
   && chmod +x /usr/local/bin/scriptarr-verify-avif \
   && /usr/local/bin/scriptarr-verify-avif
+RUN sed -i 's/\r$//' /usr/local/bin/scriptarr-verify-webp \
+  && chmod +x /usr/local/bin/scriptarr-verify-webp \
+  && /usr/local/bin/scriptarr-verify-webp
 
 ENV SERVER_PORT=8080
 ENV SCRIPTARR_RAVEN_DATA_ROOT=/downloads

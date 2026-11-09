@@ -52,8 +52,32 @@
 - Duplicate request blockers should not create second visible rows in Moon. Show the duplicate outcome, link directly
   to the title when it already exists, and let Sage or Portal own the hidden waitlist and later ready notifications.
 - Moon should show honest empty states when Raven has no imported titles, and `/admin` should stay dark by default.
-- Keep `/admin/import` and `/admin/ingest` separate. Import is manual CBZ intake into a library; ingest is the AVIF
+- Keep `/admin/import` and `/admin/ingest` separate. Import is manual CBZ intake into a library; ingest is the WebP
   backlog, hardware status, completion stats, and retry page for CBZs that are not reader-ready yet.
+- Reader indexes, counts, bookmarks and progress refer to logical source pages. `pageSegments.js` validates complete
+  non-overlapping segment geometry; `ReaderLogicalImage` renders the composite and preload waits for every segment
+  decode. Preserve the legacy single-image path for existing AVIF. Segment and whole-page-thumbnail selectors belong
+  in both image cache identities and current-session status authorization. A tile-zero probe never authorizes another
+  tile or a whole-page thumbnail. WebP cover fallback requires the `thumbnail=true` first-page variant.
+- Reader live invalidations still refresh authenticated session data. Separate route/user bootstrap from same-content
+  metadata refresh: retain active/paged chapter, logical position, preferences, loaded windows and decode state. A changed
+  revision/count invalidates only that chapter's request tokens, session promises, pages and warm images; reject late
+  responses and navigation against the old content identity. True route/user transitions and authorization failures
+  retain bootstrap clearing. Pending Webtoon seeks are observable chapter-scoped requests, including repeated seeks;
+  retry DOM scrolling when missing metadata arrives rather than waiting for unrelated state changes.
+  Webtoon tracking observes the full viewport at threshold zero, retains the complete intersecting set, and ranks its
+  current rectangles against a viewport-height pixel reading band. Scroll callbacks measure only those candidates;
+  resize rebuilds observation. Explicit seeks pause automatic metadata work until their bounded target window drains
+  and settles, then retain a passive one-target anchor for later gap insertion or layout changes. Cancel preparing and
+  passive anchors before manual wheel/touch/pointer/keyboard navigation, mode/route/content changes, and explicit chapter
+  navigation. Do not clear a seek merely because smooth scrolling started. Single-image dimensions reserve their aspect
+  ratio before lazy decode; segmented pages retain their existing logical geometry.
+- Paged composite width needs a definite native/viewport basis before its auto-sized flex/grid frame can resolve.
+  Never use that frame's cyclic `100%` as an intrinsic minimum: absolutely positioned tiles contribute no intrinsic
+  width and can collapse the whole page to zero. Preserve source aspect ratio, segment geometry, frame caps and
+  `max-width: 100%`; verify actual positive DOM rectangles in every reader layout, not only successful image decoding.
+  Keep the paged frame's single grid track at `minmax(0, 1fr)` so a wide composite's percentage maximum resolves to the
+  capped frame instead of an oversized implicit min-content track. Every segment must remain inside the visible frame.
 - Keep Discord login as the only bootstrap and admin sign-in path. Do not reintroduce claim-dev-session behavior.
 - Preserve same-origin login return flow. Moon should pass a sanitized `returnTo` path into Sage's Discord auth URL,
   and the callback relay should send users back to the page where login started whenever that route is still allowed,

@@ -193,6 +193,10 @@ export const buildScriptarrStorageLayout = (rootPath) => {
         downloads: buildFolderEntry(path.join(root, "raven", "downloads"), "/downloads"),
         logs: buildFolderEntry(path.join(root, "raven", "logs"), "/app/logs")
       },
+      "scriptarr-raven-worker": {
+        scratch: buildFolderEntry(path.join(root, "raven-worker", "scratch"), "/work"),
+        logs: buildFolderEntry(path.join(root, "raven-worker", "logs"), "/app/logs")
+      },
       "scriptarr-portal": {
         logs: buildFolderEntry(path.join(root, "portal", "logs"), "/var/log/scriptarr")
       },

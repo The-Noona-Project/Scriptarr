@@ -38,6 +38,17 @@ Library cards and title pages use the first page of the earliest readable chapte
 cannot be loaded. This fallback uses existing reader images, preserves the original cover metadata, and checks the
 current session or API key before returning cached artwork. Titles without readable pages keep their initial placeholder.
 Cached first-page covers use a lightweight access and availability check instead of downloading the page again.
+Oversized WebP pages retain their logical page number and reading position: the reader displays all image segments
+as one page. Cover fallback uses a thumbnail of the whole logical first page. Existing AVIF chapters remain readable
+while background conversion publishes verified WebP replacements.
+Paged segmented images keep their full logical aspect ratio in Single, Double, and Manga double layouts, with the
+same viewport and page-fit bounds as the reader frame. Display scaling does not reduce the source image resolution.
+Wide segmented pages shrink within that frame so the whole logical page remains visible.
+Live reader updates retain the current chapter, page and viewing preferences when content is unchanged. A changed
+chapter revision reloads that chapter's pages without resetting another open chapter. Webtoon seeks also work when
+the target page is already loaded or the same page is selected again.
+Webtoon progress follows the visible logical page on wide and tall screens. Seeking keeps the selected page in view
+as delayed page metadata loads; scrolling, touch, or another navigation action immediately gives control back to you.
 Moon's request and admin add-title flows now share the same metadata-first intake engine. Readers pick metadata only,
 and Scriptarr saves that metadata snapshot with the request so moderators can review the upstream metadata site and
 choose the exact Raven source later. Admin add-title uses the same intake base but lets staff pick a concrete source
@@ -161,9 +172,9 @@ per-type naming profiles for manga, manhwa, manhua, webtoon, comic, and OEL so a
 page formats without digging through the broader settings surface.
 `/admin/import` is the manual CBZ intake page. It sends title metadata, library type, existing-title selection, and
 Raven-visible source paths to Sage, which asks Raven to copy approved CBZ files into canonical downloaded storage.
-`/admin/ingest` is separate from import and shows the AVIF conversion backlog, completion stats, hardware status, and
+`/admin/ingest` is separate from import and shows the WebP conversion backlog, completion stats, worker readiness, and
 retry buttons for titles whose CBZs are not yet reader-ready. The backlog header also exposes `Start / rebuild all`,
-which asks Sage and Raven for a non-destructive clean restart: active AVIF runs are superseded, old superseded run noise
+which asks Sage and Raven for a non-destructive clean restart: active reader-page runs are superseded, old superseded run noise
 is compacted, and fresh OEL-first type runs start without deleting catalog rows or CBZ archives. The page also shows
 active and recent durable type-run summaries so admins can see Running current title, Waiting for worker slot, Needs
 recovery, Cancelling, and terminal whole-library rebuilds without loading every child title task. Active runs refresh

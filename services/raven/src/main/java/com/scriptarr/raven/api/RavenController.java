@@ -525,10 +525,15 @@ public class RavenController {
     public ResponseEntity<ReaderPageProbe> readerPageStatus(
         @PathVariable("titleId") String titleId,
         @PathVariable("chapterId") String chapterId,
-        @PathVariable("pageIndex") int pageIndex
+        @PathVariable("pageIndex") int pageIndex,
+        @RequestParam(value = "segment", required = false) Integer segment,
+        @RequestParam(value = "thumbnail", defaultValue = "false") boolean thumbnail
     ) {
-        return ResponseEntity.ok(libraryService.probeReaderPage(titleId, chapterId, pageIndex));
+        return ResponseEntity.ok(libraryService.probeReaderPage(titleId, chapterId, pageIndex, segment, thumbnail));
     }
+
+    /** @param titleId title @param chapterId chapter @param pageIndex logical index @return legacy default page probe */
+    public ResponseEntity<ReaderPageProbe> readerPageStatus(String titleId, String chapterId, int pageIndex) { return ResponseEntity.ok(libraryService.probeReaderPage(titleId, chapterId, pageIndex)); }
 
     /**
      * Render a single reader page as SVG.
@@ -542,15 +547,25 @@ public class RavenController {
     public ResponseEntity<?> readerPage(
         @PathVariable("titleId") String titleId,
         @PathVariable("chapterId") String chapterId,
-        @PathVariable("pageIndex") int pageIndex
+        @PathVariable("pageIndex") int pageIndex,
+        @RequestParam(value = "segment", required = false) Integer segment,
+        @RequestParam(value = "thumbnail", defaultValue = "false") boolean thumbnail
     ) {
-        RenderedPage payload = libraryService.renderReaderPage(titleId, chapterId, pageIndex);
+        RenderedPage payload = libraryService.renderReaderPage(titleId, chapterId, pageIndex, segment, thumbnail);
         if (payload == null) {
             return ResponseEntity.status(HttpStatus.NOT_FOUND).build();
         }
         return ResponseEntity.ok()
             .contentType(MediaType.parseMediaType(payload.mediaType()))
+            .header("X-Scriptarr-Segment-Index", Integer.toString(payload.segmentIndex()))
+            .header("X-Scriptarr-Thumbnail", Boolean.toString(payload.thumbnail()))
             .body(payload.bytes());
+    }
+
+    /** @param titleId title @param chapterId chapter @param pageIndex logical index @return legacy default page bytes */
+    public ResponseEntity<?> readerPage(String titleId, String chapterId, int pageIndex) {
+        RenderedPage payload = libraryService.renderReaderPage(titleId, chapterId, pageIndex);
+        return payload == null ? ResponseEntity.notFound().build() : ResponseEntity.ok().contentType(MediaType.parseMediaType(payload.mediaType())).body(payload.bytes());
     }
 
     /**

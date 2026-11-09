@@ -12,6 +12,8 @@ import {
   shouldAutoRetryReaderImage
 } from "../lib/imageRetry.js";
 import {readerTelemetryNow, recordReaderTelemetry} from "../lib/readerTelemetry.js";
+import ReaderLogicalImage from "./ReaderLogicalImage.jsx";
+import {readerPageImageKey, resolveReaderPageImages} from "../lib/pageSegments.js";
 
 /**
  * Render one reader page image and expose a retry if the browser fails it.
@@ -20,6 +22,7 @@ import {readerTelemetryNow, recordReaderTelemetry} from "../lib/readerTelemetry.
  * @returns {import("react").ReactNode}
  */
 export const ReaderPageImage = ({page, chapterId, titleId = "", layoutMode = "", showPageNumbers = true, eager = false}) => {
+  const imageIdentity = readerPageImageKey(page);
   const [failed, setFailed] = useState(false);
   const [retrying, setRetrying] = useState(false);
   const [retryKey, setRetryKey] = useState(0);
@@ -31,7 +34,7 @@ export const ReaderPageImage = ({page, chapterId, titleId = "", layoutMode = "",
 
   useEffect(() => {
     imageStartedAtRef.current = readerTelemetryNow();
-  }, [page?.src, retryKey]);
+  }, [imageIdentity, retryKey]);
 
   useEffect(() => {
     setFailed(false);
@@ -43,7 +46,7 @@ export const ReaderPageImage = ({page, chapterId, titleId = "", layoutMode = "",
       clearTimeout(retryTimerRef.current);
       retryTimerRef.current = null;
     }
-  }, [page?.src]);
+  }, [imageIdentity]);
 
   useEffect(() => () => {
     if (retryTimerRef.current) {
@@ -52,8 +55,8 @@ export const ReaderPageImage = ({page, chapterId, titleId = "", layoutMode = "",
     }
   }, []);
 
-  const probePageStatus = async () => {
-    const statusUrl = buildReaderPageStatusUrl(page?.src || "");
+  const probePageStatus = async (source = page?.src || "") => {
+    const statusUrl = buildReaderPageStatusUrl(source);
     if (!statusUrl) {
       return {ok: false, reason: "probe_unavailable", status: 0};
     }
@@ -94,7 +97,7 @@ export const ReaderPageImage = ({page, chapterId, titleId = "", layoutMode = "",
     };
   };
 
-  if (page?.missing || !page?.src) {
+  if (page?.missing || resolveReaderPageImages(page).length === 0) {
     return (
       <figure className="reader-page-frame reader-page-placeholder">
         <div className="reader-skeleton-page" />
@@ -140,9 +143,9 @@ export const ReaderPageImage = ({page, chapterId, titleId = "", layoutMode = "",
           <strong>Retrying page {page.index + 1}.</strong>
         </div>
       ) : (
-        <img
-          key={`${page.src}:${retryKey}`}
-          src={page.src}
+        <ReaderLogicalImage
+          key={`${imageIdentity}:${retryKey}`}
+          page={page}
           alt={page.label || `Page ${page.index + 1}`}
           draggable="false"
           loading={eager ? "eager" : "lazy"}
@@ -193,7 +196,7 @@ export const ReaderPageImage = ({page, chapterId, titleId = "", layoutMode = "",
               });
             });
           }}
-          onError={() => {
+          onError={(event) => {
             failureSeqRef.current += 1;
             const failureSeq = failureSeqRef.current;
             const nextAttempt = autoRetryCount + 1;
@@ -208,7 +211,7 @@ export const ReaderPageImage = ({page, chapterId, titleId = "", layoutMode = "",
               durationMs: imageErrorDurationMs,
               reason: "image_error"
             });
-            const probe = probePageStatus().catch(() => ({ok: false, reason: "probe_unavailable", status: 0}));
+            const probe = probePageStatus(event?.currentTarget?.getAttribute?.("src") || page.src).catch(() => ({ok: false, reason: "probe_unavailable", status: 0}));
             if (shouldAutoRetryReaderImage(nextAttempt)) {
               setAutoRetryCount(nextAttempt);
               setRetrying(true);
