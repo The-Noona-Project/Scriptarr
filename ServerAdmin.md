@@ -1000,3 +1000,5 @@ In Activity → Queue, the configured Discord owner with activity root access ca
 Metadata rechecking reopens affected completed batches as paused recovery work while preserving accepted task receipts. Retrying a repair never advances the approval window or starts downloads.
 
 Provider layouts can repeat headings across responsive views. Source verification uses one nonempty heading and gathers linked creators and tags from their labelled fields. Reapply a verified metadata match to refresh retained source facts after a scraper correction.
+
+Different editions may legitimately share metadata aliases. Execution resolves explicit source identities and storage ownership before treating a shared alias as a collision; an unknown source or shared canonical folder still requires recovery.
