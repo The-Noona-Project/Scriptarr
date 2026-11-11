@@ -1,6 +1,7 @@
 package com.scriptarr.raven.downloader;
 
 import com.scriptarr.raven.library.LibraryChapter;
+import com.scriptarr.raven.library.ArchiveDownloadEvidence;
 import com.scriptarr.raven.library.LibraryNaming;
 import com.scriptarr.raven.library.LibraryService;
 import com.scriptarr.raven.library.LibraryTitle;
@@ -80,7 +81,12 @@ final class CanonicalArchiveRecovery {
         return title;
     }
 
-    private LibraryChapter recoveredChapter(LibraryChapter previous, Map<String, String> source, Path archive, String number, int pages) {
+    private LibraryChapter recoveredChapter(LibraryChapter previous, Map<String, String> source, Path archive, String number, int pages) throws java.io.IOException {
+        ArchiveDownloadEvidence.Quality quality = ArchiveDownloadEvidence.read(archive, text(source.get("href")), pages);
+        if (quality != null) return new LibraryChapter(previous == null ? "" : previous.id(),
+            previous == null ? text(source.get("chapter_title")) : previous.label(), number, pages,
+            previous == null ? text(source.get("release_date")) : previous.releaseDate(), true, archive.toString(), text(source.get("href")),
+            quality.status(), quality.pages(), quality.missing().size(), quality.missing(), quality.notes(), previous == null ? null : previous.updatedAt());
         if (previous == null) return new LibraryChapter("", text(source.get("chapter_title")).isEmpty() ? "Chapter " + number : source.get("chapter_title"),
             number, pages, text(source.get("release_date")), true, archive.toString(), text(source.get("href")), null);
         // Stale catalog rows may predate file promotion; retain identity and quality evidence while redoing ingest.

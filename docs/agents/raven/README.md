@@ -6,6 +6,9 @@ also fail the title retryably, preserving staged pages. Only explicit image 404 
 may use the source-quality placeholder path. Cancellation propagates through scraping and title lookup retries.
 Frozen source-binding versions compare numeric value, independent of the broker's Integer/Long JSON decoding;
 the original source URL, selected metadata provider/id and edition checks still apply.
+`scriptarr-download-quality.json` inside new placeholder CBZs binds missing positions, expected counts and notes to
+the exact chapter URL. Restore it before retained-archive reuse and missing-catalog recovery. It is not a reader page.
+Staging uses a SHA-256 identity of the complete ordered page URL array; changed lists cannot reuse positional files.
 
 ## Distributed WebP ingest
 

@@ -6,6 +6,7 @@ import com.scriptarr.raven.library.LibraryChapter;
 import com.scriptarr.raven.library.LibraryNaming;
 import com.scriptarr.raven.library.LibraryService;
 import com.scriptarr.raven.library.LibraryTitle;
+import com.scriptarr.raven.library.ArchiveDownloadEvidence;
 import com.scriptarr.raven.metadata.MetadataService;
 import com.scriptarr.raven.settings.RavenSettingsService;
 import com.scriptarr.raven.support.FakeRavenBrokerClient;
@@ -43,6 +44,49 @@ class CanonicalArchiveRecoveryTest {
     @TempDir Path root;
     private DownloaderService downloader;
     private HttpServer server;
+
+    /** Startup discovery without any broker chapter row must restore source quality from the canonical CBZ. */
+    @Test
+    void startupScanRestoresPlaceholderQualityWithoutCatalog() throws Exception {
+        Context context = context();
+        Path archive = archive(context, canonicalRoot(), 1);
+        try (ZipOutputStream zip = new ZipOutputStream(Files.newOutputStream(archive))) {
+            zip.putNextEntry(new ZipEntry("page-1.png")); zip.write(image()); zip.closeEntry();
+            ArchiveDownloadEvidence.write(zip, chapter(1).get("href"), 1, List.of(1), List.of("Verified damaged source page."), "missing_content");
+        }
+        Fingerprint before = fingerprint(archive);
+        context.library().rescanDownloadedFiles();
+        LibraryChapter chapter = context.library().listTitles().getFirst().chapters().getFirst();
+        assertEquals(List.of(1), chapter.missingPages());
+        assertEquals("missing_content", chapter.qualityStatus());
+        assertEquals(before, fingerprint(archive));
+    }
+
+    /** Both canonical task recovery and a startup scan restore embedded placeholder quality without provider calls. */
+    @Test
+    void promotedPlaceholderArchiveRetainsQualityWithoutCatalog() throws Exception {
+        Context context = context();
+        Path archive = archive(context, canonicalRoot(), 1);
+        try (ZipOutputStream zip = new ZipOutputStream(Files.newOutputStream(archive))) {
+            zip.putNextEntry(new ZipEntry("page-1.png")); zip.write(image()); zip.closeEntry();
+            ArchiveDownloadEvidence.write(zip, chapter(1).get("href"), 1, List.of(1), List.of("Verified damaged source page."), "missing_content");
+        }
+        Map<Path, Fingerprint> untouched = Map.of(archive, fingerprint(archive));
+        seedTask(context, null, List.of(chapter(1)), "offline-fixture", "failed", "Catalog write interrupted.", false);
+        start(context);
+        assertEquals("failed", awaitTask().get("status"));
+        downloader.retryTask("restore-task");
+        assertCompleted(awaitTask());
+        LibraryChapter recovered = context.library().listTitles().getFirst().chapters().getFirst();
+        assertEquals(List.of(1), recovered.missingPages());
+        assertEquals("missing_content", recovered.qualityStatus());
+        context.library().rescanDownloadedFiles();
+        recovered = context.library().listTitles().getFirst().chapters().getFirst();
+        assertEquals(List.of(1), recovered.missingPages());
+        assertEquals("missing_content", recovered.qualityStatus());
+        assertFingerprints(untouched);
+        verifyNoProvider(context.provider());
+    }
 
     /** Stop asynchronous test workers and local source servers. */
     @AfterEach

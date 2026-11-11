@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 
 import com.scriptarr.raven.library.LibraryChapter;
 import com.scriptarr.raven.library.ArchiveImageEntries;
+import com.scriptarr.raven.library.ArchiveDownloadEvidence;
 import com.scriptarr.raven.library.LibraryNaming;
 import com.scriptarr.raven.library.LibraryService;
 import com.scriptarr.raven.library.LibraryTitle;
@@ -1364,12 +1365,16 @@ public class DownloaderService {
         );
         Path archivePath = titleRoot.resolve(archiveName);
         if (DownloadCompletionVerifier.archiveImageCount(archivePath.toString()) == images.size()) {
+            ArchiveDownloadEvidence.Quality quality = ArchiveDownloadEvidence.read(archivePath, chapter.get("href"), images.size());
             logger.info("DOWNLOAD", "Skipping chapter archive that already exists.", "file=" + archivePath.getFileName());
+            if (quality != null) return new ChapterDownloadResult(chapterNumber, new LinkedHashMap<>(chapter), archivePath,
+                quality.pages(), quality.missing().size(), quality.missing(), quality.notes(), quality.status(),
+                "Reused chapter " + chapterNumber + " with retained source-quality evidence.");
             return ChapterDownloadResult.clean(chapter, chapterNumber, archivePath, images.size(), "Downloaded chapter " + chapterNumber + ".");
         }
 
         Files.deleteIfExists(archivePath);
-        Path stagedPagesRoot = resolveChapterStageRoot(titleRoot, archiveName);
+        Path stagedPagesRoot = resolveChapterStageRoot(titleRoot, archiveName).resolve(ArchiveDownloadEvidence.pageListId(images));
         Files.createDirectories(stagedPagesRoot);
         List<Future<PageDownloadResult>> pageDownloads = new ArrayList<>();
         for (int index = 0; index < images.size(); index++) {
@@ -1438,6 +1443,9 @@ public class DownloaderService {
                     zip.closeEntry();
                 }
             }
+            ArchiveDownloadEvidence.write(zip, chapter.get("href"), images.size(),
+                missingPages.stream().map(PageDownloadResult::pageNumber).toList(),
+                missingPages.stream().map(PageDownloadResult::failureReason).filter(reason -> !reason.isBlank()).distinct().toList(), qualityStatus);
             archiveCompleted = true;
         } catch (IOException error) {
             Files.deleteIfExists(archivePath);

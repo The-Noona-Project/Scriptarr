@@ -952,6 +952,8 @@ the batch moving instead of failing the whole title for one bad image. If no usa
 Content rather than blocking the run.
 Chapter page-list failures (including empty or challenged replies), image timeouts, and server errors remain retryable
 task failures instead of source-quality gaps. Existing archives and staged healthy pages are retained for continuation.
+Placeholder CBZs carry their source-quality evidence through retry and catalog recovery. Changed source page lists use
+separate staging identities; old staged bytes cannot replace a newly resolved source page.
 Vault stores title-level `qualityStatus`, clean/partial/missing counts, and summary text plus chapter-level expected
 page counts, missing page numbers, and quality notes. Moon uses those fields in Missing Content to show partial
 chapters, bad chapters, missing pages, and bad-source summaries such as `3/256 clean downloads`.
