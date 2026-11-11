@@ -1023,3 +1023,5 @@ Different editions may legitimately share metadata aliases. Execution resolves e
 Download recovery rejects empty or zero-filled page headers in saved archives and staged pages. Preserve damaged CBZs as diagnostic evidence before repairing affected chapters; valid archives continue to be reused. A successful ZIP checksum alone does not establish readable image content.
 
 Local Node.js installations require version 22.19.0 or newer. Pause-summary edits use the bot that originally sent the message, including after switching between the single-bot fallback and split-bot configuration.
+
+Portal restores the accepted DM channel into its Discord client cache before editing a pause message after restart; no new message or approval prompt is created.

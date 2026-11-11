@@ -126,3 +126,6 @@ for a summary refresh. Show unavailable-source skips separately from title compl
 
 Resolve summary-edit clients from the stored delivery identity, even when the current notifier uses the other bot.
 Record the revision actually sent in the initial delivery receipt; an acknowledgment must not adopt a newer snapshot.
+
+`fetchDirectMessage` must cache its fetched channel: Discord.js resolves a fetched message's channel from the client
+cache when editing it. A cold DM fetch with `cache: false` cannot safely support restart-time summary edits.

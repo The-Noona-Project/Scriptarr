@@ -375,12 +375,12 @@ export const createDiscordClient = async ({
     }
   };
 
-  const fetchChannel = async (channelId) => {
+  const fetchChannel = async (channelId, {cache = false} = {}) => {
     if (!channelId) {
       throw new Error("Discord channel id is required.");
     }
     await ready;
-    return client.channels.fetch(channelId, {cache: false});
+    return client.channels.fetch(channelId, {cache});
   };
 
   const sendChannelMessage = async (channelId, payload) => {
@@ -411,7 +411,7 @@ export const createDiscordClient = async ({
     sendChannelMessage,
     sendDirectMessage,
     async fetchDirectMessage(channelId, messageId) {
-      const channel = await fetchChannel(channelId);
+      const channel = await fetchChannel(channelId, {cache: true});
       return channel.messages.fetch(messageId);
     },
     waitUntilReady: () => ready,
