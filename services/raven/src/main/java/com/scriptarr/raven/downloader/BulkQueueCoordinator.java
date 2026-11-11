@@ -179,7 +179,7 @@ public final class BulkQueueCoordinator implements BulkRunGateway {
                                     selectedMetadata.putAll(binding.metadataSnapshot()); selectedDownload.putAll(binding.downloadSnapshot());
                                 }
                                 if (catalog != null) {
-                                    List<Map<String, String>> source = provider.getChapters(url);
+                                    List<Map<String, String>> source = discoverChapters(provider, url);
                                     checkCancelled(stop);
                                     if (source == null || source.isEmpty()) throw new IllegalStateException("The provider did not return a verifiable chapter list.");
                                     List<Map<String, String>> missing = missingChapters(catalog, source);
@@ -202,7 +202,7 @@ public final class BulkQueueCoordinator implements BulkRunGateway {
                                         selectedMetadata.putAll(metadata.metadataSnapshot());
                                         selectedDownload.putAll(metadata.downloadSnapshot());
                                         if (durable) {
-                                            List<Map<String, String>> source = provider.getChapters(url);
+                                            List<Map<String, String>> source = discoverChapters(provider, url);
                                             checkCancelled(stop);
                                             if (source == null || source.isEmpty()) throw new IllegalStateException("The provider did not return a verifiable chapter list.");
                                             selectedDownload.put("expectedChapters", source);
@@ -248,6 +248,12 @@ public final class BulkQueueCoordinator implements BulkRunGateway {
                 } else if (durable) save(runId, planId, "bulk-title-plan", batchId, "queued".equals(category) || "appended".equals(category) ? "queued" : "completed",
                     plan, Map.of("category", category, "downloadTaskId", category.equals("queued") || category.equals("appended") ? taskId : ""));
                 summary.add(category, name, taskId);
+            } catch (SourceUnavailableException unavailable) {
+                checkCancelled(stop);
+                plan.put("sourceUnavailableEvidence", Map.of("sourceUrl", url, "verifiedAt", Instant.now().toString(),
+                    "reason", "The validated source explicitly reports this series unavailable and provides no chapters.", "previousDecision", outcome));
+                if (durable) save(runId, planId, "bulk-title-plan", batchId, "completed", plan, Map.of("category", "unavailable", "downloadTaskId", ""));
+                summary.add("unavailable", name, "");
             } catch (CancellationException error) { throw error;
             } catch (Exception error) {
                 if (Thread.currentThread().isInterrupted()) throw new CancellationException("Bulk discovery interrupted.");
@@ -261,6 +267,17 @@ public final class BulkQueueCoordinator implements BulkRunGateway {
         checkpoint.accept(summary.checkpoint(unresolved));
         return summary.result(null, null);
     }
+
+    private List<Map<String, String>> discoverChapters(DownloadProvider provider, String url) {
+        ChapterDiscoveryResult result = provider.discoverChapters(url);
+        if (result == null) result = ChapterDiscoveryResult.fromChapters(provider.getChapters(url));
+        if (result.unavailable()) throw new SourceUnavailableException();
+        if (!result.error().isBlank()) throw new IllegalStateException(result.error());
+        return result.chapters();
+    }
+
+    /** A typed provider-confirmed policy outcome; never inferred from a failed HTTP request. */
+    private static final class SourceUnavailableException extends RuntimeException { }
 
     @Override
     public List<Map<String, Object>> ownedTasks(String runId, String batchId) {
@@ -371,7 +388,7 @@ public final class BulkQueueCoordinator implements BulkRunGateway {
             this.filters = new BulkQueueDownloadResult.Filters(type, nsfw, prefix);
             this.pages = pages;
             this.matched = matched;
-            for (String key : List.of("queued","active","adult","noMetadata","ambiguous","completed","current","appended","invalidSource","failed")) groups.put(key,new ArrayList<>());
+            for (String key : List.of("queued","active","adult","noMetadata","ambiguous","completed","current","appended","invalidSource","failed","unavailable")) groups.put(key,new ArrayList<>());
         }
 
         private void add(String category, String title, String id) {
@@ -388,6 +405,7 @@ public final class BulkQueueCoordinator implements BulkRunGateway {
         private Map<String, Object> checkpoint(List<String> unresolved) {
             Map<String, Object> result = JSON.convertValue(result(null,null), MAP);
             result.put("taskIds",List.copyOf(ids));result.put("discoveryComplete",true);result.put("unresolvedPlanIds",List.copyOf(unresolved));
+            result.put("skippedUnavailableCount", size("unavailable")); result.put("skippedUnavailableTitles", list("unavailable"));
             result.put("stage",unresolved.isEmpty()?"waiting-for-titles":"planning-incomplete");result.put("lastActualProgressAt",Instant.now().toString());
             return result;
         }

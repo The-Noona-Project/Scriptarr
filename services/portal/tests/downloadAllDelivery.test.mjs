@@ -28,6 +28,34 @@ const fixture = () => {
 };
 const payload = async () => ({content: "paused summary"});
 
+test("a lost initial receipt retains the revision of the message actually sent", async () => {
+  const f = fixture(), record = f.sage.recordDownloadAllDelivery, sent = [];
+  f.notification.summaryRevision = 3;
+  f.sage.recordDownloadAllDelivery = async (id, body) => {
+    sent.push(body.summaryRevision);
+    if (sent.length === 1) throw new Error("receipt not persisted");
+    return record(id, body);
+  };
+  const delivery = f.create(); await delivery.poll(payload);
+  f.notification.summaryRevision = 9; await delivery.poll(payload);
+  assert.deepEqual(sent, [3, 3]); assert.equal(f.counts.send, 1);
+});
+
+test("summary edit acknowledgement loss retries the original message without sending or registering prompts", async () => {
+  const f = fixture(); let edits = 0, receipts = 0;
+  f.message.edit = async body => { assert.equal(body.content, "paused summary"); edits++; };
+  f.sage.listDownloadAllNotifications = async () => ({ok: true, payload: {notifications: [{...f.notification,
+    refreshOnly: true, summaryRevision: 3, delivery: {botIdentity: "noona", messageId: "message", channelId: "channel"}}]}});
+  f.sage.recordDownloadAllSummary = async (_id, body) => {
+    assert.equal(body.summaryRevision, 3); assert.equal(body.messageId, "message");
+    if (++receipts === 1) throw Error("edit receipt lost");
+    return {ok: true};
+  };
+  await f.create().poll(payload); await f.create().poll(payload);
+  assert.equal(edits, 2); assert.equal(receipts, 2);
+  assert.equal(f.counts.send, 0); assert.equal(f.counts.prompt, 0); assert.equal(f.counts.ack, 0);
+});
+
 test("slash and DM summaries distinguish completed title tasks from every policy skip", () => {
   const counts = {completedTitleTaskCount: 0, queuedCount: 0, skippedActiveCount: 2, skippedAdultContentCount: 3,
     skippedNoMetadataCount: 4, skippedAmbiguousMetadataCount: 5, invalidSourceCount: 6};
@@ -141,6 +169,20 @@ test("slash run and action propagate stable original interaction identifiers", a
   assert.deepEqual(forwarded[0], {providerId: "weebcentral", type: "Manhua", nsfw: false, titlePrefix: "t", groupsize: 20, batchesPerApproval: 20, requestedBy: "owner", requestId: "discord:interaction:original-interaction"});
   action = "continue"; await command.execute(interaction);
   assert.equal(actions[0].body.requestId, "discord:interaction:original-interaction");
+});
+
+test("summary edits select the original sender after split mode becomes available", async () => {
+  let refreshed;
+  const message = {edit: async () => {}};
+  const noona = {fetchDirectMessage: async (channel, id) => { assert.equal(channel, "channel"); assert.equal(id, "message"); return message; }};
+  const delivery = createDownloadAllDelivery({botIdentity: "appa", discord: {fetchDirectMessage: async () => assert.fail("Appa cannot edit Noona's message")},
+    discordForIdentity: (identity) => identity === "noona" ? noona : null, sage: {
+      listDownloadAllNotifications: async () => ({ok: true, payload: {notifications: [{id: "notification", refreshOnly: true, summaryRevision: 2,
+        delivery: {botIdentity: "noona", messageId: "message", channelId: "channel"}}]}}),
+      recordDownloadAllSummary: async (_id, body) => { refreshed = body; return {ok: true}; }
+    }});
+  await delivery.poll(async () => ({content: "updated"}));
+  assert.equal(refreshed.botIdentity, "noona"); assert.equal(refreshed.summaryRevision, 2);
 });
 
 test("legacy DM creation uses the original message identifier", async () => {

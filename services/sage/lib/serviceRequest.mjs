@@ -1,6 +1,7 @@
 /**
  * @file Authenticated, bounded first-party JSON requests from Sage.
  */
+import {sageFetch as fetch} from "./httpTransport.mjs";
 
 /**
  * Resolve a credential only for an explicitly configured service origin.

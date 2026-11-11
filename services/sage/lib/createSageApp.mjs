@@ -1,6 +1,7 @@
 /**
  * @file Scriptarr Sage module: services/sage/lib/createSageApp.mjs.
  */
+import {sageFetch as fetch} from "./httpTransport.mjs";
 import {createHash, randomBytes, timingSafeEqual} from "node:crypto";
 import express from "express";
 import {createLogger} from "@scriptarr/logging";

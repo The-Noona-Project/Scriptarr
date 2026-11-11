@@ -30,6 +30,7 @@ public class RavenSageClient implements RavenBrokerClient {
     private final Duration getTimeout;
     private final Duration putTimeout;
     private final Duration retryDelay;
+    private final Duration recoveryWindow;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Value("${SCRIPTARR_SAGE_BASE_URL:http://127.0.0.1:3004}")
@@ -51,7 +52,7 @@ public class RavenSageClient implements RavenBrokerClient {
                 .build(),
             Duration.ofSeconds(12),
             Duration.ofSeconds(20),
-            Duration.ofMillis(250)
+            Duration.ofSeconds(1), Duration.ofSeconds(120)
         );
     }
 
@@ -73,12 +74,24 @@ public class RavenSageClient implements RavenBrokerClient {
         Duration putTimeout,
         Duration retryDelay
     ) {
+        this(sageBaseUrl, serviceToken, httpClient, getTimeout, putTimeout, retryDelay, Duration.ZERO);
+    }
+
+    /**
+     * Create an explicitly bounded broker recovery transport.
+     * @param sageBaseUrl configured broker origin @param serviceToken existing identity @param httpClient HTTP transport
+     * @param getTimeout read timeout @param putTimeout checkpoint timeout @param retryDelay initial retry delay
+     * @param recoveryWindow total recovery window for idempotent reads and checkpoint PUTs, or zero for three attempts
+     */
+    RavenSageClient(String sageBaseUrl, String serviceToken, HttpClient httpClient, Duration getTimeout,
+                    Duration putTimeout, Duration retryDelay, Duration recoveryWindow) {
         this.sageBaseUrl = sageBaseUrl;
         this.serviceToken = serviceToken;
         this.httpClient = httpClient;
         this.getTimeout = getTimeout;
         this.putTimeout = putTimeout;
         this.retryDelay = retryDelay;
+        this.recoveryWindow = recoveryWindow;
     }
 
     @Override
@@ -244,15 +257,23 @@ public class RavenSageClient implements RavenBrokerClient {
 
     private JsonNode sendParsed(String path, HttpRequest request, Duration timeout) throws IOException, InterruptedException {
         IOException lastError = null;
-        for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
+        boolean recover = !recoveryWindow.isZero() && ("GET".equals(request.method()) || "PUT".equals(request.method()));
+        long deadline = System.nanoTime() + recoveryWindow.toNanos();
+        for (int attempt = 1; recover || attempt <= MAX_ATTEMPTS; attempt += 1) {
             try {
-                return parseResponse(path, sendOnce(path, request, timeout));
+                long remaining = deadline - System.nanoTime();
+                if (recover && remaining <= 0) break;
+                Duration bounded = recover && remaining < timeout.toNanos() ? Duration.ofNanos(remaining) : timeout;
+                return parseResponse(path, sendOnce(path, request, bounded));
             } catch (IOException error) {
                 lastError = error;
-                if (attempt >= MAX_ATTEMPTS || !isRetryableBrokerError(error)) {
+                if ((!recover && attempt >= MAX_ATTEMPTS) || !isRetryableBrokerError(error)) {
                     throw error;
                 }
-                TimeUnit.MILLISECONDS.sleep(Math.max(1, retryDelay.toMillis()) * attempt);
+                long delay = recover ? Math.min(10000, Math.max(1, retryDelay.toMillis()) * (1L << Math.min(10, attempt - 1)))
+                    : Math.max(1, retryDelay.toMillis()) * attempt;
+                if (recover) delay = Math.min(delay, Math.max(0, TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime())));
+                TimeUnit.MILLISECONDS.sleep(delay);
             }
         }
         throw lastError == null ? new IOException("Sage request failed for " + path + ".") : lastError;
@@ -299,24 +320,27 @@ public class RavenSageClient implements RavenBrokerClient {
     }
 
     private JsonNode parseResponse(String path, HttpResponse<String> response) throws IOException {
+        if (response.statusCode() < 200 || response.statusCode() >= 300) {
+            String message = "Sage returned " + response.statusCode() + " for " + path + ".";
+            try {
+                JsonNode error = objectMapper.readTree(response.body() == null ? "" : response.body());
+                if (error != null && !error.path("error").asText().isBlank()) message = error.path("error").asText().trim();
+            } catch (com.fasterxml.jackson.core.JsonProcessingException ignored) { /* HTTP identity survives non-JSON gateway errors. */ }
+            throw new BrokerRequestException(response.statusCode(), message);
+        }
         if (response.body() == null || response.body().isBlank()) {
-            if (response.statusCode() >= 400) {
-                throw new IOException("Sage returned " + response.statusCode() + " for " + path + ".");
-            }
             return objectMapper.createObjectNode();
         }
         JsonNode payload = objectMapper.readTree(response.body());
-        if (response.statusCode() >= 400) {
-            String message = payload.path("error").asText().trim();
-            if (message.isBlank()) {
-                message = "Sage returned " + response.statusCode() + " for " + path + ".";
-            }
-            throw new IOException(message);
-        }
         return payload;
     }
 
     private boolean isRetryableBrokerError(IOException error) {
+        if (error instanceof BrokerRequestException rejected) return rejected.transientFailure();
+        for (Throwable cause = error; cause != null; cause = cause.getCause()) {
+            if (cause instanceof java.net.ConnectException || cause instanceof java.net.SocketException
+                || cause instanceof java.net.http.HttpTimeoutException || cause instanceof java.io.EOFException) return true;
+        }
         String message = error.getMessage() == null ? "" : error.getMessage().toLowerCase();
         return message.contains("timed out")
             || message.contains("timeout")

@@ -1,6 +1,7 @@
 /**
  * @file Scriptarr Sage module: services/sage/lib/discordAuth.mjs.
  */
+import {sageFetch as fetch} from "./httpTransport.mjs";
 import {appendUserEvent, buildSessionAuditTargetId} from "./adminEvents.mjs";
 
 const encode = encodeURIComponent;
@@ -287,6 +288,7 @@ export const exchangeDiscordToken = async (config, code, {timeoutMs = config.dis
   });
 
   if (!tokenResponse.ok) {
+    await tokenResponse.body?.cancel();
     throw new Error(`Discord token exchange failed with status ${tokenResponse.status}.`);
   }
 
@@ -319,6 +321,7 @@ export const fetchDiscordUser = async (accessToken, {timeoutMs = DEFAULT_DISCORD
   });
 
   if (!meResponse.ok) {
+    await meResponse.body?.cancel();
     throw new Error(`Discord user lookup failed with status ${meResponse.status}.`);
   }
 

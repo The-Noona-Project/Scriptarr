@@ -46,7 +46,7 @@ const notificationFromJob = (job, tasks, publicBaseUrl) => {
   const currentBatchLabel = text(batch.label) || [batch.payload?.titlePrefix, batch.payload?.type].filter(Boolean).join(" ");
   const counts = {completedBatches: completed.length, remainingBatches: Math.max(0, tasks.length - completed.length)};
   for (const field of ["queuedCount", "appendedCount", "completedTitleTaskCount", "failedTitleTaskCount", "staleTitleTaskCount", "skippedCompletedCount", "skippedCurrentCount",
-    "skippedActiveCount", "skippedAdultContentCount", "skippedNoMetadataCount", "skippedAmbiguousMetadataCount", "invalidSourceCount"]) counts[field] = Number(result[field]) || 0;
+    "skippedActiveCount", "skippedAdultContentCount", "skippedNoMetadataCount", "skippedAmbiguousMetadataCount", "invalidSourceCount", "skippedUnavailableCount", "runningTitleTaskCount", "queuedTitleTaskCount", "missingTitleTaskCount"]) counts[field] = Number(result[field]) || 0;
   const failedIds = new Set(tasks.flatMap((task) => [
     ...array(task.result?.failedTaskIds),
     ...Object.entries(task.result?.observedStatuses || {}).filter(([, state]) => state === "failed").map(([id]) => id)
@@ -68,6 +68,7 @@ const notificationFromJob = (job, tasks, publicBaseUrl) => {
     id, type: "downloadall", decisionType: status, discordUserId: text(job.requestedBy),
     titleName: "Scriptarr downloadall", status, runId: job.jobId, jobId: job.jobId,
     batchId, approvalId, batchesPerApproval, filters, counts, pauseReason,
+    summaryRevision: Number(runPayload.summaryRevision) || 0, summaryUpdatedAt: text(runPayload.summaryUpdatedAt),
     linkUrl: publicBaseUrl ? `${publicBaseUrl.replace(/\/+$/, "")}/admin/activity/queue` : "",
     message: status === "paused"
       ? pauseReason ? `Downloadall paused: ${pauseReason}.` : completed.length ? `Downloadall paused after ${completed.length} batch(es).` : "Downloadall paused before any batch completed."
@@ -155,7 +156,14 @@ export const createDownloadAllBroker = ({vaultClient, config, serviceJson, clock
       for (const notification of candidates.values()) {
         if (legacy.has(notification.id)) continue;
         const delivery = await readDelivery(notification.id);
-        if (["acknowledged", "ambiguous"].includes(delivery?.result?.phase)) continue;
+        if (delivery?.result?.phase === "ambiguous") continue;
+        if (delivery?.result?.phase === "acknowledged") {
+          if (notification.status !== "paused" || !delivery.result.messageId
+            || notification.summaryRevision <= (Number(delivery.result.deliveredSummaryRevision) || 0)) continue;
+          notifications.push({...notification, refreshOnly: true, delivery: deliverState(delivery)});
+          if (notifications.length === 50) break;
+          continue;
+        }
         notifications.push({...notification, delivery: delivery ? deliverState(delivery) : null});
         if (notifications.length === 50) break;
       }
@@ -190,7 +198,11 @@ export const createDownloadAllBroker = ({vaultClient, config, serviceJson, clock
         const messageId = text(body.messageId), channelId = text(body.channelId);
         if (!messageId || !channelId) throw fail(400, "The accepted Discord message and channel ids are required.");
         if (job.result.messageId && (job.result.messageId !== messageId || job.result.channelId !== channelId)) throw fail(409, "This notification already has a different Discord message.");
-        const saved = await save(job.jobId, DELIVERY_KIND, job.payload, {...job.result, phase: job.result.phase === "acknowledged" ? "acknowledged" : "sent", messageId, channelId}, job);
+        const revision = Number(body.summaryRevision ?? 0);
+        if (!Number.isSafeInteger(revision) || revision < 0) throw fail(400, "The sent summary revision must be a non-negative integer.");
+        const saved = await save(job.jobId, DELIVERY_KIND, job.payload, {...job.result,
+          sentSummaryRevision: job.result.sentSummaryRevision ?? revision,
+          phase: job.result.phase === "acknowledged" ? "acknowledged" : "sent", messageId, channelId}, job);
         return {ok: true, delivery: deliverState(saved)};
       });
     },
@@ -209,11 +221,27 @@ export const createDownloadAllBroker = ({vaultClient, config, serviceJson, clock
         return {ok: true, prompt: {status: prompt.result.phase, approvalId: payload.approvalId}};
       });
     },
+    async refreshSummary(id, body = {}) {
+      return serial(deliveryId(id), async () => {
+        const job = await requireDelivery(id), notification = await readCurrentNotification(id);
+        if (job.result.phase !== "acknowledged" || job.payload.botIdentity !== text(body.botIdentity)
+          || job.result.messageId !== text(body.messageId) || job.result.channelId !== text(body.channelId)) {
+          throw fail(409, "The summary edit must retain its accepted bot, channel and message identity.");
+        }
+        const revision = Number(body.summaryRevision);
+        if (!Number.isSafeInteger(revision) || revision < 0 || revision > notification.summaryRevision) throw fail(409, "Unknown summary revision.");
+        const deliveredSummaryRevision = Math.max(Number(job.result.deliveredSummaryRevision) || 0, revision);
+        await save(job.jobId, DELIVERY_KIND, job.payload, {...job.result, deliveredSummaryRevision}, job);
+        return {ok: true, deliveredSummaryRevision};
+      });
+    },
     async acknowledge(id) {
       return serial(deliveryId(id), async () => {
         const job = await requireDelivery(id);
         if (!job.result.messageId || (job.payload.status === "paused" && job.payload.approvalId && !job.result.promptReady)) throw fail(409, "The Discord delivery and approval prompt must be recorded before acknowledgement.");
-        await save(job.jobId, DELIVERY_KIND, job.payload, {...job.result, phase: "acknowledged"}, job);
+        await save(job.jobId, DELIVERY_KIND, job.payload, {...job.result, phase: "acknowledged",
+          deliveredSummaryRevision: Math.max(Number(job.result.deliveredSummaryRevision) || 0,
+            Number(job.result.sentSummaryRevision) || 0)}, job);
         return {ok: true, notificationId: id};
       });
     },
@@ -279,7 +307,7 @@ export const registerDownloadAllNotificationRoutes = (app, {broker, wrap}) => {
     } catch (error) { res.status(error.status || 503).json({error: error.message || "Downloadall operation unavailable."}); }
   }));
   route("get", "/api/internal/portal/notifications/downloadall", () => broker.listNotifications());
-  for (const [suffix, operation] of [["begin", "beginDelivery"], ["delivery", "recordDelivery"], ["prompt", "registerPrompt"], ["ack", "acknowledge"]]) {
+  for (const [suffix, operation] of [["begin", "beginDelivery"], ["delivery", "recordDelivery"], ["prompt", "registerPrompt"], ["ack", "acknowledge"], ["summary", "refreshSummary"]]) {
     route("post", `/api/internal/portal/notifications/downloadall/:notificationId/${suffix}`, (req) => broker[operation](text(req.params.notificationId), req.body || {}));
   }
   route("post", "/api/internal/portal/downloads/bulk-runs/decision", (req) => broker.decide(req.body || {}));

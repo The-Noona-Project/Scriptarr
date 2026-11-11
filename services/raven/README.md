@@ -1,5 +1,11 @@
 # Raven
 
+Bulk downloads preserve completed archives and ready WebP chapters across broker interruptions. Short outages
+wait for recovery; unresolved work remains visible and can be retried by continuing the same run through Noona.
+Paused runs keep observing previously accepted work without starting new work. A source page that explicitly
+reports an unavailable series with no chapters is reported as an unavailable-source skip, separately from
+successful downloads. An empty, challenged, or rate-limited response still requires recovery.
+
 Raven is Scriptarr's Spring Boot Java 24 download, library, and metadata engine.
 
 It owns the built-in metadata stack that replaces Komf, keeps MangaDex enabled by default, enables Anime-Planet ahead
@@ -245,3 +251,5 @@ Rechecking metadata skips also prepares their parent batches, including previous
 Source metadata reads one title heading even when the provider repeats it for mobile and desktop layouts. Linked creator and tag fields remain attached to their original source provenance.
 
 Original and reboot editions can share translated aliases while retaining separate source identities. Shared aliases do not merge those editions or authorize writing into another edition's folder.
+
+Recovery also rejects CBZ pages with empty or zero-filled headers, even when the ZIP checksum is valid. Healthy chapter archives remain reusable; damaged chapters return to download repair before reader conversion.

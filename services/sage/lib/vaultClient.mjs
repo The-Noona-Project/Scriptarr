@@ -1,6 +1,7 @@
 /**
  * @file Scriptarr Sage module: services/sage/lib/vaultClient.mjs.
  */
+import {sageFetch as fetch} from "./httpTransport.mjs";
 const withBearer = (token) => ({
   "Authorization": `Bearer ${token}`,
   "Content-Type": "application/json"

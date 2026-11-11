@@ -19,6 +19,16 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** Prove catalog, ingest and completion share one supported archive-image definition. */
 class ArchiveImageEntriesTest {
+    /** CRC-valid ZIPs with zero-filled image bytes are damaged and must be downloaded again. */
+    @Test void rejectsZeroFilledImagesEvenWithValidZipCrc(@TempDir Path root) throws IOException {
+        Path archive = writeArchive(root.resolve("zero-filled.cbz"), Map.of("001.png", new byte[134014]));
+        assertEquals(1, ArchiveImageEntries.count(archive));
+        assertEquals(-1, ArchiveImageEntries.verifiedCount(archive));
+        Path staged = root.resolve("staged.png"); Files.write(staged, new byte[209649]);
+        assertFalse(ArchiveImageEntries.hasUsableHeader(staged));
+        assertFalse(ArchiveImageEntries.hasUsableHeader(new byte[0]));
+        assertTrue(ArchiveImageEntries.hasUsableHeader(new byte[]{0, 0, 0, 20, 'f', 't', 'y', 'p'}));
+    }
     /**
      * Ignore ComicInfo and directory entries while counting one readable PNG entry.
      *

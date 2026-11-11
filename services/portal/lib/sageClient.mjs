@@ -338,6 +338,11 @@ export const createSageClient = (config) => {
         `/api/internal/portal/notifications/downloadall/${encodeURIComponent(notificationId)}/delivery`,
         {method: "POST", body: payload, timeoutMs: downloadAllTimeoutMs});
     },
+    recordDownloadAllSummary(notificationId, payload) {
+      return requestJson(config.sageBaseUrl, jsonHeaders,
+        `/api/internal/portal/notifications/downloadall/${encodeURIComponent(notificationId)}/summary`,
+        {method: "POST", body: payload, timeoutMs: downloadAllTimeoutMs});
+    },
     acknowledgeDownloadAllNotification(notificationId) {
       return requestJson(
         config.sageBaseUrl,

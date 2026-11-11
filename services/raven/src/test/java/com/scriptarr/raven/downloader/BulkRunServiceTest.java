@@ -82,6 +82,28 @@ class BulkRunServiceTest {
                 + " " + map(batch.get("filters")).get("type")).toList());
     }
 
+    /** A paused run observes late terminal changes without dispatching, rotating approval, or writing from GET. */
+    @Test void pausedRunObservesAcceptedWorkWithoutStartingIt() {
+        Fixture fixture = fixture();
+        String runId = fixture.create(Map.of("type", "Manhua", "titlegroup", "t", "start", false));
+        String batchId = String.valueOf(maps(fixture.service.status(runId).get("batches")).getFirst().get("batchId"));
+        fixture.broker.setStatus(runId, "paused");
+        fixture.gateway.addOwned(runId, batchId, "accepted", "running");
+        String approval = String.valueOf(fixture.service.status(runId).get("approvalId"));
+        fixture.service.reconcileInterruptedRuns();
+        assertEquals(1, number(map(fixture.service.status(runId).get("counts")).get("runningTitleTaskCount")));
+        fixture.gateway.update("accepted", Map.of("status", "completed", "titleId", "kept-title"));
+        fixture.service.reconcileInterruptedRuns();
+        Map<String, Object> status = fixture.service.status(runId);
+        assertEquals(1, number(map(status.get("counts")).get("completedTitleTaskCount")));
+        assertEquals("paused", status.get("status")); assertEquals(approval, status.get("approvalId"));
+        int writes = fixture.broker.taskWrites + fixture.broker.jobWrites;
+        for (int i = 0; i < 5; i++) fixture.service.status(runId);
+        fixture.service.reconcileInterruptedRuns();
+        assertEquals(writes, fixture.broker.taskWrites + fixture.broker.jobWrites);
+        assertEquals(0, fixture.gateway.queueCalls.get()); assertTrue(fixture.requestedRetryIds.isEmpty());
+    }
+
     /** Lost responses reuse one creation identity; changed options cannot mutate it. */
     @Test
     void creationKeyIsCanonicalAndConflictsDoNotMutateTheRun() {
@@ -263,6 +285,11 @@ class BulkRunServiceTest {
         assertEquals(List.of(taskId), map(maps(paused.get("batches")).getFirst().get("result")).get("failedTaskIds"));
         verify(fixture.downloader, times(1)).cancelTask(taskId);
         verify(fixture.downloader, never()).removeTask(anyString());
+        fixture.gateway.update(taskId, Map.of("status", "completed", "updatedAt", NOW.toString()));
+        fixture.service.resumeRun(runId);
+        Map<String, Object> finished = awaitStatus(fixture.service, runId, "completed");
+        assertEquals(0, number(map(finished.get("counts")).get("staleTitleTaskCount")));
+        assertEquals(List.of(), map(maps(finished.get("batches")).getFirst().get("result")).get("staleTaskIds"));
     }
 
     /** Completion evidence survives UI pruning and is counted only once. */
@@ -1025,6 +1052,8 @@ class BulkRunServiceTest {
             if (hideOwned) {
                 return List.of();
             }
+            if (batchId.isBlank()) return batchRuns.entrySet().stream().filter(entry -> runId.equals(entry.getValue()))
+                .flatMap(entry -> batchIds.getOrDefault(entry.getKey(), List.of()).stream()).map(tasks::get).filter(java.util.Objects::nonNull).toList();
             return batchIds.getOrDefault(batchId, List.of()).stream().map(tasks::get).filter(java.util.Objects::nonNull).toList();
         }
 
@@ -1056,7 +1085,7 @@ class BulkRunServiceTest {
         private void addOwned(String runId, String batchId, String id, String status) {
             batchRuns.put(batchId, runId);
             batchIds.put(batchId, List.of(id));
-            tasks.put(id, Map.of("taskId", id, "status", status));
+            tasks.put(id, Map.of("taskId", id, "status", status, "bulkBatchId", batchId));
         }
     }
 

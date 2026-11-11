@@ -7,6 +7,11 @@ import org.springframework.boot.test.web.client.TestRestTemplate;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Primary;
+import com.scriptarr.raven.settings.RavenBrokerClient;
+import com.scriptarr.raven.support.FakeRavenBrokerClient;
 
 import java.util.List;
 import java.util.Map;
@@ -18,7 +23,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * Smoke tests for the Raven application scaffold.
  */
 @SpringBootTest(
-    classes = RavenApplication.class,
+    classes = {RavenApplication.class, RavenApplicationTests.BrokerFixture.class},
     webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
     properties = {
         "SCRIPTARR_RAVEN_DATA_ROOT=build/test-downloads",
@@ -26,6 +31,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
     }
 )
 class RavenApplicationTests {
+    /** The scaffold smoke owns an empty broker; it must not contact a missing production dependency. */
+    @TestConfiguration
+    static class BrokerFixture {
+        /** @return explicit durable fixture for the application smoke */
+        @Bean @Primary RavenBrokerClient emptyBroker() { return new FakeRavenBrokerClient(); }
+    }
     @LocalServerPort
     private int port;
 

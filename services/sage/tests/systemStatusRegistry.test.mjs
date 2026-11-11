@@ -1,3 +1,6 @@
+/** @file Sage status transport regression tests. */
+import {sageTransport} from "../lib/httpTransport.mjs";
+const originalSageFetch = sageTransport.fetch;
 import test from "node:test";
 import assert from "node:assert/strict";
 import {buildEndpointRegistry, buildSystemStatusPayload} from "../lib/systemStatusRegistry.mjs";
@@ -24,7 +27,7 @@ test("system status payload probes GET reads, classifies protected routes, and k
   const calls = [];
   const fetchCalls = [];
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (url, options = {}) => {
+  sageTransport.fetch = async (url, options = {}) => {
     fetchCalls.push({url: String(url), options});
     if (String(url).includes("/api/moon-v3/admin") || String(url).includes("/api/moon-v3/user")) {
       return new Response(JSON.stringify({error: "Unauthorized"}), {
@@ -89,7 +92,7 @@ test("system status payload probes GET reads, classifies protected routes, and k
     assert.equal(vaultEventsCall?.headers.Authorization, "Bearer sage-dev-token");
     assert.ok(fetchCalls.some((call) => call.url === "http://moon.test/health"));
   } finally {
-    globalThis.fetch = originalFetch;
+    sageTransport.fetch = originalSageFetch;
   }
 });
 

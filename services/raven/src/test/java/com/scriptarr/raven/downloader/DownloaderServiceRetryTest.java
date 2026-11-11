@@ -41,6 +41,24 @@ class DownloaderServiceRetryTest {
     private DownloaderService service;
     private HttpServer server;
 
+    /** A successful HTTP response with zero-filled image data is retried instead of archived as healthy. */
+    @Test void retriesZeroFilledSourceImage() throws Exception {
+        AtomicInteger requests = new AtomicInteger();
+        server = HttpServer.create(new InetSocketAddress(0), 0);
+        server.createContext("/page.jpg", exchange -> {
+            byte[] bytes = requests.incrementAndGet() == 1 ? new byte[1024] : "valid-test-image".getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, bytes.length);
+            try (var output = exchange.getResponseBody()) { output.write(bytes); }
+        });
+        server.start();
+        String image = "http://127.0.0.1:" + server.getAddress().getPort() + "/page.jpg";
+        createContext(new FakeDownloadProvider(() -> List.of(image)));
+        service.queueDownload(new DownloadRequest("Zero Header Repair", "https://weebcentral.com/series/9F5B016A9C17CF7B9ED4E6B5D6", "Manga", "tester", "weebcentral", "", Map.of(), Map.of(), "", "normal"));
+        Map<String, Object> finished = awaitTerminalTask(service);
+        assertEquals("completed", finished.get("status"), String.valueOf(finished.get("message")));
+        assertEquals(2, requests.get());
+    }
+
     /**
      * Stop test resources after each case.
      */

@@ -1391,7 +1391,7 @@ public class DownloaderService {
                 extension
             );
             final Path stagedPage = stagedPagesRoot.resolve(pageFileName);
-            if (Files.exists(stagedPage) && Files.size(stagedPage) > 0) {
+            if (Files.exists(stagedPage) && ArchiveImageEntries.hasUsableHeader(stagedPage)) {
                 pageDownloads.add(CompletableFuture.completedFuture(PageDownloadResult.success(pageNumber, stagedPage, imageUrl)));
                 continue;
             }
@@ -1565,6 +1565,7 @@ public class DownloaderService {
         if (response.statusCode() < 200 || response.statusCode() >= 300) {
             throw new IOException("Image download failed with status " + response.statusCode() + " for " + imageUrl);
         }
+        if (!ArchiveImageEntries.hasUsableHeader(response.body())) throw new IOException("Source image has an empty or zero-filled header.");
         return response.body();
     }
 

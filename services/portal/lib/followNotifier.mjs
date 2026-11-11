@@ -222,6 +222,7 @@ export const buildDownloadAllDirectMessagePayload = (notification = {}, publicBa
             `Adult or unverified content: **${skippedAdult}**`,
             `No metadata match: **${skippedNoMetadata}**`,
             `Ambiguous metadata: **${skippedAmbiguous}**`,
+            `Unavailable source: **${toCount(counts.skippedUnavailableCount, 0)}**`,
             `Invalid source rows: **${invalidSource}**`
           ].join("\n"),
           inline: true
@@ -810,7 +811,8 @@ export const createFollowNotifier = ({
   let inFlightPromise = null;
   let generation = 0;
   const downloadAllDelivery = createDownloadAllDelivery({sage, discord: adminDiscord || discord,
-    botIdentity: adminDiscord ? "appa" : "noona", logger});
+    botIdentity: adminDiscord ? "appa" : "noona", logger,
+    discordForIdentity: (identity) => identity === "noona" ? discord : identity === "appa" ? adminDiscord : null});
 
   const shouldContinue = (pollGeneration = generation) => active && pollGeneration === generation;
 

@@ -368,6 +368,8 @@ public class BulkRunService {
         response.put("active", activeRunIds.contains(normalizedRunId));
         response.put("filters", publicFilters(job));
         response.put("approvalId", approvalId(job));
+        response.put("summaryRevision", toInt(normalizeMap(job.get("payload")).get("summaryRevision"), 0));
+        response.put("summaryUpdatedAt", stringValue(normalizeMap(job.get("payload")).get("summaryUpdatedAt")));
         response.put("metadataRecheckPending", normalizeMap(normalizeMap(job.get("payload")).get("metadataRecheckPending")));
         response.put("recoveryReady", restoreReady());
         response.put("recoveryError", restoreFailure());
@@ -440,6 +442,8 @@ public class BulkRunService {
                         }
                     } else if (STATUS_CANCELLED.equals(status) && booleanValue(payload.get("cancellationPending"))) {
                         finishCancellation(runId);
+                    } else if (STATUS_PAUSED.equals(status) && !activeRunIds.contains(runId)) {
+                        reconcilePausedOutcomes(job);
                     } else if (STATUS_RUNNING.equals(status)
                         || (STATUS_QUEUED.equals(status) && booleanValue(payload.get("startRequested")))) {
                         repairManifest(job);
@@ -462,6 +466,29 @@ public class BulkRunService {
     public void shutdown() {
         recoveryWorker.shutdownNow();
         worker.shutdownNow();
+    }
+
+    private void reconcilePausedOutcomes(Map<String, Object> job) {
+        String runId = stringValue(job.get("jobId"));
+        List<Map<String, Object>> batches = loadBatchTasks(runId);
+        List<Map<String, Object>> owned = gateway.ownedTasks(runId, "");
+        for (Map<String, Object> batch : batches) {
+            Map<String, Object> previous = normalizeMap(batch.get("result"));
+            String batchId = stringValue(batch.get("taskId"));
+            Set<String> accepted = new LinkedHashSet<>(stringList(previous.get("taskIds")));
+            List<Map<String, Object>> scoped = owned.stream().filter(task -> batchId.equals(firstNonBlank(
+                stringValue(task.get("bulkBatchId")), stringValue(normalizeMap(task.get("details")).get("bulkBatchId"))))
+                || accepted.contains(stringValue(task.get("taskId")))).toList();
+            Map<String, Object> observed = BulkOwnedTaskObservation.reconcile(previous,
+                scoped, this::isTitleTaskStale, now());
+            if (!BulkOwnedTaskObservation.sameValue(observed, previous)) {
+                batch.put("result", observed); putBatchTask(runId, batch);
+            }
+        }
+        Map<String, Object> summary = buildRunSummary(batches);
+        if (!BulkOwnedTaskObservation.sameValue(summary, normalizeMap(job.get("result")))) {
+            updateRunStatus(job, STATUS_PAUSED, stringValue(job.get("message")), summary);
+        }
     }
 
     private Map<String, Object> decide(String runId, String action, String expectedApprovalId,
@@ -832,6 +859,10 @@ public class BulkRunService {
             for (Map<String, Object> task : gateway.ownedTasks(runId, stringValue(batch.get("taskId")))) {
                 snapshots.put(stringValue(task.get("taskId")), task);
             }
+            result = BulkOwnedTaskObservation.reconcile(result, List.copyOf(snapshots.values()), this::isTitleTaskStale, now());
+            completed.addAll(stringList(result.get("completedTaskIds")));
+            terminals.putAll(normalizeMap(result.get("terminalOutcomes")));
+            stale.removeAll(completed);
             Set<String> taskIds = new LinkedHashSet<>(stringList(result.get("taskIds")));
             taskIds.addAll(snapshots.keySet());
             taskIds.addAll(terminals.keySet());
@@ -1164,6 +1195,10 @@ public class BulkRunService {
         summary.put("failedTitleTaskCount", 0);
         summary.put("removedFailedTaskCount", 0);
         summary.put("staleTitleTaskCount", 0);
+        summary.put("runningTitleTaskCount", 0);
+        summary.put("queuedTitleTaskCount", 0);
+        summary.put("missingTitleTaskCount", 0);
+        summary.put("skippedUnavailableCount", 0);
         summary.put("recoveryActions", List.of());
         summary.put("lastCompletedBatch", Map.of());
         summary.put("nextBatch", Map.of());
@@ -1202,6 +1237,10 @@ public class BulkRunService {
             increment(summary, "failedTitleTaskCount", stringList(result.get("failedTaskIds")).size());
             increment(summary, "removedFailedTaskCount", stringList(result.get("removedTaskIds")).size());
             increment(summary, "staleTitleTaskCount", stringList(result.get("staleTaskIds")).size());
+            increment(summary, "runningTitleTaskCount", toInt(result.get("runningTitleTaskCount"), 0));
+            increment(summary, "queuedTitleTaskCount", toInt(result.get("queuedTitleTaskCount"), 0));
+            increment(summary, "missingTitleTaskCount", stringList(result.get("missingTaskIds")).size());
+            increment(summary, "skippedUnavailableCount", toInt(result.get("skippedUnavailableCount"), 0));
             Map<String, Object> recoveryAction = normalizeMap(result.get("recoveryAction"));
             if (!recoveryAction.isEmpty()) {
                 recoveryActions.add(recoveryAction);
@@ -1248,6 +1287,11 @@ public class BulkRunService {
         }
         updated.put("status", status);
         updated.put("message", firstNonBlank(message, status));
+        if (!BulkOwnedTaskObservation.sameValue(normalizeMap(updated.get("result")), summary)) {
+            Map<String, Object> payload = new LinkedHashMap<>(normalizeMap(updated.get("payload")));
+            payload.put("summaryRevision", toInt(payload.get("summaryRevision"), 0) + 1);
+            payload.put("summaryUpdatedAt", now); updated.put("payload", payload);
+        }
         updated.put("result", summary == null ? Map.of() : summary);
         if (STATUS_RUNNING.equals(status) && !STATUS_RUNNING.equals(previousStatus) && stringValue(updated.get("startedAt")).isBlank()) {
             updated.put("startedAt", now);

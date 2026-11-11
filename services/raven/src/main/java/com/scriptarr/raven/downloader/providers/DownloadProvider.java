@@ -1,6 +1,7 @@
 package com.scriptarr.raven.downloader.providers;
 
 import com.scriptarr.raven.downloader.BulkBrowseResult;
+import com.scriptarr.raven.downloader.ChapterDiscoveryResult;
 import com.scriptarr.raven.downloader.TitleDetails;
 
 import java.util.List;
@@ -91,6 +92,11 @@ public interface DownloadProvider {
      * @return normalized chapter list
      */
     List<Map<String, String>> getChapters(String titleUrl);
+
+    /** @param titleUrl exact source series @return explicit discovery outcome; empty legacy results remain unresolved */
+    default ChapterDiscoveryResult discoverChapters(String titleUrl) {
+        return ChapterDiscoveryResult.fromChapters(getChapters(titleUrl));
+    }
 
     /**
      * Resolve page image URLs for a provider chapter URL.

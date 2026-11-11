@@ -1,5 +1,9 @@
 # Portal
 
+Noona keeps an existing downloadall pause message current as accepted downloads complete or fail. Refreshes
+retain the same approval window and do not send another message. Summaries list verified unavailable sources
+separately from completed downloads. Continue the existing run to recover unresolved work while retaining files.
+
 Cross-host deployments set `SCRIPTARR_REQUIRE_SERVICE_AUTH=true`. In this mode every `/api` route requires a valid
 service bearer token, including read routes; `/health` remains available for bounded private-network probes. Keep the
 published port restricted to the core host. Sage supplies the destination token for its brokered requests.
@@ -164,6 +168,9 @@ retry attempts available. They explain the pause and label an interrupted batch 
 Prompt and acknowledgement retries reuse the accepted Discord message. Approval retries apply only to their original
 batch window. If an earlier send cannot be confirmed after the short Discord retry window, delivery waits for an
 administrator to reconcile it rather than sending another summary.
+
+Pause-summary updates retain the original sending bot and message when switching between split-bot mode and the
+single-bot fallback.
 
 Noona trivia is Sage-backed and runs from the configured trivia channel. Portal now reconciles one active trivia clock
 from Sage state on startup, settings refresh, manual start, win, and timeout. Repeated `/trivia start` calls while a

@@ -26,7 +26,8 @@ class IngestBrokerClientTimeoutTest {
         Fixture fixture = new Fixture();
         assertTrue(fixture.client.json("POST", "/jobs/example/heartbeat", Map.of("epoch", 1), "isolated-lease").path("ok").asBoolean());
         HttpRequest request = fixture.onlyRequest("POST", "/jobs/example/heartbeat");
-        assertEquals(Duration.ofSeconds(120), request.timeout().orElseThrow());
+        assertTrue(request.timeout().orElseThrow().compareTo(Duration.ofSeconds(120)) <= 0);
+        assertTrue(request.timeout().orElseThrow().compareTo(Duration.ofSeconds(119)) > 0);
         assertEquals("application/json", request.headers().firstValue("Content-Type").orElseThrow());
     }
 

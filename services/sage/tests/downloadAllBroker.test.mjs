@@ -36,6 +36,38 @@ const preparePrompt = async (f) => {
   return notification;
 };
 
+test("paused summary revisions edit one acknowledged delivery without resetting its prompt", async () => {
+  const f = fixture(), notification = await preparePrompt(f);
+  await f.broker.acknowledge(notification.id);
+  const current = f.jobs.get("run-1");
+  current.payload.summaryRevision = 1; current.result.completedTitleTaskCount = 13;
+  current.result.failedTitleTaskCount = 22; current.result.skippedUnavailableCount = 1;
+  const update = (await f.broker.listNotifications()).notifications[0];
+  assert.equal(update.refreshOnly, true); assert.equal(update.delivery.messageId, "message-1");
+  assert.equal(update.counts.completedTitleTaskCount, 13); assert.equal(update.counts.failedTitleTaskCount, 22);
+  assert.equal(update.counts.skippedUnavailableCount, 1); assert.equal(update.approvalId, "window-1");
+  const edit = {botIdentity: "noona", messageId: "message-1", channelId: "channel-1", summaryRevision: 1};
+  await assert.rejects(f.broker.refreshSummary(notification.id, {...edit, botIdentity: "appa"}), {status: 409});
+  await f.broker.refreshSummary(notification.id, edit); await f.broker.refreshSummary(notification.id, edit);
+  assert.deepEqual((await f.broker.listNotifications()).notifications, []);
+  assert.equal(f.jobs.get("run-1").payload.approvalId, "window-1");
+  assert.equal(f.calls.length, 0);
+});
+
+test("a newer begin snapshot cannot acknowledge an older sent summary as current", async () => {
+  const f = fixture(), listed = (await f.broker.listNotifications()).notifications[0];
+  f.jobs.get("run-1").payload.summaryRevision = 1;
+  await f.broker.beginDelivery(listed.id, {botIdentity: "noona"});
+  await f.broker.recordDelivery(listed.id, {messageId: "message", channelId: "channel", summaryRevision: listed.summaryRevision});
+  await f.broker.registerPrompt(listed.id, {messageId: "message"});
+  await f.broker.acknowledge(listed.id);
+  const update = (await f.broker.listNotifications()).notifications[0];
+  assert.equal(update.refreshOnly, true); assert.equal(update.summaryRevision, 1);
+  await f.broker.refreshSummary(listed.id, {botIdentity: "noona", messageId: "message", channelId: "channel", summaryRevision: 1});
+  await f.broker.acknowledge(listed.id);
+  assert.deepEqual((await f.broker.listNotifications()).notifications, []);
+});
+
 test("delivery phases survive restart and retain a stable short nonce and tombstone", async () => {
   const f = fixture();
   const notification = (await f.broker.listNotifications()).notifications[0];

@@ -1,6 +1,7 @@
 /**
  * @file GitHub commit digest creation for Noona Discord update posts.
  */
+import {sageFetch as fetch} from "./httpTransport.mjs";
 
 export const GITHUB_UPDATE_DIGEST_SETTING_KEY = "portal.githubUpdateDigest";
 
@@ -345,7 +346,7 @@ export const createGithubUpdateDigestService = ({
   config,
   vaultClient,
   serviceJson,
-  fetchImpl = globalThis.fetch,
+  fetchImpl = fetch,
   token = process.env.SCRIPTARR_GITHUB_TOKEN || process.env.GITHUB_TOKEN || "",
   logger
 }) => {

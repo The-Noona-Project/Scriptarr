@@ -26,6 +26,7 @@ public final class IngestBrokerClient {
     private final URI base;
     private final String token;
     private final HttpClient http;
+    private final Duration recoveryWindow;
     private final ObjectMapper json = new ObjectMapper();
 
     /**
@@ -42,6 +43,17 @@ public final class IngestBrokerClient {
      * @param transportFactory factory receiving the fully configured HTTP builder
      */
     IngestBrokerClient(Map<String, String> env, Function<HttpClient.Builder, HttpClient> transportFactory) {
+        this(env, transportFactory, CONTROL_TIMEOUT);
+    }
+
+    /** @param env process configuration @param recoveryWindow bounded control recovery window for isolated outage fixtures */
+    IngestBrokerClient(Map<String, String> env, Duration recoveryWindow) {
+        this(env, HttpClient.Builder::build, recoveryWindow);
+    }
+
+    private IngestBrokerClient(Map<String, String> env, Function<HttpClient.Builder, HttpClient> transportFactory, Duration recoveryWindow) {
+        if (recoveryWindow.isNegative() || recoveryWindow.isZero() || recoveryWindow.compareTo(CONTROL_TIMEOUT) > 0) throw new IllegalArgumentException("Invalid broker recovery window.");
+        this.recoveryWindow = recoveryWindow;
         try {
             base = URI.create(env.getOrDefault("SCRIPTARR_SAGE_BASE_URL", "http://scriptarr-sage:3004"));
             if (base.getUserInfo() != null || base.getQuery() != null || base.getFragment() != null) throw new IllegalArgumentException("Invalid broker origin.");
@@ -71,10 +83,36 @@ public final class IngestBrokerClient {
      * @throws InterruptedException when transport is cancelled
      */
     public JsonNode json(String method, String path, Object body, String leaseToken) throws IOException, InterruptedException {
+        return jsonUntil(method, path, body, leaseToken, System.currentTimeMillis() + CONTROL_TIMEOUT.toMillis());
+    }
+
+    /** @param method HTTP verb @param path fenced route @param body stable JSON operation @param leaseToken lease secret @param expiresAt latest allowed recovery instant @return acknowledged result @throws IOException on broker rejection @throws InterruptedException on cancellation */
+    JsonNode jsonUntil(String method, String path, Object body, String leaseToken, long expiresAt) throws IOException, InterruptedException {
         HttpRequest.BodyPublisher publisher = body == null ? HttpRequest.BodyPublishers.noBody() : HttpRequest.BodyPublishers.ofByteArray(json.writeValueAsBytes(body));
-        HttpResponse<byte[]> response = http.send(request(path, leaseToken, CONTROL_TIMEOUT).header("Content-Type", "application/json").method(method, publisher).build(), HttpResponse.BodyHandlers.ofByteArray());
-        requireSuccess(response.statusCode());
-        return response.statusCode() == 204 || response.body().length == 0 ? null : json.readTree(response.body());
+        long budget = Math.max(1, Math.min(recoveryWindow.toMillis(), expiresAt - System.currentTimeMillis()));
+        long deadline = System.nanoTime() + budget * 1_000_000;
+        for (int attempt = 0; ; attempt++) {
+            try {
+                Duration remaining = Duration.ofNanos(Math.max(1, deadline - System.nanoTime()));
+                HttpResponse<byte[]> response = http.send(request(path, leaseToken, remaining).header("Content-Type", "application/json").method(method, publisher).build(), HttpResponse.BodyHandlers.ofByteArray());
+                requireSuccess(response.statusCode());
+                return response.statusCode() == 204 || response.body().length == 0 ? null : json.readTree(response.body());
+            } catch (IOException failure) {
+                if (!transientFailure(failure) || System.nanoTime() >= deadline) throw failure;
+                long delay = Math.min(10000, 1000L << Math.min(4, attempt));
+                Thread.sleep(Math.min(delay, Math.max(1, (deadline - System.nanoTime()) / 1_000_000)));
+            }
+        }
+    }
+
+    /** @param error transport failure @return whether retry preserves an existing fenced operation */
+    static boolean transientFailure(IOException error) {
+        if (error instanceof Rejected rejected) return java.util.Set.of(502, 503, 504).contains(rejected.status());
+        for (Throwable cause = error; cause != null; cause = cause.getCause()) {
+            if (cause instanceof java.net.ConnectException || cause instanceof java.net.SocketException
+                || cause instanceof java.net.http.HttpTimeoutException || cause instanceof java.io.EOFException) return true;
+        }
+        return false;
     }
 
     /**

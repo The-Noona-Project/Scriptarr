@@ -311,3 +311,23 @@ Metadata match details retain versioned `sourceBinding`, original source facts, 
 Metadata rechecking also reopens each affected parent batch with durable unresolved plan IDs. Preserve its prior completion/result and accepted task receipts in the recheck history; checkpoint parent recovery before acknowledging the operation. A completed batch must never hide rechecked child plans. Supported MangaDex source details include the actual source title, creators and artwork for the same identification checks as other providers.
 
 Source-backed provider-series keys use the bounded provider ID plus source series ID; retain the full source URL in binding evidence rather than putting an arbitrarily long slug in the metadata-match key.
+
+## Broker recovery and paused observations
+
+`BulkOwnedTaskObservation` is a pure reducer shared by active waiting and the restore-gated paused lifecycle pass.
+Paused reconciliation persists changed child outcomes and parent summaries without queueing, retrying, cancelling,
+or rotating approvals. JSON numeric wrapper types must not produce revision churn. Status GETs remain observational.
+
+Raven checkpoint GET/PUT requests have a bounded 120-second transient recovery window, with interruptible exponential
+backoff capped at ten seconds. HTTP status survives in `BrokerRequestException`; permanent rejections are not retried.
+Owned execution counters stay independent of infrastructure retries. Conversion control and immutable transfers use
+existing idempotent identities and remain bounded by worker leases; uncertain completion is reconciled before replay.
+
+`ChapterDiscoveryResult` separates chapters, provider-confirmed unavailability and failed discovery. Only explicit
+unavailability from a validated full source page can produce category `unavailable`; preserve its previous decision
+and source evidence in the title plan. Count it in `skippedUnavailableCount`, never as successful owned title work.
+Legacy list consumers retain their derived-list fallback for a missing preflight page; bulk discovery stays strict.
+
+Archive integrity checks also reject empty or zero-filled image headers. Apply the same bounded check to source
+responses and reusable staged pages, so a CRC-valid zero-filled page cannot repeatedly fail conversion. This is a
+damage guard rather than a full image decoder. Repair only affected chapters and retain corrupt-archive evidence.

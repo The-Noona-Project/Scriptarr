@@ -83,30 +83,56 @@ public final class IngestWorkerRuntime {
         AtomicLong expires = new AtomicLong(Instant.parse(lease.path("expiresAt").asText()).toEpochMilli());
         var heartbeat = Executors.newSingleThreadScheduledExecutor();
         heartbeat.scheduleWithFixedDelay(() -> {
-            try { WebpChapterEncoder.Progress snapshot = progress.get(); JsonNode next = broker.json("POST", "/jobs/" + id + "/heartbeat", Map.of("workerId", workerId, "epoch", epoch,
-                "completedLogicalPages", snapshot.completedLogicalPages(), "totalLogicalPages", snapshot.totalLogicalPages(), "completedSegments", snapshot.completedSegments(), "totalSegments", snapshot.totalSegments()), token);
+            try { WebpChapterEncoder.Progress snapshot = progress.get(); JsonNode next = broker.jsonUntil("POST", "/jobs/" + id + "/heartbeat", Map.of("workerId", workerId, "epoch", epoch,
+                "completedLogicalPages", snapshot.completedLogicalPages(), "totalLogicalPages", snapshot.totalLogicalPages(), "completedSegments", snapshot.completedSegments(), "totalSegments", snapshot.totalSegments()), token, expires.get());
                 String until = next.path("lease").path("expiresAt").asText(); if (!until.isBlank()) expires.set(Instant.parse(until).toEpochMilli());
             } catch (Exception unavailable) { if (unavailable instanceof IngestBrokerClient.Rejected rejected && java.util.Set.of(403, 404, 409, 410).contains(rejected.status()) || System.currentTimeMillis() >= expires.get()) owner.interrupt(); }
         }, 20, 20, TimeUnit.SECONDS);
+        String phase = "input_transfer";
         try {
             if (Files.exists(scratch)) delete(scratch); Files.createDirectories(scratch);
             Path input = scratch.resolve("input.cbz"); String query = "?workerId=" + workerId + "&epoch=" + epoch;
-            broker.download("/jobs/" + id + "/input" + query, input, token, job.path("spec").path("input").path("sourceFingerprint").path("size").asLong());
+            retryTransfer(() -> broker.download("/jobs/" + id + "/input" + query, input, token, job.path("spec").path("input").path("sourceFingerprint").path("size").asLong()), expires);
+            phase = "encoding";
             Path output = new WebpChapterEncoder().encodeWithProgress(input, job.path("spec"), scratch.resolve("output"), progress::set);
-            IOException failure = null;
-            for (int retry = 0; retry < 3; retry++) {
-                try { broker.upload("/jobs/" + id + "/artifact" + query, output, token); failure = null; break; }
-                catch (IOException lost) { failure = lost; TimeUnit.SECONDS.sleep(2); }
-            }
-            if (failure != null) throw failure;
+            phase = "artifact_upload";
+            retryTransfer(() -> broker.upload("/jobs/" + id + "/artifact" + query, output, token), expires);
         } catch (IOException | RuntimeException failure) {
             try { broker.json("POST", "/jobs/" + id + "/fail", Map.of("workerId", workerId, "epoch", epoch,
-                "error", Map.of("code", "conversion_failed", "message", "The assigned chapter conversion failed; canonical input is unchanged.")), token); }
+                "error", Map.of("code", phase + "_failed", "message", "Worker " + phase + " failed (" + failure.getClass().getSimpleName()
+                    + (failure instanceof IngestBrokerClient.Rejected rejected ? ", HTTP " + rejected.status() : "") + "); canonical input is unchanged.")), token); }
             catch (IOException ignored) { /* A lost lease cannot publish or mutate another execution. */ }
         } finally {
             heartbeat.shutdownNow();
             try { delete(scratch); } catch (IOException ignored) { /* Only disposable worker scratch may remain. */ }
         }
+    }
+
+    private static void retryTransfer(Transfer operation, AtomicLong expires) throws IOException, InterruptedException {
+        retryTransfer(operation, expires, java.time.Duration.ofSeconds(120));
+    }
+
+    /** @param operation immutable transfer @param expires current lease expiry @param window retry budget @throws IOException on exhaustion @throws InterruptedException on lease loss */
+    static void retryTransfer(Transfer operation, AtomicLong expires, java.time.Duration window) throws IOException, InterruptedException {
+        long deadline = System.currentTimeMillis() + window.toMillis();
+        IOException lastFailure = null;
+        for (int attempt = 0; ; attempt++) {
+            if (Thread.currentThread().isInterrupted() || System.currentTimeMillis() >= expires.get()) throw new InterruptedException("Worker transfer lease ended.");
+            if (lastFailure != null && System.currentTimeMillis() >= deadline) throw lastFailure;
+            try { operation.run(); return; }
+            catch (IOException failure) {
+                lastFailure = failure;
+                if (!IngestBrokerClient.transientFailure(failure) || System.currentTimeMillis() >= Math.min(deadline, expires.get())) throw failure;
+                Thread.sleep(Math.min(Math.min(10000, 1000L << Math.min(4, attempt)), Math.max(1, Math.min(deadline, expires.get()) - System.currentTimeMillis())));
+            }
+        }
+    }
+
+    /** An immutable fenced input or output transfer that may be retried before its deadline. */
+    @FunctionalInterface
+    interface Transfer {
+        /** Execute the same immutable transfer. @throws IOException on rejection @throws InterruptedException on cancellation */
+        void run() throws IOException, InterruptedException;
     }
 
     /** @param root exact job scratch directory @throws IOException when scratch cannot be removed */
