@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {EventEmitter} from "node:events";
 
 const {createPortalRuntime} = await import("../lib/portalRuntime.mjs");
+const {createDiscordClient} = await import("../lib/discord/client.mjs");
 const {createPortalCommands} = await import("../lib/discord/commands/index.mjs");
 const {createAiResponseQueue} = await import("../lib/discord/aiResponseQueue.mjs");
 const {createRoleManager} = await import("../lib/discord/roleManager.mjs");
@@ -68,6 +69,24 @@ const createLogger = () => ({
   info() {},
   warn() {},
   error() {}
+});
+
+test("fetching an accepted DM after restart caches its channel before editing", async () => {
+  const client = new FakeDiscordClient(), cached = new Map();
+  client.channels.fetch = async (id, options) => {
+    const channel = {id, messages: {fetch: async (messageId) => ({id: messageId,
+      edit: async () => { assert.ok(cached.has(id), "Discord message edits resolve their channel from cache"); return {id: messageId}; }
+    })}};
+    if (options.cache) cached.set(id, channel);
+    return channel;
+  };
+  const adapter = await createDiscordClient({token: "isolated-token", clientId: "bot-1", commandMap: new Map(),
+    getSettings: () => ({}), logger: createLogger(), clientFactory: async () => client});
+  try {
+    await adapter.login();
+    const message = await adapter.fetchDirectMessage("original-dm", "original-message");
+    assert.equal((await message.edit({content: "current counts"})).id, "original-message");
+  } finally { adapter.destroy(); }
 });
 
 const waitFor = async (predicate, {timeoutMs = 1000, intervalMs = 10} = {}) => {
