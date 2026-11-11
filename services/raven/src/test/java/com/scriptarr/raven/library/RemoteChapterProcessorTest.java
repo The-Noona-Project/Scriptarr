@@ -249,7 +249,7 @@ class RemoteChapterProcessorTest {
             ((ObjectNode) job.path("spec").path("input")).setAll((ObjectNode) json.valueToTree(OrderedPageIdentity.create(List.of("001.png"))));
             catalog.putLibraryTitle("title", json.convertValue(title, Map.class)); catalog.putLibraryChapters("title", Map.of("chapters", json.convertValue(title.chapters(), List.class)));
             server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0); server.createContext("/api/internal/raven-ingest", this::handle); server.start();
-            processor = new RemoteChapterProcessor(catalog, root, new IngestBrokerClient(Map.of("SCRIPTARR_SAGE_BASE_URL", "http://127.0.0.1:" + server.getAddress().getPort())), true);
+            processor = new RemoteChapterProcessor(catalog, root, new IngestBrokerClient(Map.of("SCRIPTARR_SAGE_BASE_URL", "http://127.0.0.1:" + server.getAddress().getPort()), java.time.Duration.ofMillis(25)), true);
         }
 
         /** @param status existing pre-version2 execution state @throws Exception when accepted fixture files cannot be written */

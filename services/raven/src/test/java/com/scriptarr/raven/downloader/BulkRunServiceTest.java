@@ -285,6 +285,11 @@ class BulkRunServiceTest {
         assertEquals(List.of(taskId), map(maps(paused.get("batches")).getFirst().get("result")).get("failedTaskIds"));
         verify(fixture.downloader, times(1)).cancelTask(taskId);
         verify(fixture.downloader, never()).removeTask(anyString());
+        fixture.gateway.update(taskId, Map.of("status", "completed", "updatedAt", NOW.toString()));
+        fixture.service.resumeRun(runId);
+        Map<String, Object> finished = awaitStatus(fixture.service, runId, "completed");
+        assertEquals(0, number(map(finished.get("counts")).get("staleTitleTaskCount")));
+        assertEquals(List.of(), map(maps(finished.get("batches")).getFirst().get("result")).get("staleTaskIds"));
     }
 
     /** Completion evidence survives UI pruning and is counted only once. */

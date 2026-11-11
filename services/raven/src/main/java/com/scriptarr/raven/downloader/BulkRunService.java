@@ -862,6 +862,7 @@ public class BulkRunService {
             result = BulkOwnedTaskObservation.reconcile(result, List.copyOf(snapshots.values()), this::isTitleTaskStale, now());
             completed.addAll(stringList(result.get("completedTaskIds")));
             terminals.putAll(normalizeMap(result.get("terminalOutcomes")));
+            stale.removeAll(completed);
             Set<String> taskIds = new LinkedHashSet<>(stringList(result.get("taskIds")));
             taskIds.addAll(snapshots.keySet());
             taskIds.addAll(terminals.keySet());

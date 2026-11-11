@@ -251,3 +251,5 @@ Rechecking metadata skips also prepares their parent batches, including previous
 Source metadata reads one title heading even when the provider repeats it for mobile and desktop layouts. Linked creator and tag fields remain attached to their original source provenance.
 
 Original and reboot editions can share translated aliases while retaining separate source identities. Shared aliases do not merge those editions or authorize writing into another edition's folder.
+
+Recovery also rejects CBZ pages with empty or zero-filled headers, even when the ZIP checksum is valid. Healthy chapter archives remain reusable; damaged chapters return to download repair before reader conversion.

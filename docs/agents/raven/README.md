@@ -327,3 +327,7 @@ existing idempotent identities and remain bounded by worker leases; uncertain co
 unavailability from a validated full source page can produce category `unavailable`; preserve its previous decision
 and source evidence in the title plan. Count it in `skippedUnavailableCount`, never as successful owned title work.
 Legacy list consumers retain their derived-list fallback for a missing preflight page; bulk discovery stays strict.
+
+Archive integrity checks also reject empty or zero-filled image headers. Apply the same bounded check to source
+responses and reusable staged pages, so a CRC-valid zero-filled page cannot repeatedly fail conversion. This is a
+damage guard rather than a full image decoder. Repair only affected chapters and retain corrupt-archive evidence.

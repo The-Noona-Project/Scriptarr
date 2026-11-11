@@ -26,6 +26,7 @@ public final class IngestBrokerClient {
     private final URI base;
     private final String token;
     private final HttpClient http;
+    private final Duration recoveryWindow;
     private final ObjectMapper json = new ObjectMapper();
 
     /**
@@ -42,6 +43,17 @@ public final class IngestBrokerClient {
      * @param transportFactory factory receiving the fully configured HTTP builder
      */
     IngestBrokerClient(Map<String, String> env, Function<HttpClient.Builder, HttpClient> transportFactory) {
+        this(env, transportFactory, CONTROL_TIMEOUT);
+    }
+
+    /** @param env process configuration @param recoveryWindow bounded control recovery window for isolated outage fixtures */
+    IngestBrokerClient(Map<String, String> env, Duration recoveryWindow) {
+        this(env, HttpClient.Builder::build, recoveryWindow);
+    }
+
+    private IngestBrokerClient(Map<String, String> env, Function<HttpClient.Builder, HttpClient> transportFactory, Duration recoveryWindow) {
+        if (recoveryWindow.isNegative() || recoveryWindow.isZero() || recoveryWindow.compareTo(CONTROL_TIMEOUT) > 0) throw new IllegalArgumentException("Invalid broker recovery window.");
+        this.recoveryWindow = recoveryWindow;
         try {
             base = URI.create(env.getOrDefault("SCRIPTARR_SAGE_BASE_URL", "http://scriptarr-sage:3004"));
             if (base.getUserInfo() != null || base.getQuery() != null || base.getFragment() != null) throw new IllegalArgumentException("Invalid broker origin.");
@@ -77,7 +89,7 @@ public final class IngestBrokerClient {
     /** @param method HTTP verb @param path fenced route @param body stable JSON operation @param leaseToken lease secret @param expiresAt latest allowed recovery instant @return acknowledged result @throws IOException on broker rejection @throws InterruptedException on cancellation */
     JsonNode jsonUntil(String method, String path, Object body, String leaseToken, long expiresAt) throws IOException, InterruptedException {
         HttpRequest.BodyPublisher publisher = body == null ? HttpRequest.BodyPublishers.noBody() : HttpRequest.BodyPublishers.ofByteArray(json.writeValueAsBytes(body));
-        long budget = Math.max(1, Math.min(CONTROL_TIMEOUT.toMillis(), expiresAt - System.currentTimeMillis()));
+        long budget = Math.max(1, Math.min(recoveryWindow.toMillis(), expiresAt - System.currentTimeMillis()));
         long deadline = System.nanoTime() + budget * 1_000_000;
         for (int attempt = 0; ; attempt++) {
             try {

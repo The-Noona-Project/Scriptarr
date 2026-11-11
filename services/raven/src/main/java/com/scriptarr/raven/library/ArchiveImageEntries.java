@@ -32,6 +32,18 @@ public final class ArchiveImageEntries {
         return dot >= 0 && EXTENSIONS.contains(name.substring(dot + 1).toLowerCase(Locale.ROOT));
     }
 
+    /** @param header leading image bytes @return false for empty or zero-filled damaged headers; this is not a decoder */
+    public static boolean hasUsableHeader(byte[] header) {
+        for (int index = 0; index < Math.min(16, header.length); index++) if (header[index] != 0) return true;
+        return false;
+    }
+
+    /** @param image staged page @return whether its leading bytes exclude known empty/zero-filled damage */
+    public static boolean hasUsableHeader(Path image) {
+        try (var input = Files.newInputStream(image)) { return hasUsableHeader(input.readNBytes(16)); }
+        catch (IOException error) { return false; }
+    }
+
     /**
      * Count supported, non-directory image entries without decoding their data.
      *
@@ -72,10 +84,11 @@ public final class ArchiveImageEntries {
                 ZipEntry entry;
                 while ((entry = zip.getNextEntry()) != null) {
                     boolean image = !entry.isDirectory() && isImage(entry.getName());
-                    long bytes = zip.transferTo(OutputStream.nullOutputStream());
+                    byte[] header = image ? zip.readNBytes(16) : new byte[0];
+                    long bytes = header.length + zip.transferTo(OutputStream.nullOutputStream());
                     zip.closeEntry();
                     if (image) {
-                        if (bytes == 0L) {
+                        if (bytes == 0L || !hasUsableHeader(header)) {
                             return -1;
                         }
                         count += 1;

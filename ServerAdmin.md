@@ -1019,3 +1019,5 @@ Metadata rechecking reopens affected completed batches as paused recovery work w
 Provider layouts can repeat headings across responsive views. Source verification uses one nonempty heading and gathers linked creators and tags from their labelled fields. Reapply a verified metadata match to refresh retained source facts after a scraper correction.
 
 Different editions may legitimately share metadata aliases. Execution resolves explicit source identities and storage ownership before treating a shared alias as a collision; an unknown source or shared canonical folder still requires recovery.
+
+Download recovery rejects empty or zero-filled page headers in saved archives and staged pages. Preserve damaged CBZs as diagnostic evidence before repairing affected chapters; valid archives continue to be reused. A successful ZIP checksum alone does not establish readable image content.
