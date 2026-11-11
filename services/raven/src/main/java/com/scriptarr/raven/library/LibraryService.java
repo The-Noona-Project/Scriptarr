@@ -1702,15 +1702,23 @@ public final class LibraryService {
                     LibraryChapter known = knownArchives.get(archive.toAbsolutePath().normalize());
                     String chapterNumber = known != null && !stringValue(known.chapterNumber()).isBlank() ? known.chapterNumber()
                         : LibraryNaming.extractChapterNumber(archive.getFileName().toString(), namingSettings, typeLabel);
+                    int pages = countArchivePages(archive);
+                    ArchiveDownloadEvidence.Quality quality = ArchiveDownloadEvidence.read(archive,
+                        known == null || stringValue(known.sourceUrl()).isBlank() ? null : known.sourceUrl(), pages);
                     chapters.add(new LibraryChapter(
                         chapterId(titleId, chapterNumber),
                         "Chapter " + chapterNumber,
                         chapterNumber,
-                        countArchivePages(archive),
+                        pages,
                         resolveArchiveTimestamp(archive),
                         true,
                         archive.toString(),
-                        null,
+                        known == null ? null : known.sourceUrl(),
+                        quality == null ? known == null ? "clean" : known.qualityStatus() : quality.status(),
+                        quality == null ? known == null ? pages : known.expectedPageCount() : quality.pages(),
+                        quality == null ? known == null ? 0 : known.missingPageCount() : quality.missing().size(),
+                        quality == null ? known == null ? List.of() : known.missingPages() : quality.missing(),
+                        quality == null ? known == null ? List.of() : known.qualityNotes() : quality.notes(),
                         null
                     ));
                 }
@@ -1769,7 +1777,7 @@ public final class LibraryService {
             LibraryChapter saved = previous.get(normalizeStoredChapterNumber(chapter.chapterNumber()));
             return saved != null && sameArchivePath(saved.archivePath(), Path.of(chapter.archivePath()))
                 && saved.ingestedPageCount() == chapter.pageCount() && ingestService.canReuseReadyChapter(saved)
-                ? reconcileReadyPageCount(saved) : chapter;
+                ? ArchiveDownloadEvidence.withQualityFrom(reconcileReadyPageCount(saved), chapter) : chapter;
         }).toList();
     }
 
@@ -1822,9 +1830,11 @@ public final class LibraryService {
         }
         Map<String, String> archiveByChapterNumber = new LinkedHashMap<>();
         Map<String, Integer> pagesByChapterNumber = new LinkedHashMap<>();
+        Map<String, LibraryChapter> qualityByChapterNumber = new LinkedHashMap<>();
         for (LibraryChapter chapter : existingChapters) {
             archiveByChapterNumber.put(normalizeStoredChapterNumber(chapter.chapterNumber()), stringValue(chapter.archivePath()));
             pagesByChapterNumber.put(normalizeStoredChapterNumber(chapter.chapterNumber()), chapter.pageCount());
+            qualityByChapterNumber.put(normalizeStoredChapterNumber(chapter.chapterNumber()), chapter);
         }
         for (LibraryChapter chapter : scannedChapters) {
             String chapterNumber = normalizeStoredChapterNumber(chapter.chapterNumber());
@@ -1832,6 +1842,10 @@ public final class LibraryService {
                 || pagesByChapterNumber.getOrDefault(chapterNumber, -1) != chapter.pageCount()) {
                 return false;
             }
+            LibraryChapter previous = qualityByChapterNumber.get(chapterNumber);
+            if (previous == null || !Objects.equals(previous.qualityStatus(), chapter.qualityStatus())
+                || previous.expectedPageCount() != chapter.expectedPageCount() || !Objects.equals(previous.missingPages(), chapter.missingPages())
+                || !Objects.equals(previous.qualityNotes(), chapter.qualityNotes())) return false;
         }
         return true;
     }

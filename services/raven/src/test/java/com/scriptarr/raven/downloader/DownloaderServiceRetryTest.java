@@ -25,6 +25,8 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Function;
 import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -40,6 +42,117 @@ class DownloaderServiceRetryTest {
 
     private DownloaderService service;
     private HttpServer server;
+
+    /** A later chapter failure cannot erase an earlier retained archive's placeholder quality on retry. */
+    @Test
+    void retainedPlaceholderArchiveKeepsQualityAfterLaterChapterFailure() throws Exception {
+        AtomicInteger goodRequests = new AtomicInteger();
+        server = HttpServer.create(new InetSocketAddress(0), 0);
+        server.createContext("/good.jpg", exchange -> { goodRequests.incrementAndGet(); respond(exchange, 200, "healthy-source-image"); });
+        server.createContext("/damaged.jpg", exchange -> {
+            exchange.sendResponseHeaders(200, 32);
+            try (var output = exchange.getResponseBody()) { output.write(new byte[32]); }
+        });
+        server.start();
+        String root = "http://127.0.0.1:" + server.getAddress().getPort();
+        AtomicBoolean failLater = new AtomicBoolean(true);
+        FakeDownloadProvider provider = new FakeDownloadProvider(chapter -> {
+            if (chapter.endsWith("second")) {
+                if (failLater.getAndSet(false)) throw new SourcePageLookupException("Temporary later chapter outage.", null);
+                return List.of(root + "/good.jpg");
+            }
+            List<String> pages = new java.util.ArrayList<>();
+            for (int page = 1; page < 20; page++) pages.add(root + "/good.jpg?page=" + page);
+            pages.add(root + "/damaged.jpg");
+            return pages;
+        });
+        provider.chapters = List.of(Map.of("chapter_number", "1", "chapter_title", "Chapter 1", "href", "https://weebcentral.com/chapters/first"),
+            Map.of("chapter_number", "2", "chapter_title", "Chapter 2", "href", "https://weebcentral.com/chapters/second"));
+        TestContext context = createContext(provider);
+        service.queueDownload(new DownloadRequest("Retained Quality", "https://weebcentral.com/series/9F5B016A9C17CF7B9ED4E6B5D6", "Manga", "tester",
+            "weebcentral", "", Map.of(), Map.of(), "", "normal"));
+        Map<String, Object> failed = awaitTerminalTask(service);
+        assertEquals("failed", failed.get("status"));
+        int beforeRetry = goodRequests.get();
+        service.retryTask(String.valueOf(failed.get("taskId")));
+        assertEquals("completed", awaitTerminalTask(service).get("status"));
+        LibraryChapter first = context.libraryService().listTitles().getFirst().chapters().stream()
+            .filter(chapter -> chapter.chapterNumber().equals("1")).findFirst().orElseThrow();
+        assertEquals(List.of(20), first.missingPages());
+        assertEquals(1, first.missingPageCount());
+        assertFalse(first.qualityNotes().isEmpty());
+        assertEquals("possible_missing_page", first.qualityStatus());
+        assertEquals(beforeRetry + 1, goodRequests.get());
+    }
+
+    /** A refreshed page list must not reuse an older source image at the same positional filename. */
+    @Test
+    void refreshedPageListSeparatesStagedImageIdentity() throws Exception {
+        AtomicInteger badRequests = new AtomicInteger(), resolves = new AtomicInteger(), replacementRequests = new AtomicInteger();
+        server = HttpServer.create(new InetSocketAddress(0), 0);
+        server.createContext("/old.jpg", exchange -> respond(exchange, 200, "old-source-image"));
+        server.createContext("/new.jpg", exchange -> { replacementRequests.incrementAndGet(); respond(exchange, 200, "new-source-image"); });
+        server.createContext("/retry.jpg", exchange -> respond(exchange, badRequests.incrementAndGet() <= 3 ? 503 : 200, "other-source-image"));
+        server.start();
+        String root = "http://127.0.0.1:" + server.getAddress().getPort();
+        TestContext context = createContext(new FakeDownloadProvider(() -> List.of(
+            root + (resolves.incrementAndGet() == 1 ? "/old.jpg" : "/new.jpg"), root + "/retry.jpg")));
+        service.queueDownload(new DownloadRequest("Refreshed Pages", "https://weebcentral.com/series/9F5B016A9C17CF7B9ED4E6B5D6", "Manga", "tester",
+            "weebcentral", "", Map.of(), Map.of(), "", "normal"));
+        assertEquals("completed", awaitTerminalTask(service).get("status"));
+        assertEquals(1, replacementRequests.get());
+        Path archive = Path.of(context.libraryService().listTitles().getFirst().chapters().getFirst().archivePath());
+        try (var zip = new java.util.zip.ZipFile(archive.toFile())) {
+            var entry = zip.stream().filter(value -> value.getName().endsWith(".jpg")).findFirst().orElseThrow();
+            try (var input = zip.getInputStream(entry)) { assertEquals("new-source-image", new String(input.readAllBytes(), StandardCharsets.UTF_8)); }
+        }
+    }
+
+    /** A failed page index leaves a retryable task and cannot persist invented missing-content rows. */
+    @Test
+    void exhaustedPageLookupFailsWithoutCatalogMutation() throws Exception {
+        AtomicInteger lookups = new AtomicInteger();
+        TestContext context = createContext(new FakeDownloadProvider(() -> {
+            lookups.incrementAndGet();
+            throw new SourcePageLookupException("Source read timed out.", new java.net.SocketTimeoutException());
+        }));
+        service.queueDownload(new DownloadRequest("Lookup Outage", "https://weebcentral.com/series/9F5B016A9C17CF7B9ED4E6B5D6", "Manga", "tester",
+            "weebcentral", "", Map.of(), Map.of(), "", "normal"));
+        Map<String, Object> task = awaitTerminalTask(service);
+        assertEquals("failed", task.get("status"));
+        assertEquals(1, lookups.get());
+        assertTrue(String.valueOf(task.get("message")).contains("Source read timed out"));
+        assertTrue(context.libraryService().listTitles().isEmpty());
+    }
+
+    /** Exhausted image transport/server failures preserve a retryable task instead of generating placeholders. */
+    @Test
+    void exhaustedImageServerFailureFailsWithoutCatalogMutation() throws Exception {
+        AtomicInteger goodRequests = new AtomicInteger();
+        server = HttpServer.create(new InetSocketAddress(0), 0);
+        server.createContext("/page.jpg", exchange -> respond(exchange, 503, "temporary outage"));
+        server.createContext("/good.jpg", exchange -> {
+            goodRequests.incrementAndGet();
+            respond(exchange, 200, "healthy-source-image");
+        });
+        server.start();
+        String image = "http://127.0.0.1:" + server.getAddress().getPort() + "/page.jpg";
+        String goodImage = "http://127.0.0.1:" + server.getAddress().getPort() + "/good.jpg";
+        TestContext context = createContext(new FakeDownloadProvider(() -> List.of(goodImage, image)));
+        service.queueDownload(new DownloadRequest("Image Outage", "https://weebcentral.com/series/9F5B016A9C17CF7B9ED4E6B5D6", "Manga", "tester",
+            "weebcentral", "", Map.of(), Map.of(), "", "normal"));
+        Map<String, Object> task = awaitTerminalTask(service);
+        assertEquals("failed", task.get("status"));
+        assertTrue(String.valueOf(task.get("message")).contains("503"));
+        assertTrue(context.libraryService().listTitles().isEmpty());
+        assertEquals(1, goodRequests.get());
+        try (Stream<Path> staged = Files.walk(context.logger().getDownloadsRoot())) {
+            assertTrue(staged.filter(Files::isRegularFile).anyMatch(path -> {
+                try { return Files.readString(path).equals("healthy-source-image"); }
+                catch (IOException ignored) { return false; }
+            }));
+        }
+    }
 
     /** A successful HTTP response with zero-filled image data is retried instead of archived as healthy. */
     @Test void retriesZeroFilledSourceImage() throws Exception {
@@ -474,9 +587,15 @@ class DownloaderServiceRetryTest {
      * resolution behavior.
      */
     private static final class FakeDownloadProvider implements DownloadProvider {
-        private final PageSupplier pageSupplier;
+        private final Function<String, List<String>> pageSupplier;
+        private List<Map<String, String>> chapters = List.of(Map.of(
+            "chapter_number", "1", "chapter_title", "Chapter 1", "href", "https://weebcentral.com/chapters/retry-demo-1"));
 
         private FakeDownloadProvider(PageSupplier pageSupplier) {
+            this.pageSupplier = ignored -> pageSupplier.pages();
+        }
+
+        private FakeDownloadProvider(Function<String, List<String>> pageSupplier) {
             this.pageSupplier = pageSupplier;
         }
 
@@ -523,16 +642,12 @@ class DownloaderServiceRetryTest {
 
         @Override
         public List<Map<String, String>> getChapters(String titleUrl) {
-            return List.of(Map.of(
-                "chapter_number", "1",
-                "chapter_title", "Chapter 1",
-                "href", "https://weebcentral.com/chapters/retry-demo-1"
-            ));
+            return chapters;
         }
 
         @Override
         public List<String> resolvePages(String chapterUrl) {
-            return pageSupplier.pages();
+            return pageSupplier.apply(chapterUrl);
         }
     }
 

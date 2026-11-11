@@ -70,7 +70,7 @@ public final class SourceMetadataFacts {
      */
     public static boolean matchesBoundSelection(String url, String title, Map<String, Object> metadata) {
         if (!(metadata.get("sourceBinding") instanceof Map<?, ?> binding)
-            || !Integer.valueOf(1).equals(binding.get("version"))
+            || !isVersionOne(binding.get("version"))
             || !(binding.get("source") instanceof Map<?, ?> facts)
             || !url.equals(facts.get("url"))
             || text(metadata.get("provider")).isBlank() || text(metadata.get("providerSeriesId")).isBlank()
@@ -80,6 +80,15 @@ public final class SourceMetadataFacts {
             text(facts.get("status")), text(facts.get("year")), facts.get("adultContent") instanceof Boolean adult ? adult : null,
             null, null, strings(facts.get("tags")), List.of(), text(facts.get("title")), strings(facts.get("authors")), text(facts.get("coverUrl")));
         return !source.sourceTitle().isBlank() && matches(title, source, metadata);
+    }
+
+    private static boolean isVersionOne(Object value) {
+        if (!(value instanceof Number number)) return false;
+        try {
+            return new java.math.BigDecimal(number.toString()).compareTo(java.math.BigDecimal.ONE) == 0;
+        } catch (NumberFormatException invalid) {
+            return false;
+        }
     }
 
     /**

@@ -14,12 +14,37 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
  * Unit coverage for Raven's chapter page source scraper retries.
  */
 class SourceFinderTest {
     private HttpServer server;
+
+    /** Exhausted HTTP failures cannot masquerade as an authoritative empty chapter. */
+    @Test
+    void exhaustedSourceFailureRemainsRecoverable() throws Exception {
+        server = HttpServer.create(new InetSocketAddress(0), 0);
+        server.createContext("/chapters/demo/images", exchange -> respond(exchange, 503, "unavailable"));
+        server.start();
+        SourceFinder finder = new SourceFinder(new TestLogger());
+        assertThrows(SourcePageLookupException.class, () -> finder.scrapeWeebCentralChapter(
+            "http://127.0.0.1:" + server.getAddress().getPort() + "/chapters/demo"));
+    }
+
+    /** A challenge illustration is not a chapter page, and an empty response is unverified. */
+    @Test
+    void challengeAndEmptyResponsesRemainRecoverable() throws Exception {
+        server = HttpServer.create(new InetSocketAddress(0), 0);
+        server.createContext("/chapters/challenge/images", exchange -> respond(exchange, 200,
+            "<html><head><title>Just a moment...</title></head><body><img src='/challenge.png'></body></html>"));
+        server.createContext("/chapters/empty/images", exchange -> respond(exchange, 200, "<html><body></body></html>"));
+        server.start();
+        SourceFinder finder = new SourceFinder(new TestLogger());
+        for (String name : List.of("challenge", "empty")) assertThrows(SourcePageLookupException.class,
+            () -> finder.scrapeWeebCentralChapter("http://127.0.0.1:" + server.getAddress().getPort() + "/chapters/" + name));
+    }
 
     /**
      * Stop the temporary HTTP server after each test.
