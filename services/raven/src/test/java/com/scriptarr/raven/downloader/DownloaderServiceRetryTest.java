@@ -61,7 +61,10 @@ class DownloaderServiceRetryTest {
                 if (failLater.getAndSet(false)) throw new SourcePageLookupException("Temporary later chapter outage.", null);
                 return List.of(root + "/good.jpg");
             }
-            return List.of(root + "/good.jpg", root + "/damaged.jpg");
+            List<String> pages = new java.util.ArrayList<>();
+            for (int page = 1; page < 20; page++) pages.add(root + "/good.jpg?page=" + page);
+            pages.add(root + "/damaged.jpg");
+            return pages;
         });
         provider.chapters = List.of(Map.of("chapter_number", "1", "chapter_title", "Chapter 1", "href", "https://weebcentral.com/chapters/first"),
             Map.of("chapter_number", "2", "chapter_title", "Chapter 2", "href", "https://weebcentral.com/chapters/second"));
@@ -75,10 +78,10 @@ class DownloaderServiceRetryTest {
         assertEquals("completed", awaitTerminalTask(service).get("status"));
         LibraryChapter first = context.libraryService().listTitles().getFirst().chapters().stream()
             .filter(chapter -> chapter.chapterNumber().equals("1")).findFirst().orElseThrow();
-        assertEquals(List.of(2), first.missingPages());
+        assertEquals(List.of(20), first.missingPages());
         assertEquals(1, first.missingPageCount());
         assertFalse(first.qualityNotes().isEmpty());
-        assertFalse(first.qualityStatus().equals("clean"));
+        assertEquals("possible_missing_page", first.qualityStatus());
         assertEquals(beforeRetry + 1, goodRequests.get());
     }
 

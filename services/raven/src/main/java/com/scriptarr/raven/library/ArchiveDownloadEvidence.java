@@ -74,7 +74,7 @@ public final class ArchiveDownloadEvidence {
                 || (source != null && !source.equals(row.path("source").asText()))
                 || !row.path("pages").isIntegralNumber() || !row.path("pages").canConvertToInt() || row.path("pages").asInt() != pages
                 || !row.path("missing").isArray() || !row.path("notes").isArray()
-                || !Set.of("partial", "missing_content", "bad_source").contains(row.path("status").asText())) {
+                || !Set.of("possible_missing_page", "partial", "missing_content", "bad_source").contains(row.path("status").asText())) {
                 throw new IOException("Retained archive quality evidence could not be verified.");
             }
             Set<Integer> missing = new LinkedHashSet<>();
