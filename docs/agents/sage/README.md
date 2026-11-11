@@ -279,3 +279,15 @@
 ### Metadata evidence and recovery
 
 Focused metadata routes serve whitelisted evidence only after existing user/admin authorization. Bulk metadata rechecking additionally requires activity root, the configured Discord owner, and matching durable run ownership. Forward only approval/request IDs; browsers never choose internal services or overwrite generic job payloads. Queue and scheduled recovery exclude age-only queued work, encoder waits, explicit cancellations and exact-source superseded failures from actionable recovery while retaining history.
+
+## Outbound transport and summary revisions
+
+All Sage outbound HTTP uses `httpTransport.mjs` and the exact direct Undici dependency, including reader and worker
+streams. Never fall back to Node's bundled fetch in production. Keep body consumption/cancellation, scoped credentials
+and stream cleanup intact. The socket-close regression runs in a subprocess because the original assertion escapes
+request-level catches. Inject Sage's transport in tests instead of replacing the process-global fetch.
+
+Bulk summary revisions are independent of approval IDs. An acknowledged pause delivery with a newer summary is an
+edit-only notification, bound to its original bot/channel/message identity. `/summary` acknowledges the edited revision
+without resetting delivery/prompt decisions or their tombstones. Unknown sends and missing messages remain blocked;
+never create a replacement DM merely to clear a refresh failure.

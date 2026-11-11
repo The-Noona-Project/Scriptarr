@@ -1,6 +1,8 @@
 /**
  * @file Scriptarr Sage tests: services/sage/tests/vaultClient.test.mjs.
  */
+import {sageTransport} from "../lib/httpTransport.mjs";
+const originalSageFetch = sageTransport.fetch;
 import test from "node:test";
 import assert from "node:assert/strict";
 
@@ -21,12 +23,12 @@ const jsonResponse = (payload, status = 200) => new Response(JSON.stringify(payl
 });
 
 test.afterEach(() => {
-  globalThis.fetch = originalFetch;
+  sageTransport.fetch = originalSageFetch;
 });
 
 test("vault auth methods attach timeout signals", async () => {
   const calls = [];
-  globalThis.fetch = async (input, init = {}) => {
+  sageTransport.fetch = async (input, init = {}) => {
     calls.push({
       url: String(input),
       method: init.method || "GET",
@@ -84,7 +86,7 @@ test("vault auth methods attach timeout signals", async () => {
 
 test("vault getSetting retries transient fetch failures with bounded timeouts", async () => {
   const calls = [];
-  globalThis.fetch = async (input, init = {}) => {
+  sageTransport.fetch = async (input, init = {}) => {
     calls.push({
       url: String(input),
       method: init.method || "GET",
@@ -118,7 +120,7 @@ test("vault getSetting retries transient fetch failures with bounded timeouts", 
 
 test("vault auth user methods retry transient fetch failures with bounded timeouts", async () => {
   const calls = [];
-  globalThis.fetch = async (input, init = {}) => {
+  sageTransport.fetch = async (input, init = {}) => {
     calls.push({
       url: String(input),
       method: init.method || "GET",

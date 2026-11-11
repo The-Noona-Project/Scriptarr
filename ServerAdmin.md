@@ -1,5 +1,22 @@
 # Scriptarr Server Admin Guide
 
+## Bulk download interruption recovery
+
+Use the same `/downloadall continue runid:<id>` run after a broker interruption. Preserve its canonical CBZs,
+ready reader pages and durable task history; a content reset is unnecessary. The queue and Noona summary show
+late outcomes even while the run is paused. Paused reconciliation observes accepted work without approving
+another execution, and Noona edits its accepted pause message instead of generating duplicate prompts.
+
+Sage uses an explicitly pinned outbound HTTP client to avoid the bundled Node paused-parser socket-close crash.
+Raven's idempotent checkpoint transport waits up to two minutes for transient broker outages. Authentication,
+ownership and validation rejections do not enter that recovery loop. Worker recovery remains fenced by its lease.
+After recovery is exhausted, investigate the specific task or conversion stage before continuing unresolved work.
+
+Only a validated source page explicitly reporting unavailability, without chapter links or a full-list control,
+qualifies for the separately reported unavailable-source skip. Network errors, challenges, rate limits and empty
+lists without that evidence stay unresolved. Completion requires all accepted title work to pass archive, catalog
+and WebP readiness verification, with policy skips counted separately.
+
 This guide is for the supported Docker image install path.
 
 ## Required First-Boot Environment

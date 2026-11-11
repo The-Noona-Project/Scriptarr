@@ -1,5 +1,9 @@
 # Portal
 
+Noona keeps an existing downloadall pause message current as accepted downloads complete or fail. Refreshes
+retain the same approval window and do not send another message. Summaries list verified unavailable sources
+separately from completed downloads. Continue the existing run to recover unresolved work while retaining files.
+
 Cross-host deployments set `SCRIPTARR_REQUIRE_SERVICE_AUTH=true`. In this mode every `/api` route requires a valid
 service bearer token, including read routes; `/health` remains available for bounded private-network probes. Keep the
 published port restricted to the core host. Sage supplies the destination token for its brokered requests.

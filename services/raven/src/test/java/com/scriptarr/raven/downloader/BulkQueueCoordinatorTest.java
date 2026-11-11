@@ -20,6 +20,18 @@ import static org.mockito.Mockito.*;
 
 /** Verify durable replay, checked persistence, cancellation and uncapped ownership evidence. */
 class BulkQueueCoordinatorTest {
+    /** A verified unavailable row retains evidence and is separately skipped without accepting a title task. */
+    @Test void unavailableSourceIsAnExplicitRetainedPolicySkip() {
+        Fixture f = new Fixture(new FakeRavenBrokerClient());
+        when(f.provider.discoverChapters(anyString())).thenReturn(new ChapterDiscoveryResult(List.of(), true, ""));
+        var checkpoint = new java.util.concurrent.atomic.AtomicReference<Map<String, Object>>();
+        var result = f.coordinator().queueBatch("run", "batch", "weebcentral", "Manhua", false, "a", "owner", () -> false, checkpoint::set);
+        assertEquals(0, result.failedCount()); assertEquals(0, result.queuedCount());
+        assertEquals(1, checkpoint.get().get("skippedUnavailableCount"));
+        assertTrue(f.broker.listJobTasks("run", "").toString().contains("sourceUnavailableEvidence"));
+        verify(f.downloader, never()).queueBulkOwned(anyString(), anyString(), anyString(), anyString(), any());
+        assertEquals(0, f.queue().queuedCount());
+    }
     /** An emptied completed placeholder cannot reuse a shortened, unrelated metadata match. */
     @Test void emptyCompletedPlaceholderRequiresOriginalSourceAnchor() {
         Fixture f = new Fixture(new FakeRavenBrokerClient()); var title = mock(com.scriptarr.raven.library.LibraryTitle.class);

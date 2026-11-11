@@ -1,6 +1,7 @@
 /**
  * @file Endpoint registry and GET probe helpers for Moon admin system status.
  */
+import {sageFetch as fetch} from "./httpTransport.mjs";
 
 const normalizeString = (value, fallback = "") => {
   const normalized = typeof value === "string" ? value.trim() : "";

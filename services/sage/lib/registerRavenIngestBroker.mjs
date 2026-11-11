@@ -1,4 +1,5 @@
 /** @file Narrow authenticated conversion control and binary worker transport. */
+import {sageFetch as fetch} from "./httpTransport.mjs";
 import {Readable, Transform} from "node:stream";
 import {pipeline} from "node:stream/promises";
 
@@ -93,6 +94,7 @@ export const registerRavenIngestBroker = (app, {config, vaultClient, requireServ
     req.on("aborted", abort); res.on("close", abort);
     const limited = limiter();
     limited.on("error", abort);
+    let upstream, succeeded = false;
     try {
       const query = new URLSearchParams({workerId: String(lease.workerId || ""), epoch: String(lease.epoch)});
       const coordinatorToken = config.serviceTokens?.["scriptarr-raven"];
@@ -100,7 +102,7 @@ export const registerRavenIngestBroker = (app, {config, vaultClient, requireServ
       const headers = {Authorization: `Bearer ${coordinatorToken}`, "X-Scriptarr-Lease-Token": lease.leaseToken};
       if (lease.artifactSha256) headers["X-Scriptarr-Artifact-Sha256"] = String(lease.artifactSha256);
       if (upload) { headers["Content-Type"] = "application/octet-stream"; if (length) headers["Content-Length"] = length; }
-      const upstream = await fetchImpl(`${config.ravenBaseUrl}/v1/ingest/work/jobs/${encodeURIComponent(req.params.jobId)}/${upload ? "artifact" : "input"}?${query}`, {
+      upstream = await fetchImpl(`${config.ravenBaseUrl}/v1/ingest/work/jobs/${encodeURIComponent(req.params.jobId)}/${upload ? "artifact" : "input"}?${query}`, {
         method: upload ? "POST" : "GET", headers, signal: controller.signal, redirect: "error",
         ...(upload ? {body: req.pipe(limited), duplex: "half"} : {})
       });
@@ -117,8 +119,12 @@ export const registerRavenIngestBroker = (app, {config, vaultClient, requireServ
       res.setHeader("Cache-Control", "no-store");
       if (upstream.body) await pipeline(Readable.fromWeb(upstream.body), ...(upload ? [] : [limited]), res);
       else res.end();
+      succeeded = true;
     } finally {
+      if (!succeeded) controller.abort();
       finished = true; clearTimeout(timeout); req.off("aborted", abort); res.off("close", abort);
+      req.unpipe(limited);
+      if (!succeeded && upstream?.body && !upstream.body.locked) await upstream.body.cancel().catch(() => {});
       if (!limited.destroyed) limited.destroy();
     }
   };

@@ -243,15 +243,31 @@ public class TitleScraper {
      * @return normalized chapters ordered by the upstream source
      */
     public List<Map<String, String>> getChapters(String titleUrl) {
+        return discoverChapters(titleUrl, true).chapters();
+    }
+
+    /** @param titleUrl exact source series @return complete chapters, verified unavailability, or recoverable failure */
+    public ChapterDiscoveryResult discoverChapters(String titleUrl) {
+        return discoverChapters(titleUrl, false);
+    }
+
+    private ChapterDiscoveryResult discoverChapters(String titleUrl, boolean legacyFallback) {
         if (titleUrl == null || titleUrl.isBlank()) {
-            return List.of();
+            return ChapterDiscoveryResult.fromChapters(List.of());
         }
 
         try {
-            ChapterListRequest chapterListRequest = resolveChapterListRequest(titleUrl);
+            Document titleDocument;
+            try { titleDocument = executeWithRetries("title chapter list preflight", () -> connect(titleUrl.trim()).followRedirects(false).get()); }
+            catch (org.jsoup.HttpStatusException missing) {
+                if (!legacyFallback || missing.getStatusCode() != 404) throw missing;
+                titleDocument = Document.createShell(titleUrl);
+            }
+            if (verifiedUnavailable(titleUrl, titleDocument)) return new ChapterDiscoveryResult(List.of(), true, "");
+            ChapterListRequest chapterListRequest = resolveChapterListRequest(titleUrl, titleDocument);
             String listUrl = chapterListRequest.url();
             if (listUrl == null || listUrl.isBlank()) {
-                return List.of();
+                return ChapterDiscoveryResult.fromChapters(List.of());
             }
 
             Document doc = executeWithRetries(
@@ -287,11 +303,21 @@ public class TitleScraper {
                 rawChapters.add(data);
             }
 
-            return dedupeExactChapters(rawChapters);
+            return ChapterDiscoveryResult.fromChapters(dedupeExactChapters(rawChapters));
         } catch (Exception error) {
+            if (error instanceof CancellationException || Thread.currentThread().isInterrupted()) throw new CancellationException("Chapter discovery cancelled.");
             logger.warn("SCRAPER", "Chapter list request failed.", error.getMessage());
-            return List.of();
+            return new ChapterDiscoveryResult(List.of(), false, "Chapter discovery failed: " + sanitizeError(error));
         }
+    }
+
+    private boolean verifiedUnavailable(String titleUrl, Document document) {
+        String marker = "This series is currently unavailable. Subscribe to get notified when a new chapter is released!";
+        return BulkTitleSelection.validSeriesUrl(titleUrl, URI.create(sourceBaseUrl))
+            && document.select("h1").stream().anyMatch(element -> !element.text().isBlank())
+            && !extractLabeledValue(document, "Type").isBlank()
+            && document.select("a[href*=/chapters/], [hx-get*=/full-chapter-list]").isEmpty()
+            && document.getAllElements().stream().anyMatch(element -> marker.equals(element.ownText()));
     }
 
     private Document fetchSearchData(Map<String, String> queryParameters) throws Exception {
@@ -456,9 +482,7 @@ public class TitleScraper {
             : error.getMessage().trim();
     }
 
-    private ChapterListRequest resolveChapterListRequest(String titleUrl) {
-        try {
-            Document titleDocument = executeWithRetries("title chapter list preflight", () -> connect(titleUrl.trim()).get());
+    private ChapterListRequest resolveChapterListRequest(String titleUrl, Document titleDocument) {
             Element showAllButton = titleDocument.selectFirst("button[hx-get*=\"/full-chapter-list\"], [hx-get*=\"/full-chapter-list\"]");
             if (showAllButton != null) {
                 String hxUrl = normalizeChapterListUrl(titleUrl, showAllButton.attr("hx-get"));
@@ -470,9 +494,6 @@ public class TitleScraper {
                     );
                 }
             }
-        } catch (Exception error) {
-            logger.warn("SCRAPER", "Title chapter list preflight failed, falling back to the derived full list URL.", error.getMessage());
-        }
 
         String fallbackUrl = resolveFullChapterListUrl(titleUrl);
         return new ChapterListRequest(fallbackUrl, false, "");

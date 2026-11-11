@@ -1,6 +1,7 @@
 package com.scriptarr.raven.downloader.providers;
 
 import com.scriptarr.raven.downloader.BulkBrowseResult;
+import com.scriptarr.raven.downloader.ChapterDiscoveryResult;
 import com.scriptarr.raven.downloader.SourceFinder;
 import com.scriptarr.raven.downloader.TitleDetails;
 import com.scriptarr.raven.downloader.TitleScraper;
@@ -79,6 +80,11 @@ public class WeebCentralDownloadProvider implements DownloadProvider {
     @Override
     public List<Map<String, String>> getChapters(String titleUrl) {
         return titleScraper.getChapters(titleUrl);
+    }
+
+    @Override
+    public ChapterDiscoveryResult discoverChapters(String titleUrl) {
+        return titleScraper.discoverChapters(titleUrl);
     }
 
     @Override

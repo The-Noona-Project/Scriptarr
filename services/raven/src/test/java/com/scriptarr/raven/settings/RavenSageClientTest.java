@@ -24,6 +24,26 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * Unit coverage for Raven's Sage broker HTTP client.
  */
 class RavenSageClientTest {
+    /** Status-based recovery tolerates an outage beyond three responses without replaying a different checkpoint.
+     * @throws Exception when the isolated server fails
+     */
+    @Test void recoveryWindowRetriesTypedUnavailableResponses() throws Exception {
+        AtomicInteger attempts = new AtomicInteger();
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/api/internal/jobs/run/tasks/task", exchange -> {
+            assertEquals("{\"status\":\"running\"}", new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            boolean unavailable = attempts.incrementAndGet() < 5;
+            byte[] body = (unavailable ? "{\"error\":\"Temporarily unavailable\"}" : "{\"ok\":true}").getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(unavailable ? 503 : 200, body.length); exchange.getResponseBody().write(body); exchange.close();
+        });
+        server.start();
+        try {
+            var client = new RavenSageClient("http://127.0.0.1:" + server.getAddress().getPort(), "isolated",
+                HttpClient.newHttpClient(), Duration.ofMillis(500), Duration.ofMillis(500), Duration.ofMillis(1), Duration.ofSeconds(2));
+            assertTrue(client.putJobTask("run", "task", Map.of("status", "running")).path("ok").asBoolean());
+            assertEquals(5, attempts.get());
+        } finally { server.stop(0); }
+    }
     /**
      * Verify transient transport timeouts are retried for durable job-task
      * writes.
@@ -110,8 +130,7 @@ class RavenSageClientTest {
     }
 
     /**
-     * Verify HTTP error payloads are surfaced once instead of being retried as
-     * transient network failures.
+     * Verify permanent HTTP error payloads are surfaced once instead of being retried as transient failures.
      *
      * @throws Exception when the test HTTP server cannot be started
      */
@@ -124,7 +143,7 @@ class RavenSageClientTest {
         server.createContext("/api/internal/vault/settings/raven.download.providers", (exchange) -> {
             attempts.incrementAndGet();
             byte[] body = "{\"error\":\"broker rejected setting read\"}".getBytes(StandardCharsets.UTF_8);
-            exchange.sendResponseHeaders(503, body.length);
+            exchange.sendResponseHeaders(403, body.length);
             exchange.getResponseBody().write(body);
             exchange.close();
         });

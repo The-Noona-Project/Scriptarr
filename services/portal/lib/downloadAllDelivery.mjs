@@ -20,6 +20,16 @@ export const createDownloadAllDelivery = ({sage, discord, botIdentity, logger}) 
         const id = text(notification.id);
         if (!id || !shouldContinue()) continue;
         try {
+          if (notification.refreshOnly) {
+            const delivery = notification.delivery;
+            if (delivery?.botIdentity !== botIdentity || !text(delivery.messageId) || !text(delivery.channelId)) continue;
+            const message = await discord.fetchDirectMessage(delivery.channelId, delivery.messageId);
+            if (!shouldContinue()) return;
+            await message.edit(await buildPayload(notification));
+            checked(await sage.recordDownloadAllSummary(id, {botIdentity, messageId: delivery.messageId,
+              channelId: delivery.channelId, summaryRevision: notification.summaryRevision}), "summary edit acknowledgement");
+            continue;
+          }
           let delivery = checked(await sage.beginDownloadAllDelivery(id, {botIdentity}), "delivery claim")?.delivery;
           if (!delivery || delivery.phase === "acknowledged") continue;
           let message = accepted.get(id);

@@ -1,6 +1,8 @@
 /**
  * @file Scriptarr Sage module: services/sage/tests/sageApp.test.mjs.
  */
+import {sageTransport} from "../lib/httpTransport.mjs";
+const originalSageFetch = sageTransport.fetch;
 import test from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
@@ -1557,7 +1559,7 @@ const installDiscordFetchStub = (identity = {
     discordToken: 0,
     discordUser: 0
   };
-  globalThis.fetch = async (input, init) => {
+  sageTransport.fetch = async (input, init) => {
     const url = String(input);
 
     if (url === "https://discord.com/api/oauth2/token") {
@@ -1618,7 +1620,7 @@ const installDiscordFetchStub = (identity = {
 };
 
 const restoreFetch = () => {
-  globalThis.fetch = originalFetch;
+  sageTransport.fetch = originalSageFetch;
 };
 
 const signInViaDiscord = async (baseUrl, query = "") => {

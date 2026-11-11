@@ -1,6 +1,7 @@
 /**
  * @file Scriptarr Sage module: services/sage/lib/registerMoonV3Routes.mjs.
  */
+import {sageFetch as fetch} from "./httpTransport.mjs";
 import {createHash, randomBytes} from "node:crypto";
 import {registerSourceMetadataRoutes} from "./registerSourceMetadataRoutes.mjs";
 import {Readable} from "node:stream";

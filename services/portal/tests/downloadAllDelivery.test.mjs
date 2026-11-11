@@ -28,6 +28,21 @@ const fixture = () => {
 };
 const payload = async () => ({content: "paused summary"});
 
+test("summary edit acknowledgement loss retries the original message without sending or registering prompts", async () => {
+  const f = fixture(); let edits = 0, receipts = 0;
+  f.message.edit = async body => { assert.equal(body.content, "paused summary"); edits++; };
+  f.sage.listDownloadAllNotifications = async () => ({ok: true, payload: {notifications: [{...f.notification,
+    refreshOnly: true, summaryRevision: 3, delivery: {botIdentity: "noona", messageId: "message", channelId: "channel"}}]}});
+  f.sage.recordDownloadAllSummary = async (_id, body) => {
+    assert.equal(body.summaryRevision, 3); assert.equal(body.messageId, "message");
+    if (++receipts === 1) throw Error("edit receipt lost");
+    return {ok: true};
+  };
+  await f.create().poll(payload); await f.create().poll(payload);
+  assert.equal(edits, 2); assert.equal(receipts, 2);
+  assert.equal(f.counts.send, 0); assert.equal(f.counts.prompt, 0); assert.equal(f.counts.ack, 0);
+});
+
 test("slash and DM summaries distinguish completed title tasks from every policy skip", () => {
   const counts = {completedTitleTaskCount: 0, queuedCount: 0, skippedActiveCount: 2, skippedAdultContentCount: 3,
     skippedNoMetadataCount: 4, skippedAmbiguousMetadataCount: 5, invalidSourceCount: 6};

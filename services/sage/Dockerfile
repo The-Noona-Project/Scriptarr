@@ -7,7 +7,7 @@ COPY packages/scriptarr-access ./packages/scriptarr-access
 COPY packages/scriptarr-logging ./packages/scriptarr-logging
 COPY services/sage/package.json services/sage/package.json
 
-RUN npm install --workspace services/sage --include-workspace-root=false
+RUN npm ci --workspace services/sage --include-workspace-root=false
 
 COPY services/sage ./services/sage
 

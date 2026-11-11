@@ -232,3 +232,7 @@ thumbnail (`thumbnail=true`), rather than showing the first cropped tile; AVIF f
 ### Metadata repair and long queues
 
 Title metadata details and admin edition evidence are brokered through Sage. The configured Noona owner, with activity root access, can recheck metadata skips in a paused bulk run from the admin queue; Noona continuation remains a separate action. Historical cancellations and exact-source superseded failures remain in history without inviting duplicate retries. Waiting in a healthy queue or for a conversion worker is not a failure.
+
+Bulk progress continues to update when a run pauses while accepted downloads finish. Noona refreshes its existing
+pause message instead of posting another approval prompt. A temporary broker interruption retains downloaded
+content for recovery; continue the existing run after an exhausted recovery window rather than starting over.

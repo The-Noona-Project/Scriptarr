@@ -222,6 +222,7 @@ export const buildDownloadAllDirectMessagePayload = (notification = {}, publicBa
             `Adult or unverified content: **${skippedAdult}**`,
             `No metadata match: **${skippedNoMetadata}**`,
             `Ambiguous metadata: **${skippedAmbiguous}**`,
+            `Unavailable source: **${toCount(counts.skippedUnavailableCount, 0)}**`,
             `Invalid source rows: **${invalidSource}**`
           ].join("\n"),
           inline: true

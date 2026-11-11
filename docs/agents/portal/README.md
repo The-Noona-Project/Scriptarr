@@ -116,3 +116,10 @@
   requested partials, last DM receive timestamp, last handled `downloadall`, last `downloadall` error, and last Noona
   mention-chat time/error. Include Appa connection, mention, review, correction, and avatar sync state when split mode
   is configured.
+
+## Updating accepted downloadall messages
+
+Downloadall notifications with `refreshOnly` must fetch and edit the stored Discord message for the stored bot identity.
+A successful edit acknowledges `summaryRevision` through Sage's notification `/summary` route. Lost responses replay
+the edit to that same message. Do not send, add approval reactions, re-register prompts, or reset handled decisions
+for a summary refresh. Show unavailable-source skips separately from title completions and failures.
