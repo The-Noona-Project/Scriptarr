@@ -44,13 +44,17 @@ class DownloaderServiceRetryTest {
     /** A failed page index leaves a retryable task and cannot persist invented missing-content rows. */
     @Test
     void exhaustedPageLookupFailsWithoutCatalogMutation() throws Exception {
+        AtomicInteger lookups = new AtomicInteger();
         TestContext context = createContext(new FakeDownloadProvider(() -> {
+            lookups.incrementAndGet();
             throw new SourcePageLookupException("Source read timed out.", new java.net.SocketTimeoutException());
         }));
-        service.queueDownload(new DownloadRequest("Lookup Outage", "https://weebcentral.com/series/demo", "Manga", "tester",
+        service.queueDownload(new DownloadRequest("Lookup Outage", "https://weebcentral.com/series/9F5B016A9C17CF7B9ED4E6B5D6", "Manga", "tester",
             "weebcentral", "", Map.of(), Map.of(), "", "normal"));
         Map<String, Object> task = awaitTerminalTask(service);
         assertEquals("failed", task.get("status"));
+        assertEquals(1, lookups.get());
+        assertTrue(String.valueOf(task.get("message")).contains("Source read timed out"));
         assertTrue(context.libraryService().listTitles().isEmpty());
     }
 
@@ -68,10 +72,11 @@ class DownloaderServiceRetryTest {
         String image = "http://127.0.0.1:" + server.getAddress().getPort() + "/page.jpg";
         String goodImage = "http://127.0.0.1:" + server.getAddress().getPort() + "/good.jpg";
         TestContext context = createContext(new FakeDownloadProvider(() -> List.of(goodImage, image)));
-        service.queueDownload(new DownloadRequest("Image Outage", "https://weebcentral.com/series/demo", "Manga", "tester",
+        service.queueDownload(new DownloadRequest("Image Outage", "https://weebcentral.com/series/9F5B016A9C17CF7B9ED4E6B5D6", "Manga", "tester",
             "weebcentral", "", Map.of(), Map.of(), "", "normal"));
         Map<String, Object> task = awaitTerminalTask(service);
         assertEquals("failed", task.get("status"));
+        assertTrue(String.valueOf(task.get("message")).contains("503"));
         assertTrue(context.libraryService().listTitles().isEmpty());
         assertEquals(1, goodRequests.get());
         try (Stream<Path> staged = Files.walk(context.logger().getDownloadsRoot())) {
