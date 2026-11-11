@@ -5,6 +5,9 @@ wait for recovery; unresolved work remains visible and can be retried by continu
 Paused runs keep observing previously accepted work without starting new work. A source page that explicitly
 reports an unavailable series with no chapters is reported as an unavailable-source skip, separately from
 successful downloads. An empty, challenged, or rate-limited response still requires recovery.
+Chapter page-list timeouts and image transport/server failures also remain retryable failures. They do not create
+missing-content catalog rows or generated missing-page artwork. Verified image 404s and damaged image bytes retain
+their explicit source-quality handling.
 
 Raven is Scriptarr's Spring Boot Java 24 download, library, and metadata engine.
 

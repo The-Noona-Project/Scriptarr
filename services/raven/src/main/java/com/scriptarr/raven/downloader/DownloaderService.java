@@ -1289,14 +1289,9 @@ public class DownloaderService {
         }
 
         if (lastIoFailure != null) {
-            return ChapterDownloadResult.missing(
-                chapter,
-                chapterNumber,
-                0,
-                lastFailureMessage
-            );
+            throw lastIoFailure;
         }
-        return ChapterDownloadResult.missing(chapter, chapterNumber, 0, lastFailureMessage);
+        throw new SourcePageLookupException(lastFailureMessage, null);
     }
 
     private List<LibraryChapter> buildLibraryChapters(
@@ -1405,6 +1400,7 @@ public class DownloaderService {
                     Thread.currentThread().interrupt();
                     throw error;
                 } catch (IOException error) {
+                    if (!isSourceImageNotFound(error) && !(error instanceof SourceImageDataException)) throw error;
                     return PageDownloadResult.failure(pageNumber, stagedPage, imageUrl, normalizeString(error.getMessage(), "Image download failed."));
                 }
             }));
@@ -1486,7 +1482,9 @@ public class DownloaderService {
             return List.of();
         }
 
+        Exception lastFailure = null;
         for (int attempt = 1; attempt <= CHAPTER_SOURCE_RETRY_ATTEMPTS; attempt++) {
+            if (Thread.currentThread().isInterrupted()) throw new InterruptedException("Chapter page discovery was interrupted.");
             try {
                 List<String> pageUrls = provider.resolvePages(chapterUrl);
                 if (pageUrls != null && !pageUrls.isEmpty()) {
@@ -1498,7 +1496,10 @@ public class DownloaderService {
                     "title=" + titleName + " chapter=" + chapterNumber + " label=" + normalizeString(chapterTitle)
                         + " attempt=" + attempt + "/" + CHAPTER_SOURCE_RETRY_ATTEMPTS
                 );
+            } catch (SourcePageLookupException | CancellationException error) {
+                throw error;
             } catch (Exception error) {
+                lastFailure = error;
                 logger.warn(
                     "DOWNLOAD",
                     "Chapter page lookup failed.",
@@ -1513,7 +1514,7 @@ public class DownloaderService {
             }
         }
 
-        return List.of();
+        throw new SourcePageLookupException("Chapter page discovery did not finish with a verified page list.", lastFailure);
     }
 
     private byte[] downloadImageWithRetries(
@@ -1565,7 +1566,7 @@ public class DownloaderService {
         if (response.statusCode() < 200 || response.statusCode() >= 300) {
             throw new IOException("Image download failed with status " + response.statusCode() + " for " + imageUrl);
         }
-        if (!ArchiveImageEntries.hasUsableHeader(response.body())) throw new IOException("Source image has an empty or zero-filled header.");
+        if (!ArchiveImageEntries.hasUsableHeader(response.body())) throw new SourceImageDataException("Source image has an empty or zero-filled header.");
         return response.body();
     }
 

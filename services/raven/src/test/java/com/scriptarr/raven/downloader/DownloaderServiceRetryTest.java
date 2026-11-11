@@ -41,6 +41,47 @@ class DownloaderServiceRetryTest {
     private DownloaderService service;
     private HttpServer server;
 
+    /** A failed page index leaves a retryable task and cannot persist invented missing-content rows. */
+    @Test
+    void exhaustedPageLookupFailsWithoutCatalogMutation() throws Exception {
+        TestContext context = createContext(new FakeDownloadProvider(() -> {
+            throw new SourcePageLookupException("Source read timed out.", new java.net.SocketTimeoutException());
+        }));
+        service.queueDownload(new DownloadRequest("Lookup Outage", "https://weebcentral.com/series/demo", "Manga", "tester",
+            "weebcentral", "", Map.of(), Map.of(), "", "normal"));
+        Map<String, Object> task = awaitTerminalTask(service);
+        assertEquals("failed", task.get("status"));
+        assertTrue(context.libraryService().listTitles().isEmpty());
+    }
+
+    /** Exhausted image transport/server failures preserve a retryable task instead of generating placeholders. */
+    @Test
+    void exhaustedImageServerFailureFailsWithoutCatalogMutation() throws Exception {
+        AtomicInteger goodRequests = new AtomicInteger();
+        server = HttpServer.create(new InetSocketAddress(0), 0);
+        server.createContext("/page.jpg", exchange -> respond(exchange, 503, "temporary outage"));
+        server.createContext("/good.jpg", exchange -> {
+            goodRequests.incrementAndGet();
+            respond(exchange, 200, "healthy-source-image");
+        });
+        server.start();
+        String image = "http://127.0.0.1:" + server.getAddress().getPort() + "/page.jpg";
+        String goodImage = "http://127.0.0.1:" + server.getAddress().getPort() + "/good.jpg";
+        TestContext context = createContext(new FakeDownloadProvider(() -> List.of(goodImage, image)));
+        service.queueDownload(new DownloadRequest("Image Outage", "https://weebcentral.com/series/demo", "Manga", "tester",
+            "weebcentral", "", Map.of(), Map.of(), "", "normal"));
+        Map<String, Object> task = awaitTerminalTask(service);
+        assertEquals("failed", task.get("status"));
+        assertTrue(context.libraryService().listTitles().isEmpty());
+        assertEquals(1, goodRequests.get());
+        try (Stream<Path> staged = Files.walk(context.logger().getDownloadsRoot())) {
+            assertTrue(staged.filter(Files::isRegularFile).anyMatch(path -> {
+                try { return Files.readString(path).equals("healthy-source-image"); }
+                catch (IOException ignored) { return false; }
+            }));
+        }
+    }
+
     /** A successful HTTP response with zero-filled image data is retried instead of archived as healthy. */
     @Test void retriesZeroFilledSourceImage() throws Exception {
         AtomicInteger requests = new AtomicInteger();

@@ -69,6 +69,24 @@ class SourceMetadataFactsTest {
         assertFalse(SourceMetadataFacts.matchesBoundSelection(URL, title, changed));
     }
 
+    /** Durable broker decoding uses Longs; equivalent numeric versions keep the exact edition fence intact. */
+    @Test void restoredNumericBindingVersionsPreserveExactValidation() {
+        String title = source(false).sourceTitle();
+        Map<String, Object> bound = SourceMetadataFacts.bind("weebcentral", URL, title, source(false), Map.of(
+            "provider", "mangadex", "providerSeriesId", "reboot", "title", "The King's Avatar", "releaseLabel", "2020", "type", "Manhua"), "verified-provider");
+        for (Object version : List.of(1, 1L, 1.0d, new java.math.BigDecimal("1.00"), "1", 2L, 1.1d, Double.NaN)) {
+            Map<String, Object> binding = new java.util.LinkedHashMap<>((Map<String, Object>) bound.get("sourceBinding"));
+            binding.put("version", version);
+            Map<String, Object> restored = new java.util.LinkedHashMap<>(bound);
+            restored.put("sourceBinding", binding);
+            boolean valid = version instanceof Number number && Double.isFinite(number.doubleValue()) && number.doubleValue() == 1;
+            assertEquals(valid, SourceMetadataFacts.matchesBoundSelection(URL, title, restored));
+            assertFalse(SourceMetadataFacts.matchesBoundSelection(URL + "-other", title, restored));
+            restored.put("releaseLabel", "2015");
+            assertFalse(SourceMetadataFacts.matchesBoundSelection(URL, title, restored));
+        }
+    }
+
     private TitleDetails source(Boolean adult) {
         return new TitleDetails("Ye Qiu returns to Glory.", "Manhua", List.of("The King's Avatar (2020)"), "Ongoing", "2020",
             adult, true, false, List.of("Action", "Adventure"), List.of(), "The King's Avatar (Reboot)", List.of("Hudie Lan"), "https://example.org/cover.jpg");

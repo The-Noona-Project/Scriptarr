@@ -13,6 +13,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.util.concurrent.CancellationException;
 
 /**
  * Source page scraper that extracts chapter image URLs from supported hosts.
@@ -65,11 +66,14 @@ public class SourceFinder {
         String base = chapterUrl.endsWith("/") ? chapterUrl.substring(0, chapterUrl.length() - 1) : chapterUrl;
         String imagesUrl = base + "/images?is_prev=False&current_page=1&reading_style=long_strip";
 
+        Exception lastFailure = null;
         for (int attempt = 1; attempt <= SCRAPE_RETRY_ATTEMPTS; attempt++) {
+            checkInterrupted();
             try {
                 Document doc = connect(imagesUrl)
                     .referrer(chapterUrl)
                     .get();
+                rejectChallenge(doc);
                 List<String> urls = extractImageUrls(doc.select("img[src], img[data-src]"));
                 if (!urls.isEmpty()) {
                     return urls;
@@ -80,6 +84,8 @@ public class SourceFinder {
                     "attempt=" + attempt + "/" + SCRAPE_RETRY_ATTEMPTS
                 );
             } catch (Exception error) {
+                checkInterrupted();
+                lastFailure = error;
                 logger.warn("SOURCE", "WeebCentral image scrape failed.", error.getMessage());
             }
 
@@ -87,13 +93,17 @@ public class SourceFinder {
                 break;
             }
         }
-        return List.of();
+        checkInterrupted();
+        throw new SourcePageLookupException("Chapter page discovery did not finish with a verified page list.", lastFailure);
     }
 
     private List<String> genericImageScrape(String chapterUrl) {
+        Exception lastFailure = null;
         for (int attempt = 1; attempt <= SCRAPE_RETRY_ATTEMPTS; attempt++) {
+            checkInterrupted();
             try {
                 Document doc = connect(chapterUrl).get();
+                rejectChallenge(doc);
                 Elements images = doc.select("main img[src], img[src*=/media/], img[data-src]");
                 List<String> urls = extractImageUrls(images);
                 if (!urls.isEmpty()) {
@@ -105,6 +115,8 @@ public class SourceFinder {
                     "attempt=" + attempt + "/" + SCRAPE_RETRY_ATTEMPTS
                 );
             } catch (Exception error) {
+                checkInterrupted();
+                lastFailure = error;
                 logger.warn("SOURCE", "Generic image scrape failed.", error.getMessage());
             }
 
@@ -112,7 +124,20 @@ public class SourceFinder {
                 break;
             }
         }
-        return List.of();
+        checkInterrupted();
+        throw new SourcePageLookupException("Chapter page discovery did not finish with a verified page list.", lastFailure);
+    }
+
+    private void checkInterrupted() {
+        if (Thread.currentThread().isInterrupted()) throw new CancellationException("Chapter page discovery was interrupted.");
+    }
+
+    private void rejectChallenge(Document doc) {
+        String title = doc.title().toLowerCase(Locale.ROOT);
+        if (title.contains("just a moment") || title.contains("attention required")
+            || !doc.select("#challenge-form, #cf-challenge-running, #challenge-running").isEmpty()) {
+            throw new SourcePageLookupException("Chapter source returned a challenge page.", null);
+        }
     }
 
     private List<String> extractImageUrls(Elements images) {

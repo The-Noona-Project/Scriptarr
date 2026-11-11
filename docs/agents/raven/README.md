@@ -1,5 +1,12 @@
 # Raven AI Notes
 
+Chapter page discovery must propagate exhausted transport, challenge and unverified-empty failures through
+`SourcePageLookupException`; never convert them to an empty chapter. Image transport/server and archive I/O failures
+also fail the title retryably, preserving staged pages. Only explicit image 404 or damaged successful image payloads
+may use the source-quality placeholder path. Cancellation propagates through scraping and title lookup retries.
+Frozen source-binding versions compare numeric value, independent of the broker's Integer/Long JSON decoding;
+the original source URL, selected metadata provider/id and edition checks still apply.
+
 ## Distributed WebP ingest
 
 - `SCRIPTARR_RAVEN_ROLE=ingest-worker` branches before Spring bootstrap. Workers instantiate only the lease loop,
