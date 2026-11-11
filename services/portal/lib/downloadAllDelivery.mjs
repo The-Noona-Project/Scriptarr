@@ -34,7 +34,7 @@ export const createDownloadAllDelivery = ({sage, discord, botIdentity, logger,
           }
           let delivery = checked(await sage.beginDownloadAllDelivery(id, {botIdentity}), "delivery claim")?.delivery;
           if (!delivery || delivery.phase === "acknowledged") continue;
-          let message = accepted.get(id);
+          let message = accepted.get(id)?.message;
           if (!delivery.messageId && !message) {
             if (delivery.phase !== "sending") {
               logger?.warn?.("Downloadall delivery needs reconciliation; automatic resend disabled.", {notificationId: id});
@@ -44,12 +44,13 @@ export const createDownloadAllDelivery = ({sage, discord, botIdentity, logger,
             if (!shouldContinue()) return;
             message = await discord.sendDirectMessage(notification.discordUserId, {...payload, nonce: delivery.nonce, enforceNonce: true});
             if (!text(message?.id) || !text(message?.channelId || message?.channel?.id)) throw new Error("Discord did not return the accepted message identity.");
-            accepted.set(id, message);
+            accepted.set(id, {message, summaryRevision: notification.summaryRevision ?? 0});
           }
           // Always record a known accepted message, even when stop races send.
           if (!delivery.messageId) {
             delivery = checked(await sage.recordDownloadAllDelivery(id, {
-              messageId: text(message.id), channelId: text(message.channelId || message.channel?.id), summaryRevision: notification.summaryRevision
+              messageId: text(message.id), channelId: text(message.channelId || message.channel?.id),
+              summaryRevision: accepted.get(id)?.summaryRevision ?? notification.summaryRevision
             }), "delivery receipt")?.delivery;
             accepted.delete(id);
           }

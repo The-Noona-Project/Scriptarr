@@ -28,6 +28,19 @@ const fixture = () => {
 };
 const payload = async () => ({content: "paused summary"});
 
+test("a lost initial receipt retains the revision of the message actually sent", async () => {
+  const f = fixture(), record = f.sage.recordDownloadAllDelivery, sent = [];
+  f.notification.summaryRevision = 3;
+  f.sage.recordDownloadAllDelivery = async (id, body) => {
+    sent.push(body.summaryRevision);
+    if (sent.length === 1) throw new Error("receipt not persisted");
+    return record(id, body);
+  };
+  const delivery = f.create(); await delivery.poll(payload);
+  f.notification.summaryRevision = 9; await delivery.poll(payload);
+  assert.deepEqual(sent, [3, 3]); assert.equal(f.counts.send, 1);
+});
+
 test("summary edit acknowledgement loss retries the original message without sending or registering prompts", async () => {
   const f = fixture(); let edits = 0, receipts = 0;
   f.message.edit = async body => { assert.equal(body.content, "paused summary"); edits++; };
