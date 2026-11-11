@@ -320,20 +320,18 @@ public class RavenSageClient implements RavenBrokerClient {
     }
 
     private JsonNode parseResponse(String path, HttpResponse<String> response) throws IOException {
+        if (response.statusCode() < 200 || response.statusCode() >= 300) {
+            String message = "Sage returned " + response.statusCode() + " for " + path + ".";
+            try {
+                JsonNode error = objectMapper.readTree(response.body() == null ? "" : response.body());
+                if (error != null && !error.path("error").asText().isBlank()) message = error.path("error").asText().trim();
+            } catch (com.fasterxml.jackson.core.JsonProcessingException ignored) { /* HTTP identity survives non-JSON gateway errors. */ }
+            throw new BrokerRequestException(response.statusCode(), message);
+        }
         if (response.body() == null || response.body().isBlank()) {
-            if (response.statusCode() >= 400) {
-                throw new BrokerRequestException(response.statusCode(), "Sage returned " + response.statusCode() + " for " + path + ".");
-            }
             return objectMapper.createObjectNode();
         }
         JsonNode payload = objectMapper.readTree(response.body());
-        if (response.statusCode() >= 400) {
-            String message = payload.path("error").asText().trim();
-            if (message.isBlank()) {
-                message = "Sage returned " + response.statusCode() + " for " + path + ".";
-            }
-            throw new BrokerRequestException(response.statusCode(), message);
-        }
         return payload;
     }
 

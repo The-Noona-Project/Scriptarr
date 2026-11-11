@@ -33,7 +33,7 @@ class RavenSageClientTest {
         server.createContext("/api/internal/jobs/run/tasks/task", exchange -> {
             assertEquals("{\"status\":\"running\"}", new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
             boolean unavailable = attempts.incrementAndGet() < 5;
-            byte[] body = (unavailable ? "{\"error\":\"Temporarily unavailable\"}" : "{\"ok\":true}").getBytes(StandardCharsets.UTF_8);
+            byte[] body = (unavailable ? "<html>Temporarily unavailable</html>" : "{\"ok\":true}").getBytes(StandardCharsets.UTF_8);
             exchange.sendResponseHeaders(unavailable ? 503 : 200, body.length); exchange.getResponseBody().write(body); exchange.close();
         });
         server.start();

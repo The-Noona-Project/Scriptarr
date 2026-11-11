@@ -109,19 +109,31 @@ public final class IngestWorkerRuntime {
     }
 
     private static void retryTransfer(Transfer operation, AtomicLong expires) throws IOException, InterruptedException {
-        long deadline = System.currentTimeMillis() + 120000;
+        retryTransfer(operation, expires, java.time.Duration.ofSeconds(120));
+    }
+
+    /** @param operation immutable transfer @param expires current lease expiry @param window retry budget @throws IOException on exhaustion @throws InterruptedException on lease loss */
+    static void retryTransfer(Transfer operation, AtomicLong expires, java.time.Duration window) throws IOException, InterruptedException {
+        long deadline = System.currentTimeMillis() + window.toMillis();
+        IOException lastFailure = null;
         for (int attempt = 0; ; attempt++) {
             if (Thread.currentThread().isInterrupted() || System.currentTimeMillis() >= expires.get()) throw new InterruptedException("Worker transfer lease ended.");
+            if (lastFailure != null && System.currentTimeMillis() >= deadline) throw lastFailure;
             try { operation.run(); return; }
             catch (IOException failure) {
+                lastFailure = failure;
                 if (!IngestBrokerClient.transientFailure(failure) || System.currentTimeMillis() >= Math.min(deadline, expires.get())) throw failure;
-                Thread.sleep(Math.min(10000, 1000L << Math.min(4, attempt)));
+                Thread.sleep(Math.min(Math.min(10000, 1000L << Math.min(4, attempt)), Math.max(1, Math.min(deadline, expires.get()) - System.currentTimeMillis())));
             }
         }
     }
 
+    /** An immutable fenced input or output transfer that may be retried before its deadline. */
     @FunctionalInterface
-    private interface Transfer { void run() throws IOException, InterruptedException; }
+    interface Transfer {
+        /** Execute the same immutable transfer. @throws IOException on rejection @throws InterruptedException on cancellation */
+        void run() throws IOException, InterruptedException;
+    }
 
     /** @param root exact job scratch directory @throws IOException when scratch cannot be removed */
     private static void delete(Path root) throws IOException { if (Files.exists(root)) try (var paths = Files.walk(root)) { for (Path path : paths.sorted(Comparator.reverseOrder()).toList()) Files.deleteIfExists(path); } }

@@ -158,6 +158,20 @@ test("slash run and action propagate stable original interaction identifiers", a
   assert.equal(actions[0].body.requestId, "discord:interaction:original-interaction");
 });
 
+test("summary edits select the original sender after split mode becomes available", async () => {
+  let refreshed;
+  const message = {edit: async () => {}};
+  const noona = {fetchDirectMessage: async (channel, id) => { assert.equal(channel, "channel"); assert.equal(id, "message"); return message; }};
+  const delivery = createDownloadAllDelivery({botIdentity: "appa", discord: {fetchDirectMessage: async () => assert.fail("Appa cannot edit Noona's message")},
+    discordForIdentity: (identity) => identity === "noona" ? noona : null, sage: {
+      listDownloadAllNotifications: async () => ({ok: true, payload: {notifications: [{id: "notification", refreshOnly: true, summaryRevision: 2,
+        delivery: {botIdentity: "noona", messageId: "message", channelId: "channel"}}]}}),
+      recordDownloadAllSummary: async (_id, body) => { refreshed = body; return {ok: true}; }
+    }});
+  await delivery.poll(async () => ({content: "updated"}));
+  assert.equal(refreshed.botIdentity, "noona"); assert.equal(refreshed.summaryRevision, 2);
+});
+
 test("legacy DM creation uses the original message identifier", async () => {
   const bodies = [];
   const handler = createDirectMessageHandler({getSettings: () => ({superuserId: "owner"}), sage: {

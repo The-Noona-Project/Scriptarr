@@ -236,3 +236,5 @@ Title metadata details and admin edition evidence are brokered through Sage. The
 Bulk progress continues to update when a run pauses while accepted downloads finish. Noona refreshes its existing
 pause message instead of posting another approval prompt. A temporary broker interruption retains downloaded
 content for recovery; continue the existing run after an exhausted recovery window rather than starting over.
+
+Local development requires Node.js 22.19.0 or newer for Sage's pinned HTTP transport.

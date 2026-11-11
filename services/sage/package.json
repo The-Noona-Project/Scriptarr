@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "main": "server.mjs",
+  "engines": {"node": ">=22.19.0"},
   "scripts": {
     "start": "node server.mjs",
     "lint:docs": "eslint . --ext .mjs",

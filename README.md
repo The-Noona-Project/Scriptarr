@@ -14,6 +14,8 @@ cleanly instead of retaining stale memory or file handles.
 
 ## Service Map
 
+Local Node.js development requires Node 22.19.0 or newer. The Docker images include their supported runtimes.
+
 - `scriptarr-warden`: bootstraps the stack, parses the URL-first MySQL contract, owns `scriptarr-network`, and plans
   GPU/runtime flags for managed services
 - `scriptarr-mysql`: durable shared datastore for Scriptarr when `SCRIPTARR_MYSQL_URL=SELFHOST`

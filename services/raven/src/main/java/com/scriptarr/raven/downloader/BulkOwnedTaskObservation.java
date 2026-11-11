@@ -41,7 +41,7 @@ final class BulkOwnedTaskObservation {
                     terminals.putIfAbsent(id, Map.of("status", "completed", "observedAt", now,
                         "titleId", task == null ? "" : text(task.get("titleId"))));
                 }
-                case "queued" -> queued++;
+                case "queued", "pending" -> queued++;
                 case "running" -> { running++; if (stale.test(task)) stalled.add(id); }
                 case "missing" -> missing.add(id);
                 default -> failed.add(id);

@@ -54,6 +54,20 @@ test("paused summary revisions edit one acknowledged delivery without resetting 
   assert.equal(f.calls.length, 0);
 });
 
+test("a newer begin snapshot cannot acknowledge an older sent summary as current", async () => {
+  const f = fixture(), listed = (await f.broker.listNotifications()).notifications[0];
+  f.jobs.get("run-1").payload.summaryRevision = 1;
+  await f.broker.beginDelivery(listed.id, {botIdentity: "noona"});
+  await f.broker.recordDelivery(listed.id, {messageId: "message", channelId: "channel", summaryRevision: listed.summaryRevision});
+  await f.broker.registerPrompt(listed.id, {messageId: "message"});
+  await f.broker.acknowledge(listed.id);
+  const update = (await f.broker.listNotifications()).notifications[0];
+  assert.equal(update.refreshOnly, true); assert.equal(update.summaryRevision, 1);
+  await f.broker.refreshSummary(listed.id, {botIdentity: "noona", messageId: "message", channelId: "channel", summaryRevision: 1});
+  await f.broker.acknowledge(listed.id);
+  assert.deepEqual((await f.broker.listNotifications()).notifications, []);
+});
+
 test("delivery phases survive restart and retain a stable short nonce and tombstone", async () => {
   const f = fixture();
   const notification = (await f.broker.listNotifications()).notifications[0];

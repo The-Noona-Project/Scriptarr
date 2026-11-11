@@ -13,12 +13,13 @@ class BulkOwnedTaskObservationTest {
         List<Map<String, Object>> tasks = new ArrayList<>();
         for (int i = 0; i < 250; i++) tasks.add(Map.of("taskId", "done-" + i, "status", "completed", "titleId", "title-" + i));
         tasks.add(Map.of("taskId", "waiting", "status", "queued", "queuedAt", "2000-01-01T00:00:00Z"));
+        tasks.add(Map.of("taskId", "pending", "status", "pending", "queuedAt", "2000-01-01T00:00:00Z"));
         tasks.add(Map.of("taskId", "failed", "status", "failed"));
         tasks.add(Map.of("taskId", "encoder", "status", "running", "stage", "waiting-for-encoder"));
         Map<String, Object> previous = Map.of("approvalAttempts", Map.of("failed", 2), "unresolvedPlanIds", List.of("source-plan"));
         var first = BulkOwnedTaskObservation.reconcile(previous, tasks, ignored -> false, "2026-11-11T00:00:00Z");
         assertEquals(250, ((List<?>) first.get("completedTaskIds")).size());
-        assertEquals(List.of("failed"), first.get("failedTaskIds")); assertEquals(1, first.get("queuedTitleTaskCount"));
+        assertEquals(List.of("failed"), first.get("failedTaskIds")); assertEquals(2, first.get("queuedTitleTaskCount"));
         assertEquals(1, first.get("runningTitleTaskCount")); assertEquals(List.of(), first.get("staleTaskIds"));
         assertEquals(previous.get("approvalAttempts"), first.get("approvalAttempts"));
         assertEquals(previous.get("unresolvedPlanIds"), first.get("unresolvedPlanIds"));

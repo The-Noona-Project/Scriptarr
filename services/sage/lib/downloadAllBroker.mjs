@@ -161,6 +161,7 @@ export const createDownloadAllBroker = ({vaultClient, config, serviceJson, clock
           if (notification.status !== "paused" || !delivery.result.messageId
             || notification.summaryRevision <= (Number(delivery.result.deliveredSummaryRevision) || 0)) continue;
           notifications.push({...notification, refreshOnly: true, delivery: deliverState(delivery)});
+          if (notifications.length === 50) break;
           continue;
         }
         notifications.push({...notification, delivery: delivery ? deliverState(delivery) : null});
@@ -197,7 +198,11 @@ export const createDownloadAllBroker = ({vaultClient, config, serviceJson, clock
         const messageId = text(body.messageId), channelId = text(body.channelId);
         if (!messageId || !channelId) throw fail(400, "The accepted Discord message and channel ids are required.");
         if (job.result.messageId && (job.result.messageId !== messageId || job.result.channelId !== channelId)) throw fail(409, "This notification already has a different Discord message.");
-        const saved = await save(job.jobId, DELIVERY_KIND, job.payload, {...job.result, phase: job.result.phase === "acknowledged" ? "acknowledged" : "sent", messageId, channelId}, job);
+        const revision = Number(body.summaryRevision ?? 0);
+        if (!Number.isSafeInteger(revision) || revision < 0) throw fail(400, "The sent summary revision must be a non-negative integer.");
+        const saved = await save(job.jobId, DELIVERY_KIND, job.payload, {...job.result,
+          sentSummaryRevision: job.result.sentSummaryRevision ?? revision,
+          phase: job.result.phase === "acknowledged" ? "acknowledged" : "sent", messageId, channelId}, job);
         return {ok: true, delivery: deliverState(saved)};
       });
     },
@@ -235,7 +240,8 @@ export const createDownloadAllBroker = ({vaultClient, config, serviceJson, clock
         const job = await requireDelivery(id);
         if (!job.result.messageId || (job.payload.status === "paused" && job.payload.approvalId && !job.result.promptReady)) throw fail(409, "The Discord delivery and approval prompt must be recorded before acknowledgement.");
         await save(job.jobId, DELIVERY_KIND, job.payload, {...job.result, phase: "acknowledged",
-          deliveredSummaryRevision: Number(job.payload.notification?.summaryRevision) || 0}, job);
+          deliveredSummaryRevision: Math.max(Number(job.result.deliveredSummaryRevision) || 0,
+            Number(job.result.sentSummaryRevision) || 0)}, job);
         return {ok: true, notificationId: id};
       });
     },

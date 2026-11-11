@@ -9,7 +9,8 @@ const checked = (response, operation) => {
  * @param {{sage: object, discord: object, botIdentity: string, logger?: object}} options Dependencies.
  * @returns {{poll: Function}} A scoped notification poller.
  */
-export const createDownloadAllDelivery = ({sage, discord, botIdentity, logger}) => {
+export const createDownloadAllDelivery = ({sage, discord, botIdentity, logger,
+  discordForIdentity = (identity) => identity === botIdentity ? discord : null}) => {
   const accepted = new Map();
   return {
     async poll(buildPayload, shouldContinue = () => true) {
@@ -22,11 +23,12 @@ export const createDownloadAllDelivery = ({sage, discord, botIdentity, logger}) 
         try {
           if (notification.refreshOnly) {
             const delivery = notification.delivery;
-            if (delivery?.botIdentity !== botIdentity || !text(delivery.messageId) || !text(delivery.channelId)) continue;
-            const message = await discord.fetchDirectMessage(delivery.channelId, delivery.messageId);
+            const originalDiscord = discordForIdentity(delivery?.botIdentity);
+            if (!originalDiscord || !text(delivery.messageId) || !text(delivery.channelId)) continue;
+            const message = await originalDiscord.fetchDirectMessage(delivery.channelId, delivery.messageId);
             if (!shouldContinue()) return;
             await message.edit(await buildPayload(notification));
-            checked(await sage.recordDownloadAllSummary(id, {botIdentity, messageId: delivery.messageId,
+            checked(await sage.recordDownloadAllSummary(id, {botIdentity: delivery.botIdentity, messageId: delivery.messageId,
               channelId: delivery.channelId, summaryRevision: notification.summaryRevision}), "summary edit acknowledgement");
             continue;
           }
@@ -47,7 +49,7 @@ export const createDownloadAllDelivery = ({sage, discord, botIdentity, logger}) 
           // Always record a known accepted message, even when stop races send.
           if (!delivery.messageId) {
             delivery = checked(await sage.recordDownloadAllDelivery(id, {
-              messageId: text(message.id), channelId: text(message.channelId || message.channel?.id)
+              messageId: text(message.id), channelId: text(message.channelId || message.channel?.id), summaryRevision: notification.summaryRevision
             }), "delivery receipt")?.delivery;
             accepted.delete(id);
           }
