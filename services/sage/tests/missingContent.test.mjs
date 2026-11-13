@@ -9,15 +9,18 @@ test("compact pages retain fully downloaded partial titles and exact repair chap
   const chapter = {id: "chapter-197", chapterNumber: "197", sourceUrl: "https://weebcentral.com/chapters/ABC", qualityStatus: "possible_missing_page", missingPages: [3], missingPageCount: 1};
   const fetchJson = async path => {
     calls.push(path);
-    if (path === "/v1/library/partial") return {...partial, chapters: [{id: "clean", qualityStatus: "clean"}, chapter]};
+    assert.ok(path.startsWith("/v1/library?"), "No per-title Raven endpoint may trigger a catalogue reload");
     return path.includes("cursor=") ? {titles: [partial], pageInfo: {hasMore: false}}
       : {titles: [healthy], pageInfo: {hasMore: true, nextCursor: "next"}};
   };
-  const rows = await loadMissingContentTitles(fetchJson, title => ({...title, chapters: title.chapters || []}));
+  const loaded = [];
+  const rows = await loadMissingContentTitles(fetchJson, title => ({...title, chapters: title.chapters || []}), async id => {
+    loaded.push(id); return {...partial, chapters: [{id: "clean", qualityStatus: "clean"}, chapter]};
+  });
   assert.deepEqual(rows[0].chapters, []);
   assert.deepEqual(rows[1].chapters, [chapter]);
-  assert.equal(calls.filter(path => path === "/v1/library/healthy").length, 0);
-  assert.equal(calls.filter(path => path === "/v1/library/partial").length, 1);
+  assert.deepEqual(loaded, ["partial"]);
+  assert.equal(calls.length, 2);
 });
 
 test("repeated, failed or incomplete pages and foreign details cannot appear successful", async () => {
@@ -27,5 +30,5 @@ test("repeated, failed or incomplete pages and foreign details cannot appear suc
     async () => {throw new Error("Broker unavailable");},
     async () => ({}),
     async path => path.includes("?") ? {titles: [{id: "missing", chapterCount: 1, chaptersDownloaded: 0}]} : {id: "foreign", chapters: []}
-  ]) await assert.rejects(loadMissingContentTitles(fetchJson, title => title));
+  ]) await assert.rejects(loadMissingContentTitles(fetchJson, title => title, async () => ({id: "foreign", chapters: []})));
 });

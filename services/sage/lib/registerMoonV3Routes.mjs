@@ -2706,12 +2706,12 @@ export const registerMoonV3Routes = (app, {
   }));
 
   app.get("/api/moon-v3/admin/wanted/missing-chapters", requireWantedRead(async (_req, res) => {
-    const titles = await loadMissingContentTitles(fetchRavenJson, toTitleSummary);
+    const titles = await loadMissingContentTitles(fetchRavenJson, toTitleSummary, id => vaultClient.getRavenTitle(id));
     res.json(buildMissingChapterPayload(titles));
   }));
 
   app.get("/api/moon-v3/admin/wanted/missing-content", requireWantedRead(async (_req, res) => {
-    const titles = await loadMissingContentTitles(fetchRavenJson, toTitleSummary);
+    const titles = await loadMissingContentTitles(fetchRavenJson, toTitleSummary, id => vaultClient.getRavenTitle(id));
     res.json(buildMissingChapterPayload(titles));
   }));
 
@@ -4716,7 +4716,7 @@ export const registerMoonV3Routes = (app, {
     }
     if (tool.id === "missing_content") {
       await markToolUsed(vaultClient, tool.id);
-      return {message: "Missing content loaded.", data: buildMissingChapterPayload(await loadMissingContentTitles(fetchRavenJson, toTitleSummary))};
+      return {message: "Missing content loaded.", data: buildMissingChapterPayload(await loadMissingContentTitles(fetchRavenJson, toTitleSummary, id => vaultClient.getRavenTitle(id)))};
     }
     if (tool.id === "discord_runtime") {
       await markToolUsed(vaultClient, tool.id);

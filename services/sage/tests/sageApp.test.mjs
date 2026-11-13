@@ -3233,6 +3233,8 @@ test("sage exposes wanted metadata and missing chapter workflows", async () => {
       sourceUrl: "https://weebcentral.com/chapters/ABC", qualityStatus: "possible_missing_page",
       expectedPageCount: 9, missingPageCount: 1, missingPages: [3], qualityNotes: ["Source image unavailable"]}]
   };
+  await seedVaultRavenTitle(vaultPort, defaultLibraryTitle);
+  await seedVaultRavenTitle(vaultPort, gapTitle);
   const dependencyStub = await createDependencyStub({
     libraryTitles: [defaultLibraryTitle, gapTitle]
   });

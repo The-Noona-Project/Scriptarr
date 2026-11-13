@@ -10,9 +10,10 @@ const affected = title => Number(title.chapterCount) > Number(title.chaptersDown
  * Failed or repeated pagination must not silently hide later damaged titles.
  * @param {(path: string) => Promise<any>} fetchJson Authenticated Raven broker request.
  * @param {(title: any) => any} summarize Browser-safe title and chapter projection.
+ * @param {(titleId: string) => Promise<any>} loadTitle Title-scoped durable Vault read.
  * @returns {Promise<any[]>} Complete title census with only affected chapter details.
  */
-export const loadMissingContentTitles = async (fetchJson, summarize) => {
+export const loadMissingContentTitles = async (fetchJson, summarize, loadTitle) => {
   const cards = new Map(), cursors = new Set();
   let cursor = "";
   for (;;) {
@@ -34,7 +35,7 @@ export const loadMissingContentTitles = async (fetchJson, summarize) => {
   const results = new Array(titles.length);
   for (let offset = 0; offset < titles.length; offset += 4) {
     await Promise.all(titles.slice(offset, offset + 4).map(async (card, index) => {
-      const title = affected(card) ? await fetchJson(`/v1/library/${encodeURIComponent(card.id)}`) : card;
+      const title = affected(card) ? await loadTitle(card.id) : card;
       if (!title || title.id !== card.id || (affected(card) && !Array.isArray(title.chapters))) {
         throw new Error("Missing Content chapter details are incomplete.");
       }
