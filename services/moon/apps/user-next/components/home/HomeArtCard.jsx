@@ -4,7 +4,7 @@
  * @file Cover-led homepage card for Moon's personalized shelf rows.
  */
 
-import Link from "next/link";
+import Link from "../AppLink.jsx";
 import {HoverCard} from "../UiPrimitives.jsx";
 import {buildReaderPath, buildTitlePath} from "../../lib/titleRoutes.js";
 import {formatDate, formatProgress} from "../../lib/date.js";

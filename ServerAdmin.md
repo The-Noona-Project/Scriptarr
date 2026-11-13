@@ -1053,3 +1053,5 @@ Local Node.js installations require version 22.19.0 or newer. Pause-summary edit
 Portal restores the accepted DM channel into its Discord client cache before editing a pause message after restart; no new message or approval prompt is created.
 
 Missing Content includes partial chapters even when every chapter archive exists. Its selected-chapter repair list retains the saved source, expected page count, and missing page positions through the broker.
+
+Reader navigation from library cards, home shelves, and title buttons uses a full document navigation across the independently mounted reader app. This avoids passing reader routes through the user app’s Next router.

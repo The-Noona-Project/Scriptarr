@@ -266,3 +266,5 @@ admin Add Title, requests, queue or history, and library surfaces as well as the
 ### Metadata and edition details
 
 A title’s Details tab shows its edition, creators, aliases and complete expandable tag groups. Admin metadata repair compares source and metadata-provider facts and shows tag provenance. Metadata providers are preferred when their edition matches; verified source metadata is labelled when used as fallback. Existing tag preferences are retained. The admin queue includes owner-only metadata-skip recovery for paused Noona bulk runs.
+
+Library, home, and title reader links open the dedicated reader directly without requiring a reload.

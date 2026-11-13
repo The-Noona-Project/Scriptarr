@@ -2,7 +2,7 @@
  * @file Reusable series card for Moon's Next user app.
  */
 
-import Link from "next/link";
+import Link from "./AppLink.jsx";
 import {buildReaderPathForTitleTarget, buildTitlePathForTitle} from "../lib/titleRoutes.js";
 import {formatCoverage} from "../lib/date.js";
 import {resolveReaderTargetLabel} from "../lib/titleLabels.js";
