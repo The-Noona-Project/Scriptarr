@@ -3,6 +3,7 @@
  */
 import {sageFetch as fetch} from "./httpTransport.mjs";
 import {createHash, randomBytes} from "node:crypto";
+import {loadMissingContentTitles} from "./missingContent.mjs";
 import {registerChapterRepairRoutes} from "./registerChapterRepairRoutes.mjs";
 import {registerSourceMetadataRoutes} from "./registerSourceMetadataRoutes.mjs";
 import {Readable} from "node:stream";
@@ -298,6 +299,11 @@ const toTitleSummary = (title = {}) => ({
   sourceUrl: normalizeString(title.sourceUrl),
   workingRoot: normalizeString(title.workingRoot),
   downloadRoot: normalizeString(title.downloadRoot),
+  qualityStatus: normalizeString(title.qualityStatus, "clean"),
+  cleanChapterCount: Number.parseInt(String(title.cleanChapterCount || 0), 10) || 0,
+  partialChapterCount: Number.parseInt(String(title.partialChapterCount || 0), 10) || 0,
+  missingContentCount: Number.parseInt(String(title.missingContentCount || 0), 10) || 0,
+  qualitySummary: normalizeString(title.qualitySummary),
   ingestStatus: normalizeIngestStatus(title.ingestStatus),
   ingestedChapterCount: Number.parseInt(String(title.ingestedChapterCount || 0), 10) || 0,
   ingestError: normalizeString(title.ingestError),
@@ -313,6 +319,11 @@ const toChapterSummary = (chapter = {}) => ({
   available: chapter.available !== false,
   archivePath: normalizeString(chapter.archivePath),
   sourceUrl: normalizeString(chapter.sourceUrl),
+  qualityStatus: normalizeString(chapter.qualityStatus, "clean"),
+  expectedPageCount: Number.parseInt(String(chapter.expectedPageCount || 0), 10) || 0,
+  missingPageCount: Number.parseInt(String(chapter.missingPageCount || 0), 10) || 0,
+  missingPages: normalizeArray(chapter.missingPages),
+  qualityNotes: normalizeArray(chapter.qualityNotes),
   ingestStatus: normalizeIngestStatus(chapter.ingestStatus) === "ready" && !hasCurrentReaderRevision(chapter) ? "pending" : normalizeIngestStatus(chapter.ingestStatus),
   ingestRevision: normalizeString(chapter.ingestRevision),
   ingestedPageCount: Number.parseInt(String(chapter.ingestedPageCount || 0), 10) || 0,
@@ -2695,12 +2706,12 @@ export const registerMoonV3Routes = (app, {
   }));
 
   app.get("/api/moon-v3/admin/wanted/missing-chapters", requireWantedRead(async (_req, res) => {
-    const titles = await loadLibrary();
+    const titles = await loadMissingContentTitles(fetchRavenJson, toTitleSummary);
     res.json(buildMissingChapterPayload(titles));
   }));
 
   app.get("/api/moon-v3/admin/wanted/missing-content", requireWantedRead(async (_req, res) => {
-    const titles = await loadLibrary();
+    const titles = await loadMissingContentTitles(fetchRavenJson, toTitleSummary);
     res.json(buildMissingChapterPayload(titles));
   }));
 
@@ -4705,7 +4716,7 @@ export const registerMoonV3Routes = (app, {
     }
     if (tool.id === "missing_content") {
       await markToolUsed(vaultClient, tool.id);
-      return {message: "Missing content loaded.", data: buildMissingChapterPayload(await loadLibrary())};
+      return {message: "Missing content loaded.", data: buildMissingChapterPayload(await loadMissingContentTitles(fetchRavenJson, toTitleSummary))};
     }
     if (tool.id === "discord_runtime") {
       await markToolUsed(vaultClient, tool.id);

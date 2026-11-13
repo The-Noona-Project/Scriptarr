@@ -1051,3 +1051,5 @@ Download recovery rejects empty or zero-filled page headers in saved archives an
 Local Node.js installations require version 22.19.0 or newer. Pause-summary edits use the bot that originally sent the message, including after switching between the single-bot fallback and split-bot configuration.
 
 Portal restores the accepted DM channel into its Discord client cache before editing a pause message after restart; no new message or approval prompt is created.
+
+Missing Content includes partial chapters even when every chapter archive exists. Its selected-chapter repair list retains the saved source, expected page count, and missing page positions through the broker.
