@@ -35,11 +35,13 @@ const candidateKey = (entry = {}) => `${normalizeString(entry.providerId, normal
  * @returns {import("react").ReactNode}
  */
 const TitleCover = ({title}) => {
-  const coverUrl = normalizeString(title.coverUrl);
+  const coverUrl = normalizeString(title.coverThumbUrl, normalizeString(title.coverUrl));
+  const [failed, setFailed] = useState(false);
+  useEffect(() => setFailed(false), [coverUrl]);
   const name = normalizeString(title.title, "Title");
   return (
     <div className="admin-result-cover compact">
-      {coverUrl ? <img src={coverUrl} alt="" /> : <span>{name.slice(0, 1).toUpperCase()}</span>}
+      {coverUrl && !failed ? <img src={coverUrl} alt="" referrerPolicy="no-referrer" onError={() => setFailed(true)} /> : <span>{name.slice(0, 1).toUpperCase()}</span>}
     </div>
   );
 };
@@ -255,7 +257,7 @@ export const MissingChaptersPage = ({user}) => {
         onClose={() => setSelectedId("")}
       >
         {selectedTitle ? (
-          <div className="admin-drawer-stack">
+          <div className="admin-drawer-stack admin-missing-content-detail">
             <div className="admin-request-hero">
               <TitleCover title={selectedTitle} />
               <div>
@@ -287,10 +289,10 @@ export const MissingChaptersPage = ({user}) => {
                     <h3>Damaged chapters</h3>
                   </div>
                 </div>
-                <div className="admin-log-list compact">
+                <div className="admin-chapter-repair-list">
                   {normalizeArray(selectedTitle.damagedChapters).slice(0, 12).map((chapter) => (
-                    <article className="admin-log-row" key={`${chapter.id || chapter.chapterNumber}`}>
-                      <strong>{formatDisplayValue(chapter.label, `Chapter ${chapter.chapterNumber || "?"}`)}</strong>
+                    <article className="admin-chapter-repair-record" key={`${chapter.id || chapter.chapterNumber}`}>
+                      <strong>{chapter.chapterNumber ? `Chapter ${chapter.chapterNumber}` : formatDisplayValue(chapter.label, "Chapter ?")}</strong>
                       <span>{formatDisplayValue(chapter.qualityStatus, "possible missing page")}</span>
                       <span>{chapter.missingPageCount || 0} missing page{Number(chapter.missingPageCount || 0) === 1 ? "" : "s"}</span>
                     </article>

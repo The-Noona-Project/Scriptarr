@@ -1055,3 +1055,5 @@ Portal restores the accepted DM channel into its Discord client cache before edi
 Missing Content includes partial chapters even when every chapter archive exists. Its selected-chapter repair list retains the saved source, expected page count, and missing page positions through the broker.
 
 Reader navigation from library cards, home shelves, and title buttons uses a full document navigation across the independently mounted reader app. This avoids passing reader routes through the user app’s Next router.
+
+Missing Content displays canonical chapter numbers and verified missing-page counts, uses the existing artwork proxy and whole-first-page fallback, and keeps incomplete chapter coverage below 100%.
