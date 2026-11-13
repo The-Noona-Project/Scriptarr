@@ -352,3 +352,7 @@
 ### Source metadata views
 
 Reader edition and grouped-tag details load on demand from the authenticated title metadata endpoint. Admin evidence compares retained provider facts with a fresh Raven source read through Sage. Bulk metadata recovery requires the configured owner plus activity-root access, captures a durable request/approval identity and prepares skipped plans without continuing the run. A retry after reload reuses a pending request ID reported by status.
+
+`ChapterRepairPanel` is a leaf of Missing Content. Its stable request receipt survives interrupted acknowledgements
+for the same title and sorted selection. Use the existing shared admin event stream for observational progress; do not
+add polling or browser-direct internal calls. Repair is library root, progress is library read.

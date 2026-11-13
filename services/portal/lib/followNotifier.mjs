@@ -181,6 +181,8 @@ export const buildDownloadAllDirectMessagePayload = (notification = {}, publicBa
   const needsAttention = [
     unresolvedPlans ? `Unresolved title plans: **${unresolvedPlans}**` : "",
     failedTitles ? `Failed title tasks: **${failedTitles}**` : "",
+    ...(Array.isArray(notification.problems) ? notification.problems.slice(0, 3).map(problem =>
+      `${String(problem.titleName || "Title").slice(0, 60)} — ${String(problem.message || `Chapter ${problem.chapterNumber}: repair required.`).slice(0, 180)}`.replace(/[@*_~`<>]/g, "")) : []),
     staleTitles ? `Stale title tasks: **${staleTitles}**` : ""
   ].filter(Boolean).join("\n") || "None reported";
 

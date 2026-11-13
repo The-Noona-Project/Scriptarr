@@ -170,6 +170,16 @@ public final class RemoteChapterProcessor {
     public Path input(String id, String workerId, long epoch) throws Exception {
         JsonNode job = requireLease(id, workerId, epoch), input = job.path("spec").path("input");
         JsonNode title = catalog.getLibraryTitle(input.path("titleId").asText()), found = null;
+        String repairTaskId = job.path("spec").path("owner").path("repairTaskId").asText();
+        if (!repairTaskId.isBlank()) {
+            Path journal = ChapterRepairPublication.journal(root.getParent(), repairTaskId, input.path("chapterId").asText());
+            JsonNode binding = json.readTree(journal.toFile());
+            if (!title.path("sourceUrl").asText().equals(binding.path("sourceUrl").asText())) throw new IOException("Repair source owner changed.");
+            for (JsonNode chapter : title.path("chapters")) if (input.path("chapterId").asText().equals(chapter.path("id").asText())) found = chapter;
+            if (found == null || !found.path("sourceUrl").asText().equals(binding.path("originalChapter").path("sourceUrl").asText())) throw new IOException("Repair chapter owner changed.");
+            return ChapterRepairPublication.input(root.getParent(), repairTaskId, input.path("titleId").asText(), input.path("chapterId").asText(),
+                input.path("sourceFingerprint").path("sha256").asText(), input.path("sourceFingerprint").path("size").asLong());
+        }
         for (JsonNode chapter : title.path("chapters")) if (input.path("chapterId").asText().equals(chapter.path("id").asText())) found = chapter;
         if (found == null) throw new IOException("Assigned canonical chapter is unavailable.");
         Path archive = Path.of(found.path("archivePath").asText()).toAbsolutePath().normalize();

@@ -258,7 +258,9 @@ export const formatBulkRunSummary = (result = {}) => {
     "Needs attention",
     `- Unresolved title plans: ${unresolvedPlans}`,
     `- Failed title tasks: ${failedTitles}`,
-    `- Stale title tasks: ${staleTitles}`
+    `- Stale title tasks: ${staleTitles}`,
+    ...(Array.isArray(result?.summary?.completionProblems) ? result.summary.completionProblems : Array.isArray(result?.completionProblems) ? result.completionProblems : [])
+      .slice(0, 3).map(problem => `- ${String(problem.titleName || "Title").slice(0, 60)}: ${String(problem.message || "Chapter repair required.").slice(0, 180)}`.replace(/[@*_~`<>]/g, ""))
   ];
   if (currentBatch) {
     lines.push(

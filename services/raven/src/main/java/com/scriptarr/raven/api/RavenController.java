@@ -401,6 +401,18 @@ public class RavenController {
     }
 
     /**
+     * Queue selected chapter repairs through the existing durable download task path.
+     * @param titleId canonical title @param body owner, selected chapter IDs and stable request key
+     * @return accepted task or bounded validation/conflict response
+     */
+    @PostMapping("/v1/library/{titleId}/repair-chapters")
+    public ResponseEntity<Map<String, Object>> repairLibraryChapters(@PathVariable("titleId") String titleId, @RequestBody Map<String, Object> body) {
+        try { return ResponseEntity.accepted().body(downloaderService.queueChapterRepair(titleId, body)); }
+        catch (IllegalArgumentException invalid) { return ResponseEntity.badRequest().body(Map.of("error", invalid.getMessage())); }
+        catch (IllegalStateException conflict) { return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("error", conflict.getMessage())); }
+    }
+
+    /**
      * Load alternate repair candidates for an existing Raven library title.
      *
      * @param titleId title id to inspect

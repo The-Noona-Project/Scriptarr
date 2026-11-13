@@ -1,5 +1,9 @@
 # Sage
 
+Selected chapter repairs use the authenticated library root permission and the existing durable download queue.
+Missing Content shows chapter-specific failures and read-only repair progress. Repeated submissions with the same
+request identity reuse the accepted repair; changing its title or selection requires a new request.
+
 Sage is Scriptarr's Moon-facing auth and orchestration broker.
 
 Library artwork prefers the title's cover art. When it is unavailable, Sage lets Moon use the first page of the

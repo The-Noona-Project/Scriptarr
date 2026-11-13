@@ -1,5 +1,10 @@
 # Raven
 
+Selected chapter repair is available in admin Missing Content for chapters with saved source identities.
+It retries only the selected damaged chapters. The current readable version stays published until the complete
+source archive, WebP output, and catalog acknowledgement are verified. Unavailable source pages remain unresolved;
+repairs do not switch sources automatically. Library rescans preserve unavailable chapter rows and their source evidence.
+
 Bulk downloads preserve completed archives and ready WebP chapters across broker interruptions. Short outages
 wait for recovery; unresolved work remains visible and can be retried by continuing the same run through Noona.
 Paused runs keep observing previously accepted work without starting new work. A source page that explicitly

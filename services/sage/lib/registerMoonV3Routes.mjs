@@ -3,6 +3,7 @@
  */
 import {sageFetch as fetch} from "./httpTransport.mjs";
 import {createHash, randomBytes} from "node:crypto";
+import {registerChapterRepairRoutes} from "./registerChapterRepairRoutes.mjs";
 import {registerSourceMetadataRoutes} from "./registerSourceMetadataRoutes.mjs";
 import {Readable} from "node:stream";
 import {hasReadyReaderRevision, readerPageRow, readerVariantQuery} from "./readerVariants.mjs";
@@ -2702,6 +2703,13 @@ export const registerMoonV3Routes = (app, {
     const titles = await loadLibrary();
     res.json(buildMissingChapterPayload(titles));
   }));
+
+  registerChapterRepairRoutes(app, {
+    read: requireLibraryRead, root: requireLibraryRoot, loadTitle: loadLibraryTitle, vaultClient, serviceJson, ravenBaseUrl: config.ravenBaseUrl,
+    recordQueued: async (req, task) => appendEvent({...buildUserActor(req.user, "admin"), domain: "library", eventType: "chapter-repair-queued",
+      severity: "info", targetType: "title", targetId: req.params.titleId, message: "Selected chapter repair queued.",
+      metadata: {titleId: req.params.titleId, taskId: task.taskId, selectedChapterCount: req.body.chapterIds.length}})
+  });
 
   registerSourceMetadataRoutes(app, {
     userRead: (handler) => withUser(requireUser, handler), adminRead: requireWantedRead, ownerWrite: requireActivityRoot,

@@ -18,6 +18,7 @@ import {
 } from "../lib/adminWanted.js";
 import {formatDate, formatDisplayValue, formatPercent} from "../lib/format.js";
 import {AdminActionBanner, AdminDenseTable, AdminDrawer, AdminFilterBar, AdminStatusBadge} from "./AdminUi.jsx";
+import {ChapterRepairPanel} from "./ChapterRepairPanel.jsx";
 import {useAdminToast} from "./AdminToasts.jsx";
 
 const emptyPayload = Object.freeze({
@@ -297,6 +298,8 @@ export const MissingChaptersPage = ({user}) => {
                 </div>
               </section>
             ) : null}
+
+            <ChapterRepairPanel key={selectedTitle.id} title={selectedTitle} canRead={canInspectRepairs} canRepair={canQueueReplacement} />
 
             <section className="admin-subsection">
               <div className="admin-section-heading">

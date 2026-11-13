@@ -472,6 +472,10 @@ public class BulkRunService {
         String runId = stringValue(job.get("jobId"));
         List<Map<String, Object>> batches = loadBatchTasks(runId);
         List<Map<String, Object>> owned = gateway.ownedTasks(runId, "");
+        if (downloaderService != null) {
+            List<Map<String, Object>> reconciled = downloaderService.reconcileBulkChapterGaps(runId, owned);
+            if (reconciled != null && reconciled.size() == owned.size()) owned = reconciled;
+        }
         for (Map<String, Object> batch : batches) {
             Map<String, Object> previous = normalizeMap(batch.get("result"));
             String batchId = stringValue(batch.get("taskId"));
@@ -1200,6 +1204,7 @@ public class BulkRunService {
         summary.put("missingTitleTaskCount", 0);
         summary.put("skippedUnavailableCount", 0);
         summary.put("recoveryActions", List.of());
+        summary.put("completionProblems", List.of());
         summary.put("lastCompletedBatch", Map.of());
         summary.put("nextBatch", Map.of());
         summary.put("queuedTaskIds", List.of());
@@ -1210,6 +1215,7 @@ public class BulkRunService {
         Map<String, Object> summary = emptyRunSummary(batches.size());
         List<String> queuedTaskIds = new ArrayList<>();
         List<Map<String, Object>> recoveryActions = new ArrayList<>();
+        List<Map<String, Object>> completionProblems = new ArrayList<>();
         Map<String, Object> lastCompletedBatch = Map.of();
         Map<String, Object> nextBatch = Map.of();
         for (Map<String, Object> batch : batches) {
@@ -1221,6 +1227,10 @@ public class BulkRunService {
                 nextBatch = compactBatchWindow(batch);
             }
             Map<String, Object> result = normalizeMap(batch.get("result"));
+            Object rawProblems = result.get("completionProblems");
+            if (rawProblems instanceof List<?> problems) for (Object value : problems) {
+                if (completionProblems.size() < 50) completionProblems.add(normalizeMap(value));
+            }
             increment(summary, "pagesScanned", toInt(result.get("pagesScanned"), 0));
             increment(summary, "matchedCount", toInt(result.get("matchedCount"), 0));
             increment(summary, "queuedCount", toInt(result.get("queuedCount"), 0));
@@ -1253,6 +1263,7 @@ public class BulkRunService {
         summary.put("nextBatch", nextBatch);
         summary.put("queuedTaskIds", List.copyOf(queuedTaskIds));
         summary.put("recoveryActions", List.copyOf(recoveryActions));
+        summary.put("completionProblems", List.copyOf(completionProblems));
         return summary;
     }
 

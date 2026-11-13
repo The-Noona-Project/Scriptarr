@@ -291,3 +291,8 @@ Bulk summary revisions are independent of approval IDs. An acknowledged pause de
 edit-only notification, bound to its original bot/channel/message identity. `/summary` acknowledges the edited revision
 without resetting delivery/prompt decisions or their tombstones. Unknown sends and missing messages remain blocked;
 never create a replacement DM merely to clear a refresh failure.
+
+Selected repair routes live in `registerChapterRepairRoutes.mjs`: library read GET projects the latest ten repair tasks;
+library root POST injects the authenticated actor and drops all caller fields except IDs/request key. Forward through
+Sage to Raven only. Downloadall diagnostics are bounded projections from durable run results; preserve summary revision
+and delivery identities when editing an existing prompt.

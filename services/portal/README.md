@@ -1,5 +1,9 @@
 # Portal
 
+Downloadall pause summaries include bounded chapter-specific failure reasons where available. Progress and failure
+updates edit the existing pause message, keeping its approval decision intact. A missing source chapter remains an
+unresolved failure until genuine source content can be verified.
+
 Noona keeps an existing downloadall pause message current as accepted downloads complete or fail. Refreshes
 retain the same approval window and do not send another message. Summaries list verified unavailable sources
 separately from completed downloads. Continue the existing run to recover unresolved work while retaining files.

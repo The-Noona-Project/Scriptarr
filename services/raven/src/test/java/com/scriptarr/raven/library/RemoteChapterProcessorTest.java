@@ -27,6 +27,21 @@ import static org.mockito.Mockito.*;
 
 /** Actual HTTP protocol checks across coordinator ownership, waiting, fencing and completion replay. */
 class RemoteChapterProcessorTest {
+    /** Repair input remains bound to the active worker lease and coordinator journal, never a worker path. */
+    @Test void repairInputRequiresJournalAndCatalogOwnership(@TempDir Path root) throws Exception {
+        try (Fixture f = new Fixture(root)) {
+            String task = "task_repair_" + "c".repeat(64); Path journal = ChapterRepairPublication.journal(root, task, "chapter");
+            Files.createDirectories(journal.getParent()); Path candidate = journal.getParent().resolve("candidate.cbz"); Files.copy(f.archive, candidate);
+            f.json.writeValue(journal.toFile(), Map.of("version", 1, "taskId", task, "titleId", "title", "chapterId", "chapter", "sourceUrl", "",
+                "originalChapter", f.chapter, "candidatePath", candidate.toString(), "candidateSha256", WebpChapterEncoder.sha256(candidate), "candidateSize", Files.size(candidate)));
+            ((ObjectNode) f.job.path("spec")).set("owner", f.json.valueToTree(Map.of("repairTaskId", task)));
+            assertEquals(candidate, f.processor.input(f.id, "worker", 1));
+            assertThrows(Exception.class, () -> f.processor.input(f.id, "other-worker", 1));
+            assertThrows(Exception.class, () -> f.processor.input(f.id, "worker", 2));
+            Files.writeString(candidate, "changed"); assertThrows(Exception.class, () -> f.processor.input(f.id, "worker", 1));
+        }
+    }
+
     /** Upgrades reattach pending and accepted legacy executions through normal create rather than allocating another job. */
     @Test void legacyExecutionsReattachWithoutAnotherConversion(@TempDir Path root) throws Exception {
         for (String status : List.of("queued", "running", "result-ready", "publishing", "completed")) {
@@ -249,7 +264,7 @@ class RemoteChapterProcessorTest {
             ((ObjectNode) job.path("spec").path("input")).setAll((ObjectNode) json.valueToTree(OrderedPageIdentity.create(List.of("001.png"))));
             catalog.putLibraryTitle("title", json.convertValue(title, Map.class)); catalog.putLibraryChapters("title", Map.of("chapters", json.convertValue(title.chapters(), List.class)));
             server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0); server.createContext("/api/internal/raven-ingest", this::handle); server.start();
-            processor = new RemoteChapterProcessor(catalog, root, new IngestBrokerClient(Map.of("SCRIPTARR_SAGE_BASE_URL", "http://127.0.0.1:" + server.getAddress().getPort()), java.time.Duration.ofMillis(25)), true);
+            processor = new RemoteChapterProcessor(catalog, root, new IngestBrokerClient(Map.of("SCRIPTARR_SAGE_BASE_URL", "http://127.0.0.1:" + server.getAddress().getPort()), java.time.Duration.ofMillis(250)), true);
         }
 
         /** @param status existing pre-version2 execution state @throws Exception when accepted fixture files cannot be written */
