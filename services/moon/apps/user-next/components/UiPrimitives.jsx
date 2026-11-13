@@ -6,7 +6,7 @@
  */
 
 import {useCallback, useEffect, useRef, useState} from "react";
-import Link from "next/link";
+import Link from "./AppLink.jsx";
 
 const normalizeGap = (value) => {
   if (value == null || value === false) {

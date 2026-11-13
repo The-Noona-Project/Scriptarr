@@ -360,3 +360,7 @@ add polling or browser-direct internal calls. Repair is library root, progress i
 Unacknowledged chapter-repair receipts live in bounded, actor/title-scoped session storage so drawer remounts and
 reloads reuse the same mutation identity. Validate restored scope and IDs, store before POST, and clear only after
 acknowledgement. This stores mutation identity only, not admin response payloads or credentials.
+
+Use the user app’s AppLink at shared card/button surfaces that can target `/reader` or `/admin`. Cross-app destinations use native anchors; same-user-app routes retain Next Link navigation. Validate the actual click from the catalogue to a readable chapter, not only a direct reader URL.
+
+Missing Content art must use coverThumbUrl before raw provider artwork so the authenticated proxy can fall back to the first logical page. Keep repair receipt text wrapped and display chapterNumber instead of provider UI decorations embedded in raw labels.

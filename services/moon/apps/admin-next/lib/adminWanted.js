@@ -66,7 +66,7 @@ export const chapterCoveragePercent = (title = {}) => {
   if (total <= 0) {
     return downloaded > 0 ? 100 : 0;
   }
-  return Math.max(0, Math.min(100, Math.round((downloaded / total) * 100)));
+  return Math.max(0, Math.min(100, Math.floor((downloaded / total) * 100)));
 };
 
 /**

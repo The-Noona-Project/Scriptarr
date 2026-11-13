@@ -2,7 +2,7 @@
  * @file Dense title row for Moon's user library list.
  */
 
-import Link from "next/link";
+import Link from "./AppLink.jsx";
 import {formatCoverage} from "../lib/date.js";
 import {buildReaderPathForTitleTarget, buildTitlePathForTitle} from "../lib/titleRoutes.js";
 import {resolveReaderTargetLabel} from "../lib/titleLabels.js";

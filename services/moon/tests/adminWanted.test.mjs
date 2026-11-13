@@ -29,6 +29,8 @@ test("wanted missing chapter helpers calculate coverage and filters", () => {
 
   assert.equal(missingChapterCount(titles[0]), 6);
   assert.equal(chapterCoveragePercent(titles[0]), 40);
+  assert.equal(chapterCoveragePercent({chapterCount: 221, chaptersDownloaded: 220}), 99);
+  assert.equal(chapterCoveragePercent({chapterCount: 221, chaptersDownloaded: 221}), 100);
   assert.deepEqual(filterMissingChapterRows(titles, {query: "gap"}).map((entry) => entry.id), ["a"]);
 });
 

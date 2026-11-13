@@ -42,17 +42,17 @@ export const ChapterRepairPanel = ({title, canRead, canRepair, actorId}) => {
       setMessage({tone: "bad", text: "Repair acknowledgement was interrupted. Retry uses the same request identity."});
     } finally { setBusy(false); }
   };
-  return <section className="admin-subsection">
+  return <section className="admin-subsection admin-chapter-repair">
     <div className="admin-kicker">Repair</div>
     <h3>Selected chapters</h3>
     <p className="admin-muted">Retry up to 50 damaged chapters from their saved source. Existing readable pages stay published until a complete repair is verified.</p>
     {message ? <AdminActionBanner tone={message.tone}>{message.text}</AdminActionBanner> : null}
     {error ? <AdminActionBanner tone="bad">{error}</AdminActionBanner> : null}
-    <div className="admin-log-list compact">
-      {chapters.map(chapter => <label className="admin-log-row" key={chapter.id}>
+    <div className="admin-chapter-repair-list">
+      {chapters.map(chapter => <label className="admin-chapter-repair-choice" key={chapter.id}>
         <input type="checkbox" checked={selected.includes(chapter.id)} disabled={!canRepair || busy || (!selected.includes(chapter.id) && selected.length >= 50)}
           onChange={event => setSelected(current => event.target.checked ? [...current, chapter.id] : current.filter(id => id !== chapter.id))} />
-        <strong>{chapter.label || `Chapter ${chapter.chapterNumber}`}</strong>
+        <strong>{chapter.chapterNumber ? `Chapter ${chapter.chapterNumber}` : chapter.label || "Chapter ?"}</strong>
         <span>{chapter.qualityStatus || "missing content"} · {chapter.missingPageCount || 0} known missing pages</span>
       </label>)}
     </div>
@@ -61,7 +61,7 @@ export const ChapterRepairPanel = ({title, canRead, canRepair, actorId}) => {
       {busy ? "Queueing repair..." : `Repair ${selected.length} selected chapter${selected.length === 1 ? "" : "s"}`}
     </button>
     <a className="admin-button ghost" href="/admin/activity/queue">Open queue and retry controls</a>
-    {(data?.tasks || []).map(task => <article className="admin-log-row" key={task.taskId}>
+    {(data?.tasks || []).map(task => <article className="admin-chapter-repair-record" key={task.taskId}>
       <AdminStatusBadge tone={task.status === "completed" ? "good" : task.status === "failed" ? "bad" : "warning"}>{task.status}</AdminStatusBadge>
       <strong>Chapters {(task.chapterNumbers || []).join(", ")}</strong>
       <span>{task.percent || 0}% · {task.message}</span>
