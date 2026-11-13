@@ -112,6 +112,11 @@ public final class LibraryIngestService {
         this.pageExecutor = Executors.newFixedThreadPool(this.encoderSlots, new PageWorkerThreadFactory());
     }
 
+    /** @return whether selected repairs can convert into isolated, immutable WebP output */
+    public boolean supportsChapterRepair() {
+        return remote != null && remote.required();
+    }
+
     /**
      * Convert a single canonical CBZ chapter into AVIF pages and atomically
      * publish them under the ingested storage root.
@@ -329,12 +334,15 @@ public final class LibraryIngestService {
     private String publicationTimestamp(RemoteChapterProcessor.Result result, LibraryChapter chapter, Path archive, String revision, Path manifest, int count) throws IOException {
         var original = result.completedChapter();
         if (original == null) return Instant.now().toString();
+        String repairTask = String.valueOf(IngestExecutionContext.current().getOrDefault("repairTaskId", ""));
+        Path completedArchive = repairTask.isBlank() ? archive.toAbsolutePath().normalize()
+            : ChapterRepairPublication.publishedArchive(resolveDataRoot(), repairTask, chapter.id(), archive);
         int segments = 0; for (var page : result.bundle().path("pages")) segments += page.path("segments").size();
         if (!chapter.id().equals(original.path("id").asText()) || !"ready".equals(original.path("ingestStatus").asText())
             || !revision.equals(original.path("ingestRevision").asText()) || !original.path("available").asBoolean()
             || original.path("pageCount").asInt() != count || original.path("sourcePageCount").asInt() != count || original.path("ingestedPageCount").asInt() != count
             || original.path("expectedSegmentCount").asInt() != segments || original.path("ingestedSegmentCount").asInt() != segments || !original.path("segmentsReady").asBoolean()
-            || !archive.toAbsolutePath().normalize().equals(Path.of(original.path("archivePath").asText()).toAbsolutePath().normalize())
+            || !completedArchive.equals(Path.of(original.path("archivePath").asText()).toAbsolutePath().normalize())
             || !manifest.toAbsolutePath().normalize().equals(Path.of(original.path("ingestManifestPath").asText()).toAbsolutePath().normalize())) throw new IOException("Original completion does not match the immutable reader revision.");
         String saved = original.path("ingestedAt").asText();
         try { Instant.parse(saved); }

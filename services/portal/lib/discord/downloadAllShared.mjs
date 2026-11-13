@@ -258,7 +258,9 @@ export const formatBulkRunSummary = (result = {}) => {
     "Needs attention",
     `- Unresolved title plans: ${unresolvedPlans}`,
     `- Failed title tasks: ${failedTitles}`,
-    `- Stale title tasks: ${staleTitles}`
+    `- Stale title tasks: ${staleTitles}`,
+    ...(Array.isArray(result?.summary?.completionProblems) ? result.summary.completionProblems : Array.isArray(result?.completionProblems) ? result.completionProblems : [])
+      .slice(0, 3).map(problem => `- ${String(problem.titleName || "Title").slice(0, 60)}: ${String(problem.message || "Chapter repair required.").slice(0, 180)}`.replace(/[@*_~`<>]/g, ""))
   ];
   if (currentBatch) {
     lines.push(
@@ -273,7 +275,8 @@ export const formatBulkRunSummary = (result = {}) => {
       `Next: react ✅ to continue the next ${batchesPerApproval} batch(es), react ❌ to cancel, or use /downloadall continue runid:${runId || "<id>"}.`
     );
   }
-  return lines.join("\n");
+  const content = lines.join("\n");
+  return content.length <= 2000 ? content : `${content.slice(0, 1900)}\n… Open the admin queue for full chapter diagnostics.`;
 };
 
 const resolveBulkQueueFailure = (result) => {

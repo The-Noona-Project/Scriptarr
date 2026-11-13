@@ -129,3 +129,7 @@ Record the revision actually sent in the initial delivery receipt; an acknowledg
 
 `fetchDirectMessage` must cache its fetched channel: Discord.js resolves a fetched message's channel from the client
 cache when editing it. A cold DM fetch with `cache: false` cannot safely support restart-time summary edits.
+
+Chapter-specific downloadall problems are bounded, mention-stripped display data. Keep the original pause message,
+notification ID and approval ID while summary revisions update its content; diagnostic changes cannot register another
+prompt, reset a handled decision or send another notification.

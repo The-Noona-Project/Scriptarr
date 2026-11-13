@@ -24,6 +24,37 @@ final class DownloadCompletionVerifier {
         return expected.stream().allMatch(row -> title.chapters().stream().anyMatch(chapter -> matches(chapter, row) && healthy(chapter)));
     }
 
+    /**
+     * Describe incomplete planned chapters without exposing local paths in owner notifications.
+     * @param title current catalog owner
+     * @param expected frozen source chapters
+     * @param verifyFiles whether to verify archives and manifests, rather than only catalog gaps
+     * @return bounded durable chapter diagnostics
+     */
+    List<Map<String, Object>> problems(LibraryTitle title, List<Map<String, String>> expected, boolean verifyFiles) {
+        List<Map<String, Object>> result = new java.util.ArrayList<>();
+        if (title == null) return List.of(Map.of("code", "catalog_unavailable", "message", "The title catalog is unavailable."));
+        for (Map<String, String> row : expected) {
+            LibraryChapter chapter = title.chapters().stream().filter(c -> matches(c, row)).findFirst().orElse(null);
+            String code = chapter == null ? "chapter_missing" : !chapter.available() ? "source_unavailable"
+                : verifyFiles && !archiveHealthy(chapter) ? "archive_unhealthy"
+                : verifyFiles && (library == null || !library.isReaderReadyChapter(chapter)) ? "reader_not_ready" : "";
+            if (code.isBlank()) continue;
+            String number = number(row.get("chapter_number"));
+            String reason = switch (code) {
+                case "chapter_missing" -> "planned chapter is absent from the catalog";
+                case "source_unavailable" -> "source chapter has no usable archive";
+                case "archive_unhealthy" -> "canonical archive is missing or damaged";
+                default -> "reader output is not ready";
+            };
+            result.add(Map.of("code", code, "titleId", title.id(), "chapterId", chapter == null ? "" : chapter.id(),
+                "chapterNumber", number, "missingPageCount", chapter == null ? 0 : chapter.missingPageCount(),
+                "message", "Chapter " + number + ": " + reason + "."));
+            if (result.size() == 50) break;
+        }
+        return List.copyOf(result);
+    }
+
     /** Verify the planned canonical archives separately from reader-page readiness. */
     boolean archivesComplete(LibraryTitle title, List<Map<String, String>> expected) {
         return title != null && expected != null && !expected.isEmpty() && title.chapters() != null

@@ -341,3 +341,42 @@ Legacy list consumers retain their derived-list fallback for a missing preflight
 Archive integrity checks also reject empty or zero-filled image headers. Apply the same bounded check to source
 responses and reusable staged pages, so a CRC-valid zero-filled page cannot repeatedly fail conversion. This is a
 damage guard rather than a full image decoder. Repair only affected chapters and retain corrupt-archive evidence.
+
+
+## Selected chapter repair and gap retention
+
+`ChapterRepairSelection` freezes exact IDs, source URLs, chapter numbers and known page counts. Intake is restore-gated,
+owner-scoped and keyed by `requestId`; conflicting scope returns 409. Trusted `details.chapterRepair` is created only
+by the internal repair endpoint, never copied from a normal intake's `selectedDownload`. Persist before dispatch.
+`ChapterRepairRunner` uses the existing title-download queue and enabled saved source. Cancellation fences browsing,
+download and pre-publication. Strict candidate quality excludes placeholders; unresolved chapters remain explicit.
+
+`ChapterRepairPublication` journals private candidate SHA/size, original chapter/hash and verified original CBZ backup.
+It prepares remote WebP through the existing conversion lease with `owner.repairTaskId`. Workers resolve the candidate
+only through the coordinator journal and exact task/title/chapter/hash/size binding. They never supply input paths.
+After full manifest validation, the durable `publishing` intent installs a new immutable canonical name and commits the
+fenced conversion/chapter receipt. Lost responses reconcile the exact catalog identity. The summary-only title inventory checkpoint must also acknowledge the current chapter-derived counts and quality; it never replaces sibling rows. Only acknowledged publication
+retires the old canonical name; originals and old reader revisions remain retained. Startup scan recovers pending
+publication before enumerating archives. Unfinished conversion can reuse the same staged candidate and conversion job.
+
+`ScanChapterReconciler` retains absent durable chapters as unavailable, clearing positive reader claims while preserving
+source/quality evidence and stable IDs. `PlannedChapterGaps` restores only explicit absent chapter identities from the
+current failed accepted plan bound to the unchanged canonical series URL. Paused lifecycle reconciliation is restore-
+gated, checks current plan ownership, persists bounded diagnostics, and does not enqueue or spend attempts. Status GETs
+remain observational. No missing chapter can be waived to complete a bulk run.
+
+A repair cannot reuse a pending conversion whose saved `owner.repairTaskId` differs. Failed/cancelled jobs may first
+adopt the new explicit retry through the existing epoch/generation fence. An incompatible pending owner remains
+untouched and produces a durable `repair_owner_conflict` diagnostic. Completed-intent recovery is a title-scoped
+maintenance writer, including when it runs from a task retry.
+
+Paused gap diagnostics re-read the durable task under the same synchronization boundary as retry acceptance before
+merging fields. A newer receipt, queued/running executor, or changed frozen request is observed without overwrite.
+A source conflict skips only that title's gap restoration, retaining observations of the remaining owned tasks.
+Selected repair image 404s refresh the page list with the existing bounded chapter-attempt policy; retain prior
+partial candidates and their quality evidence across refreshed lists.
+
+Before any conversion, selected repair requires `LibraryIngestService.supportsChapterRepair()` (remote immutable WebP).
+Reject local AVIF mode with durable `repair_requires_webp_worker` diagnostics before calling local ingest, whose legacy
+publication can replace a chapter directory. Existing verified `publishing`/`completed` WebP intents may still recover
+without running a converter. Never rely on checking the returned output format after destructive local conversion.

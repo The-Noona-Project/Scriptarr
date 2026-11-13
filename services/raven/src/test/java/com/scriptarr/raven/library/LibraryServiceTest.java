@@ -35,6 +35,26 @@ import static org.mockito.Mockito.when;
  * Unit tests for Raven's durable library projection behavior.
  */
 class LibraryServiceTest {
+    /** An unavailable source chapter survives repeated real catalog rescans and keeps its durable identity. */
+    @Test void rescanPreservesUnavailablePlannedChapter(@TempDir Path root) throws Exception {
+        FakeRavenBrokerClient broker = new FakeRavenBrokerClient(); ScriptarrLogger logger = mock(ScriptarrLogger.class);
+        when(logger.getDownloadsRoot()).thenReturn(root);
+        LibraryService service = new LibraryService(broker, new RavenSettingsService(broker, logger, List.of()), logger);
+        Path folder = root.resolve("downloaded/manhua/Title");
+        Path archive = writeArchive(folder.resolve("Title c196 [Scriptarr].cbz"), Map.of("001.png", pngPage(40)));
+        String source = "https://weebcentral.com/series/ABC/Title";
+        LibraryTitle saved = service.recordDownloadedTitle("Title", "Manhua", source, "", null,
+            List.of(new LibraryChapter("", "Chapter 196", "196", 1, "", true, archive.toString(), "https://weebcentral.com/chapters/C196", null)), null, folder);
+        service.restorePlannedChapterGaps(saved.id(), source, List.of(Map.of("chapter_number", "197", "href", "https://weebcentral.com/chapters/C197")));
+        assertEquals(2, service.findTitle(saved.id()).chapterCount()); assertEquals(1, service.findTitle(saved.id()).chaptersDownloaded());
+        LibraryChapter gap = service.findTitle(saved.id()).chapters().stream().filter(c -> "197".equals(c.chapterNumber())).findFirst().orElseThrow();
+        service.rescanDownloadedFiles(); service.rescanDownloadedFiles();
+        LibraryTitle scanned = service.findTitle(saved.id());
+        assertEquals(2, scanned.chapterCount()); assertEquals(1, scanned.chaptersDownloaded());
+        assertEquals(gap, scanned.chapters().stream().filter(c -> "197".equals(c.chapterNumber())).findFirst().orElseThrow());
+        assertTrue(Files.exists(archive));
+    }
+
     /** Numeric title tokens must never collapse distinct canonical chapter paths during startup scanning. */
     @Test
     void rescanKeepsExplicitChapterSuffixesForNumericSeriesNames(@TempDir Path root) throws Exception {

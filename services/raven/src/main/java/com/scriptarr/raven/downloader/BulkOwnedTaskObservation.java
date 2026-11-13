@@ -47,6 +47,17 @@ final class BulkOwnedTaskObservation {
                 default -> failed.add(id);
             }
         }
+        List<Map<String, Object>> problems = new ArrayList<>();
+        for (String id : failed) {
+            Map<String, Object> task = snapshots.get(id);
+            if (task == null) continue;
+            Object raw = task.getOrDefault("completionProblems", map(task.get("details")).get("completionProblems"));
+            if (raw instanceof List<?> rows) for (Object value : rows) {
+                Map<String, Object> problem = map(value); problem.put("taskId", id); problem.put("titleName", text(task.get("titleName")));
+                if (problems.size() < 50) problems.add(problem);
+            }
+        }
+        result.put("completionProblems", List.copyOf(problems));
         result.put("taskIds", List.copyOf(ids)); result.put("queuedTaskIds", List.copyOf(ids));
         result.put("completedTaskIds", List.copyOf(completed)); result.put("failedTaskIds", List.copyOf(failed));
         result.put("missingTaskIds", List.copyOf(missing)); result.put("removedTaskIds", List.of()); result.put("staleTaskIds", List.copyOf(stalled));

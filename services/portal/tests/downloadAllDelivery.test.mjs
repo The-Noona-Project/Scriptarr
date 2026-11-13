@@ -194,3 +194,26 @@ test("legacy DM creation uses the original message identifier", async () => {
   assert.equal(bodies[0].requestId, "discord:message:original-message");
   assert.equal(bodies[0].nsfw, false);
 });
+
+
+test("chapter-specific pause problems remain bounded and cannot create Discord mentions", () => {
+  const notification = {status: "paused", failedTitleTaskCount: 1, problems: Array.from({length: 50}, () => ({
+    titleName: "@everyone" + "T".repeat(200), chapterNumber: "197", message: "Chapter 197: " + "source unavailable ".repeat(50)
+  }))};
+  const payload = buildDownloadAllDirectMessagePayload(notification);
+  const attention = payload.embeds[0].fields.find(field => field.name === "Needs attention");
+  assert.ok(attention.value.includes("Chapter 197")); assert.ok(attention.value.length <= 1024);
+  assert.ok(!attention.value.includes("@everyone"));
+  for (const field of payload.embeds[0].fields) assert.ok(field.value.length <= 1024);
+});
+
+test("slash status renders chapter problems from the durable run summary", () => {
+  const output = formatBulkRunSummary({status: "paused", summary: {completionProblems: [{titleName: "Warrior", chapterNumber: "197", message: "Chapter 197: source chapter has no usable archive."}]}});
+  assert.match(output, /Warrior: Chapter 197: source chapter has no usable archive/);
+});
+
+
+test("slash status cannot exceed Discord's content limit with long messages and chapter diagnostics", () => {
+  const output = formatBulkRunSummary({status: "paused", runId: "bulkrun_" + "a".repeat(64), message: "source details ".repeat(1000), summary: {completionProblems: Array.from({length: 50}, () => ({titleName: "T".repeat(100), message: "missing ".repeat(100)}))}});
+  assert.ok(output.length <= 2000); assert.match(output, /bulkrun_/); assert.match(output, /admin queue/);
+});

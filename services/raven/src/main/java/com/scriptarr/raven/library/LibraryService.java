@@ -72,6 +72,7 @@ public final class LibraryService {
     private final Map<String, PageValidationResult> readerPageValidations = new ConcurrentHashMap<>();
     private final Map<String, String> ingestTaskStartedAt = new ConcurrentHashMap<>();
     private final LibraryTitleLocks titleOperationLocks = new LibraryTitleLocks();
+    private final ChapterRepairPublication chapterRepairs;
     private final MigrationVerificationCursor migrationVerification = new MigrationVerificationCursor();
     private final Object importOperationLock = new Object();
 
@@ -93,6 +94,8 @@ public final class LibraryService {
         this.settingsService = settingsService;
         this.logger = logger;
         this.ingestService = ingestService;
+        this.chapterRepairs = new ChapterRepairPublication(logger.getDownloadsRoot() == null ? Path.of("/downloads") : logger.getDownloadsRoot(),
+            ingestService, titleOperationLocks, this::loadTitleById, this::checkpointIngestChapter, this::refreshChapterInventory);
         if (logger.getDownloadsRoot() != null) try { ContentMaintenance.restore(logger.getDownloadsRoot().toAbsolutePath().normalize()); }
         catch (IOException invalidFence) { throw new IllegalStateException("Durable content maintenance could not be restored before writers start.", invalidFence); }
     }
@@ -289,6 +292,68 @@ public final class LibraryService {
      */
     public LibraryTitle findTitleById(String id) {
         return loadTitleById(id);
+    }
+
+    /** @param taskId durable repair @param titleId canonical title @param chapterId selected chapter @param candidate complete isolated CBZ @param sourceUrl frozen source URL @param chapterNumber frozen catalog number @param cancelled cancellation predicate @param progress conversion progress @return committed repaired chapter @throws Exception when publication cannot be verified */
+    public LibraryChapter publishChapterRepair(String taskId, String titleId, String chapterId, Path candidate, String sourceUrl, String chapterNumber,
+        BooleanSupplier cancelled, Consumer<IngestProgress> progress) throws Exception {
+        return chapterRepairs.publish(taskId, titleId, chapterId, candidate, sourceUrl, chapterNumber, cancelled, progress);
+    }
+
+    /** @param taskId approved task @param titleId canonical title @param chapterId selected chapter @return whether its prior publication committed @throws Exception when a pending publication cannot recover */
+    public boolean chapterRepairCompleted(String taskId, String titleId, String chapterId) throws Exception {
+        return chapterRepairs.completed(taskId, titleId, chapterId);
+    }
+
+    /**
+     * Retain verified page-gap evidence for an unavailable chapter without changing a readable version.
+     * @param titleId canonical owner @param chapterId exact unavailable chapter @param sourceUrl frozen chapter URL
+     * @param pages verified source-list length @param missing unavailable positions @param notes source failure facts
+     */
+    public void recordChapterRepairGap(String titleId, String chapterId, String sourceUrl, int pages, List<Integer> missing, List<String> notes) {
+        try (var lease = titleOperationLocks.acquire(titleId)) {
+            LibraryTitle title = loadTitleById(titleId);
+            if (title == null) throw new IllegalStateException("Repair title is unavailable.");
+            LibraryChapter old = title.chapters().stream().filter(c -> c.id().equals(chapterId)).findFirst().orElseThrow();
+            if (!java.util.Objects.equals(old.sourceUrl(), sourceUrl)) throw new IllegalStateException("Repair chapter source changed.");
+            if (old.available()) return;
+            checkpointIngestChapter(titleId, new LibraryChapter(old.id(), old.label(), old.chapterNumber(), 0, old.releaseDate(), false,
+                "", old.sourceUrl(), "missing_content", pages, missing.size(), missing, notes, "missing", "", 0, null, "", "", old.updatedAt()));
+        }
+    }
+
+    /**
+     * Restore explicit accepted source gaps without enqueueing work or changing sibling checkpoints.
+     * @param titleId current canonical owner
+     * @param source frozen source identity
+     * @param expected accepted source chapter list
+     * @return freshly persisted title, or null when its canonical owner no longer exists
+     */
+    public LibraryTitle restorePlannedChapterGaps(String titleId, String source, List<Map<String, String>> expected) {
+        try (var maintenance = ContentMaintenance.enter("title:" + titleId); var lease = titleOperationLocks.acquire(titleId)) {
+            LibraryTitle title = loadTitleById(titleId);
+            if (title == null) return null;
+            for (LibraryChapter missing : PlannedChapterGaps.absent(title, source, expected, number -> chapterId(title.id(), number))) {
+                checkpointIngestChapter(title.id(), missing);
+            }
+            refreshChapterInventory(titleId);
+            return loadTitleById(titleId);
+        }
+    }
+
+    /** Refresh only summary fields after a source gap or repaired chapter is durably acknowledged. */
+    private synchronized void refreshChapterInventory(String titleId) {
+        LibraryTitle title = loadTitleById(titleId);
+        if (title == null) throw new IllegalStateException("Repair title inventory is unavailable.");
+        Map<String, Object> fields = LibraryInventorySummary.fields(title.chapters());
+        var snapshot = objectMapper.valueToTree(title);
+        if (fields.entrySet().stream().allMatch(e -> objectMapper.valueToTree(e.getValue()).equals(snapshot.path(e.getKey())))) return;
+        Map<String, Object> payload = objectMapper.convertValue(title, new TypeReference<>() { }); payload.putAll(fields);
+        LibraryTitle saved = upsertTitle(objectMapper.convertValue(payload, LibraryTitle.class));
+        var acknowledged = objectMapper.valueToTree(saved);
+        if (saved == null || !titleId.equals(saved.id()) || fields.entrySet().stream().anyMatch(e -> !objectMapper.valueToTree(e.getValue()).equals(acknowledged.path(e.getKey())))) {
+            throw new IllegalStateException("Repair title inventory was not acknowledged.");
+        }
     }
 
     private LibraryTitle loadTitleById(String id) {
@@ -1675,11 +1740,6 @@ public final class LibraryService {
     /** Scan one title only while its actual path writer lease remains held. */
     private void scanTitleFolderUnfenced(Path folder, String rawType, Path workingRoot, ScanCatalogContext scanContext) {
         try {
-            List<Path> archives = listArchiveFiles(folder);
-            if (archives.isEmpty()) {
-                return;
-            }
-
             String titleName = LibraryNaming.titleFromFolder(folder.getFileName().toString());
             String typeLabel = LibraryNaming.normalizeTypeLabel(rawType);
             String typeSlug = LibraryNaming.normalizeTypeSlug(typeLabel);
@@ -1689,6 +1749,9 @@ public final class LibraryService {
             String titleId = existingId == null || existingId.isBlank() ? UUID.randomUUID().toString() : existingId;
 
             try (var lease = titleOperationLocks.acquire(titleId)) {
+                chapterRepairs.recover(titleId);
+                List<Path> archives = listArchiveFiles(folder);
+                if (archives.isEmpty() && (existingId == null || existingId.isBlank())) return;
                 // A startup ingest may have committed newer chapter state while this scan waited.
                 LibraryTitle existing = existingId == null || existingId.isBlank() ? null : loadScanTitle(titleId);
                 if (existing != null) scanContext.ownership().assertReloadMatches(folder, titleId, existing.downloadRoot());
@@ -1739,7 +1802,7 @@ public final class LibraryService {
                     existing != null ? existing.summary() : "",
                     existing != null ? existing.releaseLabel() : "",
                     chapters.size(),
-                    chapters.size(),
+                    (int) chapters.stream().filter(LibraryChapter::available).count(),
                     existing != null ? existing.author() : "",
                     existing != null ? existing.tags() : List.of(),
                     existing != null ? existing.aliases() : List.of(),
@@ -1770,15 +1833,7 @@ public final class LibraryService {
     }
 
     private List<LibraryChapter> preserveReadyScannedChapters(LibraryTitle existing, List<LibraryChapter> scanned) {
-        if (existing == null || existing.chapters() == null) return scanned;
-        Map<String, LibraryChapter> previous = new LinkedHashMap<>();
-        for (LibraryChapter chapter : existing.chapters()) previous.put(normalizeStoredChapterNumber(chapter.chapterNumber()), chapter);
-        return scanned.stream().map(chapter -> {
-            LibraryChapter saved = previous.get(normalizeStoredChapterNumber(chapter.chapterNumber()));
-            return saved != null && sameArchivePath(saved.archivePath(), Path.of(chapter.archivePath()))
-                && saved.ingestedPageCount() == chapter.pageCount() && ingestService.canReuseReadyChapter(saved)
-                ? ArchiveDownloadEvidence.withQualityFrom(reconcileReadyPageCount(saved), chapter) : chapter;
-        }).toList();
+        return ScanChapterReconciler.merge(existing, scanned, ingestService::canReuseReadyChapter, this::reconcileReadyPageCount);
     }
 
     private LibraryChapter reconcileReadyPageCount(LibraryChapter chapter) {

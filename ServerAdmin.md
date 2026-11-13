@@ -621,6 +621,28 @@ the explicit approve or resolve action. Each admin action carries the request re
 clear refresh-and-review conflict instead of overwriting another admin or background update.
 `/admin/wanted/metadata` replaces the old Metadata Gaps page and lets staff search provider matches and apply one to an
 existing library title through Sage and Raven. `/admin/wanted/metadata-gaps` redirects to the new canonical route.
+Library root administrators can select up to 50 source-bound damaged chapters in Missing Content and queue a
+chapter repair. The accepted selection is frozen; request retries reuse the same task. Follow Activity → Queue for
+progress, cancellation, and explicit retry. Only unresolved selected chapters run again. A changed source identity
+requires review rather than an automatic source substitution.
+
+Selected chapter repair requires the configured WebP worker. Local AVIF mode refuses repair before conversion;
+existing AVIF and WebP reader revisions remain untouched. Previously verified WebP publication intents can still
+finish safe recovery.
+
+A repair publishes each chapter only after all genuine source pages, a verified CBZ, complete WebP output, and a
+catalog acknowledgement succeed. Until then its existing reader version and healthy sibling chapters remain
+unchanged. Unavailable pages keep the repair failed and the bulk run paused; continuing a run cannot waive them.
+Rescans retain explicit unavailable chapter rows. The lifecycle reconciler restores gaps accidentally removed by an
+older rescan only from current accepted source-bound bulk plans, without starting another attempt.
+
+Repair candidates, original archive backups, and publication journals are retained privately beneath
+`/downloads/.chapter-repairs/<taskId>/<chapterId>/`. Do not delete these during recovery. New canonical archives use
+immutable repair names; the old canonical name is retired only after catalog acknowledgement and verified backup.
+Interrupted publication resumes the same fenced intent. A matching conversion still owned by another task remains
+unchanged; review that job before retrying the selected repair. Old immutable reader revisions remain available as evidence.
+Noona's existing pause message displays chapter-specific failures without creating a new approval window.
+
 `/admin/wanted/missing-content` shows coverage gaps, bad chapters, possible missing pages, and bad-source quality
 summaries. It uses the existing library repair candidates to queue a safe staged replacement download when a better
 source is selected. `/admin/wanted/missing-chapters` redirects to this canonical page.

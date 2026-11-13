@@ -266,7 +266,7 @@ public class DownloaderService {
                     }
                     copyIfPresent(detailsNode, task, "startedAt");
                     copyNumberIfPresent(detailsNode, task, "downloadSpeedBytesPerSecond");
-                    for (String key : List.of("bulkRunId", "bulkBatchId", "bulkPlanId", "bulkRetryAttempt", "actualProgressAt", "stage", "ingestCompletedPages", "ingestTotalPages", "ingestCompletedChapters", "ingestTotalChapters", "ingestCompletedSegments", "ingestTotalSegments")) {
+                    for (String key : List.of("bulkRunId", "bulkBatchId", "bulkPlanId", "bulkRetryAttempt", "completionProblems", "chapterRepair", "actualProgressAt", "stage", "ingestCompletedPages", "ingestTotalPages", "ingestCompletedChapters", "ingestTotalChapters", "ingestCompletedSegments", "ingestTotalSegments")) {
                         if (detailsNode.has(key)) task.put(key, brokerClientValue(detailsNode.path(key)));
                     }
                     if (restoredSortOrder < 0) {
@@ -590,6 +590,74 @@ public class DownloaderService {
         }
     }
 
+    /**
+     * Restore catalog-only gaps from current failed owned plans without retrying any execution.
+     * @param runId non-cancelled parent run selected by the restore-gated lifecycle
+     * @param owned complete durable owned task history
+     * @return updated diagnostic observations
+     */
+    List<Map<String, Object>> reconcileBulkChapterGaps(String runId, List<Map<String, Object>> owned) {
+        List<Map<String, Object>> observed = new ArrayList<>();
+        Map<String, JsonNode> plans = new LinkedHashMap<>();
+        try {
+            JsonNode records = brokerClient.listJobTasks(runId, "");
+            if (records == null || !records.isArray()) throw new IllegalStateException("Durable chapter plans are unavailable.");
+            records.forEach(row -> plans.put(row.path("taskId").asText(), row));
+        } catch (Exception failure) { throw new IllegalStateException("Durable chapter plans are unavailable.", failure); }
+        for (Map<String, Object> original : owned) {
+            Map<String, Object> task = new LinkedHashMap<>(original);
+            normalizeMap(original.get("details")).forEach(task::putIfAbsent);
+            JsonNode plan = plans.get(normalizeString(task.get("bulkPlanId")));
+            boolean currentPlan = plan != null && "bulk-title-plan".equals(plan.path("payload").path("kind").asText())
+                && runId.equals(plan.path("payload").path("runId").asText()) && !"cancelled".equals(plan.path("status").asText())
+                && normalizeString(task.get("taskId")).equals(plan.path("result").path("downloadTaskId").asText());
+            if (!currentPlan || bulkQueueCoordinator.isRunCancelled(runId)
+                || !"failed".equals(normalizeString(task.get("status"))) || !runId.equals(normalizeString(task.get("bulkRunId")))
+                || normalizeString(task.get("titleId")).isBlank() || expectedChapters(task).isEmpty()
+                || runningTaskThreads.containsKey(normalizeString(task.get("taskId")))) { observed.add(original); continue; }
+            try {
+                LibraryTitle title = libraryService.restorePlannedChapterGaps(normalizeString(task.get("titleId")),
+                    normalizeString(task.get("titleUrl")), expectedChapters(task));
+                observed.add(checkpointBulkChapterProblems(task, completionVerifier.problems(title, expectedChapters(task), false)));
+            } catch (IllegalStateException unavailable) {
+                logger.warn("DOWNLOAD", "Chapter gap reconciliation remains unresolved; other owned outcomes will still be observed.",
+                    "runId=" + runId + " taskId=" + normalizeString(task.get("taskId")));
+                observed.add(original);
+            }
+        }
+        return List.copyOf(observed);
+    }
+
+    /** Re-read and merge diagnostics under the same boundary as accepted retries; never replace a newer execution. */
+    private synchronized Map<String, Object> checkpointBulkChapterProblems(Map<String, Object> observed, List<Map<String, Object>> problems) {
+        String id = normalizeString(observed.get("taskId"));
+        Map<String, Object> current = loadDurableBulkRetryTask(id);
+        normalizeMap(current.get("details")).forEach(current::putIfAbsent);
+        if (!"failed".equals(normalizeString(current.get("status"))) || bulkQueueCoordinator.isRunCancelled(normalizeString(current.get("bulkRunId")))
+            || normalizeString(current.get("message")).toLowerCase(Locale.ROOT).startsWith("cancelled")
+            || runningTaskThreads.containsKey(id) || queuedTasks.containsKey(id) || bulkTaskDispatches.containsKey(id)) return current;
+        for (String key : List.of("taskId", "bulkRunId", "bulkBatchId", "bulkPlanId", "bulkRetryAttempt", "titleId", "titleUrl", "queuedAt", "startedAt", "selectedDownload", "selectedMetadata")) {
+            if (!BulkOwnedTaskObservation.sameValue(observed.get(key), current.get(key))) return current;
+        }
+        if (problems.isEmpty() || BulkOwnedTaskObservation.sameValue(problems, current.get("completionProblems"))) return current;
+        current.put("completionProblems", problems); persistTaskSnapshot(id, current);
+        Map<String, Object> local = tasks.get(id);
+        if (local != null && "failed".equals(normalizeString(local.get("status")))
+            && BulkOwnedTaskObservation.sameValue(local.get("bulkRetryAttempt"), current.get("bulkRetryAttempt"))
+            && BulkOwnedTaskObservation.sameValue(local.get("startedAt"), current.get("startedAt"))) local.put("completionProblems", problems);
+        current.put("details", buildTaskDetails(current)); return current;
+    }
+
+    private void requireComplete(String taskId, LibraryTitle title) {
+        Map<String, Object> task = tasks.get(taskId);
+        List<Map<String, String>> expected = expectedChapters(task);
+        if (completionVerifier.complete(title, expected)) return;
+        List<Map<String, Object>> problems = completionVerifier.problems(title, expected, true);
+        task.put("completionProblems", problems);
+        String message = problems.isEmpty() ? "Planned chapter completion could not be verified." : normalizeString(problems.getFirst().get("message"));
+        throw new IllegalStateException(message);
+    }
+
     private void finishCanonicalIngest(String taskId, DownloadRequest request, LibraryTitle recovered) {
         throwIfCancelled(taskId);
         LibraryTitle title = persistSelectedMetadata(recovered, request);
@@ -603,7 +671,7 @@ public class DownloaderService {
         update(taskId, "running", "Resuming reader-page ingest from verified canonical CBZ archives.", 98);
         title = libraryService.ingestTitle(title.id(), request.requestedBy(), () -> isCancellationRequested(taskId), progress -> rememberIngestProgress(taskId, progress));
         throwIfCancelled(taskId);
-        if (!completionVerifier.complete(title, expectedChapters(task))) throw new IllegalStateException("Canonical recovery could not verify all planned reader-ready chapters.");
+        requireComplete(taskId, title);
         update(taskId, "completed", "Recovered Raven download from unchanged canonical archives.", 100);
     }
 
@@ -629,12 +697,59 @@ public class DownloaderService {
 
 
     /**
+     * Accept a root-authorized selected-chapter repair with durable owner-scoped idempotency.
+     * @param titleId canonical title @param body selected IDs, stable key and authenticated actor
+     * @return original durable task for retries, or the newly accepted task
+     */
+    public synchronized Map<String, Object> queueChapterRepair(String titleId, Map<String, Object> body) {
+        if (!persistedTaskRestoreCompletion.isDone() || persistedTaskRestoreCompletion.isCompletedExceptionally()) throw new IllegalStateException("Download restoration has not completed; retry shortly.");
+        List<String> ids = ChapterRepairSelection.ids(body);
+        String requestKey = ChapterRepairSelection.requestId(body.get("requestId"));
+        String owner = normalizeString(body.get("requestedBy"));
+        if (owner.isBlank()) throw new IllegalArgumentException("An authenticated repair owner is required.");
+        String taskId = ChapterRepairSelection.taskId(owner, requestKey), fingerprint = ChapterRepairSelection.fingerprint(titleId, owner, ids);
+        try {
+            JsonNode rows = brokerClient.listDownloadTasks();
+            if (rows == null || !rows.isArray()) throw new IllegalStateException("Durable repair history is unavailable.");
+            for (JsonNode node : rows) if (taskId.equals(node.path("taskId").asText())) {
+                Map<String, Object> existing = new ConcurrentHashMap<>();
+                brokerClientPayloadToMap(node).forEach((key, value) -> { if (value != null) existing.put(key, value); });
+                normalizeMap(existing.get("details")).forEach(existing::putIfAbsent);
+                if (!fingerprint.equals(normalizeString(normalizeMap(existing.get("chapterRepair")).get("fingerprint")))) throw new IllegalStateException("Repair requestId conflicts with a different owner or selection.");
+                Map<String, Object> local = tasks.get(taskId);
+                if (local != null && (queuedTasks.containsKey(taskId) || runningTaskThreads.containsKey(taskId) || bulkTaskDispatches.containsKey(taskId))) {
+                    Map<String, Object> replay = new LinkedHashMap<>(local); replay.put("replayed", true); return Map.copyOf(replay);
+                }
+                persistTaskSnapshot(taskId, existing);
+                if ("queued".equals(normalizeString(existing.get("status"))) && !queuedTasks.containsKey(taskId) && !runningTaskThreads.containsKey(taskId)) {
+                    tasks.put(taskId, existing); submitQueuedTask(taskId, requestFromTask(existing));
+                }
+                existing.put("replayed", true);
+                return Map.copyOf(existing);
+            }
+        } catch (IllegalArgumentException | IllegalStateException failure) { throw failure; }
+        catch (Exception unavailable) { throw new IllegalStateException("Durable repair intake is unavailable.", unavailable); }
+        LibraryTitle title = libraryService.findTitle(titleId);
+        if (title == null || normalizeString(title.sourceUrl()).isBlank()) throw new IllegalArgumentException("A source-bound library title is required.");
+        List<Map<String, Object>> frozen = ChapterRepairSelection.freeze(title, ids);
+        Map<String, Object> selection = new LinkedHashMap<>(); selection.put("appendTitleId", title.id()); selection.put("coverUrl", normalizeString(title.coverUrl()));
+        DownloadRequest request = new DownloadRequest(title.title(), title.sourceUrl(), title.libraryTypeLabel(), owner, "", "", Map.of(), selection, "", "normal");
+        DownloadProvider provider = resolveProvider(request);
+        request = new DownloadRequest(request.titleName(), request.titleUrl(), request.requestType(), owner, provider.id(), "", Map.of(), selection, "", "normal");
+        return queueDownload(request, taskId, Map.of("titleId", title.id(), "requestId", requestKey, "fingerprint", fingerprint, "chapters", frozen));
+    }
+
+    /**
      * Queue a new download job and return the initial task snapshot.
      *
      * @param request normalized download request payload
      * @return queued task snapshot
      */
     public synchronized Map<String, Object> queueDownload(DownloadRequest request) {
+        return queueDownload(request, "task_" + UUID.randomUUID().toString().replace("-", ""), Map.of());
+    }
+
+    private Map<String, Object> queueDownload(DownloadRequest request, String taskId, Map<String, Object> repair) {
         String activeKey = activeBulkTaskKey(Map.of(
             "providerId", request.providerId() == null ? "" : request.providerId(),
             "titleUrl", request.titleUrl()
@@ -643,7 +758,6 @@ public class DownloaderService {
             throw new IllegalStateException("A Raven download for this title is already queued or running.");
         }
 
-        String taskId = "task_" + UUID.randomUUID().toString().replace("-", "");
         Map<String, Object> selectedDownload = request.selectedDownload() == null ? Map.of() : request.selectedDownload();
         Map<String, Object> task = new ConcurrentHashMap<>();
         task.put("taskId", taskId);
@@ -671,8 +785,10 @@ public class DownloaderService {
         task.put("startedAt", "");
         task.put("downloadSpeedBytesPerSecond", 0L);
         task.put("details", buildTaskDetails(task));
+        if (!repair.isEmpty()) task.put("chapterRepair", repair);
         tasks.put(taskId, task);
-        persistTask(taskId);
+        try { persistTask(taskId); }
+        catch (RuntimeException failure) { tasks.remove(taskId, task); throw failure; }
         syncLinkedRequest(task, "", "queued", "Queued for Raven download.");
 
         submitQueuedTask(taskId, request);
@@ -857,7 +973,7 @@ public class DownloaderService {
                 if (!taskId.equals(node.path("taskId").asText())) continue;
                 Map<String, Object> restored = brokerClientPayloadToMap(node);
                 Map<String, Object> details = normalizeMap(restored.get("details"));
-                for (String key : List.of("bulkRunId", "bulkBatchId", "bulkPlanId", "bulkRetryAttempt", "selectedMetadata", "selectedDownload", "priority", "actualProgressAt", "stage")) {
+                for (String key : List.of("bulkRunId", "bulkBatchId", "bulkPlanId", "bulkRetryAttempt", "chapterRepair", "completionProblems", "selectedMetadata", "selectedDownload", "priority", "actualProgressAt", "stage")) {
                     if (!restored.containsKey(key) && details.containsKey(key)) restored.put(key, details.get(key));
                 }
                 Map<String, Object> stable = new ConcurrentHashMap<>();
@@ -1059,6 +1175,16 @@ public class DownloaderService {
             throwIfCancelled(taskId);
             update(taskId, "running", "Preparing Raven download.", 5);
             verifyCanonicalSourceOwner(taskId, request);
+            if (tasks.get(taskId).containsKey("chapterRepair")) {
+                ensureVpnProtectedIfEnabled();
+                DownloadProvider repairProvider = resolveProvider(request);
+                ChapterRepairRunner.run(taskId, request, normalizeMap(tasks.get(taskId).get("chapterRepair")), libraryService,
+                    repairProvider, logger.getDownloadsRoot(), (scope, root) -> downloadRepairCandidate(repairProvider, request, scope, root),
+                    () -> isCancellationRequested(taskId), problems -> { tasks.get(taskId).put("completionProblems", problems); persistTask(taskId); },
+                    progress -> rememberIngestProgress(taskId, progress));
+                update(taskId, "completed", "Selected chapter repairs are verified and reader-ready.", 100);
+                return;
+            }
             if (recoverCompletedTask(taskId)) return;
             LibraryTitle canonicalTitle = canonicalArchiveRecovery.inspect(tasks.get(taskId), request, expectedChapters(tasks.get(taskId)),
                 logger.getDownloadsRoot(), settingsService.getNamingSettings(), () -> isCancellationRequested(taskId));
@@ -1154,10 +1280,7 @@ public class DownloaderService {
             update(taskId, "running", "Converting downloaded CBZ files into reader-ready pages.", 98);
             tasks.get(taskId).put("titleId", title.id());
             title = libraryService.ingestTitle(title.id(), request.requestedBy(), () -> isCancellationRequested(taskId), progress -> rememberIngestProgress(taskId, progress));
-            if (title == null || ((isAppendDownload(request) || !normalizeString(tasks.get(taskId).get("bulkRunId")).isBlank())
-                && !completionVerifier.complete(title, expectedChapters(tasks.get(taskId))))) {
-                throw new IllegalStateException("Download completion could not verify every expected chapter, CBZ archive and reader-ready manifest.");
-            }
+            if (title == null || isAppendDownload(request) || !normalizeString(tasks.get(taskId).get("bulkRunId")).isBlank()) requireComplete(taskId, title);
             if (title != null) {
                 Map<String, Object> task = tasks.get(taskId);
                 if (task != null) {
@@ -1230,6 +1353,45 @@ public class DownloaderService {
         if (vpnService != null) {
             vpnService.ensureConnectedIfEnabled();
         }
+    }
+
+    private ChapterDownloadResult downloadRepairCandidate(DownloadProvider provider, DownloadRequest request, Map<String, Object> scope, Path root) throws Exception {
+        ChapterDownloadResult result = null;
+        for (int attempt = 1; attempt <= CHAPTER_DOWNLOAD_RETRY_ATTEMPTS; attempt++) {
+            result = downloadRepairCandidateOnce(provider, request, scope, root);
+            if (!hasSourceImageNotFoundNote(result.qualityNotes()) || attempt == CHAPTER_DOWNLOAD_RETRY_ATTEMPTS) return result;
+            if (!sleepBeforeRetry("repair chapter page refresh", request.titleName(), result.chapterNumber(), attempt, null)) return result;
+        }
+        return result;
+    }
+
+    private ChapterDownloadResult downloadRepairCandidateOnce(DownloadProvider provider, DownloadRequest request, Map<String, Object> scope, Path root) throws Exception {
+        ensureVpnProtectedIfEnabled();
+        Map<String, String> chapter = new LinkedHashMap<>();
+        for (String field : List.of("chapter_number", "chapter_title", "href")) chapter.put(field, normalizeString(scope.get(field)));
+        List<String> images = findChapterPagesWithRetries(provider, request.titleName(), chapter.get("chapter_number"), chapter.get("chapter_title"), chapter.get("href"));
+        if (images.isEmpty()) throw new IllegalStateException("Repair page discovery did not finish.");
+        int expected = toInt(scope.get("expectedPageCount"));
+        if (expected > 0 && expected != images.size()) throw new IllegalStateException("The selected source page count changed; review is required.");
+        Path isolated = root.resolve(ArchiveDownloadEvidence.pageListId(images));
+        Files.createDirectories(isolated);
+        String archiveName = LibraryNaming.buildChapterArchiveName(settingsService.getNamingSettings(), request.titleName(), request.requestType(),
+            chapter.get("chapter_number"), "", images.size(), resolveDomain(chapter.get("href")));
+        Path previous = isolated.resolve(archiveName);
+        if (Files.isRegularFile(previous)) {
+            ArchiveDownloadEvidence.Quality quality = ArchiveDownloadEvidence.read(previous, chapter.get("href"), images.size());
+            if (quality != null) {
+                String digest = com.scriptarr.raven.library.WebpChapterEncoder.sha256(previous);
+                Path evidence = isolated.resolve("failed-candidate-" + digest + ".cbz");
+                if (!Files.exists(evidence)) Files.copy(previous, evidence);
+                Files.delete(previous);
+            }
+        }
+        // A crash may leave generated placeholder bytes before archive evidence is closed.
+        // Retain that private staging rather than treating those bytes as successful source downloads.
+        Path staged = resolveChapterStageRoot(isolated, archiveName).resolve(ArchiveDownloadEvidence.pageListId(images));
+        if (Files.exists(staged)) Files.move(staged, isolated.resolve("retained-stage-" + UUID.randomUUID()));
+        return writeChapterArchive(isolated, request, request.requestType(), chapter, settingsService.getNamingSettings(), chapter.get("chapter_number"), images);
     }
 
     private ChapterDownloadResult downloadChapterWithRetries(
@@ -1625,7 +1787,7 @@ public class DownloaderService {
         }
         Map<String, Object> previousSnapshot = task;
         String nextStatus = normalizeString(status).toLowerCase(Locale.ROOT);
-        boolean checkedCompletion = "completed".equals(nextStatus) && !normalizeString(task.get("bulkRunId")).isBlank();
+        boolean checkedCompletion = "completed".equals(nextStatus) && (!normalizeString(task.get("bulkRunId")).isBlank() || task.containsKey("chapterRepair"));
         if (checkedCompletion) task = new ConcurrentHashMap<>(task);
         String currentStatus = normalizeString(task.get("status")).toLowerCase(Locale.ROOT);
         if (cancellationRequestedTaskIds.contains(taskId) && "failed".equals(currentStatus) && !"failed".equals(nextStatus)) {
@@ -1686,9 +1848,9 @@ public class DownloaderService {
             brokerClient.putJobTask(jobId, jobTaskId(jobId), buildJobTaskPayload(jobId, task));
             if (!normalizeString(task.get("bulkRunId")).isBlank()) brokerClient.putDownloadTask(taskId, task);
         } catch (Exception error) {
-            if (!normalizeString(task.get("bulkRunId")).isBlank()) {
-                task.put("persistenceError", "Could not persist the bulk-owned download state.");
-                throw new IllegalStateException("Could not persist a bulk-owned download task.", error);
+            if (!normalizeString(task.get("bulkRunId")).isBlank() || task.containsKey("chapterRepair")) {
+                task.put("persistenceError", "Could not persist the owned download state.");
+                throw new IllegalStateException("Could not persist an owned download task.", error);
             }
             logger.warn("DOWNLOAD", "Failed to persist a Raven task snapshot.", error.getMessage());
         }
@@ -1740,7 +1902,7 @@ public class DownloaderService {
         details.put("sortOrder", taskSortOrder(task));
         details.put("startedAt", String.valueOf(task.getOrDefault("startedAt", "")));
         details.put("downloadSpeedBytesPerSecond", toLong(task.get("downloadSpeedBytesPerSecond")));
-        for (String key : List.of("bulkRunId", "bulkBatchId", "bulkPlanId", "bulkRetryAttempt", "actualProgressAt", "stage", "ingestCompletedPages", "ingestTotalPages", "ingestCompletedChapters", "ingestTotalChapters", "ingestCompletedSegments", "ingestTotalSegments")) {
+        for (String key : List.of("bulkRunId", "bulkBatchId", "bulkPlanId", "bulkRetryAttempt", "completionProblems", "chapterRepair", "actualProgressAt", "stage", "ingestCompletedPages", "ingestTotalPages", "ingestCompletedChapters", "ingestTotalChapters", "ingestCompletedSegments", "ingestTotalSegments")) {
             if (task.containsKey(key)) details.put(key, task.get(key));
         }
         return details;
@@ -1870,7 +2032,8 @@ public class DownloaderService {
     private void pruneTerminalTaskHistory() {
         List<Map.Entry<String, Map<String, Object>>> terminalTasks = tasks.entrySet().stream()
             .filter((entry) -> isTerminalStatus(normalizeString(entry.getValue().get("status")).toLowerCase(Locale.ROOT))
-                && !BulkTaskTerminalRecovery.pendingFailure(entry.getValue()))
+                && !BulkTaskTerminalRecovery.pendingFailure(entry.getValue())
+                && !(entry.getValue().containsKey("chapterRepair") && entry.getValue().containsKey("persistenceError")))
             .sorted((left, right) -> {
                 int timestampComparison = taskTimestamp(right.getValue()).compareTo(taskTimestamp(left.getValue()));
                 if (timestampComparison != 0) {
@@ -1883,7 +2046,7 @@ public class DownloaderService {
             String taskId = terminalTasks.get(index).getKey();
             Map<String, Object> task = tasks.get(taskId);
             if (task != null && isTerminalStatus(normalizeString(task.get("status")).toLowerCase(Locale.ROOT))
-                && !BulkTaskTerminalRecovery.pendingFailure(task)) {
+                && !BulkTaskTerminalRecovery.pendingFailure(task) && !(task.containsKey("chapterRepair") && task.containsKey("persistenceError"))) {
                 tasks.remove(taskId, task);
             }
         }
@@ -2257,7 +2420,7 @@ public class DownloaderService {
 
     private boolean recoverCompletedTask(String taskId) {
         Map<String, Object> task = tasks.get(taskId);
-        if (task == null || !normalizeString(task.get("replacementTitleId")).isBlank()) {
+        if (task == null || task.containsKey("chapterRepair") || !normalizeString(task.get("replacementTitleId")).isBlank()) {
             return false;
         }
         Optional<LibraryTitle> recovered = findRecoveredTitle(task);
@@ -2388,7 +2551,7 @@ public class DownloaderService {
             request,
             () -> process(taskId, request)
         );
-        boolean owned = !normalizeString(task.get("bulkRunId")).isBlank();
+        boolean owned = !normalizeString(task.get("bulkRunId")).isBlank() || task.containsKey("chapterRepair");
         String dispatchIdentity = normalizeString(normalizeMap(task.get("bulkRetryAttempt")).get("attemptId"), "initial");
         // Reserve before publishing the queue entry, including restored and initial owned downloads.
         if (owned && bulkTaskDispatches.putIfAbsent(taskId, dispatchIdentity) != null) return;
@@ -2468,8 +2631,8 @@ public class DownloaderService {
                     if (!taskId.equals(node.path("taskId").asText())) continue;
                     Map<String, Object> restored = brokerClientPayloadToMap(node);
                     Map<String, Object> details = normalizeMap(restored.get("details"));
-                    if (normalizeString(details.get("bulkRunId")).isBlank()) break;
-                    for (String key : List.of("bulkRunId", "bulkBatchId", "bulkPlanId", "bulkRetryAttempt", "selectedMetadata", "selectedDownload", "priority", "actualProgressAt", "stage")) {
+                    if (normalizeString(details.get("bulkRunId")).isBlank() && !details.containsKey("chapterRepair")) break;
+                    for (String key : List.of("bulkRunId", "bulkBatchId", "bulkPlanId", "bulkRetryAttempt", "chapterRepair", "completionProblems", "selectedMetadata", "selectedDownload", "priority", "actualProgressAt", "stage")) {
                         if (!restored.containsKey(key) && details.containsKey(key)) restored.put(key, details.get(key));
                     }
                     Map<String, Object> stable = new ConcurrentHashMap<>();
@@ -2950,7 +3113,8 @@ public class DownloaderService {
         }
     }
 
-    private record ChapterDownloadResult(
+    /** Source download outcome including any retained missing-page evidence. */
+    record ChapterDownloadResult(
         String chapterNumber,
         Map<String, String> chapter,
         Path archivePath,

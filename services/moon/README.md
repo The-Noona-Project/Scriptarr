@@ -1,5 +1,9 @@
 # Moon
 
+Admin Missing Content supports selected chapter repair for library root administrators. Select up to 50 damaged
+chapters from their saved source, then follow the existing queue for progress or retry. Healthy sibling chapters
+remain unchanged, and an incomplete repair keeps the current readable version available.
+
 Moon serves Scriptarr's native user app at `/`, dedicated reader app at `/reader`, and admin app at `/admin`.
 The user and reader surfaces are installable through the same-origin PWA shell with a rolling recent-chapter cache for
 reader pages.

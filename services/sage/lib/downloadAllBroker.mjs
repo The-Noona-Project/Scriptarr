@@ -68,6 +68,9 @@ const notificationFromJob = (job, tasks, publicBaseUrl) => {
     id, type: "downloadall", decisionType: status, discordUserId: text(job.requestedBy),
     titleName: "Scriptarr downloadall", status, runId: job.jobId, jobId: job.jobId,
     batchId, approvalId, batchesPerApproval, filters, counts, pauseReason,
+    problems: array(result.completionProblems).slice(0, 10).map(problem => ({titleName: text(problem.titleName),
+      chapterNumber: text(problem.chapterNumber), code: text(problem.code), message: text(problem.message).slice(0, 240),
+      missingPageCount: Number(problem.missingPageCount) || 0})),
     summaryRevision: Number(runPayload.summaryRevision) || 0, summaryUpdatedAt: text(runPayload.summaryUpdatedAt),
     linkUrl: publicBaseUrl ? `${publicBaseUrl.replace(/\/+$/, "")}/admin/activity/queue` : "",
     message: status === "paused"
