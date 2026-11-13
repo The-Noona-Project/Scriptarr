@@ -275,7 +275,8 @@ export const formatBulkRunSummary = (result = {}) => {
       `Next: react ✅ to continue the next ${batchesPerApproval} batch(es), react ❌ to cancel, or use /downloadall continue runid:${runId || "<id>"}.`
     );
   }
-  return lines.join("\n");
+  const content = lines.join("\n");
+  return content.length <= 2000 ? content : `${content.slice(0, 1900)}\n… Open the admin queue for full chapter diagnostics.`;
 };
 
 const resolveBulkQueueFailure = (result) => {

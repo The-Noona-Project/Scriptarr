@@ -356,3 +356,7 @@ Reader edition and grouped-tag details load on demand from the authenticated tit
 `ChapterRepairPanel` is a leaf of Missing Content. Its stable request receipt survives interrupted acknowledgements
 for the same title and sorted selection. Use the existing shared admin event stream for observational progress; do not
 add polling or browser-direct internal calls. Repair is library root, progress is library read.
+
+Unacknowledged chapter-repair receipts live in bounded, actor/title-scoped session storage so drawer remounts and
+reloads reuse the same mutation identity. Validate restored scope and IDs, store before POST, and clear only after
+acknowledgement. This stores mutation identity only, not admin response payloads or credentials.

@@ -52,6 +52,18 @@ class ChapterRepairPublicationTest {
         assertEquals(f.old, f.current.get()); assertTrue(Files.exists(f.original)); assertTrue(Files.exists(f.oldReader));
     }
 
+    /** A title maintenance fence also blocks completed-intent recovery and its canonical writes. */
+    @Test void completedRecoveryRespectsTitleMaintenance(@TempDir Path root) throws Exception {
+        Fixture f = new Fixture(root);
+        assertThrows(IllegalStateException.class, () -> f.publisher(true, false).publish(TASK, "title", "chapter", f.candidate, f.old.sourceUrl(), "1", () -> false, p -> {}));
+        ContentMaintenance.block(root, "qa_repair_fence", List.of("title:title"));
+        try {
+            assertThrows(IllegalStateException.class, () -> f.publisher(false, false).completed(TASK, "title", "chapter"));
+            assertEquals(f.old, f.current.get()); assertTrue(Files.exists(f.original));
+        } finally { ContentMaintenance.release(root, "qa_repair_fence"); }
+        assertTrue(f.publisher(false, false).completed(TASK, "title", "chapter"));
+    }
+
     /** A changed frozen source or number fails before conversion, even when a candidate is complete. */
     @Test void changedFrozenSelectionCannotPublish(@TempDir Path root) throws Exception {
         Fixture f = new Fixture(root);

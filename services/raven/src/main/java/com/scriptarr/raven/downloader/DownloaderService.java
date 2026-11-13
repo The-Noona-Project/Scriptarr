@@ -615,21 +615,37 @@ public class DownloaderService {
                 || !"failed".equals(normalizeString(task.get("status"))) || !runId.equals(normalizeString(task.get("bulkRunId")))
                 || normalizeString(task.get("titleId")).isBlank() || expectedChapters(task).isEmpty()
                 || runningTaskThreads.containsKey(normalizeString(task.get("taskId")))) { observed.add(original); continue; }
-            LibraryTitle title = libraryService.restorePlannedChapterGaps(normalizeString(task.get("titleId")),
-                normalizeString(task.get("titleUrl")), expectedChapters(task));
-            List<Map<String, Object>> problems = completionVerifier.problems(title, expectedChapters(task), false);
-            if (!problems.isEmpty() && !BulkOwnedTaskObservation.sameValue(problems, task.get("completionProblems"))) {
-                task.put("completionProblems", problems);
-                String id = normalizeString(task.get("taskId"));
-                persistTaskSnapshot(id, task);
-                Map<String, Object> local = tasks.get(id);
-                if (local != null && "failed".equals(normalizeString(local.get("status")))
-                    && BulkOwnedTaskObservation.sameValue(local.get("bulkRetryAttempt"), task.get("bulkRetryAttempt"))) local.put("completionProblems", problems);
-                task.put("details", buildTaskDetails(task));
-                observed.add(task);
-            } else observed.add(original);
+            try {
+                LibraryTitle title = libraryService.restorePlannedChapterGaps(normalizeString(task.get("titleId")),
+                    normalizeString(task.get("titleUrl")), expectedChapters(task));
+                observed.add(checkpointBulkChapterProblems(task, completionVerifier.problems(title, expectedChapters(task), false)));
+            } catch (IllegalStateException unavailable) {
+                logger.warn("DOWNLOAD", "Chapter gap reconciliation remains unresolved; other owned outcomes will still be observed.",
+                    "runId=" + runId + " taskId=" + normalizeString(task.get("taskId")));
+                observed.add(original);
+            }
         }
         return List.copyOf(observed);
+    }
+
+    /** Re-read and merge diagnostics under the same boundary as accepted retries; never replace a newer execution. */
+    private synchronized Map<String, Object> checkpointBulkChapterProblems(Map<String, Object> observed, List<Map<String, Object>> problems) {
+        String id = normalizeString(observed.get("taskId"));
+        Map<String, Object> current = loadDurableBulkRetryTask(id);
+        normalizeMap(current.get("details")).forEach(current::putIfAbsent);
+        if (!"failed".equals(normalizeString(current.get("status"))) || bulkQueueCoordinator.isRunCancelled(normalizeString(current.get("bulkRunId")))
+            || normalizeString(current.get("message")).toLowerCase(Locale.ROOT).startsWith("cancelled")
+            || runningTaskThreads.containsKey(id) || queuedTasks.containsKey(id) || bulkTaskDispatches.containsKey(id)) return current;
+        for (String key : List.of("taskId", "bulkRunId", "bulkBatchId", "bulkPlanId", "bulkRetryAttempt", "titleId", "titleUrl", "queuedAt", "startedAt", "selectedDownload", "selectedMetadata")) {
+            if (!BulkOwnedTaskObservation.sameValue(observed.get(key), current.get(key))) return current;
+        }
+        if (problems.isEmpty() || BulkOwnedTaskObservation.sameValue(problems, current.get("completionProblems"))) return current;
+        current.put("completionProblems", problems); persistTaskSnapshot(id, current);
+        Map<String, Object> local = tasks.get(id);
+        if (local != null && "failed".equals(normalizeString(local.get("status")))
+            && BulkOwnedTaskObservation.sameValue(local.get("bulkRetryAttempt"), current.get("bulkRetryAttempt"))
+            && BulkOwnedTaskObservation.sameValue(local.get("startedAt"), current.get("startedAt"))) local.put("completionProblems", problems);
+        current.put("details", buildTaskDetails(current)); return current;
     }
 
     private void requireComplete(String taskId, LibraryTitle title) {
@@ -1340,6 +1356,16 @@ public class DownloaderService {
     }
 
     private ChapterDownloadResult downloadRepairCandidate(DownloadProvider provider, DownloadRequest request, Map<String, Object> scope, Path root) throws Exception {
+        ChapterDownloadResult result = null;
+        for (int attempt = 1; attempt <= CHAPTER_DOWNLOAD_RETRY_ATTEMPTS; attempt++) {
+            result = downloadRepairCandidateOnce(provider, request, scope, root);
+            if (!hasSourceImageNotFoundNote(result.qualityNotes()) || attempt == CHAPTER_DOWNLOAD_RETRY_ATTEMPTS) return result;
+            if (!sleepBeforeRetry("repair chapter page refresh", request.titleName(), result.chapterNumber(), attempt, null)) return result;
+        }
+        return result;
+    }
+
+    private ChapterDownloadResult downloadRepairCandidateOnce(DownloadProvider provider, DownloadRequest request, Map<String, Object> scope, Path root) throws Exception {
         ensureVpnProtectedIfEnabled();
         Map<String, String> chapter = new LinkedHashMap<>();
         for (String field : List.of("chapter_number", "chapter_title", "href")) chapter.put(field, normalizeString(scope.get(field)));

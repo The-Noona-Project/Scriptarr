@@ -3,17 +3,17 @@
 /** @file Selected chapter repair controls on the existing Missing Content surface. */
 import {useRef, useState} from "react";
 import {requestJson, useAdminEventStaleness, useAdminJson} from "../lib/api.js";
-import {repairRequest, selectableRepairChapters} from "../lib/chapterRepair.js";
+import {readPendingRepair, repairRequest, savePendingRepair, selectableRepairChapters} from "../lib/chapterRepair.js";
 import {AdminActionBanner, AdminStatusBadge} from "./AdminUi.jsx";
 
 const emptyTasks = Object.freeze({tasks: []});
 
 /**
  * Queue a frozen selection while keeping the current reader version until publication succeeds.
- * @param {{title: any, canRead: boolean, canRepair: boolean}} props
+ * @param {{title: any, canRead: boolean, canRepair: boolean, actorId: string}} props
  * @returns {import("react").ReactNode}
  */
-export const ChapterRepairPanel = ({title, canRead, canRepair}) => {
+export const ChapterRepairPanel = ({title, canRead, canRepair, actorId}) => {
   const [selected, setSelected] = useState([]);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState(null);
@@ -25,13 +25,19 @@ export const ChapterRepairPanel = ({title, canRead, canRepair}) => {
   const chapters = selectableRepairChapters(title.damagedChapters);
   const queue = async () => {
     setBusy(true);
+    let storage = null;
+    try { storage = window.sessionStorage; } catch { /* Storage may be disabled. */ }
     try {
-      receipt.current = repairRequest(receipt.current, title.id, selected);
+      receipt.current = repairRequest(receipt.current || readPendingRepair(storage, actorId, title.id), title.id, selected);
+      savePendingRepair(storage, actorId, title.id, receipt.current);
       const result = await requestJson(path, {method: "POST", json: receipt.current.body});
       setMessage({tone: result.ok ? "good" : "bad", text: result.ok
         ? `Selected chapter repair accepted. Task ${result.payload.taskId}.`
         : result.payload?.error || "Repair could not be queued. Retry keeps the same request identity."});
-      if (result.ok) await refresh();
+      if (result.ok) {
+        savePendingRepair(storage, actorId, title.id, null);
+        await refresh();
+      }
     } catch {
       setMessage({tone: "bad", text: "Repair acknowledgement was interrupted. Retry uses the same request identity."});
     } finally { setBusy(false); }

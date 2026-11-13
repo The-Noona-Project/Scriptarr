@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {repairRequest, selectableRepairChapters} from "../apps/admin-next/lib/chapterRepair.js";
+import {readPendingRepair, repairRequest, savePendingRepair, selectableRepairChapters} from "../apps/admin-next/lib/chapterRepair.js";
 
 test("an interrupted repair keeps its key for reordered identical selection", () => {
   const first = repairRequest(null, "title", ["b", "a"], () => "first");
@@ -16,4 +16,21 @@ test("selected repair choices exclude healthy and unbound chapters", () => {
   const partial = {...healthy, id: "b", missingPageCount: 1};
   const gap = {...healthy, id: "c", available: false};
   assert.deepEqual(selectableRepairChapters([healthy, partial, gap, {...partial, sourceUrl: ""}]), [partial, gap]);
+});
+
+
+test("an unresolved receipt survives remounts and reloads for the same admin and selection", () => {
+  const rows = new Map(), storage = {getItem: key => rows.get(key), setItem: (key, value) => rows.set(key, value), removeItem: key => rows.delete(key)};
+  const original = repairRequest(null, "title", ["b", "a"], () => "first");
+  savePendingRepair(storage, "owner", "title", original);
+  const restored = readPendingRepair(storage, "owner", "title");
+  assert.deepEqual(repairRequest(restored, "title", ["a", "b"], () => {throw Error("new identity");}), original);
+  assert.equal(readPendingRepair(storage, "other-owner", "title"), null);
+  assert.equal(readPendingRepair(storage, "owner", "other-title"), null);
+  savePendingRepair(storage, "owner", "title", null);
+  assert.equal(readPendingRepair(storage, "owner", "title"), null);
+  savePendingRepair(storage, "owner", "title", {...original, scope: "tampered"});
+  assert.equal(readPendingRepair(storage, "owner", "title"), null);
+  assert.equal(readPendingRepair(null, "owner", "title"), null);
+  assert.doesNotThrow(() => savePendingRepair(null, "owner", "title", original));
 });

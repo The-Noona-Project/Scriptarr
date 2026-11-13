@@ -635,7 +635,8 @@ older rescan only from current accepted source-bound bulk plans, without startin
 Repair candidates, original archive backups, and publication journals are retained privately beneath
 `/downloads/.chapter-repairs/<taskId>/<chapterId>/`. Do not delete these during recovery. New canonical archives use
 immutable repair names; the old canonical name is retired only after catalog acknowledgement and verified backup.
-Interrupted publication resumes the same fenced intent. Old immutable reader revisions remain available as evidence.
+Interrupted publication resumes the same fenced intent. A matching conversion still owned by another task remains
+unchanged; review that job before retrying the selected repair. Old immutable reader revisions remain available as evidence.
 Noona's existing pause message displays chapter-specific failures without creating a new approval window.
 
 `/admin/wanted/missing-content` shows coverage gaps, bad chapters, possible missing pages, and bad-source quality

@@ -128,7 +128,7 @@ final class ChapterRepairPublication {
 
     /** @param taskId durable repair @param titleId canonical title @param chapterId exact chapter @return whether its prior approved publication has committed @throws Exception when recovery cannot be verified */
     boolean completed(String taskId, String titleId, String chapterId) throws Exception {
-        try (var lease = locks.acquire(titleId)) {
+        try (var maintenance = ContentMaintenance.enter("title:" + titleId); var lease = locks.acquire(titleId)) {
             Path file = journal(downloads, taskId, chapterId);
             if (!Files.isRegularFile(file)) return false;
             JsonNode saved = read(file);

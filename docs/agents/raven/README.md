@@ -364,3 +364,14 @@ source/quality evidence and stable IDs. `PlannedChapterGaps` restores only expli
 current failed accepted plan bound to the unchanged canonical series URL. Paused lifecycle reconciliation is restore-
 gated, checks current plan ownership, persists bounded diagnostics, and does not enqueue or spend attempts. Status GETs
 remain observational. No missing chapter can be waived to complete a bulk run.
+
+A repair cannot reuse a pending conversion whose saved `owner.repairTaskId` differs. Failed/cancelled jobs may first
+adopt the new explicit retry through the existing epoch/generation fence. An incompatible pending owner remains
+untouched and produces a durable `repair_owner_conflict` diagnostic. Completed-intent recovery is a title-scoped
+maintenance writer, including when it runs from a task retry.
+
+Paused gap diagnostics re-read the durable task under the same synchronization boundary as retry acceptance before
+merging fields. A newer receipt, queued/running executor, or changed frozen request is observed without overwrite.
+A source conflict skips only that title's gap restoration, retaining observations of the remaining owned tasks.
+Selected repair image 404s refresh the page list with the existing bounded chapter-attempt policy; retain prior
+partial candidates and their quality evidence across refreshed lists.

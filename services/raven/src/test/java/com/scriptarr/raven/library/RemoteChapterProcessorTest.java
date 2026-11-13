@@ -27,6 +27,20 @@ import static org.mockito.Mockito.*;
 
 /** Actual HTTP protocol checks across coordinator ownership, waiting, fencing and completion replay. */
 class RemoteChapterProcessorTest {
+    /** Same-content deduplication cannot route a new repair through an ordinary or another repair's input journal. */
+    @Test void repairRejectsForeignPendingConversionOwner(@TempDir Path root) throws Exception {
+        for (String owner : List.of("", "task_repair_" + "b".repeat(64))) {
+            try (Fixture f = new Fixture(root.resolve(owner.isBlank() ? "ordinary" : "other-repair"));
+                 var attribution = IngestExecutionContext.enter("interactive", Map.of("repairTaskId", "task_repair_" + "a".repeat(64)))) {
+                ((ObjectNode) f.job.path("spec")).set("owner", f.json.valueToTree(owner.isBlank() ? Map.of("kind", "interactive") : Map.of("repairTaskId", owner)));
+                String generation = f.job.path("spec").path("coordinatorGeneration").asText();
+                var error = assertThrows(java.io.IOException.class, () -> f.processor.convert(f.title, f.chapter, f.archive, RavenNamingSettings.defaults(), () -> false, p -> {}));
+                assertTrue(error.getMessage().contains("repair_owner_conflict")); assertEquals(generation, f.job.path("spec").path("coordinatorGeneration").asText());
+                assertEquals(0, f.submits.get()); assertEquals(0, f.completes.get()); assertNull(f.cancelled.get());
+            }
+        }
+    }
+
     /** Repair input remains bound to the active worker lease and coordinator journal, never a worker path. */
     @Test void repairInputRequiresJournalAndCatalogOwnership(@TempDir Path root) throws Exception {
         try (Fixture f = new Fixture(root)) {

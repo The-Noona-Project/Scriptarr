@@ -211,3 +211,9 @@ test("slash status renders chapter problems from the durable run summary", () =>
   const output = formatBulkRunSummary({status: "paused", summary: {completionProblems: [{titleName: "Warrior", chapterNumber: "197", message: "Chapter 197: source chapter has no usable archive."}]}});
   assert.match(output, /Warrior: Chapter 197: source chapter has no usable archive/);
 });
+
+
+test("slash status cannot exceed Discord's content limit with long messages and chapter diagnostics", () => {
+  const output = formatBulkRunSummary({status: "paused", runId: "bulkrun_" + "a".repeat(64), message: "source details ".repeat(1000), summary: {completionProblems: Array.from({length: 50}, () => ({titleName: "T".repeat(100), message: "missing ".repeat(100)}))}});
+  assert.ok(output.length <= 2000); assert.match(output, /bulkrun_/); assert.match(output, /admin queue/);
+});

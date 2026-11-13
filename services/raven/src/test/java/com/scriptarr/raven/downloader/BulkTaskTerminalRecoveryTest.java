@@ -31,6 +31,41 @@ class BulkTaskTerminalRecoveryTest {
     private static final String STARTED = "2026-11-08T04:00:01.123456789Z";
     private static final String FAILED = "2026-11-08T04:01:03.123456789Z";
 
+    /** A retry accepted during gap restoration cannot be overwritten by the old failed observation. */
+    @Test void gapDiagnosticsCannotOverwriteNewApprovedRetry(@TempDir Path root) throws Exception {
+        try (Fixture f = new Fixture(root, new Broker())) {
+            Map<String, Object> old = task("task", "failed"); old.remove("persistenceError"); old.put("titleId", "title");
+            f.seed(old, copy(old));
+            f.broker.putJobTask("run", "plan", Map.of("taskId", "plan", "status", "queued", "payload", Map.of("kind", "bulk-title-plan", "runId", "run"), "result", Map.of("downloadTaskId", "task")));
+            when(f.library.restorePlannedChapterGaps(anyString(), anyString(), anyList())).thenAnswer(i -> {
+                f.service.retryBulkTask("task", "run", "batch", "approved-new", 2, 2, 1);
+                var title = mock(com.scriptarr.raven.library.LibraryTitle.class); when(title.id()).thenReturn("title"); when(title.chapters()).thenReturn(List.of()); return title;
+            });
+            f.service.reconcileBulkChapterGaps("run", List.of(copy(old)));
+            Map<String, Object> saved = f.broker.row("task");
+            assertEquals("approved-new", ((Map<?, ?>) details(saved).get("bulkRetryAttempt")).get("attemptId"));
+            assertFalse(details(saved).containsKey("completionProblems"));
+        }
+    }
+
+    /** One changed source cannot stop diagnostics for another accepted title. */
+    @Test void oneSourceConflictDoesNotBlockOtherGapObservations(@TempDir Path root) throws Exception {
+        try (Fixture f = new Fixture(root, new Broker())) {
+            List<Map<String, Object>> owned = new ArrayList<>();
+            for (String id : List.of("conflict", "other")) {
+                Map<String, Object> row = task(id, "failed"); row.remove("persistenceError"); row.put("titleId", id); details(row).put("bulkPlanId", "plan-" + id);
+                f.seed(row, copy(row)); owned.add(copy(row));
+                f.broker.putJobTask("run", "plan-" + id, Map.of("taskId", "plan-" + id, "status", "queued", "payload", Map.of("kind", "bulk-title-plan", "runId", "run"), "result", Map.of("downloadTaskId", id)));
+            }
+            when(f.library.restorePlannedChapterGaps(eq("conflict"), anyString(), anyList())).thenThrow(new IllegalStateException("Source changed"));
+            var title = mock(com.scriptarr.raven.library.LibraryTitle.class); when(title.id()).thenReturn("other"); when(title.chapters()).thenReturn(List.of());
+            when(f.library.restorePlannedChapterGaps(eq("other"), anyString(), anyList())).thenReturn(title);
+            assertEquals(2, f.service.reconcileBulkChapterGaps("run", owned).size());
+            assertTrue(details(f.broker.row("other")).containsKey("completionProblems"));
+            assertFalse(details(f.broker.row("conflict")).containsKey("completionProblems"));
+        }
+    }
+
     /** Reproduce the first running write and terminal write failing while the durable task remains queued. */
     @Test
     void actualWorkerFailureFromQueuedShadowHealsOnceWithoutDispatch(@TempDir Path root) throws Exception {
@@ -256,12 +291,13 @@ class BulkTaskTerminalRecoveryTest {
     private static final class Fixture implements AutoCloseable {
         private final Broker broker;
         private final DownloaderService service;
+        private final LibraryService library = mock(LibraryService.class);
         /** Construct a real downloader with isolated broker and filesystem dependencies. */
         private Fixture(Path root, Broker broker) {
             this.broker = broker;
             ScriptarrLogger logger = mock(ScriptarrLogger.class); when(logger.getDownloadsRoot()).thenReturn(root);
             RavenSettingsService settings = new RavenSettingsService(broker, logger, List.of());
-            service = new DownloaderService(new DownloadProviderRegistry(List.of(), settings), null, mock(LibraryService.class),
+            service = new DownloaderService(new DownloadProviderRegistry(List.of(), settings), null, library,
                 mock(DownloadIntakeService.class), mock(MetadataService.class), broker, settings, logger);
         }
         /** Inspect the exact local checkpoint boundary under test. */

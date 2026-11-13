@@ -94,6 +94,10 @@ public final class RemoteChapterProcessor {
             job = unwrap(client.json("POST", "/jobs/" + id + "/retry", Map.of("expectedEpoch", epoch, "requestId", "approved_ingest_" + id + "_" + epoch,
                 "priority", owner.get("kind"), "owner", owner), null));
         }
+        String repairTask = String.valueOf(owner.getOrDefault("repairTaskId", ""));
+        if (!repairTask.isBlank() && !repairTask.equals(job.path("spec").path("owner").path("repairTaskId").asText())) {
+            throw new IOException("repair_owner_conflict: The matching conversion belongs to another approved task.");
+        }
         String generation = job.path("spec").path("coordinatorGeneration").asText();
         if (generation.isBlank()) throw new IOException("Conversion execution identity was not acknowledged.");
         int lastPages = -1, lastSegments = -1;

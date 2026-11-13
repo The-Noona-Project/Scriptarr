@@ -75,8 +75,11 @@ final class ChapterRepairRunner {
                 }
             } catch (InterruptedException | CancellationException stop) { throw stop; }
             catch (Exception failure) {
-                failures.add(problem(titleId, chapterId, number, "repair_unresolved", 0,
-                    failure.getMessage() != null && failure.getMessage().contains("changed") ? "source or publication identity changed; review required" : "repair could not be verified; the prior chapter is preserved"));
+                String reason = failure.getMessage() == null ? "" : failure.getMessage();
+                boolean ownerConflict = reason.contains("repair_owner_conflict");
+                failures.add(problem(titleId, chapterId, number, ownerConflict ? "repair_owner_conflict" : "repair_unresolved", 0,
+                    ownerConflict ? "conversion belongs to another task; review its durable job before retrying"
+                        : reason.contains("changed") ? "source or publication identity changed; review required" : "repair could not be verified; the prior chapter is preserved"));
             }
             diagnostics.accept(List.copyOf(failures));
         }

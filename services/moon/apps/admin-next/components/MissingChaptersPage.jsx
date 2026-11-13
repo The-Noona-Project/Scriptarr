@@ -299,7 +299,7 @@ export const MissingChaptersPage = ({user}) => {
               </section>
             ) : null}
 
-            <ChapterRepairPanel key={selectedTitle.id} title={selectedTitle} canRead={canInspectRepairs} canRepair={canQueueReplacement} />
+            <ChapterRepairPanel key={`${user.discordUserId}:${selectedTitle.id}`} actorId={user.discordUserId} title={selectedTitle} canRead={canInspectRepairs} canRepair={canQueueReplacement} />
 
             <section className="admin-subsection">
               <div className="admin-section-heading">
