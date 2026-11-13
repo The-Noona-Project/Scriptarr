@@ -296,3 +296,5 @@ Selected repair routes live in `registerChapterRepairRoutes.mjs`: library read G
 library root POST injects the authenticated actor and drops all caller fields except IDs/request key. Forward through
 Sage to Raven only. Downloadall diagnostics are bounded projections from durable run results; preserve summary revision
 and delivery identities when editing an existing prompt.
+
+Missing Content pages exhaust compact card pagination with repeated-cursor rejection, hydrate only affected titles with title-scoped Vault reads in bounded batches, and return only damaged/unavailable chapter rows. Preserve title and chapter quality fields in Moon projections so selected repair keeps its source identity.

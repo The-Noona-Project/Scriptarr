@@ -3226,8 +3226,15 @@ test("sage exposes wanted metadata and missing chapter workflows", async () => {
     metadataProvider: "",
     metadataMatchedAt: "",
     chapterCount: 10,
-    chaptersDownloaded: 7
+    chaptersDownloaded: 7,
+    qualityStatus: "possible_missing_page",
+    partialChapterCount: 1,
+    chapters: [{id: "damaged-197", chapterNumber: "197", label: "Chapter 197", available: true,
+      sourceUrl: "https://weebcentral.com/chapters/ABC", qualityStatus: "possible_missing_page",
+      expectedPageCount: 9, missingPageCount: 1, missingPages: [3], qualityNotes: ["Source image unavailable"]}]
   };
+  await seedVaultRavenTitle(vaultPort, defaultLibraryTitle);
+  await seedVaultRavenTitle(vaultPort, gapTitle);
   const dependencyStub = await createDependencyStub({
     libraryTitles: [defaultLibraryTitle, gapTitle]
   });
@@ -3260,6 +3267,14 @@ test("sage exposes wanted metadata and missing chapter workflows", async () => {
   assert.equal(missing.counts.totalTitles, 2);
   assert.equal(missing.counts.affectedTitles, 2);
   assert.equal(missing.counts.totalMissing, 163);
+  assert.equal(missing.counts.totalMissingPages, 1);
+  const damaged = missing.entries.find(title => title.id === gapTitle.id);
+  assert.equal(damaged.qualityStatus, "possible_missing_page");
+  assert.equal(damaged.partialChapterCount, 1);
+  assert.deepEqual(damaged.damagedChapters.map(chapter => ({id: chapter.id, sourceUrl: chapter.sourceUrl, missingPages: chapter.missingPages, expectedPageCount: chapter.expectedPageCount})),
+    [{id: "damaged-197", sourceUrl: "https://weebcentral.com/chapters/ABC", missingPages: [3], expectedPageCount: 9}]);
+  const canonicalMissing = await fetch(`${baseUrl}/api/moon-v3/admin/wanted/missing-content`, {headers}).then(response => response.json());
+  assert.deepEqual(canonicalMissing, missing);
 
   const metadata = await fetch(`${baseUrl}/api/moon-v3/admin/wanted/metadata`, {headers}).then((response) => response.json());
   assert.equal(metadata.counts.total, 1);
