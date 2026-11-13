@@ -52,6 +52,34 @@ class ChapterRepairPublicationTest {
         assertEquals(f.old, f.current.get()); assertTrue(Files.exists(f.original)); assertTrue(Files.exists(f.oldReader));
     }
 
+    /** Local AVIF processing must be rejected before its destructive chapter publication path can run. */
+    @Test void unsupportedLocalIngestPreservesExistingReaderRevisions(@TempDir Path root) throws Exception {
+        Fixture f = new Fixture(root); var logger = mock(com.scriptarr.raven.support.ScriptarrLogger.class); when(logger.getDownloadsRoot()).thenReturn(root);
+        var settings = new com.scriptarr.raven.settings.RavenSettingsService(new com.scriptarr.raven.support.FakeRavenBrokerClient(), logger, List.of());
+        PageTranscoder transcoder = mock(PageTranscoder.class);
+        Path avif = root.resolve("ingested/manhua/title/chapter/avif-old/page.avif"), webp = root.resolve("ingested/manhua/title/chapter/webp-old/page.webp");
+        Files.createDirectories(avif.getParent()); Files.createDirectories(webp.getParent()); Files.writeString(avif,"retained AVIF"); Files.writeString(webp,"retained WebP");
+        var avifTime = Files.getLastModifiedTime(avif); var webpTime = Files.getLastModifiedTime(webp);
+        try (var local = new LocalIngest(settings, logger, transcoder)) {
+            ChapterRepairPublication publisher = new ChapterRepairPublication(root, local.service, new LibraryTitleLocks(), id -> f.title,
+                (id, chapter) -> {fail("Unsupported repair published a catalog row"); return null;});
+            LibraryIngestException error = assertThrows(LibraryIngestException.class, () -> publisher.publish(TASK,"title","chapter",f.candidate,f.old.sourceUrl(),"1",()->false,p -> {}));
+            assertEquals("repair_requires_webp_worker",error.failureCode()); verifyNoInteractions(transcoder);
+        }
+        assertEquals("retained AVIF",Files.readString(avif)); assertEquals("retained WebP",Files.readString(webp));
+        assertEquals(avifTime,Files.getLastModifiedTime(avif)); assertEquals(webpTime,Files.getLastModifiedTime(webp));
+        assertEquals(f.old,f.current.get()); assertTrue(Files.exists(f.original));
+    }
+
+    /** Close the real local-ingest executor without invoking its converter. */
+    private static final class LocalIngest implements AutoCloseable {
+        private final LibraryIngestService service;
+        /** @param settings isolated settings @param logger fixture root @param transcoder conversion sentinel */
+        private LocalIngest(com.scriptarr.raven.settings.RavenSettingsService settings, com.scriptarr.raven.support.ScriptarrLogger logger, PageTranscoder transcoder) {service = new LibraryIngestService(settings,logger,transcoder);}
+        /** Release the isolated executor. */
+        @Override public void close() {service.shutdown();}
+    }
+
     /** A title maintenance fence also blocks completed-intent recovery and its canonical writes. */
     @Test void completedRecoveryRespectsTitleMaintenance(@TempDir Path root) throws Exception {
         Fixture f = new Fixture(root);
@@ -117,6 +145,7 @@ class ChapterRepairPublicationTest {
         /** @param root isolated root @throws Exception when fixture writes fail */
         private Fixture(Path root) throws Exception {
             this.root = root;
+            when(ingest.supportsChapterRepair()).thenReturn(true);
             Path folder = root.resolve("downloaded/manhua/Title"); Files.createDirectories(folder);
             original = folder.resolve("Title c001 [Scriptarr].cbz"); Files.writeString(original, "original retained archive");
             sibling = folder.resolve("Title c002 [Scriptarr].cbz"); Files.writeString(sibling, "healthy sibling");

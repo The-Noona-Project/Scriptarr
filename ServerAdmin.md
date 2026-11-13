@@ -626,6 +626,10 @@ chapter repair. The accepted selection is frozen; request retries reuse the same
 progress, cancellation, and explicit retry. Only unresolved selected chapters run again. A changed source identity
 requires review rather than an automatic source substitution.
 
+Selected chapter repair requires the configured WebP worker. Local AVIF mode refuses repair before conversion;
+existing AVIF and WebP reader revisions remain untouched. Previously verified WebP publication intents can still
+finish safe recovery.
+
 A repair publishes each chapter only after all genuine source pages, a verified CBZ, complete WebP output, and a
 catalog acknowledgement succeed. Until then its existing reader version and healthy sibling chapters remain
 unchanged. Unavailable pages keep the repair failed and the bulk run paused; continuing a run cannot waive them.

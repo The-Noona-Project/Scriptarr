@@ -96,6 +96,8 @@ final class ChapterRepairPublication {
             }
             LibraryChapter input = new LibraryChapter(old.id(), old.label(), old.chapterNumber(), pages, old.releaseDate(), true,
                 source.toString(), old.sourceUrl(), "clean", pages, 0, List.of(), List.of(), "pending", "", 0, null, "", "", old.updatedAt());
+            if (!ingest.supportsChapterRepair()) throw new LibraryIngestException("repair_requires_webp_worker",
+                "Selected chapter repair requires the WebP worker; the published chapter is unchanged.");
             LibraryIngestResult result;
             try (var attribution = IngestExecutionContext.enter("interactive", Map.of("taskId", taskId, "repairTaskId", taskId))) {
                 result = ingest.ingestChapter(title, input, cancelled, progress);

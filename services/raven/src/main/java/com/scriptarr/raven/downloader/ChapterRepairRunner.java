@@ -2,6 +2,7 @@ package com.scriptarr.raven.downloader;
 
 import com.scriptarr.raven.downloader.providers.DownloadProvider;
 import com.scriptarr.raven.library.LibraryChapter;
+import com.scriptarr.raven.library.LibraryIngestException;
 import com.scriptarr.raven.library.LibraryService;
 import com.scriptarr.raven.library.LibraryTitle;
 import com.scriptarr.raven.library.IngestProgress;
@@ -77,8 +78,9 @@ final class ChapterRepairRunner {
             catch (Exception failure) {
                 String reason = failure.getMessage() == null ? "" : failure.getMessage();
                 boolean ownerConflict = reason.contains("repair_owner_conflict");
-                failures.add(problem(titleId, chapterId, number, ownerConflict ? "repair_owner_conflict" : "repair_unresolved", 0,
-                    ownerConflict ? "conversion belongs to another task; review its durable job before retrying"
+                boolean requiresWebp = failure instanceof LibraryIngestException typed && "repair_requires_webp_worker".equals(typed.failureCode());
+                failures.add(problem(titleId, chapterId, number, requiresWebp ? "repair_requires_webp_worker" : ownerConflict ? "repair_owner_conflict" : "repair_unresolved", 0,
+                    requiresWebp ? "a configured WebP worker is required; the published chapter is preserved" : ownerConflict ? "conversion belongs to another task; review its durable job before retrying"
                         : reason.contains("changed") ? "source or publication identity changed; review required" : "repair could not be verified; the prior chapter is preserved"));
             }
             diagnostics.accept(List.copyOf(failures));

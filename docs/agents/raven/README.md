@@ -375,3 +375,8 @@ merging fields. A newer receipt, queued/running executor, or changed frozen requ
 A source conflict skips only that title's gap restoration, retaining observations of the remaining owned tasks.
 Selected repair image 404s refresh the page list with the existing bounded chapter-attempt policy; retain prior
 partial candidates and their quality evidence across refreshed lists.
+
+Before any conversion, selected repair requires `LibraryIngestService.supportsChapterRepair()` (remote immutable WebP).
+Reject local AVIF mode with durable `repair_requires_webp_worker` diagnostics before calling local ingest, whose legacy
+publication can replace a chapter directory. Existing verified `publishing`/`completed` WebP intents may still recover
+without running a converter. Never rely on checking the returned output format after destructive local conversion.

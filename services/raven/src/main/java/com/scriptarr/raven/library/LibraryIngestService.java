@@ -112,6 +112,11 @@ public final class LibraryIngestService {
         this.pageExecutor = Executors.newFixedThreadPool(this.encoderSlots, new PageWorkerThreadFactory());
     }
 
+    /** @return whether selected repairs can convert into isolated, immutable WebP output */
+    public boolean supportsChapterRepair() {
+        return remote != null && remote.required();
+    }
+
     /**
      * Convert a single canonical CBZ chapter into AVIF pages and atomically
      * publish them under the ingested storage root.
