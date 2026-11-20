@@ -1057,3 +1057,21 @@ Missing Content includes partial chapters even when every chapter archive exists
 Reader navigation from library cards, home shelves, and title buttons uses a full document navigation across the independently mounted reader app. This avoids passing reader routes through the user app’s Next router.
 
 Missing Content displays canonical chapter numbers and verified missing-page counts, uses the existing artwork proxy and whole-first-page fallback, and keeps incomplete chapter coverage below 100%.
+
+## Array storage and mass-download readiness
+
+On ItsRainingPlex, configure the complete Scriptarr share with **Array primary storage and no secondary pool**. This includes database files, settings, logs, caches, archives, reader pages and temporary processing data. Verify actual physical array placement after migration and preserve a consistent recovery point before retiring SSD copies. Remote worker/AI storage and the shared Docker engine retain their existing placement.
+
+Downloads pause below a 100 GiB free-space reserve. After recovering capacity, explicit start/continue requires 150 GiB before releasing the storage pause. Existing files and run identities remain available for recovery. The public `/health/downloads` endpoint reports catalog, storage, worker and VPN readiness; independent monitoring also checks the freshness of committed backups.
+
+Recover the existing A run before starting the full alphabet. The owner-only command below enables automatic advancement through A-Z across all four types:
+
+```text
+/downloadall run type:All nsfw:False titlegroup:all groupsize:4 autoadvance:True
+```
+
+Automatic advancement requires a fresh committed backup, a reviewed capacity forecast with 25% headroom, protected source access and a ready WebP worker. Failures pause the run for recovery. Existing command behavior remains the default when `autoadvance` is omitted. Titles starting with numbers or non-Latin characters are outside this A-Z scope.
+
+Completed conversion duplicates become eligible for cleanup after 24 hours once canonical pages, archives and durable receipts verify. Unfinished work and recovery evidence are retained. Completed titles keep their canonical CBZs and reader pages.
+
+Retire obsolete backup containers by reviewed exact IDs after preserving private configuration and any unique writable-layer contents. Preserve active containers, images, mounts and volumes. Successful deployments leave one canonical Warden per host; recovery uses protected manifests and immutable image references. See [the operations workflow](docs/agents/mass-download-operations.md) for migration, cleanup and rollback details.

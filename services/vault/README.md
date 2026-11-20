@@ -94,3 +94,5 @@ Apply requires Raven's exact quiescent filesystem-removal proof. It clears only 
 readiness/counters, retaining title/alias identities, metadata, covers, publication status, all user reading state,
 requests, jobs, download-task history, settings and credentials. Finish releases the fence. Replaying a finished apply
 never clears fresh content again. This scoped workflow does not call the older global content-reset operation.
+
+Database acquisition and operations have bounded deadlines. Uncertain timed-out writes retire their connection and return a recoverable availability error. Health returns 503 when the database cannot respond. Conversion rebuilds preserve previous publication receipts and require the exact owning epoch, generation and artifact identity.

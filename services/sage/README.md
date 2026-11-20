@@ -244,3 +244,5 @@ content for recovery; continue the existing run after an exhausted recovery wind
 Local development requires Node.js 22.19.0 or newer for Sage's pinned HTTP transport.
 
 Missing Content preserves source chapter quality and exact repair identities. It reads compact catalogue pages and loads chapter details only for affected titles.
+
+Bulk-run creation forwards optional Boolean `autoAdvance` while preserving legacy request identities. Conversion reconstruction retains fenced completion history. Download readiness stays behind the Moon-to-Sage service boundary.

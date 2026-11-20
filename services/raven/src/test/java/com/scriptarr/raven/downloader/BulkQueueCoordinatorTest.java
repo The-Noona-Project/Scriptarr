@@ -221,6 +221,7 @@ class BulkQueueCoordinatorTest {
             when(library.listTitles()).thenReturn(List.of());
             when(provider.browseTitlesAlphabetically(anyString(),anyBoolean(),anyString(),any(),any())).thenReturn(new BulkBrowseResult(List.of(Map.of("title","Alpha","href","https://weebcentral.com/series/01J76XYCH9QX9GSDFR6959N669","type","Manhua")),1));
             when(provider.getTitleDetails(anyString())).thenReturn(new TitleDetails("","Manhua",List.of(),"Ongoing","",false,false,false,List.of(),List.of()));
+            org.mockito.Mockito.doCallRealMethod().when(provider).getTitleDetails(anyString(), any());
             when(provider.getChapters(anyString())).thenReturn(List.of(Map.of("chapter_number","1","href","https://weebcentral.com/chapters/one")));
             when(intake.resolveBulkMetadata(anyString(),anyString(),anyString(),anyString(),anyList())).thenReturn(new DownloadIntakeService.BulkMetadataResolution("matched",Map.of("provider","mangadex","providerSeriesId","alpha","title","Alpha"),Map.of()));
             when(downloader.queueBulkOwned(anyString(),anyString(),anyString(),anyString(),any())).thenAnswer(this::accept);

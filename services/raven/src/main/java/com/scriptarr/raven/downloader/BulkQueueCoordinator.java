@@ -155,7 +155,7 @@ public final class BulkQueueCoordinator implements BulkRunGateway {
                     category = "active";
                 } else {
                     if (!plan.containsKey("request")) {
-                        TitleDetails details = provider.getTitleDetails(url);
+                        TitleDetails details = provider.getTitleDetails(url, stop);
                         checkCancelled(stop);
                         if (details == null || !wantedType.equals(BulkTitleSelection.type(details.type()))) {
                             throw new IllegalStateException("The provider did not confirm the requested content type.");
@@ -257,6 +257,13 @@ public final class BulkQueueCoordinator implements BulkRunGateway {
             } catch (CancellationException error) { throw error;
             } catch (Exception error) {
                 if (Thread.currentThread().isInterrupted()) throw new CancellationException("Bulk discovery interrupted.");
+                if (!nsfw && safeError(error).startsWith("metadata_adult_conflict:")) {
+                    if (durable) save(runId, planId, "bulk-title-plan", batchId, "completed", plan,
+                        Map.of("category", "adult", "reason", safeError(error), "downloadTaskId", ""));
+                    summary.add("adult", name, "");
+                    checkpoint.accept(summary.checkpoint(unresolved));
+                    continue;
+                }
                 unresolved.add(planId);
                 summary.add("failed", name, "");
                 if (durable) save(runId, planId, "bulk-title-plan", batchId, "failed", plan,

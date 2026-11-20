@@ -85,6 +85,14 @@ public interface DownloadProvider {
      */
     TitleDetails getTitleDetails(String titleUrl);
 
+    /** @param titleUrl source series @param cancelled owner cancellation @return verified source metadata or null */
+    default TitleDetails getTitleDetails(String titleUrl, BooleanSupplier cancelled) {
+        if (cancelled.getAsBoolean() || Thread.currentThread().isInterrupted()) throw new CancellationException("Metadata request cancelled.");
+        TitleDetails result = getTitleDetails(titleUrl);
+        if (cancelled.getAsBoolean() || Thread.currentThread().isInterrupted()) throw new CancellationException("Metadata request cancelled.");
+        return result;
+    }
+
     /**
      * Load the chapter list for a provider title URL.
      *

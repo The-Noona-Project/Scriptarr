@@ -77,6 +77,12 @@ public class WeebCentralDownloadProvider implements DownloadProvider {
         return titleScraper.getTitleDetails(titleUrl);
     }
 
+    /** @param titleUrl source series @param cancelled owner cancellation @return normalized source metadata */
+    @Override
+    public TitleDetails getTitleDetails(String titleUrl, BooleanSupplier cancelled) {
+        return titleScraper.getTitleDetails(titleUrl, cancelled);
+    }
+
     @Override
     public List<Map<String, String>> getChapters(String titleUrl) {
         return titleScraper.getChapters(titleUrl);

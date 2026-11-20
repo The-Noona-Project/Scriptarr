@@ -144,13 +144,12 @@ export const createVaultApp = async ({
   const auth = serviceAuth(config);
 
   app.get("/health", async (_req, res) => {
-    const health = await runTimedStoreOperation(logger, config, "health", () => store.health());
-    res.json({
-      ok: true,
-      service: "scriptarr-vault",
-      driver: store.driver,
-      ...health
-    });
+    try {
+      const health = await runTimedStoreOperation(logger, config, "health", () => store.health());
+      res.status(health.ready === false ? 503 : 200).json({ok: health.ready !== false, service: "scriptarr-vault", driver: store.driver, ...health});
+    } catch {
+      res.status(503).json({ok: false, service: "scriptarr-vault", driver: store.driver, ready: false, degraded: true, reason: "database_unavailable"});
+    }
   });
 
   app.get("/api/public/bootstrap-status", async (_req, res) => {
@@ -706,6 +705,12 @@ export const createVaultApp = async ({
       ...req.body,
       taskId: req.params.taskId
     }));
+  });
+
+  app.use((error, _req, res, next) => {
+    if (error?.code === "STORE_TIMEOUT") {
+      res.status(503).json({error: "Database operation unavailable; reconcile uncertain writes before retrying.", code: "STORE_TIMEOUT", outcomeUnknown: error.outcomeUnknown === true});
+    } else next(error);
   });
 
   logger.info("Vault app initialized.", {

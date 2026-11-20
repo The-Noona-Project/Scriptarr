@@ -82,3 +82,5 @@ same suite on a Linux host to verify Unix permission behavior.
 The initial November 7 recovery point preserved the stopped October 8 database, then was fetched from na-west-2,
 authenticated, and restored on Plex. Its 50 application tables passed `CHECK TABLE ... QUICK`; the trial instance was
 stopped afterward so the deployment owner can test Vault migration on the recovered copy.
+
+The current [array/mass-download workflow](mass-download-operations.md) adds scoped container retirement, canonical Warden replacement, array-only core storage, committed-backup proofs and download-readiness monitoring. Keep private operation records and restore artifacts outside Git.

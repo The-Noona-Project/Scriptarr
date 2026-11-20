@@ -9,6 +9,7 @@ import {createLocalAiRuntime} from "./localAiRuntime.mjs";
 import {createManagedStackRuntime} from "./managedStackRuntime.mjs";
 import {createUpdateRuntime} from "./updateRuntime.mjs";
 import {createClusterRuntime} from "./clusterRuntime.mjs";
+import {storageReadiness} from "./storageReadiness.mjs";
 
 /**
  * Assemble the Warden runtime object shared by the API routes and the repo
@@ -123,7 +124,10 @@ export const createWardenRuntime = ({
     }).storage,
     getHealth: async () => {
       const runtime = await getRuntime();
+      const storage = await storageReadiness(env.SCRIPTARR_WARDEN_RUNTIME_DIR || "/var/lib/scriptarr");
       return {
+        storage,
+        dependenciesReady: runtime.managedServices.length > 0 && runtime.managedServices.every(service => service.running && service.health === "healthy"),
         ok: Boolean(runtime.warden.dockerSocketAvailable) && !runtime.warden.lastError,
         ingestDegraded: !(runtime.allServices || runtime.services || []).some(service => service.name === "scriptarr-raven-worker")
           || runtime.managedServices.some(service => service.name === "scriptarr-raven-worker"

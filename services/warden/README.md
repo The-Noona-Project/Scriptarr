@@ -200,3 +200,5 @@ bindings are opt-in with `SCRIPTARR_NVIDIA_DEVICE_BINDINGS=true` for hosts that 
 start, remove, and generation probe jobs are Oracle-owned and brokered through Sage. If Oracle lands on an NVIDIA host
 with an old CPU-only LocalAI backend cached under `/data/backends`, Oracle rejects that backend and prepares a
 GPU-capable runtime instead.
+
+Core Scriptarr data can live entirely on array storage. Health includes mounted-storage capacity/inode readiness and local dependency readiness. Keep one canonical Warden per host: the supported replacement helper preserves private restore manifests instead of accumulating renamed backup containers. Retire separately reviewed obsolete containers while preserving their data mounts and required images.

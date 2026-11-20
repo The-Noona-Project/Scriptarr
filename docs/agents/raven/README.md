@@ -380,3 +380,5 @@ Before any conversion, selected repair requires `LibraryIngestService.supportsCh
 Reject local AVIF mode with durable `repair_requires_webp_worker` diagnostics before calling local ingest, whose legacy
 publication can replace a chapter directory. Existing verified `publishing`/`completed` WebP intents may still recover
 without running a converter. Never rely on checking the returned output format after destructive local conversion.
+
+See [mass-download operations](../mass-download-operations.md) for storage admission/latches, automatic consent identity, provider cooldowns, completed-artifact reclamation and fenced reconstruction from canonical CBZs.

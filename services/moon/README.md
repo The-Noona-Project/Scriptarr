@@ -270,3 +270,5 @@ A title’s Details tab shows its edition, creators, aliases and complete expand
 Library, home, and title reader links open the dedicated reader directly without requiring a reload.
 
 Missing Content uses cached cover art with first-page fallback, keeps repair details readable within the drawer, and reserves 100% coverage for complete chapter sets.
+
+`/health/downloads` exposes a small, uncached readiness summary for independent monitoring. It checks catalog, storage, WebP-worker and VPN readiness through Sage and returns 503 when required evidence is unavailable.

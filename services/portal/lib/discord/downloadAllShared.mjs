@@ -368,10 +368,12 @@ export const executeDownloadAll = async ({
   });
 
   try {
+    const {autoAdvance, ...selection} = filters || {};
     const payload = {
       providerId: "weebcentral",
-      ...filters,
+      ...selection,
       groupsize: filters?.batchesPerApproval,
+      ...(autoAdvance === true ? {autoAdvance: true} : {}),
       requestedBy: normalizeString(requestedBy),
       ...(requestId ? {requestId} : {})
     };

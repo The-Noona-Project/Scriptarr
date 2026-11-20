@@ -35,6 +35,37 @@ public final class RemoteChapterProcessor {
     private final Path root;
     private final ObjectMapper json = new ObjectMapper();
     private final boolean required;
+    private final java.util.concurrent.ScheduledExecutorService retention = java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> { Thread thread = new Thread(r, "artifact-retention"); thread.setDaemon(true); return thread; });
+    private int retentionCursor;
+
+    /** Start bounded duplicate-payload reclamation after the coordinator is ready. */
+    @org.springframework.context.event.EventListener(org.springframework.boot.context.event.ApplicationReadyEvent.class)
+    public void startRetention() {
+        retention.scheduleWithFixedDelay(() -> { try { reclaimArtifacts(32); } catch (Exception unavailable) { /* Retry later without discarding uncertain artifacts. */ } }, 60, 60, java.util.concurrent.TimeUnit.SECONDS);
+    }
+
+    /** Stop duplicate-artifact work before service shutdown. */
+    @jakarta.annotation.PreDestroy
+    public void stopRetention() { retention.shutdownNow(); }
+
+    /** @param limit bounded number of descriptors to inspect @return acknowledged cleanup counts @throws Exception when the root cannot be inspected */
+    public synchronized Map<String, Object> reclaimArtifacts(int limit) throws Exception {
+        int inspected = 0, reclaimed = 0, deferred = 0;
+        if (!Files.isDirectory(root) || Files.isSymbolicLink(root)) return Map.of("inspected", 0, "reclaimed", 0, "deferred", 0);
+        List<Path> jobs;
+        try (var paths = Files.list(root)) { jobs = paths.filter(p -> p.getFileName().toString().matches("raven_webp_[a-f0-9]{64}") && !Files.isSymbolicLink(p)).sorted().toList(); }
+        if (jobs.isEmpty()) return Map.of("inspected", 0, "reclaimed", 0, "deferred", 0);
+        int count = Math.min(Math.max(1, Math.min(limit, 128)), jobs.size());
+        for (int i = 0; i < count; i++) {
+            if (Thread.currentThread().isInterrupted()) throw new InterruptedException("Artifact retention interrupted.");
+            Path path = jobs.get(retentionCursor++ % jobs.size()); inspected++;
+            try {
+                JsonNode job = unwrap(client.jsonUntil("GET", "/jobs/" + path.getFileName(), null, null, System.currentTimeMillis() + 5000));
+                if (CompletedArtifactRetention.reclaim(root.getParent(), catalog, job, Instant.now())) reclaimed++;
+            } catch (Exception unresolved) { deferred++; }
+        }
+        return Map.of("inspected", inspected, "reclaimed", reclaimed, "deferred", deferred);
+    }
     /** Immutable output profile shared by coordinator and workers. */
     public static final Map<String, Object> PROFILE = Map.of("format", "webp", "quality", 85, "method", 4,
         "threads", 2, "pageConcurrency", 1, "maxDimension", 16383, "segmentationVersion", 2);
@@ -74,6 +105,7 @@ public final class RemoteChapterProcessor {
      */
     public Result convert(LibraryTitle title, LibraryChapter chapter, Path archive, RavenNamingSettings naming,
                           BooleanSupplier cancelled, Consumer<IngestProgress> progress) throws Exception {
+        com.scriptarr.raven.support.StorageBudget.require(root.getParent());
         String hash = WebpChapterEncoder.sha256(archive); List<String> entries;
         try (ZipFile zip = new ZipFile(archive.toFile())) {
             entries = zip.stream().filter(e -> !e.isDirectory() && ArchiveImageEntries.isImage(e.getName()))
@@ -115,6 +147,18 @@ public final class RemoteChapterProcessor {
             if (List.of("result-ready", "publishing", "completed").contains(status)) {
                 long epoch = job.path("lease").path("epoch").asLong(); JsonNode artifact = job.path("result").path("artifact");
                 Path directory = jobRoot(id, epoch).resolve("files");
+                if ("completed".equals(status) && Files.exists(directory.resolve("payload-reclaimed.json"))) {
+                    try {
+                        LibraryChapter saved = CompletedArtifactRetention.canonical(root.getParent(), catalog, job);
+                        JsonNode bundle = DerivedPageManifest.read(saved);
+                        return new Result(id, epoch, artifact.path("sha256").asText(), Path.of(saved.ingestManifestPath()).getParent(), bundle, job.path("result").path("chapter").deepCopy());
+                    } catch (CompletedArtifactRetention.OutputUnavailable damaged) {
+                        job = unwrap(client.json("POST", "/jobs/" + id + "/retry", Map.of("expectedEpoch", epoch, "expectedCoordinatorGeneration", generation,
+                            "expectedArtifactSha256", artifact.path("sha256").asText(), "rebuildPublished", true, "requestId", "rebuild_" + id + "_" + epoch, "owner", owner), null));
+                        generation = job.path("spec").path("coordinatorGeneration").asText();
+                        continue;
+                    }
+                }
                 if (!Files.isRegularFile(directory.resolve("bundle.json"))) throw new IOException("Accepted chapter artifact is missing from coordinator storage.");
                 JsonNode bundle = json.readTree(directory.resolve("bundle.json").toFile());
                 OrderedPageIdentity.requireBundle(bundle, job.path("spec").path("input"));
@@ -206,13 +250,14 @@ public final class RemoteChapterProcessor {
      * @throws Exception when archive, output or lease validation fails
      */
     public JsonNode accept(String id, String workerId, long epoch, String token, InputStream source) throws Exception {
+        com.scriptarr.raven.support.StorageBudget.require(root.getParent());
         JsonNode job = requireLease(id, workerId, epoch);
         try (var writer = ContentMaintenance.enter("title:" + job.path("spec").path("input").path("titleId").asText(), ContentMaintenance.pathKey(root.resolve(id)))) {
         input(id, workerId, epoch);
         Files.createDirectories(root.resolve(id)); json.writeValue(root.resolve(id).resolve("job.json").toFile(), job);
         Path attempt = jobRoot(id, epoch); Files.createDirectories(attempt); Path upload = Files.createTempFile(attempt, "upload-", ".zip"), candidate = Files.createTempDirectory(attempt, "candidate-");
         try {
-            try (var out = Files.newOutputStream(upload)) { byte[] buffer = new byte[65536]; long total = 0; int count; while ((count = source.read(buffer)) >= 0) { total += count; if (total > 2_147_483_648L) throw new IOException("Chapter artifact exceeds its transfer budget."); out.write(buffer, 0, count); } }
+        try (var out = Files.newOutputStream(upload)) { byte[] buffer = new byte[65536]; long total = 0; int count; while ((count = source.read(buffer)) >= 0) { total += count; if (total > 2_147_483_648L) throw new IOException("Chapter artifact exceeds its transfer budget."); if (total % (16 * 1024 * 1024) < buffer.length) com.scriptarr.raven.support.StorageBudget.require(root.getParent()); out.write(buffer, 0, count); } }
             String hash = WebpChapterEncoder.sha256(upload); Path files = attempt.resolve("files");
             JsonNode bundle = unpack(upload, candidate, job.path("spec"));
             int segments = 0; for (JsonNode page : bundle.path("pages")) segments += page.path("segments").size();

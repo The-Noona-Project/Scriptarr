@@ -182,3 +182,5 @@ Noona trivia is Sage-backed and runs from the configured trivia channel. Portal 
 from Sage state on startup, settings refresh, manual start, win, and timeout. Repeated `/trivia start` calls while a
 round is open report the existing round instead of reposting the clue, and stale timers from old reloads cannot post
 duplicate hints, timeouts, leaderboards, or next rounds.
+
+The owner-only DM command accepts optional `autoadvance:True` for `type:All nsfw:False titlegroup:all groupsize:4`. It advances through A-Z when storage, backup and service checks pass, and pauses on failures. Omit the option to retain the existing approval-window behavior. Completed content is reused during later runs.

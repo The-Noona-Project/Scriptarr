@@ -171,7 +171,7 @@ public class TitleScraper {
                     checkBulkCancelled(stop);
                     Connection connection = connect(sourceBaseUrl + "/search/data").followRedirects(false);
                     query.forEach(connection::data);
-                    Document page = connection.get();
+                    Document page = fetch(connection, stop);
                     checkBulkCancelled(stop);
                     return page;
                 });
@@ -258,7 +258,7 @@ public class TitleScraper {
 
         try {
             Document titleDocument;
-            try { titleDocument = executeWithRetries("title chapter list preflight", () -> connect(titleUrl.trim()).followRedirects(false).get()); }
+            try { titleDocument = executeWithRetries("title chapter list preflight", () -> fetch(connect(titleUrl.trim()).followRedirects(false))); }
             catch (org.jsoup.HttpStatusException missing) {
                 if (!legacyFallback || missing.getStatusCode() != 404) throw missing;
                 titleDocument = Document.createShell(titleUrl);
@@ -280,7 +280,7 @@ public class TitleScraper {
                     if (chapterListRequest.hxTarget() != null && !chapterListRequest.hxTarget().isBlank()) {
                         connection.header("HX-Target", chapterListRequest.hxTarget());
                     }
-                    return connection.get();
+                    return fetch(connection);
                 }
             );
 
@@ -326,7 +326,7 @@ public class TitleScraper {
             for (Map.Entry<String, String> entry : queryParameters.entrySet()) {
                 connection.data(entry.getKey(), entry.getValue());
             }
-            return connection.get();
+            return fetch(connection);
         });
     }
 
@@ -402,12 +402,17 @@ public class TitleScraper {
      * @return normalized title detail payload, or {@code null} on failure
      */
     public TitleDetails getTitleDetails(String titleUrl) {
+        return getTitleDetails(titleUrl, () -> false);
+    }
+
+    /** @param titleUrl source series @param cancelled owner cancellation predicate @return source metadata or null on source failure */
+    public TitleDetails getTitleDetails(String titleUrl, BooleanSupplier cancelled) {
         if (titleUrl == null || titleUrl.isBlank()) {
             return null;
         }
 
         try {
-            Document doc = executeWithRetries("title details request", () -> connect(titleUrl.trim()).get());
+            Document doc = executeWithRetries("title details request", () -> fetch(connect(titleUrl.trim()), cancelled));
 
             return new TitleDetails(
                 extractSummary(doc),
@@ -424,6 +429,8 @@ public class TitleScraper {
                 extractLabeledList(doc, "Author(s)"),
                 doc.select("img[alt$=cover]").stream().map(image -> image.absUrl("src")).findFirst().orElse("")
             );
+        } catch (CancellationException cancelledRequest) {
+            throw cancelledRequest;
         } catch (Exception error) {
             logger.warn("SCRAPER", "Title details request failed.", error.getMessage());
             return null;
@@ -435,6 +442,25 @@ public class TitleScraper {
             .userAgent(USER_AGENT)
             .maxBodySize(0)
             .timeout((int) SCRAPE_TIMEOUT.toMillis());
+    }
+
+    /** @param connection validated source request @return parsed successful HTML @throws Exception on a rejected source response */
+    private Document fetch(Connection connection) throws Exception {
+        return fetch(connection, () -> false);
+    }
+
+    /** @param connection validated request @param cancelled durable cancellation @return source HTML @throws Exception on source failure */
+    private Document fetch(Connection connection, BooleanSupplier cancelled) throws Exception {
+        // Local fixture origins remain deterministic; all production source HTML shares one gate.
+        boolean production = "weebcentral.com".equalsIgnoreCase(connection.request().url().getHost());
+        if (production) ProviderCooldown.SOURCE.await(cancelled);
+        checkBulkCancelled(cancelled);
+        Connection.Response response = connection.ignoreHttpErrors(true).execute();
+        checkBulkCancelled(cancelled);
+        if (response.statusCode() == 429 && production) ProviderCooldown.SOURCE.limited(response.header("Retry-After"), System.currentTimeMillis());
+        if (response.statusCode() >= 400) throw new org.jsoup.HttpStatusException("Source HTTP error", response.statusCode(), response.url().toString());
+        if (production) ProviderCooldown.SOURCE.succeeded();
+        return response.parse();
     }
 
     private Document executeWithRetries(String label, DocumentSupplier supplier) throws Exception {

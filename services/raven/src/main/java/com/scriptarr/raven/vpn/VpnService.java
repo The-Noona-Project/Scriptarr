@@ -66,6 +66,7 @@ public class VpnService {
     private volatile String lastError = "";
     private volatile String lastSettingsError = "";
     private volatile String lastRuntimeError = "";
+    private volatile String binaryProbeError = "";
     private volatile RavenVpnSettings lastKnownSettings = new RavenVpnSettings(false, "us_california", "", "");
     private volatile boolean hasLastKnownSettings;
     private volatile Instant lastSettingsLoadedAt = Instant.EPOCH;
@@ -446,7 +447,7 @@ public class VpnService {
             return "Raven VPN runtime is missing NET_ADMIN.";
         }
         if (!openVpnBinaryAvailable()) {
-            return "Raven VPN runtime is missing openvpn.";
+            return binaryProbeError;
         }
         return "";
     }
@@ -482,14 +483,23 @@ public class VpnService {
         try {
             Process process = new ProcessBuilder("openvpn", "--version")
                 .redirectErrorStream(true)
+                .redirectOutput(ProcessBuilder.Redirect.DISCARD)
                 .start();
             boolean finished = process.waitFor(2, TimeUnit.SECONDS);
             if (!finished) {
                 process.destroyForcibly();
+                binaryProbeError = "Raven VPN binary probe timed out; executable availability is unverified.";
                 return false;
             }
+            binaryProbeError = "Raven VPN binary probe exited unsuccessfully (exit " + process.exitValue() + ").";
             return process.exitValue() == 0;
-        } catch (Exception ignored) {
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            binaryProbeError = "Raven VPN binary probe was interrupted.";
+            return false;
+        } catch (IOException unavailable) {
+            binaryProbeError = Files.isExecutable(Path.of("/usr/sbin/openvpn")) || Files.isExecutable(Path.of("/usr/bin/openvpn"))
+                ? "Raven VPN executable exists but could not be started; inspect host resources." : "Raven VPN runtime cannot locate or execute openvpn.";
             return false;
         }
     }

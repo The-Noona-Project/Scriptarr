@@ -276,7 +276,7 @@ public final class LibraryIngestService {
      */
     private LibraryIngestResult ingestRemoteChapter(LibraryTitle title, LibraryChapter chapter, BooleanSupplier cancelled, Consumer<IngestProgress> progress) {
         Path stage = null;
-        try {
+        try (var maintenance = ContentMaintenance.enter("title:" + title.id())) {
             throwIfCancelled(cancelled); Path archive = resolveArchivePath(chapter);
             RemoteChapterProcessor.Result result = remote.convert(title, chapter, archive, settingsService.getNamingSettings(), cancelled, progress);
             var bundle = result.bundle(); int count = bundle.path("pageCount").asInt();

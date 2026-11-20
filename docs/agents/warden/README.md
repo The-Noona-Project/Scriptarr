@@ -73,3 +73,5 @@
 - Warden-originated runtime or update transitions that matter to operators should be reported through Sage's internal
   broker routes so Vault's shared durable event log stays authoritative for Moon admin timelines.
 - Keep full JSDoc on exported Warden `.mjs` source and tests so the ESLint doc gate stays green.
+
+- Manual canonical replacements use the protected-manifest helper in `scripts/operations/replace-warden.mjs`; do not retain renamed deployment containers. Storage readiness probes the mounted runtime directory. See [mass-download operations](../mass-download-operations.md).

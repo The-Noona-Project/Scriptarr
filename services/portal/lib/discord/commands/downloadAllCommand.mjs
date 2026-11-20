@@ -70,7 +70,8 @@ export const createDownloadAllCommand = ({
         stringOption("type", "Library type to browse.", true, TYPE_CHOICES),
         booleanOption("nsfw", "Whether adult titles are allowed.", true),
         stringOption("titlegroup", "Enter a single letter a-z, or all.", true),
-        integerOption("groupsize", "Batch groups to run before pausing for approval.", false, 1, 25)
+        integerOption("groupsize", "Batch groups to run before pausing for approval.", false, 1, 25),
+        booleanOption("autoadvance", "Advance A-Z automatically with health, storage and backup gates.")
       ]),
       subcommand("continue", "Continue the next batch for a paused mega downloadall run.", [
         stringOption("runid", "Run id returned by /downloadall run.", true)
@@ -144,7 +145,8 @@ export const createDownloadAllCommand = ({
       type: interaction.options?.getString?.("type"),
       nsfw: interaction.options?.getBoolean?.("nsfw"),
       titlePrefix: interaction.options?.getString?.("titlegroup"),
-      batchesPerApproval: interaction.options?.getInteger?.("groupsize") || 1
+      batchesPerApproval: interaction.options?.getInteger?.("groupsize") || 1,
+      autoAdvance: interaction.options?.getBoolean?.("autoadvance") === true
     };
 
     try {
