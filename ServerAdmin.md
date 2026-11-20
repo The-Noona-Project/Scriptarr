@@ -1062,7 +1062,7 @@ Missing Content displays canonical chapter numbers and verified missing-page cou
 
 On ItsRainingPlex, configure the complete Scriptarr share with **Array primary storage and no secondary pool**. This includes database files, settings, logs, caches, archives, reader pages and temporary processing data. Verify actual physical array placement after migration and preserve a consistent recovery point before retiring SSD copies. Remote worker/AI storage and the shared Docker engine retain their existing placement.
 
-Downloads pause below a 100 GiB free-space reserve. After recovering capacity, explicit start/continue requires 150 GiB before releasing the storage pause. Existing files and run identities remain available for recovery. The public `/health/downloads` endpoint reports catalog, storage, worker and VPN readiness; independent monitoring also checks the freshness of committed backups.
+Downloads pause below a 100 GiB free-space reserve. After recovering capacity, explicit start/continue requires 150 GiB before releasing the storage pause. Existing files and run identities remain available for recovery. The public `/health/downloads` endpoint reports catalog, storage, worker and VPN readiness. Independent monitoring checks backup freshness only for configured backup stores.
 This is a global download pause. The configured owner must explicitly start or continue a bulk run to clear it after capacity recovery, then retry any ordinary downloads affected by the pause. GET requests, background recovery and ordinary retries never clear the latch. Readiness responses have both a time deadline and a streaming byte limit.
 
 Recover the existing A run before starting the full alphabet. The owner-only command below enables automatic advancement through A-Z across all four types:
@@ -1071,7 +1071,7 @@ Recover the existing A run before starting the full alphabet. The owner-only com
 /downloadall run type:All nsfw:False titlegroup:all groupsize:4 autoadvance:True
 ```
 
-Automatic advancement requires a fresh committed backup, a reviewed capacity forecast with 25% headroom, protected source access and a ready WebP worker. Failures pause the run for recovery. Existing command behavior remains the default when `autoadvance` is omitted. Titles starting with numbers or non-Latin characters are outside this A-Z scope.
+Automatic advancement requires a reviewed capacity forecast with 25% headroom, protected source access and a ready WebP worker. A fresh committed backup is required by default. When the owner explicitly disables backups, record Boolean `backupRequired: false` in the reviewed `.operations/mass-capacity.json`; omitted values retain the backup requirement, and malformed policy values pause the run. Disable that deployment's backup schedules and remove its backup stores from independent monitoring without deleting existing backup files. This choice does not bypass capacity, storage, VPN or worker checks. Failures pause the run for recovery. Existing command behavior remains the default when `autoadvance` is omitted. Titles starting with numbers or non-Latin characters are outside this A-Z scope.
 
 Completed conversion duplicates become eligible for cleanup after 24 hours once canonical pages, archives and durable receipts verify. Unfinished work and recovery evidence are retained. Completed titles keep their canonical CBZs and reader pages.
 

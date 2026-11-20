@@ -265,7 +265,7 @@ Original and reboot editions can share translated aliases while retaining separa
 
 Recovery also rejects CBZ pages with empty or zero-filled headers, even when the ZIP checksum is valid. Healthy chapter archives remain reusable; damaged chapters return to download repair before reader conversion.
 
-Bulk downloads pause when storage falls below the 100 GiB reserve. Explicit resume needs 150 GiB of free capacity. Automatic A-Z runs additionally require fresh backups, a reviewed capacity estimate, protected source access and a ready WebP worker. Completed conversion duplicates can be reclaimed after 24 hours; canonical archives, reader pages and recovery receipts are preserved.
+Bulk downloads pause when storage falls below the 100 GiB reserve. Explicit resume needs 150 GiB of free capacity. Automatic A-Z runs additionally require a reviewed capacity estimate, protected source access and a ready WebP worker. Fresh backups are required by default; an owner who disables backups must explicitly record that choice in the capacity approval. Other readiness requirements still apply. Completed conversion duplicates can be reclaimed after 24 hours; canonical archives, reader pages and recovery receipts are preserved.
 
 The storage pause applies to all download work. After restoring capacity, the configured owner clears it with an explicit bulk start or continue; ordinary retries and monitoring cannot clear it. Retry other affected downloads after that approval. Duplicate cleanup briefly yields to incoming content work and remains cancellation-aware.
 
