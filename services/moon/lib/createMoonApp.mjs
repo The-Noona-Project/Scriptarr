@@ -97,7 +97,7 @@ export const createMoonApp = async ({logger = createLogger("MOON")} = {}) => {
   app.get("/health/downloads", async (_req, res) => {
     res.set("Cache-Control", "no-store");
     try {
-      const upstream = await proxyRequest({baseUrl: config.sageBaseUrl, path: "/health", signal: AbortSignal.timeout(5000)});
+      const upstream = await proxyRequest({baseUrl: config.sageBaseUrl, path: "/health", signal: AbortSignal.timeout(5000), maxResponseBytes: 65536});
       if (upstream.status !== 200 || upstream.body.length > 65536) throw new Error("Readiness unavailable.");
       const readiness = downloadReadiness(JSON.parse(upstream.body.toString("utf8")));
       res.status(readiness.ready ? 200 : 503).json(readiness);

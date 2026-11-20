@@ -96,6 +96,16 @@ const artifactValue = (value, job) => ({
   ...(value?.segmentCount == null ? {} : {segmentCount: integer(value.segmentCount, "segment count", job.spec.input.sourcePageCount, 1000000)})
 });
 
+/** Validate the immutable reader manifest against an artifact accepted by this exact content job. */
+const publicationValue = (value, job) => {
+  if (value == null) return null;
+  const publication = {jobId: identifier(value.jobId, "publication job id"), epoch: integer(value.epoch, "publication epoch", 1),
+    artifactSha256: sha(value.artifactSha256, "publication artifact SHA256"), manifestSha256: sha(value.manifestSha256, "publication manifest SHA256")};
+  const accepted = publication.epoch === job.lease.epoch ? job.result : job._publicationHistory?.[publication.epoch]?.result;
+  if (publication.jobId !== job.jobId || publication.artifactSha256 !== accepted?.artifact?.sha256) conflict("The reader publication does not belong to an accepted artifact of this conversion.");
+  return publication;
+};
+
 /** Create authoritative conversion state transitions over a transactional repository. */
 export const createConversionJobs = ({repository, now = Date.now, publishChapter = null, repairChapter = null}) => {
   const time = tx => Number.isFinite(tx.now) ? tx.now : now();
@@ -262,6 +272,8 @@ export const createConversionJobs = ({repository, now = Date.now, publishChapter
         const job = await requireJob(tx, id);
         await coordinatorFence(tx, job, body, ["result-ready", "publishing", "completed"]);
         if (job.status === "completed") return publicJob(job);
+        job._publicationHistory ||= {};
+        job._publicationHistory[job.lease.epoch] = {result: copy(job.result)};
         job.status = "publishing";
         return save(tx, job);
       });
@@ -289,8 +301,10 @@ export const createConversionJobs = ({repository, now = Date.now, publishChapter
           return response;
         }
         const completionHash = hash(canonical(body.chapter));
+        const publication = publicationValue(body.publication, job);
         if (job.status === "completed") {
           if (job._completionHash !== completionHash) conflict("This conversion already completed with another chapter checkpoint.");
+          if (publication && canonical(publication) !== canonical(job.result.publication)) conflict("This conversion already completed with another reader publication.");
           return {job: publicJob(job), chapter: copy(job.result.chapter)};
         }
         if (!publishChapter) fail(503, "CONVERSION_PUBLISH_UNAVAILABLE", "The catalogue publisher is unavailable.");
@@ -299,6 +313,7 @@ export const createConversionJobs = ({repository, now = Date.now, publishChapter
         job.finishedAt = new Date(time(tx)).toISOString();
         job._completionHash = completionHash;
         job.result.chapter = copy(chapter);
+        if (publication) job.result.publication = publication;
         return {job: await save(tx, job), chapter};
       });
     },

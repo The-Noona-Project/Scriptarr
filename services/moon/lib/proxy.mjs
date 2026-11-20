@@ -6,7 +6,8 @@
  *   body?: unknown,
  *   sessionToken?: string,
  *   headers?: Record<string, string>,
- *   signal?: AbortSignal
+ *   signal?: AbortSignal,
+ *   maxResponseBytes?: number
  * }} ProxyRequestOptions
  */
 import {lookup} from "node:dns/promises";
@@ -111,8 +112,11 @@ export const proxyRequest = async ({
   body,
   sessionToken,
   headers = {},
-  signal
+  signal,
+  maxResponseBytes
 }) => {
+  if (maxResponseBytes !== undefined && (!Number.isSafeInteger(maxResponseBytes) || maxResponseBytes < 1)) throw new TypeError("Invalid proxy response bound.");
+  const controller = new AbortController();
   const response = await fetch(await resolveProxyFetchUrl(baseUrl, path), {
     method,
     headers: {
@@ -121,13 +125,24 @@ export const proxyRequest = async ({
       ...headers
     },
     body: body == null ? undefined : JSON.stringify(body),
-    signal
+    signal: signal ? AbortSignal.any([signal, controller.signal]) : controller.signal
   });
+
+  let responseBody;
+  if (maxResponseBytes !== undefined) {
+    const chunks = []; let bytes = 0;
+    if (response.body) for await (const chunk of response.body) {
+      bytes += chunk.byteLength;
+      if (bytes > maxResponseBytes) { controller.abort(); throw new Error("Proxy response exceeded its byte limit."); }
+      chunks.push(chunk);
+    }
+    responseBody = Buffer.concat(chunks, bytes);
+  } else responseBody = Buffer.from(await response.arrayBuffer());
 
   return {
     status: response.status,
     headers: Object.fromEntries(response.headers.entries()),
-    body: Buffer.from(await response.arrayBuffer())
+    body: responseBody
   };
 };
 

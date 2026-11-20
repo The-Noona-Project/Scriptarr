@@ -1063,6 +1063,7 @@ Missing Content displays canonical chapter numbers and verified missing-page cou
 On ItsRainingPlex, configure the complete Scriptarr share with **Array primary storage and no secondary pool**. This includes database files, settings, logs, caches, archives, reader pages and temporary processing data. Verify actual physical array placement after migration and preserve a consistent recovery point before retiring SSD copies. Remote worker/AI storage and the shared Docker engine retain their existing placement.
 
 Downloads pause below a 100 GiB free-space reserve. After recovering capacity, explicit start/continue requires 150 GiB before releasing the storage pause. Existing files and run identities remain available for recovery. The public `/health/downloads` endpoint reports catalog, storage, worker and VPN readiness; independent monitoring also checks the freshness of committed backups.
+This is a global download pause. The configured owner must explicitly start or continue a bulk run to clear it after capacity recovery, then retry any ordinary downloads affected by the pause. GET requests, background recovery and ordinary retries never clear the latch. Readiness responses have both a time deadline and a streaming byte limit.
 
 Recover the existing A run before starting the full alphabet. The owner-only command below enables automatic advancement through A-Z across all four types:
 
@@ -1075,5 +1076,7 @@ Automatic advancement requires a fresh committed backup, a reviewed capacity for
 Completed conversion duplicates become eligible for cleanup after 24 hours once canonical pages, archives and durable receipts verify. Unfinished work and recovery evidence are retained. Completed titles keep their canonical CBZs and reader pages.
 
 Malformed reader manifests are preserved under `.ingest-recovery` before reconstruction, after the accepted artifact and retained pages validate. Conflicting content blocks repair. Warden rollback restores its inspected image ID even if its original tag has changed.
+Reconstruction can preserve an older immutable manifest while using a new conversion execution. Its completion receipt binds the retained manifest hash and accepted publication epoch; later replay validates that binding. Duplicate reclamation waits for quiescence and yields to pending content writers rather than failing legitimate work.
 
 Retire obsolete backup containers by reviewed exact IDs after preserving private configuration and any unique writable-layer contents. Preserve active containers, images, mounts and volumes. Successful deployments leave one canonical Warden per host; recovery uses protected manifests and immutable image references. See [the operations workflow](docs/agents/mass-download-operations.md) for migration, cleanup and rollback details.
+Recovery archives, configuration snapshots, receipts and their directory entries must be synchronized to durable storage before removal. Warden replacement verifies that its rollback image is cached before stopping the existing container.

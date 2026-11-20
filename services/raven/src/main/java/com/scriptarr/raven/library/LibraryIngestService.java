@@ -276,7 +276,7 @@ public final class LibraryIngestService {
      */
     private LibraryIngestResult ingestRemoteChapter(LibraryTitle title, LibraryChapter chapter, BooleanSupplier cancelled, Consumer<IngestProgress> progress) {
         Path stage = null;
-        try (var maintenance = ContentMaintenance.enter("title:" + title.id())) {
+        try (var maintenance = ContentMaintenance.enter(cancelled, "title:" + title.id())) {
             throwIfCancelled(cancelled); Path archive = resolveArchivePath(chapter);
             RemoteChapterProcessor.Result result = remote.convert(title, chapter, archive, settingsService.getNamingSettings(), cancelled, progress);
             var bundle = result.bundle(); int count = bundle.path("pageCount").asInt();
@@ -333,6 +333,7 @@ public final class LibraryIngestService {
             }
             return new LibraryIngestResult("ready", revision, count, ingestedAt, manifest.toString(), List.of(), result.jobId(), result.epoch(), result.artifactSha256());
         } catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); throw new LibraryIngestException("ingest_cancelled", "Reader processing was cancelled."); }
+        catch (java.util.concurrent.CancellationException cancelledWait) { throw new LibraryIngestException("ingest_cancelled", "Reader processing was cancelled while waiting for content maintenance."); }
         catch (Exception failure) { throw new LibraryIngestException("remote_ingest_failed", "Remote reader processing could not be committed: " + sanitizeError(failure.getMessage())); }
         finally { deleteTreeQuietly(stage); }
     }

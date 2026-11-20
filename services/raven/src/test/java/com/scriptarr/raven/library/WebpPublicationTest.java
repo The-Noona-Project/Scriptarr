@@ -152,10 +152,12 @@ class WebpPublicationTest {
         try (Fixture f = new Fixture(root)) {
             LibraryIngestResult first = f.service.ingestChapter(f.title, f.chapter); Path manifest = Path.of(first.manifestPath());
             String before = WebpChapterEncoder.sha256(manifest); long modified = Files.getLastModifiedTime(manifest).toMillis();
+            Path missing = manifest.getParent().resolve("p000001-s0001.webp"); String pageHash = WebpChapterEncoder.sha256(missing); Files.delete(missing);
             when(f.remote.convert(any(), any(), any(), any(), any(), any())).thenReturn(new RemoteChapterProcessor.Result("raven_webp_" + "a".repeat(64), 2, "b".repeat(64), f.files, f.bundle));
             LibraryIngestResult second = f.service.ingestChapter(f.title, f.chapter);
             assertEquals(first.revision(), second.revision()); assertEquals(first.ingestedAt(), second.ingestedAt()); assertEquals(2, second.conversionEpoch());
             assertEquals(before, WebpChapterEncoder.sha256(manifest)); assertEquals(modified, Files.getLastModifiedTime(manifest).toMillis()); verifyNoInteractions(f.localEncoder);
+            assertEquals(pageHash, WebpChapterEncoder.sha256(missing));
         }
     }
 

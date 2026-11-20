@@ -52,7 +52,7 @@ final class ChapterRepairPublication {
      */
     LibraryChapter publish(String taskId, String titleId, String chapterId, Path candidate, String expectedSource, String expectedNumber,
         BooleanSupplier cancelled, Consumer<IngestProgress> progress) throws Exception {
-        try (var maintenance = ContentMaintenance.enter("title:" + titleId); var lease = locks.acquire(titleId)) {
+        try (var maintenance = ContentMaintenance.enter(cancelled, "title:" + titleId); var lease = locks.acquire(titleId)) {
             Path file = journal(downloads, taskId, chapterId); Files.createDirectories(file.getParent());
             if (Files.isRegularFile(file)) {
                 JsonNode saved = read(file);
@@ -113,6 +113,8 @@ final class ChapterRepairPublication {
             state.put("readyChapter", fields); state.put("conversion", result); state.put("phase", "publishing");
             write(file, state);
             return finish(file, JSON.valueToTree(state));
+        } catch (java.util.concurrent.CancellationException cancelledWait) {
+            throw new InterruptedException("Chapter repair cancelled while waiting for content maintenance.");
         }
     }
 

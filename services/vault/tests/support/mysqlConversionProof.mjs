@@ -18,6 +18,10 @@ try {
     await admin.query("CREATE DATABASE ??", [database]);
     inspector = mysql.createPool(config.mysql);
     await first.init(); await second.init();
+    for (let index = 0; index < 110; index++) await first.upsertDiscordUser({discordUserId: `hydration-${String(index).padStart(3, "0")}`, username: `Hydration ${String(index).padStart(3, "0")}`});
+    const hydratedUsers = await second.listUsers();
+    assert.equal(hydratedUsers.length, 110, "User hydration must not overflow the bounded pool queue.");
+    assert.equal(hydratedUsers[0].username, "Hydration 000"); assert.equal(hydratedUsers[109].username, "Hydration 109");
     const request = chapterId => ({input: {titleId: "conversion-title", chapterId, sourceFingerprint: {sha256: "a".repeat(64), size: 123}, sourcePageCount: 1, archiveName: "chapter.cbz", entries: ["001.png"]}});
     const worker = i => ({workerId: `mysql-worker-${i}`, instanceId: `mysql-instance-${i}`, claimId: `mysql-claim-${i}`, leaseToken: String(i).padEnd(40, "T"), capabilities: {format: "webp", profileVersion: 1, selfTestPassed: true}});
     await first.upsertRavenTitle({id: "conversion-title", title: "Conversion fixture", mediaType: "manhua", libraryTypeSlug: "manhua", chapterCount: 2});
@@ -105,7 +109,15 @@ try {
     const history = typeof historyRow.record_json === "string" ? JSON.parse(historyRow.record_json) : historyRow.record_json;
     assert.deepEqual(history._publicationHistory[originalCompletion.lease.epoch].result, originalCompletion.result);
     await assert.rejects(first.completeConversionJob(jobId, {epoch: originalCompletion.lease.epoch, artifactSha256: artifact.sha256, chapter}), error => error.status === 409);
-    await second.cancelConversionJob(jobId, {expectedCoordinatorGeneration: rebuilds[0].spec.coordinatorGeneration});
+    const rebuiltLease = await first.claimConversionJob(worker(140));
+    assert.equal(rebuiltLease.job.jobId, jobId);
+    const rebuiltArtifact = {...artifact, sha256: "d".repeat(64)}, rebuiltFence = {epoch: rebuiltLease.lease.epoch, artifactSha256: rebuiltArtifact.sha256};
+    await second.submitConversionJob(jobId, {...worker(140), epoch: rebuiltLease.lease.epoch, artifact: rebuiltArtifact});
+    await first.publishConversionJob(jobId, rebuiltFence);
+    const publication = {jobId, epoch: originalCompletion.lease.epoch, artifactSha256: artifact.sha256, manifestSha256: "e".repeat(64)};
+    const rebuiltCompletion = await second.completeConversionJob(jobId, {...rebuiltFence, chapter, publication});
+    assert.deepEqual(rebuiltCompletion.job.result.publication, publication);
+    assert.deepEqual((await first.getConversionJob(jobId)).result.publication, publication, "The manifest's retained identity must survive a database round trip.");
     await proveScopedReset(createCachedStore(first));
     await proveCanonicalTitleIdentity(createCachedStore(second), {readAliases: async () => {
       const [rows] = await inspector.query("SELECT * FROM raven_title_aliases WHERE alias_title_id IN (?,?) ORDER BY alias_title_id", ["6639ab89-297c-4516-9228-913f0f020cb4", "merged-alias"]);

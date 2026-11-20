@@ -25,7 +25,11 @@ export function boundedMysqlPool(pool, {acquireMs = 5000, queryMs = 30000, healt
       const timer = setTimeout(() => { destroy(); reject(timeoutError()); }, ms);
       Promise.resolve().then(() => connection[name](...args)).then(value => {
         clearTimeout(timer); resolve(value);
-      }, error => { clearTimeout(timer); destroy(); reject(error); });
+      }, error => {
+        clearTimeout(timer);
+        if (error?.fatal === true || ["PROTOCOL_CONNECTION_LOST", "PROTOCOL_ENQUEUE_AFTER_FATAL_ERROR", "ECONNRESET", "EPIPE", "ETIMEDOUT"].includes(error?.code)) destroy();
+        reject(error);
+      });
     });
     return {
       query: (...args) => operation("query", args),

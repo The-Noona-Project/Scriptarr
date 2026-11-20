@@ -9,20 +9,27 @@ import {pathToFileURL} from "node:url";
  * @param {string} method HTTP method.
  * @param {string} route Docker API route.
  * @param {object} [body] Request payload.
+ * @param {Function} [requestImpl] Injectable HTTP transport.
  * @returns {Promise<object|null>} Parsed response.
  */
-export function dockerRequest(method, route, body) {
+export function dockerRequest(method, route, body, requestImpl = http.request) {
   return new Promise((resolve, reject) => {
-    const request = http.request({socketPath: "/var/run/docker.sock", method, path: route,
+    let settled = false, deadline;
+    const finish = (error, value) => {if (settled) return; settled = true; clearTimeout(deadline); error ? reject(error) : resolve(value);};
+    const request = requestImpl({socketPath: "/var/run/docker.sock", method, path: route,
       headers: {"Content-Type": "application/json"}, timeout: 45000}, response => {
       const chunks = []; response.on("data", chunk => chunks.push(chunk));
+      response.on("error", error => finish(error));
+      response.on("aborted", () => finish(new Error("Docker response ended before completion.")));
+      response.on("close", () => {if (!settled) finish(new Error("Docker response ended before completion."));});
       response.on("end", () => {
-        if (response.statusCode >= 400) { reject(Object.assign(new Error("Docker operation rejected."), {status: response.statusCode})); return; }
-        try { resolve(chunks.length ? JSON.parse(Buffer.concat(chunks).toString()) : null); } catch { reject(new Error("Invalid Docker response.")); }
+        if (response.statusCode >= 400) { finish(Object.assign(new Error("Docker operation rejected."), {status: response.statusCode})); return; }
+        try { finish(null, chunks.length ? JSON.parse(Buffer.concat(chunks).toString()) : null); } catch { finish(new Error("Invalid Docker response.")); }
       });
     });
+    deadline = setTimeout(() => request.destroy(new Error("Docker operation deadline exceeded.")), 45000);
     request.on("timeout", () => request.destroy(new Error("Docker operation deadline exceeded.")));
-    request.on("error", reject); request.end(body ? JSON.stringify(body) : undefined);
+    request.on("error", error => finish(error)); request.end(body ? JSON.stringify(body) : undefined);
   });
 }
 
@@ -60,6 +67,7 @@ export async function replaceWarden(options, docker = dockerRequest, wait = asyn
   if (before.Id !== options.expectedId || before.Name !== "/scriptarr-warden" || !/@sha256:[a-f0-9]{64}$/.test(options.image)
     || !path.isAbsolute(options.archiveRoot)) throw new Error("Warden identity or immutable deployment reference changed.");
   await docker("GET", `/images/${encodeURIComponent(options.image)}/json`);
+  await docker("GET", `/images/${encodeURIComponent(before.Image)}/json`);
   await mkdir(options.archiveRoot, {recursive: true, mode: 0o700});
   await writeFile(path.join(options.archiveRoot, `${before.Id}.private.json`), JSON.stringify(before, null, 2) + "\n", {mode: 0o600, flag: "wx"});
   const operation = `replacement-${before.Id.slice(0, 12)}-${Date.now()}`;

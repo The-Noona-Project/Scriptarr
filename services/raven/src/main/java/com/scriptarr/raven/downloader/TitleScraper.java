@@ -461,12 +461,11 @@ public class TitleScraper {
         boolean production = "weebcentral.com".equalsIgnoreCase(connection.request().url().getHost());
         if (production) ProviderCooldown.SOURCE.await(cancelled);
         checkBulkCancelled(cancelled);
-        Connection.Response response = connection.ignoreHttpErrors(true).execute();
-        checkBulkCancelled(cancelled);
-        if (response.statusCode() == 429 && production) ProviderCooldown.SOURCE.limited(response.header("Retry-After"), System.currentTimeMillis());
-        if (response.statusCode() >= 400) throw new org.jsoup.HttpStatusException("Source HTTP error", response.statusCode(), response.url().toString());
+        Document document = SourceHtmlResponse.fetch(connection, cancelled, retryAfter -> {
+            if (production) ProviderCooldown.SOURCE.limited(retryAfter, System.currentTimeMillis());
+        });
         if (production) ProviderCooldown.SOURCE.succeeded();
-        return response.parse();
+        return document;
     }
 
     private Document executeWithRetries(String label, DocumentSupplier supplier) throws Exception {

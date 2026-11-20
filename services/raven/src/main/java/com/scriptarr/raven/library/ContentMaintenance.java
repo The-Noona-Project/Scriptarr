@@ -16,6 +16,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public final class ContentMaintenance {
     private static final Map<String, List<String>> FENCES = new LinkedHashMap<>();
     private static final Map<String, Integer> WRITERS = new LinkedHashMap<>();
+    private static final java.util.Set<String> TRANSIENT = new java.util.HashSet<>();
+    private static final Map<String, Integer> WAITERS = new LinkedHashMap<>();
     private static final ObjectMapper JSON = new ObjectMapper();
 
     /** Prevent construction of this process-wide writer gate. */
@@ -52,6 +54,7 @@ public final class ContentMaintenance {
      */
     public static synchronized void block(Path downloads, String operationId, List<String> keys) throws IOException {
         if (!operationId.matches("[A-Za-z0-9_-]{1,120}") || keys.isEmpty()) throw new IOException("Invalid scoped maintenance identity.");
+        if (TRANSIENT.contains(operationId)) throw new IOException("This maintenance identity is already active.");
         List<String> prior = FENCES.get(operationId);
         if (prior != null && !prior.equals(keys)) throw new IOException("Maintenance operation scope changed.");
         Path directory = downloads.resolve(".content-maintenance"); Files.createDirectories(directory);
@@ -64,33 +67,55 @@ public final class ContentMaintenance {
     /** @param downloads managed root @param operationId completed cleanup @throws IOException when its exact journal cannot be removed */
     public static synchronized void release(Path downloads, String operationId) throws IOException {
         if (!operationId.matches("[A-Za-z0-9_-]{1,120}")) throw new IOException("Invalid maintenance identity.");
+        if (TRANSIENT.contains(operationId)) throw new IOException("Transient maintenance must release its own fence.");
         Files.deleteIfExists(downloads.resolve(".content-maintenance").resolve(operationId + ".json")); FENCES.remove(operationId);
     }
 
     /** @param keys exact writer scopes @return lease retained until actual writer cleanup has finished */
-    public static synchronized Lease enter(String... keys) {
-        for (String key : keys) for (List<String> fence : FENCES.values()) if (fence.stream().anyMatch(blocked -> intersects(key, blocked))) throw new IllegalStateException("This title's content is under scoped maintenance.");
-        for (String key : keys) WRITERS.merge(key, 1, Integer::sum);
-        return new Lease(List.of(keys));
+    public static Lease enter(String... keys) { return enter(null, keys); }
+
+    /** @param cancelled cooperative owner cancellation @param keys exact writer scopes @return lease after transient cleanup yields; permanent maintenance still rejects */
+    public static synchronized Lease enter(java.util.function.BooleanSupplier cancelled, String... keys) {
+        boolean registered = false;
+        try {
+            while (true) {
+                if (Thread.currentThread().isInterrupted() || (cancelled != null && cancelled.getAsBoolean())) throw new java.util.concurrent.CancellationException("Waiting content writer cancelled.");
+                boolean waiting = false;
+                for (String key : keys) for (var fence : FENCES.entrySet()) if (fence.getValue().stream().anyMatch(blocked -> intersects(key, blocked))) {
+                    if (!TRANSIENT.contains(fence.getKey())) throw new IllegalStateException("This title's content is under scoped maintenance.");
+                    waiting = true;
+                }
+                if (!waiting) {for (String key : keys) WRITERS.merge(key, 1, Integer::sum);return new Lease(List.of(keys));}
+                if (!registered) {for (String key : keys) WAITERS.merge(key, 1, Integer::sum);registered = true;}
+                try {ContentMaintenance.class.wait(100);}
+                catch (InterruptedException interrupted) {Thread.currentThread().interrupt();throw new java.util.concurrent.CancellationException("Waiting content writer cancelled.");}
+            }
+        } finally {if (registered) for (String key : keys) WAITERS.computeIfPresent(key, (_key, count) -> count == 1 ? null : count - 1);}
     }
 
-    /** @param keys cleanup scopes @return number of actual active or waiting scoped writers */
-    public static synchronized int active(List<String> keys) { return WRITERS.entrySet().stream().filter(row -> keys.stream().anyMatch(key -> intersects(row.getKey(), key))).mapToInt(Map.Entry::getValue).sum(); }
+    /** @param keys cleanup scopes @return number of actual writers and active transient cleanup operations */
+    public static synchronized int active(List<String> keys) {
+        return WRITERS.entrySet().stream().filter(row -> keys.stream().anyMatch(key -> intersects(row.getKey(), key))).mapToInt(Map.Entry::getValue).sum()
+            + (int) TRANSIENT.stream().filter(id -> FENCES.get(id).stream().anyMatch(a -> keys.stream().anyMatch(b -> intersects(a, b)))).count();
+    }
 
     /** @param operation unique process-local reclamation @param keys exact scopes @return temporary fence, or null when writers/maintenance already own the scope */
     public static synchronized TransientFence tryQuiescent(String operation, List<String> keys) {
-        if (FENCES.containsKey(operation) || active(keys) != 0 || FENCES.values().stream().anyMatch(existing -> existing.stream().anyMatch(a -> keys.stream().anyMatch(b -> intersects(a, b))))) return null;
+        if (FENCES.containsKey(operation) || active(keys) != 0 || WAITERS.keySet().stream().anyMatch(a -> keys.stream().anyMatch(b -> intersects(a, b)))
+            || FENCES.values().stream().anyMatch(existing -> existing.stream().anyMatch(a -> keys.stream().anyMatch(b -> intersects(a, b))))) return null;
         FENCES.put(operation, List.copyOf(keys));
+        TRANSIENT.add(operation);
         return new TransientFence(operation);
     }
 
     /** Process-local exclusion for duplicate-artifact removal; canonical content is never removed by this fence. */
     public static final class TransientFence implements AutoCloseable {
         private final String operation;
+        private final AtomicBoolean closed = new AtomicBoolean();
         /** @param operation exact process-local fence */
         private TransientFence(String operation) { this.operation = operation; }
         /** Release only this temporary exclusion. */
-        @Override public void close() { synchronized (ContentMaintenance.class) { FENCES.remove(operation); } }
+        @Override public void close() { synchronized (ContentMaintenance.class) {if (closed.compareAndSet(false, true)) {TRANSIENT.remove(operation);FENCES.remove(operation);ContentMaintenance.class.notifyAll();}} }
     }
 
     /** @param path managed path @return normalized writer key */

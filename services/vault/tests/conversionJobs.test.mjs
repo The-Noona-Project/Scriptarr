@@ -33,6 +33,18 @@ test("rebuilding reclaimed completed output requires the exact publication fence
   assert.deepEqual(await store.retryConversionJob(job.jobId, request), rebuilt);
   const retained = await repository.transaction(tx => tx.get(job.jobId));
   assert.deepEqual(retained._publicationHistory[done.job.lease.epoch].result.chapter, done.job.result.chapter);
+  const nextClaim = claim("worker-1", "rebuilt-claim"), next = await store.claimConversionJob(nextClaim);
+  const nextArtifact = {...artifact, sha256: "d".repeat(64)};
+  await store.submitConversionJob(job.jobId, {...nextClaim, epoch: next.lease.epoch, artifact: nextArtifact});
+  const fence = {epoch: next.lease.epoch, artifactSha256: nextArtifact.sha256};
+  await store.publishConversionJob(job.jobId, fence);
+  const binding = {jobId: job.jobId, epoch: leased.lease.epoch, artifactSha256: artifact.sha256, manifestSha256: "e".repeat(64)};
+  await assert.rejects(store.completeConversionJob(job.jobId, {...fence, chapter: readyChapter, publication: {...binding, artifactSha256: "f".repeat(64)}}), fenced);
+  await assert.rejects(store.completeConversionJob(job.jobId, {...fence, chapter: readyChapter, publication: {...binding, jobId: "foreign"}}), fenced);
+  const rebound = await store.completeConversionJob(job.jobId, {...fence, chapter: readyChapter, publication: binding});
+  assert.deepEqual(rebound.job.result.publication, binding);
+  assert.deepEqual(await store.completeConversionJob(job.jobId, {...fence, chapter: readyChapter, publication: binding}), rebound);
+  await assert.rejects(store.completeConversionJob(job.jobId, {...fence, chapter: readyChapter, publication: {...binding, manifestSha256: "f".repeat(64)}}), fenced);
 });
 const orderedSpec = (entries = ["001.png", "002.png"]) => ({
   ...spec(), profile: {segmentationVersion: 2},

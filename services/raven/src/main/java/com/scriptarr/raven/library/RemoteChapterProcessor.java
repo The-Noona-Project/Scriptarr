@@ -297,7 +297,11 @@ public final class RemoteChapterProcessor {
             if (acknowledged(current, expected)) return json.treeToValue(current, LibraryChapter.class);
             request = CompletedArtifactRepair.request(currentJob, current, payload);
         } else {
-            request = Map.of("epoch", result.epoch(), "artifactSha256", result.artifactSha256(), "chapter", payload);
+            JsonNode manifest = DerivedPageManifest.read(chapter);
+            Map<String, Object> publication = Map.of("jobId", manifest.path("conversionJobId").asText(),
+                "epoch", manifest.path("conversionEpoch").asLong(), "artifactSha256", manifest.path("artifactSha256").asText(),
+                "manifestSha256", WebpChapterEncoder.sha256(Path.of(chapter.ingestManifestPath())));
+            request = Map.of("epoch", result.epoch(), "artifactSha256", result.artifactSha256(), "chapter", payload, "publication", publication);
         }
         JsonNode response = client.json("POST", "/jobs/" + result.jobId() + "/complete", request, null);
         LibraryChapter saved = json.treeToValue(response.path("chapter"), LibraryChapter.class);

@@ -96,3 +96,4 @@ requests, jobs, download-task history, settings and credentials. Finish releases
 never clears fresh content again. This scoped workflow does not call the older global content-reset operation.
 
 Database acquisition and operations have bounded deadlines. Uncertain timed-out writes retire their connection and return a recoverable availability error. Health returns 503 when the database cannot respond. Conversion rebuilds preserve previous publication receipts and require the exact owning epoch, generation and artifact identity.
+Recoverable database conflicts keep their transaction available for conflict resolution. User-list hydration is bounded to avoid exhausting the connection queue. Rebuilt conversions may retain a previously accepted immutable reader publication; completion stores its verified identity separately from the new execution.
