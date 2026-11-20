@@ -93,6 +93,12 @@ public class WeebCentralDownloadProvider implements DownloadProvider {
         return titleScraper.discoverChapters(titleUrl);
     }
 
+    /** @param titleUrl source series @param cancelled owner cancellation @return explicit chapter discovery outcome */
+    @Override
+    public ChapterDiscoveryResult discoverChapters(String titleUrl, BooleanSupplier cancelled) {
+        return titleScraper.discoverChapters(titleUrl, cancelled);
+    }
+
     @Override
     public List<String> resolvePages(String chapterUrl) {
         return sourceFinder.findSource(chapterUrl);

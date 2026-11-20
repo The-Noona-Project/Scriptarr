@@ -243,22 +243,27 @@ public class TitleScraper {
      * @return normalized chapters ordered by the upstream source
      */
     public List<Map<String, String>> getChapters(String titleUrl) {
-        return discoverChapters(titleUrl, true).chapters();
+        return discoverChapters(titleUrl, true, () -> false).chapters();
     }
 
     /** @param titleUrl exact source series @return complete chapters, verified unavailability, or recoverable failure */
     public ChapterDiscoveryResult discoverChapters(String titleUrl) {
-        return discoverChapters(titleUrl, false);
+        return discoverChapters(titleUrl, false, () -> false);
     }
 
-    private ChapterDiscoveryResult discoverChapters(String titleUrl, boolean legacyFallback) {
+    /** @param titleUrl exact source series @param cancelled owner cancellation @return explicit chapter discovery outcome */
+    public ChapterDiscoveryResult discoverChapters(String titleUrl, BooleanSupplier cancelled) {
+        return discoverChapters(titleUrl, false, cancelled);
+    }
+
+    private ChapterDiscoveryResult discoverChapters(String titleUrl, boolean legacyFallback, BooleanSupplier cancelled) {
         if (titleUrl == null || titleUrl.isBlank()) {
             return ChapterDiscoveryResult.fromChapters(List.of());
         }
 
         try {
             Document titleDocument;
-            try { titleDocument = executeWithRetries("title chapter list preflight", () -> fetch(connect(titleUrl.trim()).followRedirects(false))); }
+            try { titleDocument = executeWithRetries("title chapter list preflight", () -> fetch(connect(titleUrl.trim()).followRedirects(false), cancelled)); }
             catch (org.jsoup.HttpStatusException missing) {
                 if (!legacyFallback || missing.getStatusCode() != 404) throw missing;
                 titleDocument = Document.createShell(titleUrl);
@@ -280,13 +285,14 @@ public class TitleScraper {
                     if (chapterListRequest.hxTarget() != null && !chapterListRequest.hxTarget().isBlank()) {
                         connection.header("HX-Target", chapterListRequest.hxTarget());
                     }
-                    return fetch(connection);
+                    return fetch(connection, cancelled);
                 }
             );
 
             List<Map<String, String>> rawChapters = new ArrayList<>();
             Elements chapterLinks = doc.select("a[href^=https://weebcentral.com/chapters/], a[href^=/chapters/]");
             for (int index = 0; index < chapterLinks.size(); index++) {
+                checkBulkCancelled(cancelled);
                 Element chapter = chapterLinks.get(index);
                 String chapterTitle = chapter.text();
                 String href = chapter.absUrl("href");

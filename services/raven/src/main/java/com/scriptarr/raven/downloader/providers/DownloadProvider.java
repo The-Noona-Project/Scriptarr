@@ -106,6 +106,14 @@ public interface DownloadProvider {
         return ChapterDiscoveryResult.fromChapters(getChapters(titleUrl));
     }
 
+    /** @param titleUrl exact source series @param cancelled owner cancellation @return explicit chapter discovery outcome */
+    default ChapterDiscoveryResult discoverChapters(String titleUrl, BooleanSupplier cancelled) {
+        if (cancelled.getAsBoolean() || Thread.currentThread().isInterrupted()) throw new CancellationException("Chapter request cancelled.");
+        ChapterDiscoveryResult result = discoverChapters(titleUrl);
+        if (cancelled.getAsBoolean() || Thread.currentThread().isInterrupted()) throw new CancellationException("Chapter request cancelled.");
+        return result;
+    }
+
     /**
      * Resolve page image URLs for a provider chapter URL.
      *

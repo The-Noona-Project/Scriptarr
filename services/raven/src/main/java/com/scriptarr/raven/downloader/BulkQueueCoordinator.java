@@ -179,7 +179,7 @@ public final class BulkQueueCoordinator implements BulkRunGateway {
                                     selectedMetadata.putAll(binding.metadataSnapshot()); selectedDownload.putAll(binding.downloadSnapshot());
                                 }
                                 if (catalog != null) {
-                                    List<Map<String, String>> source = discoverChapters(provider, url);
+                                    List<Map<String, String>> source = discoverChapters(provider, url, stop);
                                     checkCancelled(stop);
                                     if (source == null || source.isEmpty()) throw new IllegalStateException("The provider did not return a verifiable chapter list.");
                                     List<Map<String, String>> missing = missingChapters(catalog, source);
@@ -202,7 +202,7 @@ public final class BulkQueueCoordinator implements BulkRunGateway {
                                         selectedMetadata.putAll(metadata.metadataSnapshot());
                                         selectedDownload.putAll(metadata.downloadSnapshot());
                                         if (durable) {
-                                            List<Map<String, String>> source = discoverChapters(provider, url);
+                                            List<Map<String, String>> source = discoverChapters(provider, url, stop);
                                             checkCancelled(stop);
                                             if (source == null || source.isEmpty()) throw new IllegalStateException("The provider did not return a verifiable chapter list.");
                                             selectedDownload.put("expectedChapters", source);
@@ -275,8 +275,8 @@ public final class BulkQueueCoordinator implements BulkRunGateway {
         return summary.result(null, null);
     }
 
-    private List<Map<String, String>> discoverChapters(DownloadProvider provider, String url) {
-        ChapterDiscoveryResult result = provider.discoverChapters(url);
+    private List<Map<String, String>> discoverChapters(DownloadProvider provider, String url, BooleanSupplier cancelled) {
+        ChapterDiscoveryResult result = provider.discoverChapters(url, cancelled);
         if (result == null) result = ChapterDiscoveryResult.fromChapters(provider.getChapters(url));
         if (result.unavailable()) throw new SourceUnavailableException();
         if (!result.error().isBlank()) throw new IllegalStateException(result.error());
