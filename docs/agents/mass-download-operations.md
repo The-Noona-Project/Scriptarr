@@ -31,6 +31,7 @@
 - Reclamation requires a completed durable conversion older than 24 hours, exact epoch/artifact/catalog binding, unchanged source fingerprint, a healthy canonical manifest and matching physical page hashes. Active writers and maintenance fences defer it.
 - Preserve bundle/proof files and an atomic reclamation receipt. Remove only verified duplicate WebP payloads. Unknown, changed, failed, queued and publishing work remain intact. Interrupted reclamation resumes from its phase receipt.
 - Completed replay reads the verified canonical output after reclamation. Missing/corrupt output with unchanged source/catalog binding may request a fenced `rebuildPublished` retry. Vault requires the exact epoch, coordinator generation and artifact hash, retains prior publication receipts, and allocates a new epoch. Broker outages and changed identities cannot authorize reconstruction.
+- Malformed manifest reconstruction validates the accepted artifact and all retained pages before preserving the damaged metadata under `.ingest-recovery`. The restored manifest publishes last; foreign or changed retained files still block recovery. Warden rollback uses the inspected image ID even when the original container used a mutable tag.
 - New reclamation uses a process-local quiescent fence because it removes only duplicates. Canonical cleanup continues using restart-durable maintenance fences. Reader publication holds the title writer scope throughout file publication.
 
 ## Failure handling

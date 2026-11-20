@@ -1074,4 +1074,6 @@ Automatic advancement requires a fresh committed backup, a reviewed capacity for
 
 Completed conversion duplicates become eligible for cleanup after 24 hours once canonical pages, archives and durable receipts verify. Unfinished work and recovery evidence are retained. Completed titles keep their canonical CBZs and reader pages.
 
+Malformed reader manifests are preserved under `.ingest-recovery` before reconstruction, after the accepted artifact and retained pages validate. Conflicting content blocks repair. Warden rollback restores its inspected image ID even if its original tag has changed.
+
 Retire obsolete backup containers by reviewed exact IDs after preserving private configuration and any unique writable-layer contents. Preserve active containers, images, mounts and volumes. Successful deployments leave one canonical Warden per host; recovery uses protected manifests and immutable image references. See [the operations workflow](docs/agents/mass-download-operations.md) for migration, cleanup and rollback details.

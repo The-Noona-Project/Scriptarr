@@ -17,6 +17,16 @@ import static org.mockito.Mockito.*;
 class CompletedArtifactRetentionTest {
     private static final ObjectMapper JSON = new ObjectMapper();
 
+    /** Empty and malformed published metadata remain typed reconstruction failures after duplicate removal. */
+    @Test void corruptReclaimedManifestRequiresReconstruction(@TempDir Path root) throws Exception {
+        Fixture f = fixture(root);
+        assertTrue(CompletedArtifactRetention.reclaim(root, f.catalog, f.job, Instant.parse("2026-11-20T12:00:00Z")));
+        for (String broken : List.of("", "{malformed")) {
+            Files.writeString(Path.of(f.chapter.ingestManifestPath()), broken);
+            assertThrows(CompletedArtifactRetention.OutputUnavailable.class, () -> CompletedArtifactRetention.canonical(root, f.catalog, f.job));
+        }
+    }
+
     /** @param root isolated canonical storage @throws Exception when fixture IO fails */
     @Test void reclaimsOnlyDuplicatePayloadAndCanReplayFromCanonicalOutput(@TempDir Path root) throws Exception {
         Fixture f = fixture(root);

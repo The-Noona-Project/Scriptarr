@@ -8,7 +8,7 @@ import {replaceWarden} from "./replace-warden.mjs";
 
 for (const fail of [false, true]) test(`canonical replacement ${fail ? "rolls back" : "succeeds"} without renamed backups`, async () => {
   const root = await mkdtemp(path.join(tmpdir(), "warden-replace-")), calls = [];
-  const before = {Id: "a".repeat(64), Name: "/scriptarr-warden", Config: {Image: "old-immutable", Env: ["PRESERVED=yes"]},
+  const before = {Id: "a".repeat(64), Image: "sha256:" + "c".repeat(64), Name: "/scriptarr-warden", Config: {Image: "registry/warden:latest", Env: ["PRESERVED=yes"]},
     HostConfig: {Binds: ["/existing/data:/existing/data"]}, NetworkSettings: {Networks: {internal: {Aliases: ["scriptarr-warden"]}}}};
   let current = before, creates = 0;
   try {
@@ -22,7 +22,7 @@ for (const fail of [false, true]) test(`canonical replacement ${fail ? "rolls ba
     };
     const operation = replaceWarden({expectedId: before.Id, image: "registry/warden@sha256:" + "b".repeat(64), archiveRoot: root}, docker,
       async () => { if (fail && creates === 1) throw new Error("injected unhealthy replacement"); });
-    if (fail) { await assert.rejects(operation, /previous canonical Warden was restored/); assert.equal(current.Config.Image, before.Config.Image); }
+    if (fail) { await assert.rejects(operation, /previous canonical Warden was restored/); assert.equal(current.Config.Image, before.Image); }
     else assert.equal((await operation).backupContainersCreated, 0);
     assert.ok(calls.filter(c => c.route.includes("create")).every(c => c.route === "/containers/create?name=scriptarr-warden"));
     assert.ok(calls.filter(c => c.method === "DELETE").every(c => !/[?&]v=/.test(c.route)));

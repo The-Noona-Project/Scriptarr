@@ -84,7 +84,7 @@ export async function replaceWarden(options, docker = dockerRequest, wait = asyn
       if ((replacement && failed.Id !== replacement.Id) || failed.Config.Labels?.["com.scriptarr.replacement"] !== operation) throw new Error("Canonical Warden changed during rollback; manual reconciliation required.");
       await docker("POST", `/containers/${failed.Id}/stop?t=30`); await docker("DELETE", `/containers/${failed.Id}`);
     }
-    const restored = await docker("POST", "/containers/create?name=scriptarr-warden", wardenSpecification(before, before.Config.Image));
+    const restored = await docker("POST", "/containers/create?name=scriptarr-warden", wardenSpecification(before, before.Image));
     await docker("POST", `/containers/${restored.Id}/start`); await wait(restored.Id);
     throw new Error("Replacement failed; previous canonical Warden was restored.", {cause: failure});
   }

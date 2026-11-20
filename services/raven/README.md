@@ -266,3 +266,5 @@ Original and reboot editions can share translated aliases while retaining separa
 Recovery also rejects CBZ pages with empty or zero-filled headers, even when the ZIP checksum is valid. Healthy chapter archives remain reusable; damaged chapters return to download repair before reader conversion.
 
 Bulk downloads pause when storage falls below the 100 GiB reserve. Explicit resume needs 150 GiB of free capacity. Automatic A-Z runs additionally require fresh backups, a reviewed capacity estimate, protected source access and a ready WebP worker. Completed conversion duplicates can be reclaimed after 24 hours; canonical archives, reader pages and recovery receipts are preserved.
+
+Reader reconstruction preserves malformed metadata as recovery evidence and validates retained pages before publishing a repaired manifest. Conflicting content remains paused for review.
