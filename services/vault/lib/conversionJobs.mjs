@@ -106,6 +106,18 @@ const publicationValue = (value, job) => {
   return publication;
 };
 
+/** Retain accepted evidence before cancellation advances its epoch or an explicit retry clears its result. */
+const rememberAcceptedPublication = job => {
+  if (!job.result?.artifact) return;
+  const epoch = job.lease.epoch - (job.status === "cancelled" ? 1 : 0);
+  if (epoch < 1) conflict("The accepted publication epoch cannot be recovered.");
+  artifactValue(job.result.artifact, job);
+  job._publicationHistory ||= {};
+  const prior = job._publicationHistory[epoch];
+  if (prior && prior.result?.artifact?.sha256 !== job.result.artifact.sha256) conflict("Accepted publication evidence conflicts with its retained history.");
+  if (!prior) job._publicationHistory[epoch] = {result: copy(job.result)};
+};
+
 /** Create authoritative conversion state transitions over a transactional repository. */
 export const createConversionJobs = ({repository, now = Date.now, publishChapter = null, repairChapter = null}) => {
   const time = tx => Number.isFinite(tx.now) ? tx.now : now();
@@ -338,6 +350,7 @@ export const createConversionJobs = ({repository, now = Date.now, publishChapter
         }
         if (["cancelled", "completed"].includes(job.status)) return publicJob(job);
         if (body.expectedEpoch != null && body.expectedEpoch !== job.lease.epoch) conflict("This cancellation epoch is no longer current.");
+        rememberAcceptedPublication(job);
         job.status = "cancelled"; job.lease.epoch += 1; job.lease.expiresAt = null;
         job.finishedAt = new Date(time(tx)).toISOString();
         return save(tx, job);
@@ -355,9 +368,11 @@ export const createConversionJobs = ({repository, now = Date.now, publishChapter
         await assertUnfenced(tx, job);
         const owner = body.owner == null ? null : ownerValue(body.owner);
         const priority = priorityValue(body.priority || owner?.kind || job.priority || "interactive");
+        rememberAcceptedPublication(job);
         if (rebuild) {
           job._publicationHistory ||= {};
           job._publicationHistory[job.lease.epoch] = {result: copy(job.result), completionHash: job._completionHash, finishedAt: job.finishedAt};
+          if (job.result.publication) job.spec.rebuildPublication = {...copy(job.result.publication), chapter: copy(job.result.chapter)};
         }
         job.status = "queued"; job.lease = {epoch: job.lease.epoch + 1, workerId: null, expiresAt: null};
         job.progress = {completedLogicalPages: 0, totalLogicalPages: job.spec.input.sourcePageCount}; job.result = {};

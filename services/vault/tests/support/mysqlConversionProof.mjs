@@ -118,6 +118,24 @@ try {
     const rebuiltCompletion = await second.completeConversionJob(jobId, {...rebuiltFence, chapter, publication});
     assert.deepEqual(rebuiltCompletion.job.result.publication, publication);
     assert.deepEqual((await first.getConversionJob(jobId)).result.publication, publication, "The manifest's retained identity must survive a database round trip.");
+    const anotherRebuild = await first.retryConversionJob(jobId, {requestId: "changed-metadata-rebuild", rebuildPublished: true,
+      expectedEpoch: rebuiltCompletion.job.lease.epoch, expectedCoordinatorGeneration: rebuiltCompletion.job.spec.coordinatorGeneration, expectedArtifactSha256: rebuiltArtifact.sha256});
+    assert.deepEqual((await second.getConversionJob(jobId)).spec.rebuildPublication, {...publication, chapter: rebuiltCompletion.chapter});
+    await first.cancelConversionJob(jobId, {expectedCoordinatorGeneration: anotherRebuild.spec.coordinatorGeneration});
+    const legacy = await first.createConversionJob({...request("legacy-interrupted"), priority: "interactive"}), legacyClaim = worker(150);
+    const legacyLease = await second.claimConversionJob(legacyClaim);assert.equal(legacyLease.job.jobId, legacy.jobId);
+    await first.submitConversionJob(legacy.jobId, {...legacyClaim, epoch: legacyLease.lease.epoch, artifact});
+    await second.publishConversionJob(legacy.jobId, {epoch: legacyLease.lease.epoch, artifactSha256: artifact.sha256});
+    // Isolated pre-upgrade cancelled state: accepted bytes remain, but no publication-history feature existed yet.
+    await inspector.query("UPDATE raven_conversion_jobs SET status_name='cancelled', record_json=JSON_SET(JSON_REMOVE(record_json,'$._publicationHistory'),'$.status','cancelled','$.lease.epoch',?,'$.lease.expiresAt',NULL) WHERE job_id=?", [legacyLease.lease.epoch + 1, legacy.jobId]);
+    await first.retryConversionJob(legacy.jobId, {requestId: "legacy-approved-retry", expectedEpoch: legacyLease.lease.epoch + 1});
+    const legacyRetryClaim = worker(151), legacyRetryLease = await second.claimConversionJob(legacyRetryClaim);assert.equal(legacyRetryLease.job.jobId, legacy.jobId);
+    await first.submitConversionJob(legacy.jobId, {...legacyRetryClaim, epoch: legacyRetryLease.lease.epoch, artifact: rebuiltArtifact});
+    const legacyFence = {epoch: legacyRetryLease.lease.epoch, artifactSha256: rebuiltArtifact.sha256};await second.publishConversionJob(legacy.jobId, legacyFence);
+    const legacyPublication = {...publication, jobId: legacy.jobId, epoch: legacyLease.lease.epoch};
+    await first.completeConversionJob(legacy.jobId, {...legacyFence, publication: legacyPublication, chapter: {...chapter, id: "legacy-interrupted",
+      ingestManifestPath: "/downloads/ingested/manhua/conversion-title/legacy-interrupted/webp-0123456789abcdef/manifest.json"}});
+    assert.deepEqual((await second.getConversionJob(legacy.jobId)).result.publication, legacyPublication);
     await proveScopedReset(createCachedStore(first));
     await proveCanonicalTitleIdentity(createCachedStore(second), {readAliases: async () => {
       const [rows] = await inspector.query("SELECT * FROM raven_title_aliases WHERE alias_title_id IN (?,?) ORDER BY alias_title_id", ["6639ab89-297c-4516-9228-913f0f020cb4", "merged-alias"]);

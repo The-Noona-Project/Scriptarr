@@ -271,3 +271,4 @@ The storage pause applies to all download work. After restoring capacity, the co
 
 Reader reconstruction preserves malformed metadata as recovery evidence and validates retained pages before publishing a repaired manifest. Conflicting content remains paused for review.
 Reconstructed pages can retain their original immutable manifest. The new completion records that publication identity so later recovery still verifies the correct files.
+Changed saved metadata can be reconstructed only against the broker's fenced publication receipt and validated page files; rejected metadata is preserved as evidence. Interrupted older publications retain their accepted-artifact proof through cancellation and retry.

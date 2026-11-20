@@ -67,6 +67,16 @@ test("failed recovery synchronization preserves the stopped container", async ()
   } finally {await rm(root, {recursive: true, force: true});}
 });
 
+test("nested archive creation synchronizes every newly published ancestor", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "retire-ancestors-")), archiveRoot = path.join(root, "one", "two", "three"), id = "f".repeat(64);
+  try {
+    await retireContainer({id, name: "old-copy", archiveRoot}, async args => {
+      if (args[0] === "inspect") return JSON.stringify([{Id: id, Name: "/old-copy", State: {Status: "exited", Running: false}, Image: "immutable", Mounts: []}]);
+      if (args[0] === "export") await writeFile(args[2], Buffer.alloc(2048));return "";
+    }, async (_files, directories) => {for (const dir of [root, path.join(root, "one"), path.join(root, "one", "two"), archiveRoot, path.join(archiveRoot, id)]) assert.ok(directories.includes(dir));});
+  } finally {await rm(root, {recursive: true, force: true});}
+});
+
 test("Linux recovery files and directory entries synchronize", {skip: process.platform !== "linux"}, async () => {
   const root = await mkdtemp(path.join(tmpdir(), "retire-durable-")), file = path.join(root, "proof");
   try {await writeFile(file, "recoverable");await synchronizeRecovery([file], [root, path.dirname(root)]);}

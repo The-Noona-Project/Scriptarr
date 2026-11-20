@@ -16,6 +16,23 @@ import static org.mockito.Mockito.*;
 
 /** Real JSON throttling and deterministic response ownership checks. */
 class SourceHtmlResponseTest {
+    /** @throws Exception on local fixture or deadline failure */
+    @Test void continuouslySendingBodyCannotOutliveTheRequestDeadline() throws Exception {
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/slow", exchange -> {
+            exchange.getResponseHeaders().set("Content-Type", "text/html"); exchange.sendResponseHeaders(200, 0);
+            try (var output = exchange.getResponseBody()) {
+                for (int i = 0; i < 200; i++) {output.write("<p>still sending</p>".getBytes(java.nio.charset.StandardCharsets.UTF_8));output.flush();Thread.sleep(20);}
+            } catch (java.io.IOException closed) { /* Deadline closure is expected. */ }
+            catch (InterruptedException interrupted) {Thread.currentThread().interrupt();}
+        });
+        server.start(); long started = System.nanoTime();
+        try {
+            assertThrows(java.net.SocketTimeoutException.class, () -> SourceHtmlResponse.fetch(Jsoup.connect("http://127.0.0.1:" + server.getAddress().getPort() + "/slow").timeout(400), () -> false, ignored -> {}));
+            assertTrue(java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started) < 2000);
+        } finally {server.stop(0);}
+    }
+
     /** @throws Exception on fixture HTTP failure */
     @Test void jsonThrottlingIsHandledBeforeMimeAndSuccessfulJsonRemainsRejected() throws Exception {
         HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
@@ -44,6 +61,7 @@ class SourceHtmlResponseTest {
     @Test void errorAndCancellationCloseWithoutReadingBody() throws Exception {
         for (boolean cancel : new boolean[]{false, true}) {
             Connection connection = mock(Connection.class, RETURNS_SELF);
+            Connection.Request request = mock(Connection.Request.class);when(connection.request()).thenReturn(request);when(request.timeout()).thenReturn(1000);
             Connection.Response response = mock(Connection.Response.class);
             AtomicBoolean closed = new AtomicBoolean();
             BufferedInputStream body = new BufferedInputStream(new ByteArrayInputStream(new byte[0])) {

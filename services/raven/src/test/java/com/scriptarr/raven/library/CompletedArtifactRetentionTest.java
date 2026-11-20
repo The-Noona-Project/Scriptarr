@@ -26,7 +26,7 @@ class CompletedArtifactRetentionTest {
             "epoch", 1, "artifactSha256", "b".repeat(64), "manifestSha256", WebpChapterEncoder.sha256(Path.of(f.chapter.ingestManifestPath())))));
         assertEquals(f.chapter, CompletedArtifactRetention.canonical(root, f.catalog, f.job));
         Files.writeString(Path.of(f.chapter.ingestManifestPath()), Files.readString(Path.of(f.chapter.ingestManifestPath())) + " ");
-        assertThrows(java.io.IOException.class, () -> CompletedArtifactRetention.canonical(root, f.catalog, f.job));
+        assertThrows(CompletedArtifactRetention.OutputUnavailable.class, () -> CompletedArtifactRetention.canonical(root, f.catalog, f.job));
     }
 
     /** Empty and malformed published metadata remain typed reconstruction failures after duplicate removal. */

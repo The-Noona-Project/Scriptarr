@@ -290,7 +290,18 @@ public final class LibraryIngestService {
             if (Files.isSymbolicLink(destination) || Files.isSymbolicLink(manifest)) throw new IOException("Immutable reader publication must not follow a link.");
             com.fasterxml.jackson.databind.JsonNode saved = null;
             boolean malformedManifest = false;
-            if (Files.isRegularFile(manifest)) {
+            String damagedManifestHash = null;
+            var prior = result.rebuildPublication();
+            if (prior != null) {
+                if (!result.jobId().equals(prior.path("jobId").asText()) || !revision.equals(prior.path("chapter").path("ingestRevision").asText())
+                    || !manifest.toString().equals(prior.path("chapter").path("ingestManifestPath").asText())
+                    || !prior.path("manifestSha256").asText().matches("[a-f0-9]{64}")) throw new IOException("Fenced reconstruction publication scope changed.");
+                if (Files.isRegularFile(manifest)) {
+                    String currentHash = WebpChapterEncoder.sha256(manifest);
+                    if (!currentHash.equals(prior.path("manifestSha256").asText())) { damagedManifestHash = currentHash; malformedManifest = true; }
+                }
+            }
+            if (Files.isRegularFile(manifest) && damagedManifestHash == null) {
                 try { saved = objectMapper.readTree(manifest.toFile()); }
                 catch (com.fasterxml.jackson.core.JsonProcessingException malformed) { malformedManifest = true; }
                 if (saved == null || !saved.isObject()) { malformedManifest = true; saved = null; }
@@ -323,7 +334,8 @@ public final class LibraryIngestService {
                 objectMapper.writerWithDefaultPrettyPrinter().writeValue(stage.resolve("manifest.json").toFile(), metadata);
                 throwIfCancelled(cancelled); Files.createDirectories(chapterRoot);
                 if (Files.exists(destination, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
-                    if (malformedManifest) ImmutableManifestRecovery.restoreMalformed(stage, destination, resolveDataRoot().resolve(INGESTED_FOLDER_NAME), cancelled);
+                    if (damagedManifestHash != null) ImmutableManifestRecovery.restoreDamaged(stage, destination, resolveDataRoot().resolve(INGESTED_FOLDER_NAME), cancelled, damagedManifestHash);
+                    else if (malformedManifest) ImmutableManifestRecovery.restoreMalformed(stage, destination, resolveDataRoot().resolve(INGESTED_FOLDER_NAME), cancelled);
                     else ImmutableManifestRecovery.restore(stage, destination, resolveDataRoot().resolve(INGESTED_FOLDER_NAME), cancelled);
                 } else {
                     try { Files.move(stage, destination, StandardCopyOption.ATOMIC_MOVE); }

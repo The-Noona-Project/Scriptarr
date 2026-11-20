@@ -166,7 +166,8 @@ public final class RemoteChapterProcessor {
                 if (!"completed".equals(status)) client.json("POST", "/jobs/" + id + "/publish", Map.of("epoch", epoch, "artifactSha256", artifact.path("sha256").asText()), null);
                 JsonNode completedChapter = "completed".equals(status) ? job.path("result").path("chapter") : null;
                 if (completedChapter != null && !completedChapter.isObject()) throw new IOException("Completed conversion has no original chapter receipt.");
-                return new Result(id, epoch, artifact.path("sha256").asText(), directory, bundle, completedChapter == null ? null : completedChapter.deepCopy());
+                return new Result(id, epoch, artifact.path("sha256").asText(), directory, bundle, completedChapter == null ? null : completedChapter.deepCopy(),
+                    job.path("spec").path("rebuildPublication").isObject() ? job.path("spec").path("rebuildPublication").deepCopy() : null);
             }
             Thread.sleep(1000); job = unwrap(client.json("GET", "/jobs/" + id, null, null));
         }
@@ -406,7 +407,9 @@ public final class RemoteChapterProcessor {
     private static JsonNode unwrap(JsonNode value) { return value != null && value.has("job") ? value.path("job") : value; }
 
     /** Accepted worker output awaiting coordinator publication and atomic catalog completion. */
-    public record Result(String jobId, long epoch, String artifactSha256, Path directory, JsonNode bundle, JsonNode completedChapter) {
+    public record Result(String jobId, long epoch, String artifactSha256, Path directory, JsonNode bundle, JsonNode completedChapter, JsonNode rebuildPublication) {
+        /** @param jobId immutable job @param epoch transport fence @param artifactSha256 accepted transfer digest @param directory private accepted files @param bundle validated metadata @param completedChapter original completion checkpoint */
+        public Result(String jobId, long epoch, String artifactSha256, Path directory, JsonNode bundle, JsonNode completedChapter) { this(jobId, epoch, artifactSha256, directory, bundle, completedChapter, null); }
         /** @param jobId immutable job @param epoch transport fence @param artifactSha256 accepted transfer digest @param directory private accepted files @param bundle validated artifact metadata */
         public Result(String jobId, long epoch, String artifactSha256, Path directory, JsonNode bundle) { this(jobId, epoch, artifactSha256, directory, bundle, null); }
     }

@@ -51,7 +51,7 @@ export async function retireContainer(approval, docker = async args => (await ex
     return {...receipt, removed: true};
   }
   if (before.Id !== approval.id || before.Name !== `/${approval.name}` || !["exited", "created", "dead"].includes(before.State.Status) || before.State.Running) throw new Error("The reviewed container identity/state changed; refusing retirement.");
-  await mkdir(directory, {recursive: true, mode: 0o700});
+  const firstCreated = await mkdir(directory, {recursive: true, mode: 0o700});
   const snapshot = path.join(directory, "inspect.private.json");
   try { await writeFile(snapshot, JSON.stringify(before, null, 2) + "\n", {mode: 0o600, flag: "wx"}); }
   catch (error) {
@@ -90,7 +90,13 @@ export async function retireContainer(approval, docker = async args => (await ex
     if (saved.id !== approval.id || saved.name !== approval.name || saved.sha256 !== sha256) throw new Error("Existing retirement receipt differs.");
     receipt = saved;
   }
-  await synchronize([archive, snapshot, path.join(directory, "receipt.json")], [directory, approval.archiveRoot, path.dirname(approval.archiveRoot)]);
+  const directories = new Set([directory, approval.archiveRoot, path.dirname(approval.archiveRoot)]);
+  if (firstCreated) for (let current = directory; ; current = path.dirname(current)) {
+    directories.add(current);
+    if (path.relative(path.toNamespacedPath(current), path.toNamespacedPath(path.dirname(firstCreated))) === "") break;
+    if (path.dirname(current) === current) throw new Error("Created recovery directory ancestry could not be verified.");
+  }
+  await synchronize([archive, snapshot, path.join(directory, "receipt.json")], [...directories]);
   await docker(["rm", approval.id]);
   const remaining = (await docker(["ps", "-a", "--no-trunc", "--format", "{{.ID}}"])).trim().split(/\s+/);
   if (remaining.includes(approval.id)) throw new Error("Container retirement could not be verified.");

@@ -8,7 +8,10 @@ import static org.junit.jupiter.api.Assertions.*;
 
 /** Capacity reads cannot release owner pauses or report an unavailable filesystem ready. */
 class StorageBudgetTest {
-    /** Approval and admission share one lock, so a waiter cannot recreate an already approved pressure marker. */
+    /** Approval and admission share one lock, so a waiter cannot recreate an already approved pressure marker.
+     * @param root isolated managed filesystem
+     * @throws Exception when fixture setup fails
+     */
     @Test void approvalWinsBeforeWaitingAdmissionReadsState(@TempDir Path root) throws Exception {
         var status = StorageBudget.status(root);
         org.junit.jupiter.api.Assumptions.assumeTrue((long) status.get("availableBytes") >= (long) status.get("resumeBytes"));
