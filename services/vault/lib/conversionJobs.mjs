@@ -333,10 +333,17 @@ export const createConversionJobs = ({repository, now = Date.now, publishChapter
       return repository.transaction(async tx => {
         const job = await requireJob(tx, id);
         if (job._retryReceipts?.[requestId]) return copy(job._retryReceipts[requestId]);
-        if (body.expectedEpoch !== job.lease.epoch || !["failed", "cancelled"].includes(job.status)) conflict("This conversion cannot be retried in its current state.");
+        const rebuild = job.status === "completed" && body.rebuildPublished === true
+          && body.expectedCoordinatorGeneration === job.spec.coordinatorGeneration
+          && body.expectedArtifactSha256 === job.result?.artifact?.sha256;
+        if (body.expectedEpoch !== job.lease.epoch || (!["failed", "cancelled"].includes(job.status) && !rebuild)) conflict("This conversion cannot be retried in its current state.");
         await assertUnfenced(tx, job);
         const owner = body.owner == null ? null : ownerValue(body.owner);
         const priority = priorityValue(body.priority || owner?.kind || job.priority || "interactive");
+        if (rebuild) {
+          job._publicationHistory ||= {};
+          job._publicationHistory[job.lease.epoch] = {result: copy(job.result), completionHash: job._completionHash, finishedAt: job.finishedAt};
+        }
         job.status = "queued"; job.lease = {epoch: job.lease.epoch + 1, workerId: null, expiresAt: null};
         job.progress = {completedLogicalPages: 0, totalLogicalPages: job.spec.input.sourcePageCount}; job.result = {};
         delete job.error; delete job.finishedAt; delete job._leaseTokenHash; delete job._completionHash;

@@ -48,6 +48,21 @@ class BulkRunServiceTest {
     private static final Instant NOW = Instant.parse("2026-11-07T12:00:00Z");
     private final List<BulkRunService> services = new ArrayList<>();
 
+    /** Automatic owner consent covers all 104 batches; changed consent cannot reuse a creation key. @throws Exception when fixture execution fails */
+    @Test void automaticRunKeepsDurableConsentAndHonorsDependencyGates() throws Exception {
+        Fixture fixture = fixture();
+        String id = fixture.create(Map.of("type", "all", "titlegroup", "all", "nsfw", false, "groupsize", 4, "autoAdvance", true, "requestId", "automatic-owner-run"));
+        assertEquals("completed", awaitStatus(fixture.service, id, "completed").get("status"));
+        assertEquals(104, fixture.gateway.queueCalls.get());
+        assertEquals(true, map(fixture.service.status(id).get("filters")).get("autoAdvance"));
+        assertThrows(BulkRunConflictException.class, () -> fixture.create(Map.of("type", "all", "titlegroup", "all", "groupsize", 4, "requestId", "automatic-owner-run")));
+        Fixture blocked = fixture();
+        org.mockito.Mockito.doThrow(new java.io.IOException("mass_download_gate: worker unavailable")).when(blocked.downloader).requireMassDownloadReady(anyString());
+        String paused = blocked.create(Map.of("type", "all", "titlegroup", "all", "nsfw", false, "groupsize", 4, "autoAdvance", true));
+        assertEquals("paused", awaitStatus(blocked.service, paused, "paused").get("status"));
+        assertEquals(0, blocked.gateway.queueCalls.get());
+    }
+
     /** Stop every executor even when a test fails before explicit cancellation. */
     @AfterEach
     void stopWorkers() {

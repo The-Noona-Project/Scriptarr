@@ -85,6 +85,14 @@ public interface DownloadProvider {
      */
     TitleDetails getTitleDetails(String titleUrl);
 
+    /** @param titleUrl source series @param cancelled owner cancellation @return verified source metadata or null */
+    default TitleDetails getTitleDetails(String titleUrl, BooleanSupplier cancelled) {
+        if (cancelled.getAsBoolean() || Thread.currentThread().isInterrupted()) throw new CancellationException("Metadata request cancelled.");
+        TitleDetails result = getTitleDetails(titleUrl);
+        if (cancelled.getAsBoolean() || Thread.currentThread().isInterrupted()) throw new CancellationException("Metadata request cancelled.");
+        return result;
+    }
+
     /**
      * Load the chapter list for a provider title URL.
      *
@@ -96,6 +104,14 @@ public interface DownloadProvider {
     /** @param titleUrl exact source series @return explicit discovery outcome; empty legacy results remain unresolved */
     default ChapterDiscoveryResult discoverChapters(String titleUrl) {
         return ChapterDiscoveryResult.fromChapters(getChapters(titleUrl));
+    }
+
+    /** @param titleUrl exact source series @param cancelled owner cancellation @return explicit chapter discovery outcome */
+    default ChapterDiscoveryResult discoverChapters(String titleUrl, BooleanSupplier cancelled) {
+        if (cancelled.getAsBoolean() || Thread.currentThread().isInterrupted()) throw new CancellationException("Chapter request cancelled.");
+        ChapterDiscoveryResult result = discoverChapters(titleUrl);
+        if (cancelled.getAsBoolean() || Thread.currentThread().isInterrupted()) throw new CancellationException("Chapter request cancelled.");
+        return result;
     }
 
     /**

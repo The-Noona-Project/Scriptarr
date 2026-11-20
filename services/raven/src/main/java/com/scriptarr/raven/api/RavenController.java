@@ -88,6 +88,7 @@ public class RavenController {
             "ok", true,
             "service", "scriptarr-raven",
             "downloads", downloaderService.stats(),
+            "storage", downloaderService.storageStatus(),
             "vpn", vpnService.status(),
             "ingest", Map.of("hardware", libraryService.ingestHardwareStatus()),
             "metadataProviders", settingsService.getMetadataProviderSettings(),

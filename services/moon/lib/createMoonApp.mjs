@@ -12,6 +12,7 @@ import {createAdminNextRuntime} from "./createAdminNextRuntime.mjs";
 import {createReaderNextRuntime} from "./createReaderNextRuntime.mjs";
 import {createUserNextRuntime} from "./createUserNextRuntime.mjs";
 import {proxyRequest} from "./proxy.mjs";
+import {downloadReadiness} from "./downloadReadiness.mjs";
 
 const SAGE_WARMUP_TIMEOUT_MS = 7000;
 const SAGE_WARMUP_PATHS = Object.freeze([
@@ -91,6 +92,16 @@ export const createMoonApp = async ({logger = createLogger("MOON")} = {}) => {
       service: "scriptarr-moon",
       programs: ["/", "/reader", "/admin"]
     });
+  });
+
+  app.get("/health/downloads", async (_req, res) => {
+    res.set("Cache-Control", "no-store");
+    try {
+      const upstream = await proxyRequest({baseUrl: config.sageBaseUrl, path: "/health", signal: AbortSignal.timeout(5000)});
+      if (upstream.status !== 200 || upstream.body.length > 65536) throw new Error("Readiness unavailable.");
+      const readiness = downloadReadiness(JSON.parse(upstream.body.toString("utf8")));
+      res.status(readiness.ready ? 200 : 503).json(readiness);
+    } catch { res.status(503).json(downloadReadiness()); }
   });
 
   registerAuthRoutes(app, {config, getSessionToken, logger});

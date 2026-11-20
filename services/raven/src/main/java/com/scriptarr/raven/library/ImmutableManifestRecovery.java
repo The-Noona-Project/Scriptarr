@@ -31,11 +31,28 @@ final class ImmutableManifestRecovery {
      * @throws InterruptedException when the owner cancels before a publication checkpoint
      */
     static void restore(Path stage, Path destination, Path ingestRoot, BooleanSupplier cancelled) throws IOException, InterruptedException {
+        restore(stage, destination, ingestRoot, cancelled, false);
+    }
+
+    /** @param stage accepted output @param destination exact revision @param ingestRoot managed root @param cancelled owner cancellation @throws IOException on foreign content @throws InterruptedException on cancellation */
+    static void restoreMalformed(Path stage, Path destination, Path ingestRoot, BooleanSupplier cancelled) throws IOException, InterruptedException {
+        restore(stage, destination, ingestRoot, cancelled, true);
+    }
+
+    /** @param stage accepted output @param destination exact revision @param ingestRoot managed category @param cancelled owner cancellation @param malformed whether unreadable metadata may be preserved @throws IOException on unsafe content @throws InterruptedException on cancellation */
+    private static void restore(Path stage, Path destination, Path ingestRoot, BooleanSupplier cancelled, boolean malformed) throws IOException, InterruptedException {
         checkScope(destination, ingestRoot);
         Path manifest = stage.resolve("manifest.json"), targetManifest = destination.resolve("manifest.json");
         if (Files.isSymbolicLink(stage) || !Files.isDirectory(stage, LinkOption.NOFOLLOW_LINKS)
             || Files.isSymbolicLink(manifest) || !Files.isRegularFile(manifest, LinkOption.NOFOLLOW_LINKS)
-            || Files.size(manifest) <= 0 || Files.size(manifest) > 8_388_608 || Files.exists(targetManifest, LinkOption.NOFOLLOW_LINKS)) throw invalid();
+            || Files.size(manifest) <= 0 || Files.size(manifest) > 8_388_608 || (!malformed && Files.exists(targetManifest, LinkOption.NOFOLLOW_LINKS))) throw invalid();
+        byte[] damaged = null;
+        if (malformed) {
+            if (Files.isSymbolicLink(targetManifest) || !Files.isRegularFile(targetManifest, LinkOption.NOFOLLOW_LINKS) || Files.size(targetManifest) > 8_388_608) throw invalid();
+            damaged = Files.readAllBytes(targetManifest);
+            try { JsonNode retained = JSON.readTree(damaged); if (retained != null && retained.isObject()) throw invalid(); }
+            catch (com.fasterxml.jackson.core.JsonProcessingException unreadable) { /* Preserve only proven malformed metadata after the remaining output validates. */ }
+        }
         JsonNode metadata = JSON.readTree(manifest.toFile());
         if (!"webp".equals(metadata.path("format").asText()) || !"image/webp".equals(metadata.path("mediaType").asText())
             || !destination.getFileName().toString().equals(metadata.path("revision").asText())
@@ -55,10 +72,24 @@ final class ImmutableManifestRecovery {
         for (var row : expected.entrySet()) checkFile(stage.resolve(row.getKey()), row.getValue());
         try (var paths = Files.list(destination)) {
             for (Path retained : paths.toList()) {
+                if (malformed && retained.equals(targetManifest)) continue;
                 JsonNode row = expected.get(retained.getFileName().toString());
                 if (row == null) throw invalid();
                 checkFile(retained, row);
             }
+        }
+        if (malformed) {
+            checkCancelled(cancelled);
+            String digest = WebpChapterEncoder.sha256(targetManifest);
+            Path recoveryRoot = ingestRoot.getParent().resolve(".ingest-recovery");
+            Path evidence = recoveryRoot.resolve(metadata.path("titleId").asText()).resolve(metadata.path("chapterId").asText())
+                .resolve(metadata.path("revision").asText()).resolve("manifest-" + digest + ".json");
+            Files.createDirectories(evidence.getParent()); checkScope(evidence.getParent(), recoveryRoot);
+            if (Files.isSymbolicLink(evidence)) throw invalid();
+            try { Files.write(evidence, damaged, java.nio.file.StandardOpenOption.CREATE_NEW); }
+            catch (FileAlreadyExistsException replay) { if (!java.util.Arrays.equals(damaged, Files.readAllBytes(evidence))) throw invalid(); }
+            if (Files.isSymbolicLink(targetManifest) || !java.util.Arrays.equals(damaged, Files.readAllBytes(targetManifest))) throw invalid();
+            Files.delete(targetManifest);
         }
         for (var row : expected.entrySet()) {
             checkCancelled(cancelled); Path target = destination.resolve(row.getKey());

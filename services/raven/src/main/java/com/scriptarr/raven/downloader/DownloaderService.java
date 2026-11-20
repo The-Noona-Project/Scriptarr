@@ -1166,6 +1166,12 @@ public class DownloaderService {
         pageDownloadWorker.shutdownNow();
     }
 
+    /** @param group current A-Z letter @throws Exception when the next automatic window cannot safely start */
+    public void requireMassDownloadReady(String group) throws Exception { MassDownloadReadiness.require(logger.getDownloadsRoot(), vpnService, group); }
+
+    /** @return observational capacity and owner-pause state */
+    public Map<String, Object> storageStatus() { return com.scriptarr.raven.support.StorageBudget.status(logger.getDownloadsRoot()); }
+
     private void process(String taskId, DownloadRequest request) {
         queuedTasks.remove(taskId);
         runningTaskThreads.put(taskId, Thread.currentThread());
@@ -1173,6 +1179,7 @@ public class DownloaderService {
             "logical:" + LibraryNaming.normalizeTypeSlug(request.requestType()) + ":" + LibraryNaming.sanitizeTitleFolder(request.titleName()));
              var attribution = conversionContext(taskId, request); var sourceClaim = claimCanonicalSource(request)) {
             throwIfCancelled(taskId);
+            com.scriptarr.raven.support.StorageBudget.require(logger.getDownloadsRoot());
             update(taskId, "running", "Preparing Raven download.", 5);
             verifyCanonicalSourceOwner(taskId, request);
             if (tasks.get(taskId).containsKey("chapterRepair")) {
@@ -1231,6 +1238,7 @@ public class DownloaderService {
             Map<String, LibraryChapter> reusedChapters = new LinkedHashMap<>();
             for (int index = 0; index < chaptersToDownload.size(); index++) {
                 throwIfCancelled(taskId);
+                com.scriptarr.raven.support.StorageBudget.require(logger.getDownloadsRoot());
                 Map<String, String> chapter = chaptersToDownload.get(index);
                 Instant chapterStartedAt = Instant.now();
                 LibraryChapter reusable = replacementDownload ? null : canonicalArchiveRecovery.reusable(canonicalTitle, chapter);
@@ -1407,6 +1415,7 @@ public class DownloaderService {
         IOException lastIoFailure = null;
 
         for (int attempt = 1; attempt <= CHAPTER_DOWNLOAD_RETRY_ATTEMPTS; attempt++) {
+            com.scriptarr.raven.support.StorageBudget.require(logger.getDownloadsRoot());
             ensureVpnProtectedIfEnabled();
             List<String> images = findChapterPagesWithRetries(
                 provider,
@@ -1560,6 +1569,7 @@ public class DownloaderService {
 
             pageDownloads.add(pageDownloadWorker.submit(() -> {
                 try {
+                    com.scriptarr.raven.support.StorageBudget.require(logger.getDownloadsRoot());
                     Files.createDirectories(stagedPage.getParent());
                     Files.write(stagedPage, downloadImageWithRetries(imageUrl, chapter.get("href"), request.titleName(), chapterNumber));
                     return PageDownloadResult.success(pageNumber, stagedPage, imageUrl);

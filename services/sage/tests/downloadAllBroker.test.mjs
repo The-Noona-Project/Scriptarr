@@ -303,5 +303,8 @@ test("authenticated create route forwards exact Manhua false t 20 and requestId"
     assert.equal(decision.status, 200); assert.equal(calls.length, 2);
     assert.equal(calls[1].options.body.approvalId, "window-1");
     assert.match(calls[1].options.body.requestId, /^discord:decision:/);
+    const automatic = {...body, type: "all", titlePrefix: "all", batchesPerApproval: 4, autoAdvance: true, requestId: "discord:interaction:auto"};
+    assert.equal((await fetch(url, {method: "POST", headers, body: JSON.stringify(automatic)})).status, 200);
+    assert.deepEqual(calls[2].options.body, {...automatic, titlegroup: "all", groupsize: 4});
   } finally { await new Promise((resolve) => server.close(resolve)); }
 });

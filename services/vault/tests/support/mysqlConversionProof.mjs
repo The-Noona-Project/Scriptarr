@@ -95,6 +95,17 @@ try {
     assert.deepEqual(await second.getConversionJob(jobId), originalCompletion, "Versioned ordering must not rewrite a legacy completed receipt.");
     await first.cancelConversionJob(versioned.jobId, {expectedCoordinatorGeneration: versioned.spec.coordinatorGeneration});
     await second.cancelConversionJob(reordered.jobId, {expectedCoordinatorGeneration: reordered.spec.coordinatorGeneration});
+    const rebuildRequest = {expectedEpoch: originalCompletion.lease.epoch, expectedCoordinatorGeneration: originalCompletion.spec.coordinatorGeneration,
+      expectedArtifactSha256: originalCompletion.result.artifact.sha256, rebuildPublished: true, requestId: "missing-output-rebuild"};
+    await assert.rejects(first.retryConversionJob(jobId, {...rebuildRequest, expectedArtifactSha256: "f".repeat(64)}), error => error.status === 409);
+    const rebuilds = await Promise.all([first.retryConversionJob(jobId, rebuildRequest), second.retryConversionJob(jobId, rebuildRequest)]);
+    assert.deepEqual(rebuilds[0], rebuilds[1], "Concurrent rebuild approvals must allocate one durable execution.");
+    assert.equal(rebuilds[0].lease.epoch, originalCompletion.lease.epoch + 1);
+    const [[historyRow]] = await inspector.query("SELECT record_json FROM raven_conversion_jobs WHERE job_id=?", [jobId]);
+    const history = typeof historyRow.record_json === "string" ? JSON.parse(historyRow.record_json) : historyRow.record_json;
+    assert.deepEqual(history._publicationHistory[originalCompletion.lease.epoch].result, originalCompletion.result);
+    await assert.rejects(first.completeConversionJob(jobId, {epoch: originalCompletion.lease.epoch, artifactSha256: artifact.sha256, chapter}), error => error.status === 409);
+    await second.cancelConversionJob(jobId, {expectedCoordinatorGeneration: rebuilds[0].spec.coordinatorGeneration});
     await proveScopedReset(createCachedStore(first));
     await proveCanonicalTitleIdentity(createCachedStore(second), {readAliases: async () => {
       const [rows] = await inspector.query("SELECT * FROM raven_title_aliases WHERE alias_title_id IN (?,?) ORDER BY alias_title_id", ["6639ab89-297c-4516-9228-913f0f020cb4", "merged-alias"]);

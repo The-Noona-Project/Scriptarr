@@ -126,3 +126,5 @@
 - Fixed profiles accept segmentation versions 1 and 2 with otherwise identical seven fields. Version 2 has a distinct
   profile hash and content job ID; worker capability `profileVersion: 1` describes the transport protocol. Do not mutate
   an existing version-1 job into different tile geometry or infer durable segment readiness from DTO defaults.
+
+- `boundedMysqlPool` bounds acquisition and queries, destroys timed-out executing connections and preserves uncertainty instead of replaying writes. Completed conversion rebuilds require epoch/generation/artifact equality and retain `_publicationHistory` before allocating a new epoch.

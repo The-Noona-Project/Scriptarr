@@ -16,6 +16,24 @@ const fixture = () => {
   return {repository, store: createConversionJobs({repository, now: () => clock, publishChapter: async (_tx, _job, chapter) => chapter}), advance: ms => { clock += ms; }};
 };
 const fenced = error => error.status === 409 && error.code === "CONVERSION_FENCE_CONFLICT";
+
+test("rebuilding reclaimed completed output requires the exact publication fence and retains the old receipt", async () => {
+  const {store, repository} = fixture(), job = await store.createConversionJob(spec());
+  const leased = await store.claimConversionJob(claim());
+  await store.submitConversionJob(job.jobId, {...claim(), epoch: leased.lease.epoch, artifact});
+  const publication = {epoch: leased.lease.epoch, artifactSha256: artifact.sha256};
+  await store.publishConversionJob(job.jobId, publication);
+  const done = await store.completeConversionJob(job.jobId, {...publication, chapter: readyChapter});
+  const request = {expectedEpoch: done.job.lease.epoch, expectedCoordinatorGeneration: done.job.spec.coordinatorGeneration,
+    expectedArtifactSha256: artifact.sha256, rebuildPublished: true, requestId: "rebuild-missing-output"};
+  await assert.rejects(store.retryConversionJob(job.jobId, {...request, rebuildPublished: false}), fenced);
+  await assert.rejects(store.retryConversionJob(job.jobId, {...request, expectedArtifactSha256: "f".repeat(64)}), fenced);
+  const rebuilt = await store.retryConversionJob(job.jobId, request);
+  assert.equal(rebuilt.status, "queued"); assert.equal(rebuilt.lease.epoch, done.job.lease.epoch + 1);
+  assert.deepEqual(await store.retryConversionJob(job.jobId, request), rebuilt);
+  const retained = await repository.transaction(tx => tx.get(job.jobId));
+  assert.deepEqual(retained._publicationHistory[done.job.lease.epoch].result.chapter, done.job.result.chapter);
+});
 const orderedSpec = (entries = ["001.png", "002.png"]) => ({
   ...spec(), profile: {segmentationVersion: 2},
   input: {...spec().input, entries, contentIdentityVersion: 2,

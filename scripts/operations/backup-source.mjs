@@ -163,6 +163,10 @@ export async function runBackup(config, {signal} = {}) {
     await writeJson(indexFile, current);
     const status = {...result, databaseKind, libraryFiles: Object.keys(current).length, archiveBytes: archive.bytes};
     await writeJson(path.join(config.workRoot, "latest-status.json"), status);
+    if (config.completionStatusFile) {
+      await mkdir(path.dirname(config.completionStatusFile), {recursive: true, mode: 0o700});
+      await writeJson(config.completionStatusFile, {state: "complete", createdAt, id});
+    }
     await rm(directory, {recursive: true});
     return status;
   } catch (error) {

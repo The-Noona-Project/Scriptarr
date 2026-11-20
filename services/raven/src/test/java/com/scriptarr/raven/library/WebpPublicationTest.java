@@ -20,6 +20,25 @@ import static org.mockito.Mockito.*;
 
 /** Content revisions survive new transfer epochs without mutable reader artifacts. */
 class WebpPublicationTest {
+    /** A regenerated artifact repairs malformed metadata while preserving its evidence and every valid retained page. */
+    @Test void malformedManifestRecoversAfterFencedRebuild(@TempDir Path root) throws Exception {
+        try (Fixture f = new Fixture(root)) {
+            LibraryIngestResult first = f.service.ingestChapter(f.title, f.chapter); Path manifest = Path.of(first.manifestPath());
+            String broken = "{broken metadata"; Files.writeString(manifest, broken);
+            Map<Path, FileSnapshot> retained = snapshots(manifest.getParent(), Path.of(f.chapter.archivePath()));
+            when(f.remote.convert(any(), any(), any(), any(), any(), any())).thenReturn(new RemoteChapterProcessor.Result("raven_webp_" + "a".repeat(64), 2, "b".repeat(64), f.files, f.bundle));
+            LibraryIngestResult restored = f.service.ingestChapter(f.title, f.chapter);
+            assertEquals(first.revision(), restored.revision()); assertEquals(2, restored.conversionEpoch());
+            assertEquals(2, new ObjectMapper().readTree(manifest.toFile()).path("conversionEpoch").asInt());
+            assertEquals(retained, snapshots(manifest.getParent(), Path.of(f.chapter.archivePath())));
+            try (var evidence = Files.walk(root.resolve(".ingest-recovery"))) {
+                List<Path> files = evidence.filter(Files::isRegularFile).toList();
+                assertEquals(1, files.size()); assertEquals(broken, Files.readString(files.getFirst()));
+            }
+            verifyNoInteractions(f.localEncoder);
+        }
+    }
+
     /** Order-aware output gets its own immutable destination and retains the exact validated digest in its manifest. */
     @Test void orderedBundlePublishesSeparateImmutableRevision(@TempDir Path root) throws Exception {
         try (Fixture f = new Fixture(root)) {

@@ -662,6 +662,9 @@ class DownloaderServiceRetryTest {
         private TestLogger(Path downloadsRoot, Path logsRoot) {
             this.downloadsRoot = downloadsRoot;
             this.logsRoot = logsRoot;
+            // Production logger initialization establishes the mounted root before downloader admission.
+            try { Files.createDirectories(downloadsRoot); Files.createDirectories(logsRoot); }
+            catch (IOException unavailable) { throw new java.io.UncheckedIOException(unavailable); }
         }
 
         @Override

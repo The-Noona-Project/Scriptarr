@@ -77,6 +77,22 @@ public final class ContentMaintenance {
     /** @param keys cleanup scopes @return number of actual active or waiting scoped writers */
     public static synchronized int active(List<String> keys) { return WRITERS.entrySet().stream().filter(row -> keys.stream().anyMatch(key -> intersects(row.getKey(), key))).mapToInt(Map.Entry::getValue).sum(); }
 
+    /** @param operation unique process-local reclamation @param keys exact scopes @return temporary fence, or null when writers/maintenance already own the scope */
+    public static synchronized TransientFence tryQuiescent(String operation, List<String> keys) {
+        if (FENCES.containsKey(operation) || active(keys) != 0 || FENCES.values().stream().anyMatch(existing -> existing.stream().anyMatch(a -> keys.stream().anyMatch(b -> intersects(a, b))))) return null;
+        FENCES.put(operation, List.copyOf(keys));
+        return new TransientFence(operation);
+    }
+
+    /** Process-local exclusion for duplicate-artifact removal; canonical content is never removed by this fence. */
+    public static final class TransientFence implements AutoCloseable {
+        private final String operation;
+        /** @param operation exact process-local fence */
+        private TransientFence(String operation) { this.operation = operation; }
+        /** Release only this temporary exclusion. */
+        @Override public void close() { synchronized (ContentMaintenance.class) { FENCES.remove(operation); } }
+    }
+
     /** @param path managed path @return normalized writer key */
     public static String pathKey(Path path) { return "path:" + path.toAbsolutePath().normalize(); }
 

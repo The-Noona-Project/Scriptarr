@@ -127,10 +127,16 @@ public class BulkRunService {
         List<String> types = resolveTypes(typeFilter);
         List<String> groups = resolveTitleGroups(groupFilter);
         boolean nsfw = booleanValue(request.get("nsfw"));
+        boolean autoAdvance = Boolean.TRUE.equals(request.get("autoAdvance"));
+        if (autoAdvance && (nsfw || !"all".equalsIgnoreCase(typeFilter) || !"all".equalsIgnoreCase(groupFilter))) {
+            throw new IllegalArgumentException("autoAdvance requires type all, titlegroup all, and nsfw false.");
+        }
         int batchesPerApproval = resolveBatchesPerApproval(request.get("batchesPerApproval"), request.get("groupsize"));
+        if (autoAdvance && batchesPerApproval != 4) throw new IllegalArgumentException("autoAdvance requires a four-type letter window (groupsize 4).");
         String requestId = BulkRunIdentity.requestId(request.get("requestId"));
         String fingerprint = BulkRunIdentity.fingerprint(normalizeRunTypeFilter(typeFilter), normalizeRunGroupFilter(groupFilter),
             nsfw, batchesPerApproval, requestedBy);
+        if (autoAdvance) fingerprint = BulkRunIdentity.digest(List.of(fingerprint, "autoAdvance:true"));
         String runId = BulkRunIdentity.runId(requestId);
         String now = now();
         Map<String, Object> existing = findRun(runId);
@@ -147,6 +153,7 @@ public class BulkRunService {
         runPayload.put("type", normalizeRunTypeFilter(typeFilter));
         runPayload.put("titlegroup", normalizeRunGroupFilter(groupFilter));
         runPayload.put("nsfw", nsfw);
+        runPayload.put("autoAdvance", autoAdvance);
         runPayload.put("batchCount", groups.size() * types.size());
         runPayload.put("batchesPerApproval", batchesPerApproval);
         runPayload.put("requestId", requestId);
@@ -198,6 +205,7 @@ public class BulkRunService {
         }
         Map<String, Object> payload = new LinkedHashMap<>(normalizeMap(job.get("payload")));
         payload.put("startRequested", true);
+        approveStorageResume();
         job.put("payload", payload);
         putJob(runId, job);
         repairManifest(job);
@@ -536,6 +544,7 @@ public class BulkRunService {
         payload.put("approvalId", newApprovalId());
         payload.put("startRequested", true);
         if ("continue".equals(action)) {
+            approveStorageResume();
             payload.put("approvalGeneration", toInt(payload.get("approvalGeneration"), 0) + 1);
             payload.put("approvalBatchCount", 0);
             job.put("status", STATUS_RUNNING);
@@ -643,7 +652,7 @@ public class BulkRunService {
                 .count();
             // A batch checkpoint can survive a crash before the separate parent counter write.
             int processedBatches = Math.max(toInt(payload.get("approvalBatchCount"), 0), completedInGeneration);
-            while (processedBatches < batchesPerApproval) {
+            while (processedBatches < batchesPerApproval || booleanValue(payload.get("autoAdvance"))) {
                 Map<String, Object> batch = nextRunnableBatch(runId);
                 if (batch == null) {
                     Map<String, Object> completedJob = requireRun(runId);
@@ -651,6 +660,8 @@ public class BulkRunService {
                     return;
                 }
                 throwIfRunCancelled(runId);
+                com.scriptarr.raven.support.StorageBudget.require(logger.getDownloadsRoot());
+                if (booleanValue(payload.get("autoAdvance"))) downloaderService.requireMassDownloadReady(stringValue(normalizeMap(batch.get("payload")).get("titleGroup")));
                 processBatch(runId, batch);
                 processedBatches++;
                 checkpointApprovalBudget(runId, generation, processedBatches);
@@ -698,6 +709,12 @@ public class BulkRunService {
             }
         }
         return null;
+    }
+
+    /** Clear pressure only at an explicit creation/continue boundary, never lifecycle recovery or status GET. */
+    private void approveStorageResume() {
+        try { com.scriptarr.raven.support.StorageBudget.approveResume(logger.getDownloadsRoot()); }
+        catch (java.io.IOException pressure) { throw new IllegalStateException(pressure.getMessage(), pressure); }
     }
 
     private boolean tryScheduleRunWorker(String runId) {
@@ -850,6 +867,8 @@ public class BulkRunService {
         Map<String, Object> current = new LinkedHashMap<>(batch);
         while (true) {
             throwIfRunCancelled(runId);
+            try { com.scriptarr.raven.support.StorageBudget.require(logger.getDownloadsRoot()); }
+            catch (java.io.IOException pressure) { throw new BulkRunNeedsAdminRecoveryException(pressure.getMessage()); }
             Map<String, Object> result = new LinkedHashMap<>(normalizeMap(current.get("result")));
             Map<String, Object> attempts = new LinkedHashMap<>(normalizeMap(result.get("attempts")));
             Map<String, Object> approvalAttempts = new LinkedHashMap<>(normalizeMap(result.get("approvalAttempts")));
@@ -1404,7 +1423,7 @@ public class BulkRunService {
     private Map<String, Object> publicFilters(Map<String, Object> job) {
         Map<String, Object> payload = normalizeMap(job.get("payload"));
         Map<String, Object> filters = new LinkedHashMap<>();
-        for (String key : List.of("providerId", "type", "titlegroup", "nsfw", "batchCount", "batchesPerApproval")) {
+        for (String key : List.of("providerId", "type", "titlegroup", "nsfw", "batchCount", "batchesPerApproval", "autoAdvance")) {
             if (payload.containsKey(key)) {
                 filters.put(key, payload.get(key));
             }

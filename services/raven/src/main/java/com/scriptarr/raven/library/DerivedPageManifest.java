@@ -41,7 +41,9 @@ public final class DerivedPageManifest {
         if (chapter == null || chapter.ingestManifestPath() == null || !supported(chapter.ingestRevision())) throw new IOException("Reader manifest is unavailable.");
         Path file = Path.of(chapter.ingestManifestPath());
         if (Files.isSymbolicLink(file) || !Files.isRegularFile(file) || Files.size(file) > 8_388_608) throw new IOException("Reader manifest is unavailable.");
-        JsonNode manifest = JSON.readTree(file.toFile()); String format = manifest.path("format").asText();
+        JsonNode manifest = JSON.readTree(file.toFile());
+        if (manifest == null || !manifest.isObject()) throw new IOException("Reader manifest is invalid.");
+        String format = manifest.path("format").asText();
         if (!List.of("avif", "webp").contains(format) || !chapter.ingestRevision().equals(manifest.path("revision").asText())
             || !chapter.id().equals(manifest.path("chapterId").asText()) || !("image/" + format).equals(manifest.path("mediaType").asText())
             || manifest.path("pageCount").asInt() != chapter.ingestedPageCount()) throw new IOException("Reader manifest identity differs.");

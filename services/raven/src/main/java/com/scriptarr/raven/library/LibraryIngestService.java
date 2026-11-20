@@ -276,7 +276,7 @@ public final class LibraryIngestService {
      */
     private LibraryIngestResult ingestRemoteChapter(LibraryTitle title, LibraryChapter chapter, BooleanSupplier cancelled, Consumer<IngestProgress> progress) {
         Path stage = null;
-        try {
+        try (var maintenance = ContentMaintenance.enter("title:" + title.id())) {
             throwIfCancelled(cancelled); Path archive = resolveArchivePath(chapter);
             RemoteChapterProcessor.Result result = remote.convert(title, chapter, archive, settingsService.getNamingSettings(), cancelled, progress);
             var bundle = result.bundle(); int count = bundle.path("pageCount").asInt();
@@ -288,8 +288,14 @@ public final class LibraryIngestService {
             Path destination = chapterRoot.resolve(revision), manifest = destination.resolve("manifest.json");
             String ingestedAt;
             if (Files.isSymbolicLink(destination) || Files.isSymbolicLink(manifest)) throw new IOException("Immutable reader publication must not follow a link.");
+            com.fasterxml.jackson.databind.JsonNode saved = null;
+            boolean malformedManifest = false;
             if (Files.isRegularFile(manifest)) {
-                var saved = objectMapper.readTree(manifest.toFile());
+                try { saved = objectMapper.readTree(manifest.toFile()); }
+                catch (com.fasterxml.jackson.core.JsonProcessingException malformed) { malformedManifest = true; }
+                if (saved == null || !saved.isObject()) { malformedManifest = true; saved = null; }
+            }
+            if (saved != null) {
                 if (!result.jobId().equals(saved.path("conversionJobId").asText()) || !revision.equals(saved.path("revision").asText())
                     || !saved.path("pages").equals(bundle.path("pages")) || !saved.path("profile").equals(bundle.path("profile"))) throw new IOException("Immutable output revision has different content or profile.");
                 ingestedAt = saved.path("ingestedAt").asText();
@@ -317,7 +323,8 @@ public final class LibraryIngestService {
                 objectMapper.writerWithDefaultPrettyPrinter().writeValue(stage.resolve("manifest.json").toFile(), metadata);
                 throwIfCancelled(cancelled); Files.createDirectories(chapterRoot);
                 if (Files.exists(destination, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
-                    ImmutableManifestRecovery.restore(stage, destination, resolveDataRoot().resolve(INGESTED_FOLDER_NAME), cancelled);
+                    if (malformedManifest) ImmutableManifestRecovery.restoreMalformed(stage, destination, resolveDataRoot().resolve(INGESTED_FOLDER_NAME), cancelled);
+                    else ImmutableManifestRecovery.restore(stage, destination, resolveDataRoot().resolve(INGESTED_FOLDER_NAME), cancelled);
                 } else {
                     try { Files.move(stage, destination, StandardCopyOption.ATOMIC_MOVE); }
                     catch (java.nio.file.AtomicMoveNotSupportedException unsupported) { Files.move(stage, destination); }

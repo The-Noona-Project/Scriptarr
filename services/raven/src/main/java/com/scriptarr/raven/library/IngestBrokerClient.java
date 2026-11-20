@@ -87,7 +87,7 @@ public final class IngestBrokerClient {
     }
 
     /** @param method HTTP verb @param path fenced route @param body stable JSON operation @param leaseToken lease secret @param expiresAt latest allowed recovery instant @return acknowledged result @throws IOException on broker rejection @throws InterruptedException on cancellation */
-    JsonNode jsonUntil(String method, String path, Object body, String leaseToken, long expiresAt) throws IOException, InterruptedException {
+    public JsonNode jsonUntil(String method, String path, Object body, String leaseToken, long expiresAt) throws IOException, InterruptedException {
         HttpRequest.BodyPublisher publisher = body == null ? HttpRequest.BodyPublishers.noBody() : HttpRequest.BodyPublishers.ofByteArray(json.writeValueAsBytes(body));
         long budget = Math.max(1, Math.min(recoveryWindow.toMillis(), expiresAt - System.currentTimeMillis()));
         long deadline = System.nanoTime() + budget * 1_000_000;

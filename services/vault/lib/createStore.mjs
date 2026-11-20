@@ -1,6 +1,7 @@
 import {createHash, randomUUID} from "node:crypto";
 
 import mysql from "mysql2/promise";
+import {boundedMysqlPool} from "./boundedMysqlPool.mjs";
 import {deriveLegacyPermissions, seedPermissionGroups} from "@scriptarr/access";
 import {createCachedStore} from "./createCachedStore.mjs";
 import {ensureLegacyRavenCatalogDefaults} from "./legacyRavenCatalogCompatibility.mjs";
@@ -2314,7 +2315,7 @@ const createMysqlStore = (config) => {
   const sessionTtlMs = resolveSessionTtlMs(config.sessionTtlMs ?? SESSION_TTL_MS, {
     allowShort: Object.hasOwn(config, "sessionTtlMs")
   });
-  const pool = mysql.createPool({
+  const pool = boundedMysqlPool(mysql.createPool({
     host: config.mysql.host,
     port: config.mysql.port,
     user: config.mysql.user,
@@ -2322,8 +2323,11 @@ const createMysqlStore = (config) => {
     database: config.mysql.database,
     // All catalogue timestamps are persisted as UTC text, independent of the host's local timezone.
     timezone: "Z",
-    connectionLimit: 5
-  });
+    connectionLimit: 5,
+    connectTimeout: 5000,
+    waitForConnections: true,
+    queueLimit: 100
+  }));
   const conversionRepository = createMysqlConversionRepository(pool);
 
   const init = async () => {
@@ -3328,7 +3332,7 @@ const createMysqlStore = (config) => {
     sessionTtlMs,
     init,
     async health() {
-      await pool.query("SELECT 1");
+      await pool.health();
       return {ready: true, degraded: false, reason: null};
     },
     async getBootstrapStatus(superuserId) {
