@@ -20,6 +20,23 @@ import static org.mockito.Mockito.*;
 
 /** Content revisions survive new transfer epochs without mutable reader artifacts. */
 class WebpPublicationTest {
+    /** @param root isolated storage @throws Exception on fixture IO or publication failure */
+    @Test void fencedRebuildPreservesAndReplacesDamagedParseableMetadata(@TempDir Path root) throws Exception {
+        try (Fixture f = new Fixture(root)) {
+            LibraryIngestResult first = f.service.ingestChapter(f.title, f.chapter);Path manifest = Path.of(first.manifestPath());
+            ObjectMapper json = new ObjectMapper();String originalHash = WebpChapterEncoder.sha256(manifest);
+            ObjectNode binding = json.valueToTree(Map.of("jobId", "raven_webp_" + "a".repeat(64), "manifestSha256", originalHash,
+                "chapter", Map.of("ingestRevision", first.revision(), "ingestManifestPath", first.manifestPath())));
+            ObjectNode damaged = (ObjectNode) json.readTree(manifest.toFile());damaged.put("unexpected", "damaged metadata");json.writeValue(manifest.toFile(), damaged);
+            String rejected = Files.readString(manifest);Map<Path, FileSnapshot> retained = snapshots(manifest.getParent(), Path.of(f.chapter.archivePath()));
+            when(f.remote.convert(any(), any(), any(), any(), any(), any())).thenReturn(new RemoteChapterProcessor.Result("raven_webp_" + "a".repeat(64), 2, "b".repeat(64), f.files, f.bundle, null, binding));
+            LibraryIngestResult rebuilt = f.service.ingestChapter(f.title, f.chapter);
+            assertEquals(first.revision(), rebuilt.revision());assertFalse(json.readTree(manifest.toFile()).has("unexpected"));assertEquals(2, json.readTree(manifest.toFile()).path("conversionEpoch").asInt());
+            assertEquals(retained, snapshots(manifest.getParent(), Path.of(f.chapter.archivePath())));
+            try (var evidence = Files.walk(root.resolve(".ingest-recovery"))) {assertTrue(evidence.filter(Files::isRegularFile).anyMatch(p -> {try{return Files.readString(p).equals(rejected);}catch(Exception error){return false;}}));}
+        }
+    }
+
     /** A regenerated artifact repairs malformed metadata while preserving its evidence and every valid retained page. */
     @Test void malformedManifestRecoversAfterFencedRebuild(@TempDir Path root) throws Exception {
         try (Fixture f = new Fixture(root)) {
@@ -152,10 +169,12 @@ class WebpPublicationTest {
         try (Fixture f = new Fixture(root)) {
             LibraryIngestResult first = f.service.ingestChapter(f.title, f.chapter); Path manifest = Path.of(first.manifestPath());
             String before = WebpChapterEncoder.sha256(manifest); long modified = Files.getLastModifiedTime(manifest).toMillis();
+            Path missing = manifest.getParent().resolve("p000001-s0001.webp"); String pageHash = WebpChapterEncoder.sha256(missing); Files.delete(missing);
             when(f.remote.convert(any(), any(), any(), any(), any(), any())).thenReturn(new RemoteChapterProcessor.Result("raven_webp_" + "a".repeat(64), 2, "b".repeat(64), f.files, f.bundle));
             LibraryIngestResult second = f.service.ingestChapter(f.title, f.chapter);
             assertEquals(first.revision(), second.revision()); assertEquals(first.ingestedAt(), second.ingestedAt()); assertEquals(2, second.conversionEpoch());
             assertEquals(before, WebpChapterEncoder.sha256(manifest)); assertEquals(modified, Files.getLastModifiedTime(manifest).toMillis()); verifyNoInteractions(f.localEncoder);
+            assertEquals(pageHash, WebpChapterEncoder.sha256(missing));
         }
     }
 

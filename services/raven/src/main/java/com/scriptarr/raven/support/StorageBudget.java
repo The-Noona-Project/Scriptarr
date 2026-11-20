@@ -27,17 +27,15 @@ public final class StorageBudget {
     }
 
     /** @param root managed root @throws IOException when storage cannot safely accept more work */
-    public static void require(Path root) throws IOException {
+    public static synchronized void require(Path root) throws IOException {
         if (root == null) return;
         Map<String, Object> state = status(root);
         if (Boolean.TRUE.equals(state.get("ready"))) return;
         Path marker = root.resolve(".storage-pressure"), temporary = root.resolve(".storage-pressure.partial");
-        synchronized (StorageBudget.class) {
-            if (!Files.exists(marker)) try {
+        if (!Files.exists(marker)) try {
                 Files.writeString(temporary, "storage_pressure: owner approval is required after capacity recovery.\n");
                 Files.move(temporary, marker, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
-            } catch (IOException cannotLatch) { /* The current operation still fails closed on an exhausted filesystem. */ }
-        }
+        } catch (IOException cannotLatch) { /* The current operation still fails closed on an exhausted filesystem. */ }
         throw new IOException("storage_pressure: Data storage is below its reserve or awaits explicit resume approval.");
     }
 

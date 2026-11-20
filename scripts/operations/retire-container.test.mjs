@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import {mkdtemp, rm, writeFile} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import path from "node:path";
-import {retireContainer} from "./retire-container.mjs";
+import {retireContainer, synchronizeRecovery} from "./retire-container.mjs";
 
 test("retirement requires the reviewed stopped identity", async () => {
   const id = "a".repeat(64), approval = {id, name: "old-copy", archiveRoot: tmpdir()};
@@ -23,9 +23,13 @@ test("retirement archives the exact stopped container and uses rm without volume
       if (args[0] === "export") await writeFile(args[2], Buffer.alloc(2048));
       return "";
     };
-    const receipt = await retireContainer({id, name: "old-copy", archiveRoot: root}, docker);
+    const receipt = await retireContainer({id, name: "old-copy", archiveRoot: root}, docker, async (files, directories) => {
+      assert.equal(files.length, 3); assert.ok(files.some(file => file.endsWith("rootfs.tar")));
+      assert.ok(directories.includes(root)); assert.equal(calls.some(args => args[0] === "rm"), false); calls.push(["synchronized"]);
+    });
     assert.equal(receipt.removed, true); assert.deepEqual(calls.find(args => args[0] === "rm"), ["rm", id]);
     assert.ok(calls.findIndex(args => args[0] === "export") < calls.findIndex(args => args[0] === "rm"));
+    assert.ok(calls.findIndex(args => args[0] === "synchronized") < calls.findIndex(args => args[0] === "rm"));
     const replay = await retireContainer({id, name: "old-copy", archiveRoot: root}, async args => {
       if (args[0] === "inspect") throw new Error("Container absent after lost response");
       assert.equal(args[0], "ps"); return "";
@@ -46,9 +50,37 @@ test("mount ordering changes during export do not invalidate an unchanged contai
       if (args[0] === "rm") removed = true;
       return "";
     };
-    assert.equal((await retireContainer({id, name: "old-copy", archiveRoot: root}, docker)).removed, true);
+    assert.equal((await retireContainer({id, name: "old-copy", archiveRoot: root}, docker, async () => {})).removed, true);
     assert.equal(removed, true);
   } finally { await rm(root, {recursive: true, force: true}); }
+});
+
+test("failed recovery synchronization preserves the stopped container", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "retire-sync-")), id = "e".repeat(64), calls = [];
+  try {
+    await assert.rejects(retireContainer({id, name: "old-copy", archiveRoot: root}, async args => {
+      calls.push(args);
+      if (args[0] === "inspect") return JSON.stringify([{Id: id, Name: "/old-copy", State: {Status: "exited", Running: false}, Image: "immutable", Mounts: []}]);
+      if (args[0] === "export") await writeFile(args[2], Buffer.alloc(2048)); return "";
+    }, async () => {throw new Error("sync failed");}), /sync failed/);
+    assert.equal(calls.some(args => args[0] === "rm"), false);
+  } finally {await rm(root, {recursive: true, force: true});}
+});
+
+test("nested archive creation synchronizes every newly published ancestor", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "retire-ancestors-")), archiveRoot = path.join(root, "one", "two", "three"), id = "f".repeat(64);
+  try {
+    await retireContainer({id, name: "old-copy", archiveRoot}, async args => {
+      if (args[0] === "inspect") return JSON.stringify([{Id: id, Name: "/old-copy", State: {Status: "exited", Running: false}, Image: "immutable", Mounts: []}]);
+      if (args[0] === "export") await writeFile(args[2], Buffer.alloc(2048));return "";
+    }, async (_files, directories) => {for (const dir of [root, path.join(root, "one"), path.join(root, "one", "two"), archiveRoot, path.join(archiveRoot, id)]) assert.ok(directories.includes(dir));});
+  } finally {await rm(root, {recursive: true, force: true});}
+});
+
+test("Linux recovery files and directory entries synchronize", {skip: process.platform !== "linux"}, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "retire-durable-")), file = path.join(root, "proof");
+  try {await writeFile(file, "recoverable");await synchronizeRecovery([file], [root, path.dirname(root)]);}
+  finally {await rm(root, {recursive: true, force: true});}
 });
 
 test("failed export preserves the container and its mounts", async () => {

@@ -800,8 +800,11 @@ public final class LibraryService {
     private MigrationPass ingestTitlePass(String titleId, String requestedBy, BooleanSupplier cancelled, Consumer<IngestProgress> progress, boolean migrateToWebp) {
         String normalizedTitleId = firstNonBlank(titleId, "").trim();
         LibraryTitle resolved = loadTitleById(normalizedTitleId); if (resolved != null) normalizedTitleId = resolved.id();
-        try (var maintenance = ContentMaintenance.enter("title:" + normalizedTitleId); var lease = titleOperationLocks.acquire(normalizedTitleId)) {
+        try (var maintenance = ContentMaintenance.enter(cancelled, "title:" + normalizedTitleId); var lease = titleOperationLocks.acquire(normalizedTitleId)) {
             return ingestTitleLocked(normalizedTitleId, requestedBy, cancelled == null ? () -> false : cancelled, progress == null ? value -> { } : progress, migrateToWebp);
+        } catch (java.util.concurrent.CancellationException cancelledWait) {
+            migrationVerification.discard(IngestExecutionContext.current(), normalizedTitleId);
+            throw new LibraryIngestException("ingest_cancelled", "Reader processing was cancelled while waiting for content maintenance.");
         }
     }
 

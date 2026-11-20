@@ -17,22 +17,52 @@ const fixture = () => {
 };
 const fenced = error => error.status === 409 && error.code === "CONVERSION_FENCE_CONFLICT";
 
+for (const alreadyCancelled of [false, true]) test(`interrupted legacy publication survives ${alreadyCancelled ? "pre-upgrade" : "new"} cancellation and retry`, async () => {
+  const {store, repository} = fixture(), job = await store.createConversionJob(spec()), leased = await store.claimConversionJob(claim());
+  await store.submitConversionJob(job.jobId, {...claim(), epoch: leased.lease.epoch, artifact});
+  await store.publishConversionJob(job.jobId, {epoch: leased.lease.epoch, artifactSha256: artifact.sha256});
+  const legacy = repository.records.get(job.jobId);delete legacy._publicationHistory;
+  if (alreadyCancelled) {legacy.status = "cancelled";legacy.lease.epoch++;}
+  else await store.cancelConversionJob(job.jobId, {expectedEpoch: leased.lease.epoch});
+  const cancelled = await store.getConversionJob(job.jobId);
+  await store.retryConversionJob(job.jobId, {requestId: "legacy-retry", expectedEpoch: cancelled.lease.epoch});
+  const nextClaim = claim("worker-1", "legacy-retry-claim"), next = await store.claimConversionJob(nextClaim), nextArtifact = {...artifact, sha256: "d".repeat(64)};
+  await store.submitConversionJob(job.jobId, {...nextClaim, epoch: next.lease.epoch, artifact: nextArtifact});
+  const fence = {epoch: next.lease.epoch, artifactSha256: nextArtifact.sha256};await store.publishConversionJob(job.jobId, fence);
+  const publication = {jobId: job.jobId, epoch: leased.lease.epoch, artifactSha256: artifact.sha256, manifestSha256: "e".repeat(64)};
+  await assert.rejects(store.completeConversionJob(job.jobId, {...fence, chapter: readyChapter, publication: {...publication, artifactSha256: "f".repeat(64)}}), fenced);
+  assert.deepEqual((await store.completeConversionJob(job.jobId, {...fence, chapter: readyChapter, publication})).job.result.publication, publication);
+});
+
 test("rebuilding reclaimed completed output requires the exact publication fence and retains the old receipt", async () => {
   const {store, repository} = fixture(), job = await store.createConversionJob(spec());
   const leased = await store.claimConversionJob(claim());
   await store.submitConversionJob(job.jobId, {...claim(), epoch: leased.lease.epoch, artifact});
   const publication = {epoch: leased.lease.epoch, artifactSha256: artifact.sha256};
+  const binding = {jobId: job.jobId, epoch: leased.lease.epoch, artifactSha256: artifact.sha256, manifestSha256: "e".repeat(64)};
   await store.publishConversionJob(job.jobId, publication);
-  const done = await store.completeConversionJob(job.jobId, {...publication, chapter: readyChapter});
+  const done = await store.completeConversionJob(job.jobId, {...publication, chapter: readyChapter, publication: binding});
   const request = {expectedEpoch: done.job.lease.epoch, expectedCoordinatorGeneration: done.job.spec.coordinatorGeneration,
     expectedArtifactSha256: artifact.sha256, rebuildPublished: true, requestId: "rebuild-missing-output"};
   await assert.rejects(store.retryConversionJob(job.jobId, {...request, rebuildPublished: false}), fenced);
   await assert.rejects(store.retryConversionJob(job.jobId, {...request, expectedArtifactSha256: "f".repeat(64)}), fenced);
   const rebuilt = await store.retryConversionJob(job.jobId, request);
+  assert.deepEqual(rebuilt.spec.rebuildPublication, {...binding, chapter: readyChapter});
   assert.equal(rebuilt.status, "queued"); assert.equal(rebuilt.lease.epoch, done.job.lease.epoch + 1);
   assert.deepEqual(await store.retryConversionJob(job.jobId, request), rebuilt);
   const retained = await repository.transaction(tx => tx.get(job.jobId));
   assert.deepEqual(retained._publicationHistory[done.job.lease.epoch].result.chapter, done.job.result.chapter);
+  const nextClaim = claim("worker-1", "rebuilt-claim"), next = await store.claimConversionJob(nextClaim);
+  const nextArtifact = {...artifact, sha256: "d".repeat(64)};
+  await store.submitConversionJob(job.jobId, {...nextClaim, epoch: next.lease.epoch, artifact: nextArtifact});
+  const fence = {epoch: next.lease.epoch, artifactSha256: nextArtifact.sha256};
+  await store.publishConversionJob(job.jobId, fence);
+  await assert.rejects(store.completeConversionJob(job.jobId, {...fence, chapter: readyChapter, publication: {...binding, artifactSha256: "f".repeat(64)}}), fenced);
+  await assert.rejects(store.completeConversionJob(job.jobId, {...fence, chapter: readyChapter, publication: {...binding, jobId: "foreign"}}), fenced);
+  const rebound = await store.completeConversionJob(job.jobId, {...fence, chapter: readyChapter, publication: binding});
+  assert.deepEqual(rebound.job.result.publication, binding);
+  assert.deepEqual(await store.completeConversionJob(job.jobId, {...fence, chapter: readyChapter, publication: binding}), rebound);
+  await assert.rejects(store.completeConversionJob(job.jobId, {...fence, chapter: readyChapter, publication: {...binding, manifestSha256: "f".repeat(64)}}), fenced);
 });
 const orderedSpec = (entries = ["001.png", "002.png"]) => ({
   ...spec(), profile: {segmentationVersion: 2},

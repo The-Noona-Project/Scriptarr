@@ -276,7 +276,7 @@ public final class LibraryIngestService {
      */
     private LibraryIngestResult ingestRemoteChapter(LibraryTitle title, LibraryChapter chapter, BooleanSupplier cancelled, Consumer<IngestProgress> progress) {
         Path stage = null;
-        try (var maintenance = ContentMaintenance.enter("title:" + title.id())) {
+        try (var maintenance = ContentMaintenance.enter(cancelled, "title:" + title.id())) {
             throwIfCancelled(cancelled); Path archive = resolveArchivePath(chapter);
             RemoteChapterProcessor.Result result = remote.convert(title, chapter, archive, settingsService.getNamingSettings(), cancelled, progress);
             var bundle = result.bundle(); int count = bundle.path("pageCount").asInt();
@@ -290,7 +290,18 @@ public final class LibraryIngestService {
             if (Files.isSymbolicLink(destination) || Files.isSymbolicLink(manifest)) throw new IOException("Immutable reader publication must not follow a link.");
             com.fasterxml.jackson.databind.JsonNode saved = null;
             boolean malformedManifest = false;
-            if (Files.isRegularFile(manifest)) {
+            String damagedManifestHash = null;
+            var prior = result.rebuildPublication();
+            if (prior != null) {
+                if (!result.jobId().equals(prior.path("jobId").asText()) || !revision.equals(prior.path("chapter").path("ingestRevision").asText())
+                    || !manifest.toString().equals(prior.path("chapter").path("ingestManifestPath").asText())
+                    || !prior.path("manifestSha256").asText().matches("[a-f0-9]{64}")) throw new IOException("Fenced reconstruction publication scope changed.");
+                if (Files.isRegularFile(manifest)) {
+                    String currentHash = WebpChapterEncoder.sha256(manifest);
+                    if (!currentHash.equals(prior.path("manifestSha256").asText())) { damagedManifestHash = currentHash; malformedManifest = true; }
+                }
+            }
+            if (Files.isRegularFile(manifest) && damagedManifestHash == null) {
                 try { saved = objectMapper.readTree(manifest.toFile()); }
                 catch (com.fasterxml.jackson.core.JsonProcessingException malformed) { malformedManifest = true; }
                 if (saved == null || !saved.isObject()) { malformedManifest = true; saved = null; }
@@ -323,7 +334,8 @@ public final class LibraryIngestService {
                 objectMapper.writerWithDefaultPrettyPrinter().writeValue(stage.resolve("manifest.json").toFile(), metadata);
                 throwIfCancelled(cancelled); Files.createDirectories(chapterRoot);
                 if (Files.exists(destination, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
-                    if (malformedManifest) ImmutableManifestRecovery.restoreMalformed(stage, destination, resolveDataRoot().resolve(INGESTED_FOLDER_NAME), cancelled);
+                    if (damagedManifestHash != null) ImmutableManifestRecovery.restoreDamaged(stage, destination, resolveDataRoot().resolve(INGESTED_FOLDER_NAME), cancelled, damagedManifestHash);
+                    else if (malformedManifest) ImmutableManifestRecovery.restoreMalformed(stage, destination, resolveDataRoot().resolve(INGESTED_FOLDER_NAME), cancelled);
                     else ImmutableManifestRecovery.restore(stage, destination, resolveDataRoot().resolve(INGESTED_FOLDER_NAME), cancelled);
                 } else {
                     try { Files.move(stage, destination, StandardCopyOption.ATOMIC_MOVE); }
@@ -333,6 +345,7 @@ public final class LibraryIngestService {
             }
             return new LibraryIngestResult("ready", revision, count, ingestedAt, manifest.toString(), List.of(), result.jobId(), result.epoch(), result.artifactSha256());
         } catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); throw new LibraryIngestException("ingest_cancelled", "Reader processing was cancelled."); }
+        catch (java.util.concurrent.CancellationException cancelledWait) { throw new LibraryIngestException("ingest_cancelled", "Reader processing was cancelled while waiting for content maintenance."); }
         catch (Exception failure) { throw new LibraryIngestException("remote_ingest_failed", "Remote reader processing could not be committed: " + sanitizeError(failure.getMessage())); }
         finally { deleteTreeQuietly(stage); }
     }

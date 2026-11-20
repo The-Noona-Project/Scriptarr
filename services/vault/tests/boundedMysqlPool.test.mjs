@@ -3,6 +3,28 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {boundedMysqlPool} from "../lib/boundedMysqlPool.mjs";
 
+test("duplicate-key conflicts retain a usable transaction connection for the conflict lookup", async () => {
+  let count = 0, destroyed = 0;
+  const pool = boundedMysqlPool({getConnection: async () => ({query: async () => {
+    if (count++ === 0) throw Object.assign(new Error("duplicate"), {code: "ER_DUP_ENTRY", errno: 1062});
+    return [[{request_id: 7}]];
+  }, destroy: () => destroyed++, release: () => {}})});
+  const connection = await pool.getConnection();
+  await assert.rejects(connection.query("INSERT INTO request_work_locks VALUES (?)", [7]), {code: "ER_DUP_ENTRY"});
+  assert.deepEqual(await connection.query("SELECT request_id FROM request_work_locks"), [[{request_id: 7}]]);
+  assert.equal(destroyed, 0); connection.release();
+});
+
+test("fatal protocol errors still retire the connection", async () => {
+  let destroyed = 0;
+  const pool = boundedMysqlPool({getConnection: async () => ({query: async () => {throw Object.assign(new Error("lost"), {code: "PROTOCOL_CONNECTION_LOST"});},
+    destroy: () => destroyed++, release: () => {}})});
+  const connection = await pool.getConnection();
+  await assert.rejects(connection.query("SELECT 1"), {code: "PROTOCOL_CONNECTION_LOST"});
+  await assert.rejects(connection.query("SELECT 1"), {code: "STORE_TIMEOUT"});
+  assert.equal(destroyed, 1);
+});
+
 test("timed-out writes destroy the underlying connection without retrying", async () => {
   let destroyed = 0, released = 0, queries = 0;
   const pool = boundedMysqlPool({getConnection: async () => ({

@@ -9,20 +9,34 @@ import {pathToFileURL} from "node:url";
  * @param {string} method HTTP method.
  * @param {string} route Docker API route.
  * @param {object} [body] Request payload.
+ * @param {Function} [requestImpl] Injectable HTTP transport.
  * @returns {Promise<object|null>} Parsed response.
  */
-export function dockerRequest(method, route, body) {
+export function dockerRequest(method, route, body, requestImpl = http.request) {
   return new Promise((resolve, reject) => {
-    const request = http.request({socketPath: "/var/run/docker.sock", method, path: route,
+    let settled = false, deadline, receivedStatus;
+    const finish = (error, value) => {
+      if (settled) return; settled = true; clearTimeout(deadline);
+      if (error && receivedStatus > 0) error = receivedStatus >= 400
+        ? Object.assign(new Error("Docker operation rejected."), {status: receivedStatus, cause: error}) : Object.assign(error, {status: receivedStatus});
+      error ? reject(error) : resolve(value);
+    };
+    const request = requestImpl({socketPath: "/var/run/docker.sock", method, path: route,
       headers: {"Content-Type": "application/json"}, timeout: 45000}, response => {
+      receivedStatus = response.statusCode;
       const chunks = []; response.on("data", chunk => chunks.push(chunk));
+      response.on("error", error => finish(error));
+      response.on("aborted", () => finish(new Error("Docker response ended before completion.")));
+      response.on("close", () => {if (!settled) finish(new Error("Docker response ended before completion."));});
       response.on("end", () => {
-        if (response.statusCode >= 400) { reject(Object.assign(new Error("Docker operation rejected."), {status: response.statusCode})); return; }
-        try { resolve(chunks.length ? JSON.parse(Buffer.concat(chunks).toString()) : null); } catch { reject(new Error("Invalid Docker response.")); }
+        if (response.statusCode >= 400) { finish(Object.assign(new Error("Docker operation rejected."), {status: response.statusCode})); return; }
+        try { finish(null, chunks.length ? JSON.parse(Buffer.concat(chunks).toString()) : null); } catch { finish(new Error("Invalid Docker response.")); }
       });
     });
-    request.on("timeout", () => request.destroy(new Error("Docker operation deadline exceeded.")));
-    request.on("error", reject); request.end(body ? JSON.stringify(body) : undefined);
+    const expire = () => {const error = new Error("Docker operation deadline exceeded.");finish(error);request.destroy(error);};
+    deadline = setTimeout(expire, 45000);
+    request.on("timeout", expire);
+    request.on("error", error => finish(error)); request.end(body ? JSON.stringify(body) : undefined);
   });
 }
 
@@ -60,6 +74,7 @@ export async function replaceWarden(options, docker = dockerRequest, wait = asyn
   if (before.Id !== options.expectedId || before.Name !== "/scriptarr-warden" || !/@sha256:[a-f0-9]{64}$/.test(options.image)
     || !path.isAbsolute(options.archiveRoot)) throw new Error("Warden identity or immutable deployment reference changed.");
   await docker("GET", `/images/${encodeURIComponent(options.image)}/json`);
+  await docker("GET", `/images/${encodeURIComponent(before.Image)}/json`);
   await mkdir(options.archiveRoot, {recursive: true, mode: 0o700});
   await writeFile(path.join(options.archiveRoot, `${before.Id}.private.json`), JSON.stringify(before, null, 2) + "\n", {mode: 0o600, flag: "wx"});
   const operation = `replacement-${before.Id.slice(0, 12)}-${Date.now()}`;
@@ -84,7 +99,20 @@ export async function replaceWarden(options, docker = dockerRequest, wait = asyn
       if ((replacement && failed.Id !== replacement.Id) || failed.Config.Labels?.["com.scriptarr.replacement"] !== operation) throw new Error("Canonical Warden changed during rollback; manual reconciliation required.");
       await docker("POST", `/containers/${failed.Id}/stop?t=30`); await docker("DELETE", `/containers/${failed.Id}`);
     }
-    const restored = await docker("POST", "/containers/create?name=scriptarr-warden", wardenSpecification(before, before.Image));
+    const rollback = wardenSpecification(before, before.Image), rollbackOperation = `${operation}-rollback`;
+    rollback.Labels = {...rollback.Labels, "com.scriptarr.replacement": rollbackOperation};
+    let restored;
+    try {
+      restored = await docker("POST", "/containers/create?name=scriptarr-warden", rollback);
+      if (!restored?.Id || !/^[a-f0-9]{64}$/.test(restored.Id)) throw new Error("Rollback create response is incomplete.");
+    }
+    catch (uncertainCreate) {
+      try { restored = await docker("GET", "/containers/scriptarr-warden/json"); }
+      catch { throw new Error("Rollback creation could not be reconciled; manual reconciliation required.", {cause: uncertainCreate}); }
+      if (!/^[a-f0-9]{64}$/.test(restored?.Id || "") || restored.Name !== before.Name || restored.Image !== before.Image || restored.Config?.Labels?.["com.scriptarr.replacement"] !== rollbackOperation) {
+        throw new Error("Canonical Warden changed during rollback; manual reconciliation required.", {cause: uncertainCreate});
+      }
+    }
     await docker("POST", `/containers/${restored.Id}/start`); await wait(restored.Id);
     throw new Error("Replacement failed; previous canonical Warden was restored.", {cause: failure});
   }

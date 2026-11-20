@@ -35,9 +35,15 @@ final class CompletedArtifactRetention {
         JsonNode saved;
         try { requireScoped(manifest, downloads.resolve("ingested")); saved = DerivedPageManifest.read(chapter); }
         catch (IOException missing) { throw new OutputUnavailable("Canonical reader output is unavailable.", missing); }
+        JsonNode publication = job.path("result").path("publication");
+        if (publication.isObject()) {
+            if (!job.path("jobId").asText().equals(publication.path("jobId").asText())) throw new IOException("Canonical publication owner changed.");
+            if (!WebpChapterEncoder.sha256(manifest).equals(publication.path("manifestSha256").asText())) throw new OutputUnavailable("Canonical manifest bytes changed.", null);
+        }
+        long publishedEpoch = publication.isObject() ? publication.path("epoch").asLong() : job.path("lease").path("epoch").asLong();
+        String publishedArtifact = publication.isObject() ? publication.path("artifactSha256").asText() : job.path("result").path("artifact").path("sha256").asText();
         if (!job.path("jobId").asText().equals(saved.path("conversionJobId").asText())
-            || job.path("lease").path("epoch").asLong() != saved.path("conversionEpoch").asLong()
-            || !job.path("result").path("artifact").path("sha256").equals(saved.path("artifactSha256"))) throw new IOException("Canonical reader output identity changed.");
+            || publishedEpoch != saved.path("conversionEpoch").asLong() || !publishedArtifact.equals(saved.path("artifactSha256").asText())) throw new IOException("Canonical reader output identity changed.");
         if (!DerivedPageManifest.reusable(chapter)) throw new OutputUnavailable("Canonical reader output is incomplete.", null);
         OrderedPageIdentity.requireBundle(saved, input);
         return chapter;

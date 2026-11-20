@@ -31,16 +31,22 @@ final class ImmutableManifestRecovery {
      * @throws InterruptedException when the owner cancels before a publication checkpoint
      */
     static void restore(Path stage, Path destination, Path ingestRoot, BooleanSupplier cancelled) throws IOException, InterruptedException {
-        restore(stage, destination, ingestRoot, cancelled, false);
+        restore(stage, destination, ingestRoot, cancelled, false, null);
     }
 
     /** @param stage accepted output @param destination exact revision @param ingestRoot managed root @param cancelled owner cancellation @throws IOException on foreign content @throws InterruptedException on cancellation */
     static void restoreMalformed(Path stage, Path destination, Path ingestRoot, BooleanSupplier cancelled) throws IOException, InterruptedException {
-        restore(stage, destination, ingestRoot, cancelled, true);
+        restore(stage, destination, ingestRoot, cancelled, true, null);
     }
 
-    /** @param stage accepted output @param destination exact revision @param ingestRoot managed category @param cancelled owner cancellation @param malformed whether unreadable metadata may be preserved @throws IOException on unsafe content @throws InterruptedException on cancellation */
-    private static void restore(Path stage, Path destination, Path ingestRoot, BooleanSupplier cancelled, boolean malformed) throws IOException, InterruptedException {
+    /** @param stage accepted output @param destination exact revision @param ingestRoot managed root @param cancelled owner cancellation @param damagedHash bytes rejected against the broker's retained publication binding @throws IOException on changed evidence or foreign pages @throws InterruptedException on cancellation */
+    static void restoreDamaged(Path stage, Path destination, Path ingestRoot, BooleanSupplier cancelled, String damagedHash) throws IOException, InterruptedException {
+        if (damagedHash == null || !damagedHash.matches("[a-f0-9]{64}")) throw invalid();
+        restore(stage, destination, ingestRoot, cancelled, true, damagedHash);
+    }
+
+    /** @param stage accepted output @param destination exact revision @param ingestRoot managed category @param cancelled owner cancellation @param malformed whether rejected metadata may be preserved @param damagedHash optional fenced changed-byte identity @throws IOException on unsafe content @throws InterruptedException on cancellation */
+    private static void restore(Path stage, Path destination, Path ingestRoot, BooleanSupplier cancelled, boolean malformed, String damagedHash) throws IOException, InterruptedException {
         checkScope(destination, ingestRoot);
         Path manifest = stage.resolve("manifest.json"), targetManifest = destination.resolve("manifest.json");
         if (Files.isSymbolicLink(stage) || !Files.isDirectory(stage, LinkOption.NOFOLLOW_LINKS)
@@ -50,7 +56,9 @@ final class ImmutableManifestRecovery {
         if (malformed) {
             if (Files.isSymbolicLink(targetManifest) || !Files.isRegularFile(targetManifest, LinkOption.NOFOLLOW_LINKS) || Files.size(targetManifest) > 8_388_608) throw invalid();
             damaged = Files.readAllBytes(targetManifest);
-            try { JsonNode retained = JSON.readTree(damaged); if (retained != null && retained.isObject()) throw invalid(); }
+            if (damagedHash != null) {
+                if (!WebpChapterEncoder.sha256(targetManifest).equals(damagedHash)) throw invalid();
+            } else try { JsonNode retained = JSON.readTree(damaged); if (retained != null && retained.isObject()) throw invalid(); }
             catch (com.fasterxml.jackson.core.JsonProcessingException unreadable) { /* Preserve only proven malformed metadata after the remaining output validates. */ }
         }
         JsonNode metadata = JSON.readTree(manifest.toFile());

@@ -3416,7 +3416,11 @@ const createMysqlStore = (config) => {
     },
     async listUsers() {
       const [rows] = await pool.query("SELECT * FROM users ORDER BY username ASC");
-      return Promise.all(rows.map((row) => hydrateUserRow(pool, row)));
+      const users = [];
+      for (let offset = 0; offset < rows.length; offset += 4) {
+        users.push(...await Promise.all(rows.slice(offset, offset + 4).map((row) => hydrateUserRow(pool, row))));
+      }
+      return users;
     },
     async listPermissionGroups() {
       return listPermissionGroupsFrom(pool);

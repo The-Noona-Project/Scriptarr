@@ -15,12 +15,26 @@ const archiveHash = async archive => {
 };
 
 /**
+ * Flush recovery content and published directory entries before Docker may remove the source container.
+ * @param {string[]} files Exact protected recovery files.
+ * @param {string[]} directories Containing directories through the archive root's parent.
+ * @returns {Promise<void>} Resolves only after all durability barriers succeed.
+ */
+export async function synchronizeRecovery(files, directories) {
+  for (const filename of [...files, ...directories]) {
+    const handle = await open(filename, "r");
+    try { await handle.sync(); } finally { await handle.close(); }
+  }
+}
+
+/**
  * Archive and retire an exact, stopped container without deleting its mounts or image.
  * @param {{id:string,name:string,archiveRoot:string,readOnlyBtrfs?:boolean}} approval Frozen reviewed identity and protected archive directory.
  * @param {Function} [docker] Injectable Docker command transport.
+ * @param {Function} [synchronize] Injectable durability barrier; production requires file and directory synchronization.
  * @returns {Promise<object>} Non-secret retirement receipt.
  */
-export async function retireContainer(approval, docker = async args => (await execute("docker", args, {timeout: 300000, maxBuffer: 8 * 1024 * 1024})).stdout) {
+export async function retireContainer(approval, docker = async args => (await execute("docker", args, {timeout: 300000, maxBuffer: 8 * 1024 * 1024})).stdout, synchronize = synchronizeRecovery) {
   if (!/^[a-f0-9]{64}$/.test(approval.id) || !/^[A-Za-z0-9][A-Za-z0-9_.-]+$/.test(approval.name)
     || !path.isAbsolute(approval.archiveRoot)) throw new Error("An exact reviewed container identity and absolute archive root are required.");
   const inspect = async () => JSON.parse(await docker(["inspect", approval.id]))[0];
@@ -37,7 +51,7 @@ export async function retireContainer(approval, docker = async args => (await ex
     return {...receipt, removed: true};
   }
   if (before.Id !== approval.id || before.Name !== `/${approval.name}` || !["exited", "created", "dead"].includes(before.State.Status) || before.State.Running) throw new Error("The reviewed container identity/state changed; refusing retirement.");
-  await mkdir(directory, {recursive: true, mode: 0o700});
+  const firstCreated = await mkdir(directory, {recursive: true, mode: 0o700});
   const snapshot = path.join(directory, "inspect.private.json");
   try { await writeFile(snapshot, JSON.stringify(before, null, 2) + "\n", {mode: 0o600, flag: "wx"}); }
   catch (error) {
@@ -76,6 +90,13 @@ export async function retireContainer(approval, docker = async args => (await ex
     if (saved.id !== approval.id || saved.name !== approval.name || saved.sha256 !== sha256) throw new Error("Existing retirement receipt differs.");
     receipt = saved;
   }
+  const directories = new Set([directory, approval.archiveRoot, path.dirname(approval.archiveRoot)]);
+  if (firstCreated) for (let current = directory; ; current = path.dirname(current)) {
+    directories.add(current);
+    if (path.relative(path.toNamespacedPath(current), path.toNamespacedPath(path.dirname(firstCreated))) === "") break;
+    if (path.dirname(current) === current) throw new Error("Created recovery directory ancestry could not be verified.");
+  }
+  await synchronize([archive, snapshot, path.join(directory, "receipt.json")], [...directories]);
   await docker(["rm", approval.id]);
   const remaining = (await docker(["ps", "-a", "--no-trunc", "--format", "{{.ID}}"])).trim().split(/\s+/);
   if (remaining.includes(approval.id)) throw new Error("Container retirement could not be verified.");

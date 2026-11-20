@@ -267,4 +267,8 @@ Recovery also rejects CBZ pages with empty or zero-filled headers, even when the
 
 Bulk downloads pause when storage falls below the 100 GiB reserve. Explicit resume needs 150 GiB of free capacity. Automatic A-Z runs additionally require fresh backups, a reviewed capacity estimate, protected source access and a ready WebP worker. Completed conversion duplicates can be reclaimed after 24 hours; canonical archives, reader pages and recovery receipts are preserved.
 
+The storage pause applies to all download work. After restoring capacity, the configured owner clears it with an explicit bulk start or continue; ordinary retries and monitoring cannot clear it. Retry other affected downloads after that approval. Duplicate cleanup briefly yields to incoming content work and remains cancellation-aware.
+
 Reader reconstruction preserves malformed metadata as recovery evidence and validates retained pages before publishing a repaired manifest. Conflicting content remains paused for review.
+Reconstructed pages can retain their original immutable manifest. The new completion records that publication identity so later recovery still verifies the correct files.
+Changed saved metadata can be reconstructed only against the broker's fenced publication receipt and validated page files; rejected metadata is preserved as evidence. Interrupted older publications retain their accepted-artifact proof through cancellation and retry.

@@ -96,6 +96,28 @@ const artifactValue = (value, job) => ({
   ...(value?.segmentCount == null ? {} : {segmentCount: integer(value.segmentCount, "segment count", job.spec.input.sourcePageCount, 1000000)})
 });
 
+/** Validate the immutable reader manifest against an artifact accepted by this exact content job. */
+const publicationValue = (value, job) => {
+  if (value == null) return null;
+  const publication = {jobId: identifier(value.jobId, "publication job id"), epoch: integer(value.epoch, "publication epoch", 1),
+    artifactSha256: sha(value.artifactSha256, "publication artifact SHA256"), manifestSha256: sha(value.manifestSha256, "publication manifest SHA256")};
+  const accepted = publication.epoch === job.lease.epoch ? job.result : job._publicationHistory?.[publication.epoch]?.result;
+  if (publication.jobId !== job.jobId || publication.artifactSha256 !== accepted?.artifact?.sha256) conflict("The reader publication does not belong to an accepted artifact of this conversion.");
+  return publication;
+};
+
+/** Retain accepted evidence before cancellation advances its epoch or an explicit retry clears its result. */
+const rememberAcceptedPublication = job => {
+  if (!job.result?.artifact) return;
+  const epoch = job.lease.epoch - (job.status === "cancelled" ? 1 : 0);
+  if (epoch < 1) conflict("The accepted publication epoch cannot be recovered.");
+  artifactValue(job.result.artifact, job);
+  job._publicationHistory ||= {};
+  const prior = job._publicationHistory[epoch];
+  if (prior && prior.result?.artifact?.sha256 !== job.result.artifact.sha256) conflict("Accepted publication evidence conflicts with its retained history.");
+  if (!prior) job._publicationHistory[epoch] = {result: copy(job.result)};
+};
+
 /** Create authoritative conversion state transitions over a transactional repository. */
 export const createConversionJobs = ({repository, now = Date.now, publishChapter = null, repairChapter = null}) => {
   const time = tx => Number.isFinite(tx.now) ? tx.now : now();
@@ -262,6 +284,8 @@ export const createConversionJobs = ({repository, now = Date.now, publishChapter
         const job = await requireJob(tx, id);
         await coordinatorFence(tx, job, body, ["result-ready", "publishing", "completed"]);
         if (job.status === "completed") return publicJob(job);
+        job._publicationHistory ||= {};
+        job._publicationHistory[job.lease.epoch] = {result: copy(job.result)};
         job.status = "publishing";
         return save(tx, job);
       });
@@ -289,8 +313,10 @@ export const createConversionJobs = ({repository, now = Date.now, publishChapter
           return response;
         }
         const completionHash = hash(canonical(body.chapter));
+        const publication = publicationValue(body.publication, job);
         if (job.status === "completed") {
           if (job._completionHash !== completionHash) conflict("This conversion already completed with another chapter checkpoint.");
+          if (publication && canonical(publication) !== canonical(job.result.publication)) conflict("This conversion already completed with another reader publication.");
           return {job: publicJob(job), chapter: copy(job.result.chapter)};
         }
         if (!publishChapter) fail(503, "CONVERSION_PUBLISH_UNAVAILABLE", "The catalogue publisher is unavailable.");
@@ -299,6 +325,7 @@ export const createConversionJobs = ({repository, now = Date.now, publishChapter
         job.finishedAt = new Date(time(tx)).toISOString();
         job._completionHash = completionHash;
         job.result.chapter = copy(chapter);
+        if (publication) job.result.publication = publication;
         return {job: await save(tx, job), chapter};
       });
     },
@@ -323,6 +350,7 @@ export const createConversionJobs = ({repository, now = Date.now, publishChapter
         }
         if (["cancelled", "completed"].includes(job.status)) return publicJob(job);
         if (body.expectedEpoch != null && body.expectedEpoch !== job.lease.epoch) conflict("This cancellation epoch is no longer current.");
+        rememberAcceptedPublication(job);
         job.status = "cancelled"; job.lease.epoch += 1; job.lease.expiresAt = null;
         job.finishedAt = new Date(time(tx)).toISOString();
         return save(tx, job);
@@ -340,9 +368,11 @@ export const createConversionJobs = ({repository, now = Date.now, publishChapter
         await assertUnfenced(tx, job);
         const owner = body.owner == null ? null : ownerValue(body.owner);
         const priority = priorityValue(body.priority || owner?.kind || job.priority || "interactive");
+        rememberAcceptedPublication(job);
         if (rebuild) {
           job._publicationHistory ||= {};
           job._publicationHistory[job.lease.epoch] = {result: copy(job.result), completionHash: job._completionHash, finishedAt: job.finishedAt};
+          if (job.result.publication) job.spec.rebuildPublication = {...copy(job.result.publication), chapter: copy(job.result.chapter)};
         }
         job.status = "queued"; job.lease = {epoch: job.lease.epoch + 1, workerId: null, expiresAt: null};
         job.progress = {completedLogicalPages: 0, totalLogicalPages: job.spec.input.sourcePageCount}; job.result = {};

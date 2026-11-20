@@ -27,6 +27,22 @@ import static org.mockito.Mockito.*;
 
 /** Actual HTTP protocol checks across coordinator ownership, waiting, fencing and completion replay. */
 class RemoteChapterProcessorTest {
+    /** @param root isolated files @throws Exception when fixture transport or publication fails */
+    @Test void completionBindsTheActualRetainedManifestRatherThanTheNewExecution(@TempDir Path root) throws Exception {
+        try (Fixture f = new Fixture(root); var manifests = mockStatic(DerivedPageManifest.class)) {
+            f.job.put("status", "publishing"); ((ObjectNode) f.job.path("lease")).put("epoch", 3);
+            Path manifest = Path.of(f.chapter.ingestManifestPath()); Files.writeString(manifest, "{}");
+            manifests.when(() -> DerivedPageManifest.catalogFields(f.chapter)).thenReturn(Map.of());
+            manifests.when(() -> DerivedPageManifest.read(f.chapter)).thenReturn(f.json.valueToTree(Map.of("conversionJobId", f.id,
+                "conversionEpoch", 1, "artifactSha256", "a".repeat(64))));
+            f.processor.complete(new RemoteChapterProcessor.Result(f.id, 3, "b".repeat(64), null, null), f.chapter);
+            assertEquals(3, f.completedBody.get().path("epoch").asLong());
+            assertEquals(1, f.completedBody.get().path("publication").path("epoch").asLong());
+            assertEquals("a".repeat(64), f.completedBody.get().path("publication").path("artifactSha256").asText());
+            assertEquals(WebpChapterEncoder.sha256(manifest), f.completedBody.get().path("publication").path("manifestSha256").asText());
+        }
+    }
+
     /** Same-content deduplication cannot route a new repair through an ordinary or another repair's input journal. */
     @Test void repairRejectsForeignPendingConversionOwner(@TempDir Path root) throws Exception {
         for (String owner : List.of("", "task_repair_" + "b".repeat(64))) {

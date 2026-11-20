@@ -18,6 +18,10 @@ try {
     await admin.query("CREATE DATABASE ??", [database]);
     inspector = mysql.createPool(config.mysql);
     await first.init(); await second.init();
+    for (let index = 0; index < 110; index++) await first.upsertDiscordUser({discordUserId: `hydration-${String(index).padStart(3, "0")}`, username: `Hydration ${String(index).padStart(3, "0")}`});
+    const hydratedUsers = await second.listUsers();
+    assert.equal(hydratedUsers.length, 110, "User hydration must not overflow the bounded pool queue.");
+    assert.equal(hydratedUsers[0].username, "Hydration 000"); assert.equal(hydratedUsers[109].username, "Hydration 109");
     const request = chapterId => ({input: {titleId: "conversion-title", chapterId, sourceFingerprint: {sha256: "a".repeat(64), size: 123}, sourcePageCount: 1, archiveName: "chapter.cbz", entries: ["001.png"]}});
     const worker = i => ({workerId: `mysql-worker-${i}`, instanceId: `mysql-instance-${i}`, claimId: `mysql-claim-${i}`, leaseToken: String(i).padEnd(40, "T"), capabilities: {format: "webp", profileVersion: 1, selfTestPassed: true}});
     await first.upsertRavenTitle({id: "conversion-title", title: "Conversion fixture", mediaType: "manhua", libraryTypeSlug: "manhua", chapterCount: 2});
@@ -105,7 +109,33 @@ try {
     const history = typeof historyRow.record_json === "string" ? JSON.parse(historyRow.record_json) : historyRow.record_json;
     assert.deepEqual(history._publicationHistory[originalCompletion.lease.epoch].result, originalCompletion.result);
     await assert.rejects(first.completeConversionJob(jobId, {epoch: originalCompletion.lease.epoch, artifactSha256: artifact.sha256, chapter}), error => error.status === 409);
-    await second.cancelConversionJob(jobId, {expectedCoordinatorGeneration: rebuilds[0].spec.coordinatorGeneration});
+    const rebuiltLease = await first.claimConversionJob(worker(140));
+    assert.equal(rebuiltLease.job.jobId, jobId);
+    const rebuiltArtifact = {...artifact, sha256: "d".repeat(64)}, rebuiltFence = {epoch: rebuiltLease.lease.epoch, artifactSha256: rebuiltArtifact.sha256};
+    await second.submitConversionJob(jobId, {...worker(140), epoch: rebuiltLease.lease.epoch, artifact: rebuiltArtifact});
+    await first.publishConversionJob(jobId, rebuiltFence);
+    const publication = {jobId, epoch: originalCompletion.lease.epoch, artifactSha256: artifact.sha256, manifestSha256: "e".repeat(64)};
+    const rebuiltCompletion = await second.completeConversionJob(jobId, {...rebuiltFence, chapter, publication});
+    assert.deepEqual(rebuiltCompletion.job.result.publication, publication);
+    assert.deepEqual((await first.getConversionJob(jobId)).result.publication, publication, "The manifest's retained identity must survive a database round trip.");
+    const anotherRebuild = await first.retryConversionJob(jobId, {requestId: "changed-metadata-rebuild", rebuildPublished: true,
+      expectedEpoch: rebuiltCompletion.job.lease.epoch, expectedCoordinatorGeneration: rebuiltCompletion.job.spec.coordinatorGeneration, expectedArtifactSha256: rebuiltArtifact.sha256});
+    assert.deepEqual((await second.getConversionJob(jobId)).spec.rebuildPublication, {...publication, chapter: rebuiltCompletion.chapter});
+    await first.cancelConversionJob(jobId, {expectedCoordinatorGeneration: anotherRebuild.spec.coordinatorGeneration});
+    const legacy = await first.createConversionJob({...request("legacy-interrupted"), priority: "interactive"}), legacyClaim = worker(150);
+    const legacyLease = await second.claimConversionJob(legacyClaim);assert.equal(legacyLease.job.jobId, legacy.jobId);
+    await first.submitConversionJob(legacy.jobId, {...legacyClaim, epoch: legacyLease.lease.epoch, artifact});
+    await second.publishConversionJob(legacy.jobId, {epoch: legacyLease.lease.epoch, artifactSha256: artifact.sha256});
+    // Isolated pre-upgrade cancelled state: accepted bytes remain, but no publication-history feature existed yet.
+    await inspector.query("UPDATE raven_conversion_jobs SET status_name='cancelled', record_json=JSON_SET(JSON_REMOVE(record_json,'$._publicationHistory'),'$.status','cancelled','$.lease.epoch',?,'$.lease.expiresAt',NULL) WHERE job_id=?", [legacyLease.lease.epoch + 1, legacy.jobId]);
+    await first.retryConversionJob(legacy.jobId, {requestId: "legacy-approved-retry", expectedEpoch: legacyLease.lease.epoch + 1});
+    const legacyRetryClaim = worker(151), legacyRetryLease = await second.claimConversionJob(legacyRetryClaim);assert.equal(legacyRetryLease.job.jobId, legacy.jobId);
+    await first.submitConversionJob(legacy.jobId, {...legacyRetryClaim, epoch: legacyRetryLease.lease.epoch, artifact: rebuiltArtifact});
+    const legacyFence = {epoch: legacyRetryLease.lease.epoch, artifactSha256: rebuiltArtifact.sha256};await second.publishConversionJob(legacy.jobId, legacyFence);
+    const legacyPublication = {...publication, jobId: legacy.jobId, epoch: legacyLease.lease.epoch};
+    await first.completeConversionJob(legacy.jobId, {...legacyFence, publication: legacyPublication, chapter: {...chapter, id: "legacy-interrupted",
+      ingestManifestPath: "/downloads/ingested/manhua/conversion-title/legacy-interrupted/webp-0123456789abcdef/manifest.json"}});
+    assert.deepEqual((await second.getConversionJob(legacy.jobId)).result.publication, legacyPublication);
     await proveScopedReset(createCachedStore(first));
     await proveCanonicalTitleIdentity(createCachedStore(second), {readAliases: async () => {
       const [rows] = await inspector.query("SELECT * FROM raven_title_aliases WHERE alias_title_id IN (?,?) ORDER BY alias_title_id", ["6639ab89-297c-4516-9228-913f0f020cb4", "merged-alias"]);

@@ -17,6 +17,11 @@ final class MigrationVerificationCursor {
     private static final int MAX_SCOPES = 32;
     private final Map<Scope, State> scopes = new ConcurrentHashMap<>();
 
+    /** @param context cancelled migration attribution @param titleId exact title whose prior hints must not survive cancellation */
+    void discard(Map<String, Object> context, String titleId) {
+        if ("migration".equals(context.get("kind"))) scopes.remove(new Scope(string(context.get("runId")), string(context.get("taskId")), titleId));
+    }
+
     /** @param context exact durable migration attribution @param titleId canonical owner @param chapters current ordered checkpoints @return validated prefix hint for this pass */
     Pass begin(Map<String, Object> context, String titleId, List<LibraryChapter> chapters) {
         String run = string(context.get("runId")), task = string(context.get("taskId"));
