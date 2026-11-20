@@ -6,6 +6,66 @@ import {tmpdir} from "node:os";
 import path from "node:path";
 import {replaceWarden, dockerRequest} from "./replace-warden.mjs";
 import {EventEmitter} from "node:events";
+import http from "node:http";
+
+for (const duration of [45000, 180000]) test(`Docker total and idle deadlines respect ${duration}ms`, async t => {
+  t.mock.timers.enable({apis: ["setTimeout"]});
+  let destroyed = false, observedTimeout;
+  const transport = options => {
+    observedTimeout = options.timeout;
+    const request = new EventEmitter();request.end = () => {};
+    request.destroy = error => {destroyed = true;request.emit("error", error);};return request;
+  };
+  const operation = dockerRequest("POST", "/containers/reviewed/stop?t=30", null, transport, duration === 45000 ? undefined : duration);
+  operation.catch(() => {});
+  t.mock.timers.tick(duration - 1);await Promise.resolve();
+  assert.equal(destroyed, false);assert.equal(observedTimeout, duration);
+  t.mock.timers.tick(1);
+  await assert.rejects(operation, /operation deadline exceeded/);assert.equal(destroyed, true);
+});
+
+test("invalid timeout options reject before Docker reads or mutations", async () => {
+  for (const dockerTimeoutMs of [0, 999, 300001, "180000", null, NaN, Infinity, 180000.5]) {
+    let contacted = false;const transport = () => {contacted = true;throw new Error("must not contact Docker");};
+    await assert.rejects(dockerRequest("GET", "/containers/json", null, transport, dockerTimeoutMs), /operation timeout/);
+    await assert.rejects(replaceWarden({dockerTimeoutMs}, transport), /operation timeout/);
+    assert.equal(contacted, false);
+  }
+});
+
+for (const failHealth of [false, true]) test(`replacement and rollback use the configured transport budget: ${failHealth}`, async t => {
+  const root = await mkdtemp(path.join(tmpdir(), "warden-deadline-")), budgets = [];
+  const before = {Id: "a".repeat(64), Image: "sha256:" + "c".repeat(64), Name: "/scriptarr-warden",
+    Config: {Env: []}, HostConfig: {}, NetworkSettings: {Networks: {internal: {Aliases: []}}}};
+  let current = before, creates = 0, waits = 0;
+  t.mock.method(http, "request", (options, received) => {
+    budgets.push(options.timeout);const request = new EventEmitter();
+    request.destroy = error => request.emit("error", error);
+    request.end = body => queueMicrotask(() => {
+      let payload;
+      if (options.path.startsWith("/images/")) payload = {};
+      else if (options.method === "GET") payload = current;
+      else if (options.method === "DELETE") current = null;
+      else if (options.path.startsWith("/containers/create")) {
+        const specification = JSON.parse(body), Id = String(++creates).repeat(64);
+        current = {...before, Id, Image: specification.Image, Config: specification};payload = {Id};
+      }
+      const response = new EventEmitter();response.statusCode = 200;received(response);
+      if (payload) response.emit("data", Buffer.from(JSON.stringify(payload)));
+      response.emit("end");response.emit("close");
+    });return request;
+  });
+  try {
+    const operation = replaceWarden({expectedId: before.Id, image: "registry/warden@sha256:" + "b".repeat(64), archiveRoot: root, dockerTimeoutMs: 180000}, undefined,
+      async () => {if (failHealth && waits++ === 0) throw new Error("injected unhealthy replacement");});
+    if (failHealth) {await assert.rejects(operation, /previous canonical Warden was restored/);assert.equal(current.Image, before.Image);}
+    else assert.equal((await operation).healthy, true);
+    assert.ok(budgets.length >= 7);assert.ok(budgets.every(value => value === 180000));
+  } finally {
+    assert.equal(path.dirname(root), path.resolve(tmpdir()));assert.ok(path.basename(root).startsWith("warden-deadline-"));
+    await rm(root, {recursive: true, force: true});
+  }
+});
 
 for (const outcome of ["complete", "aborted", "close", "error"]) test(`Docker responses settle on ${outcome}`, {timeout: 1000}, async () => {
   const transport = (_options, received) => {
