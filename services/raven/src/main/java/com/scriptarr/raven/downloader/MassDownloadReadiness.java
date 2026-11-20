@@ -12,7 +12,7 @@ import java.time.Instant;
 import java.time.Duration;
 import java.util.Map;
 
-/** Owner-approved automatic windows require current storage, VPN, worker and committed backup evidence. */
+/** Owner-approved automatic windows enforce capacity, protected traffic, worker readiness and the explicit backup policy. */
 final class MassDownloadReadiness {
     private MassDownloadReadiness() { }
 
@@ -21,10 +21,24 @@ final class MassDownloadReadiness {
         StorageBudget.require(root);
         JsonNode forecast = new ObjectMapper().readTree(Files.readString(root.resolve(".operations/mass-capacity.json")));
         requireForecast(forecast, group, Files.getFileStore(root).getUsableSpace());
-        JsonNode backup = new ObjectMapper().readTree(Files.readString(root.resolve(".operations/core-backup.json")));
+        boolean backupRequired = requiresBackup(forecast);
+        JsonNode backup = readBackup(root, backupRequired);
         JsonNode pool = new IngestBrokerClient(System.getenv()).jsonUntil("GET", "/pool", null, null, System.currentTimeMillis() + 5000);
         if (pool != null && pool.has("payload")) pool = pool.path("payload");
-        validate(pool, vpn == null ? Map.of("enabled", false) : vpn.status(), backup, Instant.now());
+        validate(pool, vpn == null ? Map.of("enabled", false) : vpn.status(), backup, Instant.now(), backupRequired);
+    }
+
+    /** @param forecast owner-reviewed capacity and policy proof @return whether a fresh backup is required, defaulting to true @throws IOException when an explicit policy is not Boolean */
+    static boolean requiresBackup(JsonNode forecast) throws IOException {
+        JsonNode policy = forecast.path("backupRequired");
+        if (policy.isMissingNode()) return true;
+        if (!policy.isBoolean()) throw new IOException("mass_download_gate: Backup policy must be an explicit Boolean.");
+        return policy.booleanValue();
+    }
+
+    /** @param root managed data root @param required explicit backup policy @return committed evidence or no evidence when backups are disabled @throws IOException when required evidence is unavailable */
+    static JsonNode readBackup(Path root, boolean required) throws IOException {
+        return required ? new ObjectMapper().readTree(Files.readString(root.resolve(".operations/core-backup.json"))) : com.fasterxml.jackson.databind.node.NullNode.instance;
     }
 
     /** @param forecast reviewed A-based capacity proof @param group current letter @param available actual free bytes @throws IOException when the remaining estimate cannot fit with headroom */
@@ -40,9 +54,16 @@ final class MassDownloadReadiness {
 
     /** @param pool live pool @param vpn live protection @param backup committed backup proof @param now current UTC time @throws IOException when a gate fails */
     static void validate(JsonNode pool, Map<String, Object> vpn, JsonNode backup, Instant now) throws IOException {
+        validate(pool, vpn, backup, now, true);
+    }
+
+    /** @param pool live pool @param vpn live protection @param backup optional committed evidence @param now current UTC time @param backupRequired explicit owner policy @throws IOException when any required gate fails */
+    static void validate(JsonNode pool, Map<String, Object> vpn, JsonNode backup, Instant now, boolean backupRequired) throws IOException {
         try {
-            Duration age = Duration.between(Instant.parse(backup.path("createdAt").asText()), now);
-            if (!"complete".equals(backup.path("state").asText()) || age.isNegative() || age.compareTo(Duration.ofHours(30)) >= 0) throw new IOException("mass_download_gate: A fresh committed core backup is required.");
+            if (backupRequired) {
+                Duration age = Duration.between(Instant.parse(backup.path("createdAt").asText()), now);
+                if (!"complete".equals(backup.path("state").asText()) || age.isNegative() || age.compareTo(Duration.ofHours(30)) >= 0) throw new IOException("mass_download_gate: A fresh committed core backup is required.");
+            }
             if (Boolean.TRUE.equals(vpn.get("enabled")) && !Boolean.TRUE.equals(vpn.get("protected"))) throw new IOException("mass_download_gate: VPN protection is unavailable.");
             boolean ready = false;
             if (pool != null && pool.path("capacity").asInt() > 0) for (JsonNode worker : pool.path("workers")) if (worker.path("ready").asBoolean()) ready = true;
