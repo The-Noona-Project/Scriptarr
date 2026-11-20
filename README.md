@@ -358,6 +358,9 @@ For end-to-end Docker verification, use:
 
 ## Docs
 
+Administrators can allow longer, bounded deployment operations on slower storage. See the server administration
+guide for deployment and recovery settings.
+
 Encrypted backups reuse a private SSH connection for each run, supporting large libraries while preserving the
 receiver's existing access restrictions. See the server administration guide for recovery and monitoring.
 

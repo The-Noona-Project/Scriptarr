@@ -5,15 +5,27 @@ import path from "node:path";
 import {pathToFileURL} from "node:url";
 
 /**
+ * Validate a bounded Docker operation budget before contacting the daemon.
+ * @param {number} [value] Protected deployment option in milliseconds.
+ * @returns {number} Valid operation timeout.
+ */
+const operationTimeout = (value = 45000) => {
+  if (!Number.isInteger(value) || value < 1000 || value > 300000) throw new Error("Docker operation timeout must be an integer from 1000 through 300000 milliseconds.");
+  return value;
+};
+
+/**
  * Send one bounded request to the local Docker socket.
  * @param {string} method HTTP method.
  * @param {string} route Docker API route.
  * @param {object} [body] Request payload.
  * @param {Function} [requestImpl] Injectable HTTP transport.
+ * @param {number} [timeoutMs] Bounded idle and total operation deadline.
  * @returns {Promise<object|null>} Parsed response.
  */
-export function dockerRequest(method, route, body, requestImpl = http.request) {
+export function dockerRequest(method, route, body, requestImpl = http.request, timeoutMs = 45000) {
   return new Promise((resolve, reject) => {
+    const duration = operationTimeout(timeoutMs);
     let settled = false, deadline, receivedStatus;
     const finish = (error, value) => {
       if (settled) return; settled = true; clearTimeout(deadline);
@@ -22,7 +34,7 @@ export function dockerRequest(method, route, body, requestImpl = http.request) {
       error ? reject(error) : resolve(value);
     };
     const request = requestImpl({socketPath: "/var/run/docker.sock", method, path: route,
-      headers: {"Content-Type": "application/json"}, timeout: 45000}, response => {
+      headers: {"Content-Type": "application/json"}, timeout: duration}, response => {
       receivedStatus = response.statusCode;
       const chunks = []; response.on("data", chunk => chunks.push(chunk));
       response.on("error", error => finish(error));
@@ -34,7 +46,7 @@ export function dockerRequest(method, route, body, requestImpl = http.request) {
       });
     });
     const expire = () => {const error = new Error("Docker operation deadline exceeded.");finish(error);request.destroy(error);};
-    deadline = setTimeout(expire, 45000);
+    deadline = setTimeout(expire, duration);
     request.on("timeout", expire);
     request.on("error", error => finish(error)); request.end(body ? JSON.stringify(body) : undefined);
   });
@@ -55,7 +67,7 @@ export function wardenSpecification(before, image, environment = before.Config.E
 
 /**
  * Replace one explicitly identified Warden, recreating its previous specification on failure.
- * @param {{expectedId:string,image:string,archiveRoot:string,environment?:string[]}} options Reviewed deployment.
+ * @param {{expectedId:string,image:string,archiveRoot:string,environment?:string[],dockerTimeoutMs?:number}} options Reviewed deployment.
  * @param {Function} [docker] Docker request transport.
  * @param {Function} [wait] Healthy-start verifier.
  * @returns {Promise<object>} Non-secret replacement receipt.
@@ -70,6 +82,8 @@ export async function replaceWarden(options, docker = dockerRequest, wait = asyn
   }
   throw new Error("Replacement Warden health deadline exceeded.");
 }) {
+  const timeoutMs = operationTimeout(options.dockerTimeoutMs);
+  if (docker === dockerRequest) docker = (method, route, body) => dockerRequest(method, route, body, http.request, timeoutMs);
   const before = await docker("GET", "/containers/scriptarr-warden/json");
   if (before.Id !== options.expectedId || before.Name !== "/scriptarr-warden" || !/@sha256:[a-f0-9]{64}$/.test(options.image)
     || !path.isAbsolute(options.archiveRoot)) throw new Error("Warden identity or immutable deployment reference changed.");
