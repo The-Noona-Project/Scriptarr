@@ -17,6 +17,13 @@
 - The committed backup sender may write `completionStatusFile` to `/mnt/user/scriptarr/raven/downloads/.operations/core-backup.json`. Only successful receiver commit writes `{state:"complete",createdAt,id}`. Automatic work requires a recovery point younger than 30 hours by default. An explicit Boolean `backupRequired:false` in the owner-reviewed capacity proof skips only that evidence read and freshness check. Missing values default true; null/string/numeric values fail closed. The forecast must still be approved and fit with headroom, and storage, VPN and worker checks remain mandatory. When the owner disables backups, disable only the matching Scriptarr backup/retention schedules, remove their monitor stores, and preserve existing completed files.
 - Before launch, audit all four A types and calculate retained canonical archive plus reader-output bytes per title. Use the provider population and the completed A sample to choose a conservative per-letter estimate. Record a reviewed `.operations/mass-capacity.json` with `approved:true`, `type:"all"`, `nsfw:false`, and positive integral `perLetterEstimateBytes`. Recheck the remaining alphabet against available capacity with 25% headroom and the reserve before every batch. Missing or malformed proofs pause automation.
 
+## VPN transport recovery
+
+- Compare the selected cached profile with the current official provider profile before attributing a failed handshake to cache age. Existing exact-region profiles are reused; archive age alone does not replace them.
+- When the default UDP profile fails TLS negotiation, an owner-approved manual override may use the same region from PIA's official `https://www.privateinternetaccess.com/openvpn/openvpn-tcp.zip`. Download through Raven's VPN bootstrap network path, bound and validate the ZIP, and record archive/profile hashes. Check that the exact target is a regular managed profile and that no Raven tunnel is active before atomically replacing it.
+- Preserve credentials, region selection and TLS verification. Run the Sage-brokered `/v1/vpn/test`, then confirm sustained `protected:true` through Raven health and Moon's public boolean readiness route. Source downloads stay paused on failed protection; never disable the guard to test throughput.
+- Treat a manual TCP profile as private deployment configuration. A cache reconstruction from the default IP/UDP archive can overwrite it; reapply the approved provider profile after such a rebuild. Keep the public Settings enable/region/credentials contract unchanged.
+
 ## Command and identity compatibility
 
 `/downloadall run type:All nsfw:False titlegroup:all groupsize:4 autoadvance:True`

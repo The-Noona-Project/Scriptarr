@@ -111,12 +111,15 @@ for manga, manhwa, manhua, webtoon, comic, and OEL downloads while Raven keeps o
 
 When Raven VPN is enabled through Moon admin, downloads now fail closed if Raven cannot safely load the settings,
 resolve the requested PIA profile, or complete the OpenVPN handshake. Raven still uses the existing simplified
-enable/region/credentials admin contract, but the runtime now refreshes stale PIA profiles, validates downloaded
+enable/region/credentials admin contract, but the runtime repairs missing PIA profile caches, validates downloaded
 profile archives before replacing the cache, reconnects on region changes or a dead tunnel, and uses short-lived
 credential files with `--auth-nocache`. Raven health includes `runtimeCapable`, `settingsFresh`, `protected`, and
 `lastError` so Moon can show whether direct downloads are intentionally blocked. An enabled idle VPN reports `armed`
 until a download or admin test starts OpenVPN; the brokered `/v1/vpn/test` path uses the same fail-closed guard and
 leaves a successful enabled tunnel connected.
+
+If the default VPN transport repeatedly times out, an administrator can use PIA's official TCP profile for the same
+region. See [the server administration guide](../../ServerAdmin.md) for the manual recovery procedure and verification.
 
 Raven's request intake is now provider-based on the download side. Enabled metadata providers run first, Raven expands
 aliases from those results, then the enabled download-provider registry checks site-specific scrapers for a concrete
