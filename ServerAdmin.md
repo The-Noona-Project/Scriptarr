@@ -1023,6 +1023,12 @@ The test stack uses:
 - `Armed / idle` in Settings means the VPN is enabled and ready but OpenVPN is not currently running because Raven
   connects lazily before protected download traffic. Use `Test VPN` to force a brokered connection check; a successful
   enabled test leaves the tunnel connected.
+- If DNS resolves but the default PIA profile repeatedly times out during TLS negotiation, test the provider's
+  [official TCP configuration](https://helpdesk.privateinternetaccess.com/hc/en-us/articles/46770624896923-Linux-Set-Up-a-Manual-OpenVPN-Connection-Through-Terminal)
+  for the same region. This is a manual profile override: validate the provider archive, replace the selected cached
+  region profile only while its tunnel is inactive, preserve credentials and TLS verification, then use `Test VPN`
+  and confirm `protected: true`. A full profile-cache rebuild restores the default IP/UDP profiles and requires
+  reapplying an approved TCP override. The Settings enable/region/credentials workflow stays the same.
 - If source lookups work on the host but fail inside Raven after the VPN connects, check which route reaches the
   container's inherited DNS server. A LAN resolver can become unreachable through the VPN. Set
   `SCRIPTARR_RAVEN_DNS_SERVERS=1.1.1.1,8.8.8.8` in Warden's private environment only after verifying those resolvers
