@@ -92,7 +92,7 @@ test("Linux fixture really pauses and resumes rsync without affecting a foreign 
   try {
     await until(() => {
       jobs = fs.readdirSync("/proc").filter(p => /^\d+$/.test(p)).map(p => proc(+p)).filter(p => p?.argv[0] === "rsync" && p.argv.at(-2) === source && p.argv.at(-1) === destination);
-      return jobs.length >= 2 && fs.existsSync(statusFile);
+      return jobs.length === 3 && fs.existsSync(statusFile);
     });
     const identity = p => { const s = fs.statSync(p); return {dev: s.dev, ino: s.ino}; };
     const fixture = {...config, source, destination, owner: proc(child.pid), jobs, statusFile, journalFile: directory + "/journal.json", copyStartedAt: startedAt,
@@ -108,9 +108,11 @@ test("Linux fixture really pauses and resumes rsync without affecting a foreign 
     assert.equal(runSchedule(broken, {clock: night}).signal, "SIGSTOP");
     assert.ok(sameProcess(foreignBefore, proc(foreign.pid))); assert.notEqual(proc(foreign.pid).state, "T");
     runSchedule(fixture, {clock: day}); await until(() => jobs.every(p => proc(p.pid)?.state === "T"));
+    runSchedule(fixture, {clock: night}); await until(() => jobs.every(p => proc(p.pid)?.state !== "T"));
     fs.writeFileSync(fixture.journalFile, "{invalid journal");
-    const malformed = runSchedule(fixture, {clock: night});
+    const malformed = runSchedule(fixture, {clock: day});
     assert.equal(malformed.phase, "blocked"); assert.equal(malformed.reason, "journal-unreadable");
+    await until(() => jobs.every(p => proc(p.pid)?.state === "T"));
     assert.ok(jobs.every(p => proc(p.pid)?.state === "T"));
     const retained = fs.readdirSync(directory).find(name => name.startsWith("journal.json.rejected-"));
     assert.ok(retained); assert.equal(fs.readFileSync(path.join(directory, retained), "utf8"), "{invalid journal");
