@@ -9,6 +9,31 @@
    For array-backed Docker storage with slow stop/unmount operations, set integer `dockerTimeoutMs:180000` in those protected options. Each operation retains both idle and absolute deadlines (default 45000 ms, bounds 1000–300000 ms); extend the caller's SSH budget to cover the full replacement and health wait. Reject malformed budgets before any Docker call and reconcile canonical identity after an interrupted response.
 5. Retire only separately reviewed stopped/created containers through `retire-container.mjs ID NAME ARCHIVE_ROOT`. The protected archive contains private Docker configuration, root filesystem and a SHA-256 receipt. The optional `--read-only-btrfs` archive path reads the exact inspected stopped snapshot when Docker export stalls; deletion still goes through Docker. It never removes images, bind-mounted files or volumes. Keep unresolved migration/custody containers and running qualification work.
 
+## Overnight pre-copy controller
+
+- `scripts/operations/scheduled-copy.mjs CONFIG [--dry-run]` controls an existing reviewed Linux rsync tree; it never
+  launches rsync. The protected version-1 manifest pins the boot ID, owner and child PID/start/parent/group/argv,
+  physical source/destination device and inode, original copy start time, status/journal paths, timezone and hours.
+- Install the controller and private manifest under `/boot/config/plugins/dynamix/scriptarr-overnight-copy/`.
+  Install one every-minute entry in `/boot/config/plugins/dynamix/scriptarr-overnight-copy.cron`, guarded by an
+  exclusive nonblocking `flock` in `/run/lock`, then apply it using `/usr/local/sbin/update_cron`. Invoke the actual
+  absolute Node binary; preserve all unrelated cron files. Hold that same lock for manual controller invocations.
+- Capture identities from the current verified tree, pause it, and retain the bootstrap receipt outside both copy
+  trees. The separate controller journal is authoritative for scheduling; do not overwrite the original worker's
+  `precopy-status.json`, which continues to own transfer completion. Record the installed cron SHA-256 in the manifest.
+- Midnight is inclusive and 7 AM exclusive in `America/Los_Angeles`. The host checks every minute; kernel writeback
+  can outlive a stop request. Do not kill rsync, alter its copy flags, or issue a system-wide sync to enforce a pause.
+  The owner worker stays alive to persist its child's eventual exit. Repeated ticks signal only members needing a change.
+- Validate every identity before signaling. Missing/reused PIDs, ancestry/argv changes, reboot, changed directories,
+  failed/malformed copy status or a latched controller fault prohibit resume. Pause still-matching children where safe.
+  Review and explicitly reinstall a manifest after a fault; never restart a duplicate from a daily task.
+- Only a matching original copy receipt with exit 0 or online exit 24 and no remaining live reviewed children can
+  finish pre-copy. Rename only the hash-matching cron file to `.cron.disabled` and reload cron. The controller retains
+  its manifest and journal and cannot authorize cold sync, cutover, source deletion, new backups or download resume.
+- Create one midnight Codex heartbeat in the current chat to check this host controller and report meaningful
+  progress/failures. The server remains responsible for the morning pause when Codex is closed. Retire the heartbeat
+  after verified pre-copy completion and hand the remaining migration gates back to the existing workflow.
+
 ## Capacity and readiness
 
 - Raven uses a 100 GiB reserve and writes `.storage-pressure` on rejection. Capacity GETs are observational. Explicit start/continue clears the latch only above 150 GiB. `SCRIPTARR_STORAGE_RESERVE_BYTES` and `SCRIPTARR_STORAGE_RESUME_BYTES` override these defaults for controlled environments; isolated tests may use zero.

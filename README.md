@@ -68,8 +68,14 @@ Raven now stages active work under `downloading/<type>/...` and promotes complet
 `downloaded/<type>/...` inside the Raven downloads tree.
 Raven also supports old-style chapter and page naming templates behind the internal `raven.naming` setting while
 keeping the current title-folder layout stable for rescans.
+
 Those naming settings are now profile-based by library type, so manga, manhwa, manhua, webtoon, comic, and OEL
 downloads can each use their own archive and page format while still sharing the same Raven rescan logic.
+
+Storage migration copies can run during a configured overnight window while downloads remain paused. The server
+enforces the daytime pause independently of Codex; final verification and cutover are still required before downloads
+resume. See [ServerAdmin.md](ServerAdmin.md#overnight-storage-migration) for scheduling and recovery.
+
 Moon requests and admin add-title now use a metadata-first intake flow. Readers pick one exact metadata result first,
 Scriptarr stores that metadata snapshot with the request, and staff choose the concrete Raven source later during
 approval unless Sage auto-approves a high-confidence match.

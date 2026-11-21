@@ -1068,6 +1068,22 @@ Missing Content displays canonical chapter numbers and verified missing-page cou
 
 On ItsRainingPlex, configure the complete Scriptarr share with **Array primary storage and no secondary pool**. This includes database files, settings, logs, caches, archives, reader pages and temporary processing data. Verify actual physical array placement after migration and preserve a consistent recovery point before retiring SSD copies. Remote worker/AI storage and the shared Docker engine retain their existing placement.
 
+### Overnight storage migration
+
+The current online copy runs only from midnight through 7 AM in `America/Los_Angeles`, including daylight-saving
+changes. Active viewers do not change this window. A persistent Unraid controller checks once per minute and suspends
+the reviewed rsync processes during the day; already-issued disk writes may finish after the pause request. The same
+processes resume overnight without deleting copied files or restarting the transfer. The reader remains online during
+this pre-copy stage, and existing download runs remain paused.
+
+The host schedule works independently of the daily midnight Codex task. A reboot, changed process identity, changed
+physical directories, or failed copy blocks automatic resumption and requires operator review. The controller never
+starts a replacement copy or resumes downloads. Pre-copy completion retires only this copy schedule; final consistent
+sync, full content and metadata verification, cutover and production checks remain mandatory. See the
+[operations workflow](docs/agents/mass-download-operations.md#overnight-pre-copy-controller) for installation details.
+
+### Download readiness
+
 Downloads pause below a 100 GiB free-space reserve. After recovering capacity, explicit start/continue requires 150 GiB before releasing the storage pause. Existing files and run identities remain available for recovery. The public `/health/downloads` endpoint reports catalog, storage, worker and VPN readiness. Independent monitoring checks backup freshness only for configured backup stores.
 This is a global download pause. The configured owner must explicitly start or continue a bulk run to clear it after capacity recovery, then retry any ordinary downloads affected by the pause. GET requests, background recovery and ordinary retries never clear the latch. Readiness responses have both a time deadline and a streaming byte limit.
 
