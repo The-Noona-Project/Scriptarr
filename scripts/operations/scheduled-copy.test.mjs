@@ -108,6 +108,12 @@ test("Linux fixture really pauses and resumes rsync without affecting a foreign 
     assert.equal(runSchedule(broken, {clock: night}).signal, "SIGSTOP");
     assert.ok(sameProcess(foreignBefore, proc(foreign.pid))); assert.notEqual(proc(foreign.pid).state, "T");
     runSchedule(fixture, {clock: day}); await until(() => jobs.every(p => proc(p.pid)?.state === "T"));
+    fs.writeFileSync(fixture.journalFile, "{invalid journal");
+    const malformed = runSchedule(fixture, {clock: night});
+    assert.equal(malformed.phase, "blocked"); assert.equal(malformed.reason, "journal-unreadable");
+    assert.ok(jobs.every(p => proc(p.pid)?.state === "T"));
+    const retained = fs.readdirSync(directory).find(name => name.startsWith("journal.json.rejected-"));
+    assert.ok(retained); assert.equal(fs.readFileSync(path.join(directory, retained), "utf8"), "{invalid journal");
   } finally {
     for (const p of jobs) if (sameProcess(p, proc(p.pid))) { process.kill(p.pid, "SIGCONT"); process.kill(p.pid, "SIGTERM"); }
     child.kill("SIGTERM"); foreign.kill("SIGTERM");

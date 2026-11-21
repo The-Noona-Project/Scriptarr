@@ -78,7 +78,7 @@ function readProcess(pid) {
   } catch (error) { if (["ENOENT", "ESRCH"].includes(error.code)) return null; throw error; }
 }
 
-/** Persist a small receipt before changing a process state. */
+/** Atomically persist a small scheduling receipt. */
 function saveReceipt(file, value) {
   const temporary = file + ".partial", fd = fs.openSync(temporary, "w", 0o600);
   try { fs.writeFileSync(fd, JSON.stringify(value) + "\n"); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
@@ -110,8 +110,13 @@ function retireSchedule(config) {
 export function runSchedule(config, {dryRun = false, clock = () => new Date()} = {}) {
   validateSchedule(config);
   const now = clock();
-  let prior = null;
-  try { prior = JSON.parse(fs.readFileSync(config.journalFile, "utf8")); } catch (error) { if (error.code !== "ENOENT") throw error; }
+  let prior = null, invalidJournal = false;
+  try {
+    prior = JSON.parse(fs.readFileSync(config.journalFile, "utf8"));
+    if (prior?.version !== 1 || !["copying", "pausing", "paused", "blocked", "complete"].includes(prior.phase)) throw new Error("Invalid journal.");
+  } catch (error) {
+    if (error.code !== "ENOENT") { invalidJournal = true; prior = {phase: "blocked", reason: "journal-unreadable"}; }
+  }
   let status = null;
   try { status = JSON.parse(fs.readFileSync(config.statusFile, "utf8")); } catch { /* Invalid status must pause instead of resuming. */ }
   const observe = () => ({bootId: fs.readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim(), owner: readProcess(config.owner.pid), jobs: config.jobs.map(p => readProcess(p.pid)), status, prior, now,
@@ -129,6 +134,7 @@ export function runSchedule(config, {dryRun = false, clock = () => new Date()} =
   try {
     // Pausing must not wait for a busy destination's journal flush. Resuming requires a durable receipt first.
     if (decision.signal === "SIGSTOP") signalTargets();
+    if (invalidJournal && fs.existsSync(config.journalFile)) fs.renameSync(config.journalFile, `${config.journalFile}.rejected-${process.pid}-${now.getTime()}`);
     saveReceipt(config.journalFile, {...receipt, actionPending: receipt.targets.length > 0});
     if (decision.signal === "SIGCONT") signalTargets();
     if (decision.phase === "complete") { retireSchedule(config); receipt.scheduleRetired = true; }

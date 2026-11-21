@@ -26,6 +26,7 @@
   The owner worker stays alive to persist its child's eventual exit. Repeated ticks signal only members needing a change.
 - Validate every identity before signaling. Missing/reused PIDs, ancestry/argv changes, reboot, changed directories,
   failed/malformed copy status or a latched controller fault prohibit resume. Pause still-matching children where safe.
+  Preserve malformed controller journals under a `.rejected-*` name and latch a review fault before any resumption.
   Review and explicitly reinstall a manifest after a fault; never restart a duplicate from a daily task.
 - Only a matching original copy receipt with exit 0 or online exit 24 and no remaining live reviewed children can
   finish pre-copy. Rename only the hash-matching cron file to `.cron.disabled` and reload cron. The controller retains
