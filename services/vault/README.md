@@ -95,6 +95,11 @@ readiness/counters, retaining title/alias identities, metadata, covers, publicat
 requests, jobs, download-task history, settings and credentials. Finish releases the fence. Replaying a finished apply
 never clears fresh content again. This scoped workflow does not call the older global content-reset operation.
 
+The full content reset also clears retired title aliases, conversion jobs and claims, scoped content fences and
+Discord bulk-download delivery/approval records. It preserves accounts, permissions, sessions, API keys, settings,
+secrets, worker registrations and unrelated AI, trivia and update jobs. Stop content writers and remove reviewed
+reader pages and conversion artifacts during full storage cleanup; the database reset alone does not remove files.
+
 Database acquisition and operations have bounded deadlines. Uncertain timed-out writes retire their connection and return a recoverable availability error. Health returns 503 when the database cannot respond. Conversion rebuilds preserve previous publication receipts and require the exact owning epoch, generation and artifact identity.
 Recoverable database conflicts keep their transaction available for conflict resolution. User-list hydration is bounded to avoid exhausting the connection queue. Rebuilt conversions may retain a previously accepted immutable reader publication; completion stores its verified identity separately from the new execution.
 Accepted publication evidence also survives cancellation and retry for interrupted older jobs. Reconstruction of changed saved metadata requires the completed publication's fenced receipt; unknown artifacts remain rejected.

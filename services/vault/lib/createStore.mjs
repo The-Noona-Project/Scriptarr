@@ -12,6 +12,7 @@ import {conversionChapterFingerprint, repairedConversionChapter, writeMysqlConve
 import {hasAllRavenSegments, mergeRavenSegmentFields, normalizeRavenSegments} from "./ravenIngestSegments.mjs";
 import {createScopedContentReset} from "./scopedContentReset.mjs";
 import {createMemoryScopedResetAdapter, createMysqlScopedResetAdapter} from "./scopedResetAdapters.mjs";
+import {isContentResetJob, CONTENT_RESET_JOB_SQL, previewFullResetExtras, clearFullResetExtras} from "./fullContentReset.mjs";
 import {
   buildEffectiveUserAccess,
   ensureSeedPermissionGroups,
@@ -1399,13 +1400,14 @@ const createMemoryStore = (options = {}) => {
       followingSettings: Array.from(state.settings.keys()).filter((key) => key.startsWith("moon.following.")).length,
       bookmarkSettings: Array.from(state.settings.keys()).filter((key) => key.startsWith("moon.reader.bookmarks.")).length,
       ravenTitles: state.ravenTitles.size,
+      ravenTitleAliases: state.ravenTitleAliases.size,
       ravenChapters: Array.from(state.ravenChapters.values()).reduce((sum, entries) => sum + entries.size, 0),
       ravenMetadataMatches: state.ravenMetadataMatches.size,
       ravenDownloadTasks: state.ravenDownloadTasks.size,
-      ravenJobs: Array.from(state.jobs.values()).filter((job) => job.ownerService === "scriptarr-raven").length,
+      ravenJobs: Array.from(state.jobs.values()).filter(isContentResetJob).length,
       ravenJobTasks: Array.from(state.jobTasks.values()).filter((task) => {
         const job = state.jobs.get(task.jobId);
-        return job?.ownerService === "scriptarr-raven";
+        return isContentResetJob(job);
       }).length
     };
     state.requests.clear();
@@ -1419,11 +1421,12 @@ const createMemoryStore = (options = {}) => {
       }
     }
     state.ravenTitles.clear();
+    state.ravenTitleAliases.clear();
     state.ravenChapters.clear();
     state.ravenMetadataMatches.clear();
     state.ravenDownloadTasks.clear();
     const ravenJobIds = Array.from(state.jobs.values())
-      .filter((job) => job.ownerService === "scriptarr-raven")
+      .filter(isContentResetJob)
       .map((job) => job.jobId);
     for (const jobId of ravenJobIds) {
       state.jobs.delete(jobId);
@@ -2029,22 +2032,23 @@ const createMemoryStore = (options = {}) => {
           followingSettings: Array.from(state.settings.keys()).filter((key) => key.startsWith("moon.following.")).length,
           bookmarkSettings: Array.from(state.settings.keys()).filter((key) => key.startsWith("moon.reader.bookmarks.")).length,
           ravenTitles: state.ravenTitles.size,
+          ravenTitleAliases: state.ravenTitleAliases.size,
+          conversionJobs: conversionRepository.records.size,
+          conversionClaims: conversionRepository.claims.size,
+          contentResetOperations: conversionRepository.fences.size,
           ravenChapters: Array.from(state.ravenChapters.values()).reduce((sum, entries) => sum + entries.size, 0),
           ravenMetadataMatches: state.ravenMetadataMatches.size,
           ravenDownloadTasks: state.ravenDownloadTasks.size,
-          ravenJobs: Array.from(state.jobs.values()).filter((job) => job.ownerService === "scriptarr-raven").length,
+          ravenJobs: Array.from(state.jobs.values()).filter(isContentResetJob).length,
           ravenJobTasks: Array.from(state.jobTasks.values()).filter((task) => {
             const job = state.jobs.get(task.jobId);
-            return job?.ownerService === "scriptarr-raven";
+            return isContentResetJob(job);
           }).length
         }
       };
     },
     async executeContentReset() {
-      return {
-        driver: "memory",
-        counts: clearMemoryContentReset()
-      };
+      return conversionRepository.transaction(async tx => ({driver: "memory", counts: {...clearMemoryContentReset(), ...await tx.clearContent()}}));
     },
     async listRavenTitles() {
       return sortRavenTitles(Array.from(state.ravenTitles.values()).map((title) =>
@@ -4155,17 +4159,18 @@ const createMysqlStore = (config) => {
         pool.query("SELECT COUNT(*) AS count FROM raven_chapters"),
         pool.query("SELECT COUNT(*) AS count FROM raven_metadata_matches"),
         pool.query("SELECT COUNT(*) AS count FROM raven_download_tasks"),
-        pool.query("SELECT COUNT(*) AS count FROM vault_jobs WHERE owner_service = 'scriptarr-raven'"),
+        pool.query(`SELECT COUNT(*) AS count FROM vault_jobs WHERE ${CONTENT_RESET_JOB_SQL}`),
         pool.query(`
           SELECT COUNT(*) AS count
           FROM vault_job_tasks tasks
           INNER JOIN vault_jobs jobs ON jobs.job_id = tasks.job_id
-          WHERE jobs.owner_service = 'scriptarr-raven'
+          WHERE jobs.job_id IN (SELECT job_id FROM vault_jobs WHERE ${CONTENT_RESET_JOB_SQL})
         `)
       ]);
       return {
         driver: "mysql",
         counts: {
+          ...await previewFullResetExtras(pool),
           requests: Number(requestRows[0]?.count || 0),
           requestWorkLocks: Number(requestWorkLockRows[0]?.count || 0),
           progress: Number(progressRows[0]?.count || 0),
@@ -4184,7 +4189,9 @@ const createMysqlStore = (config) => {
     },
     async executeContentReset() {
       const preview = await this.previewContentReset();
-      await withTransaction(async (connection) => {
+      await conversionRepository.transaction(async (tx) => {
+        const connection = tx.raw;
+        await clearFullResetExtras(connection);
         await connection.query("DELETE FROM requests");
         await connection.query("DELETE FROM request_work_locks");
         await connection.query("DELETE FROM media_progress");
@@ -4201,9 +4208,9 @@ const createMysqlStore = (config) => {
           DELETE tasks
           FROM vault_job_tasks tasks
           INNER JOIN vault_jobs jobs ON jobs.job_id = tasks.job_id
-          WHERE jobs.owner_service = 'scriptarr-raven'
+          WHERE jobs.job_id IN (SELECT job_id FROM vault_jobs WHERE ${CONTENT_RESET_JOB_SQL})
         `);
-        await connection.query("DELETE FROM vault_jobs WHERE owner_service = 'scriptarr-raven'");
+        await connection.query(`DELETE FROM vault_jobs WHERE ${CONTENT_RESET_JOB_SQL}`);
       });
       return {
         driver: "mysql",
