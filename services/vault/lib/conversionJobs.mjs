@@ -412,6 +412,10 @@ export const createMemoryConversionRepository = ({now = Date.now, records = new 
         const result = await action({now: now(), raw: null, afterCommit: fn => commits.push(fn), get: async id => copy(working.get(id) || null), put: async job => working.set(job.jobId, copy(job)), list: async () => Array.from(working.values()).map(copy), getClaim: async (worker, id) => copy(claimWorking.get(`${worker}:${id}`) || null), putClaim: async (worker, id, value) => claimWorking.set(`${worker}:${id}`, copy(value)),
           getWorker: async id => copy(workerWorking.get(id) || null), putWorker: async w => workerWorking.set(w.workerId, copy(w)),
           getReset: async id => copy(fenceWorking.get(id) || null), putReset: async reset => fenceWorking.set(reset.operationId, copy(reset)),
+          clearContent: async () => {
+            const counts = {conversionJobs: working.size, conversionClaims: claimWorking.size, contentResetOperations: fenceWorking.size};
+            working.clear(); claimWorking.clear(); fenceWorking.clear(); return counts;
+          },
           jobsForTitles: async ids => Array.from(working.values()).filter(j => ids.includes(j.spec.input.titleId)).map(copy),
           isTitleFenced: async (titleId, owner = {}) => Array.from(fenceWorking.values()).some(f => ["maintenance", "catalog-cleared"].includes(f.status) && ((f.fencedTitleIds || f.titleIds).includes(titleId) || (owner.logicalKey && f.logicalKeys.includes(owner.logicalKey))))});
         for (const commit of commits) commit();

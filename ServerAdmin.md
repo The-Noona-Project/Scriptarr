@@ -957,6 +957,11 @@ off the shelf until new chapters arrive.
 Moon's content reset is content-only, not a factory reset. The root-only reset flow clears requests, work locks,
 progress, follows, reader bookmarks, Raven catalog or task state, and managed Raven download folders, but keeps users,
 permission groups, sessions, settings, secrets, and durable events.
+The full reset includes retired title aliases, conversion jobs/claims, prior scoped-reset fences and Discord bulk
+delivery/approval records. It preserves worker registrations and unrelated AI, trivia and update state. For an
+operator-led full purge, stop intake and all content writers first, reset through Sage/Vault, and remove the reviewed
+archives, partial files, reader pages, conversion artifacts and media caches before restarting. The legacy Raven reset
+alone does not clear every derived directory. Preserve application configuration, VPN profiles and database files.
 For an approved restart of one cancelled bulk run, use the separate Warden-authenticated scoped reset through Sage's
 `/api/internal/warden/raven/content-reset/preview` and `/apply` routes. The first preview requires the cancelled run ID,
 a unique operation ID, and exactly its selected plan IDs. Review both the durable scope digest and filesystem inventory

@@ -1,5 +1,18 @@
 # Array storage and automatic bulk downloads
 
+## Owner-approved cancellation and full library purge
+
+Explicit full-library deletion supersedes the preservation/resume sequence below. Remove the Codex heartbeat and
+hash-matching host copy cron under its flock, terminate only the pinned rsync tree, and hold Warden reconciliation
+and all content writers. Keep Vault/MySQL available for a temporary Sage maintenance runner using the existing
+broker contract. Full reset uses the conversion pool lock and clears aliases, jobs, claims, scoped fences and only
+Sage's three `portal-downloadall-*` job kinds alongside the original content tables. Preserve unrelated jobs and
+account/configuration state. Memory reset joins the same conversion transaction queue; scoped reset behavior stays
+unchanged. Remove only an inventoried, quiescent physical content scope, including reader/conversion artifacts and the
+unpublished migration data tree. Keep VPN configuration, application/database directories, existing backups and
+retirement archives. Hold maintenance on any partial failure; restart through Warden only after empty-content and
+protected-state checks pass. No migration cutover or automatic download resume follows this purge.
+
 ## Operational sequence
 
 1. Preserve the existing A/T run identities and take a current inventory. A remains paused during storage maintenance.
