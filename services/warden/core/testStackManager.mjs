@@ -14,7 +14,7 @@ import {
 } from "../config/constants.mjs";
 import {resolveServiceImage} from "../config/images.mjs";
 import {resolveServicePlan} from "../config/servicePlan.mjs";
-import {ensureScriptarrStorageFolders, resolveEphemeralTestDataRoot, resolveTestStateDirectory} from "../filesystem/storageLayout.mjs";
+import {ensureScriptarrStorageFolders, resolveEphemeralTestDataRoot, resolveTestStateDirectory, resolveHostFilesystemPath} from "../filesystem/storageLayout.mjs";
 import {
   containerExists,
   inspectDockerContainer,
@@ -287,7 +287,7 @@ export const createTestStackManager = ({
       tolerateMissing: true
     });
 
-    await ensureStorageFolders(built.dataRoot);
+    await ensureStorageFolders(built.dataRoot, {mediaRoot: built.env.SCRIPTARR_MEDIA_ROOT});
 
     const runtimePlan = resolvePlan({
       env: built.env,
@@ -307,6 +307,10 @@ export const createTestStackManager = ({
       mounts: [
         wardenFolders.logs,
         wardenFolders.runtime,
+        ...(normalizeString(built.env.SCRIPTARR_MEDIA_ROOT) ? [built.dataRoot, built.env.SCRIPTARR_MEDIA_ROOT].map(root => ({
+          hostPath: root,
+          containerPath: resolveHostFilesystemPath(root, {platform: "linux"})
+        })) : []),
         {
           hostPath: "/var/run/docker.sock",
           containerPath: "/var/run/docker.sock"

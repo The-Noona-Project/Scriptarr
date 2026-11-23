@@ -221,7 +221,7 @@ export const resolveServicePlan = ({env = process.env, containerNamePrefix = ""}
   const callbackUrl = resolveDiscordCallbackUrl({env});
   const serviceTokens = defaultTokenMap(env);
   const dataRoot = resolveScriptarrDataRoot({env});
-  const storageLayout = buildScriptarrStorageLayout(dataRoot);
+  const storageLayout = buildScriptarrStorageLayout(dataRoot, {mediaRoot: env.SCRIPTARR_MEDIA_ROOT});
   const mysqlEnv = toInternalMysqlEnv(mysql);
   const moonPort = resolvePort(env.SCRIPTARR_MOON_PORT, DEFAULT_MOON_PORT);
   const moonPublicPort = resolvePort(env.SCRIPTARR_MOON_PUBLIC_PORT || env.SCRIPTARR_MOON_PORT, DEFAULT_MOON_PUBLIC_PORT);
@@ -399,7 +399,7 @@ export const resolveServicePlan = ({env = process.env, containerNamePrefix = ""}
       SCRIPTARR_RAVEN_AVIF_PAGE_CONCURRENCY: normalizeString(env.SCRIPTARR_RAVEN_AVIF_PAGE_CONCURRENCY) || "1",
       SCRIPTARR_RAVEN_INGEST_GPU_PROFILE: "cpu"
     },
-    mounts: resolveFolderMounts(storageLayout, "scriptarr-raven", ["downloads", "logs"]),
+    mounts: resolveFolderMounts(storageLayout, "scriptarr-raven", ["downloads", "logs", "vpn", "operations"]),
     networkAliases: ["scriptarr-raven"],
     publishedPorts: [],
     extraArgs: ravenVpnExtraArgs,

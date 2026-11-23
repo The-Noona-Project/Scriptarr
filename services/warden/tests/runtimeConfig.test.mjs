@@ -5,6 +5,13 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {resolveWardenRuntimeSnapshot, sanitizeWardenRuntimeSnapshot} from "../config/runtimeConfig.mjs";
+import path from "node:path";
+
+test("runtime storage description reflects the configured media root", () => {
+  const runtime = resolveWardenRuntimeSnapshot({env: {SCRIPTARR_DATA_ROOT: "/appdata", SCRIPTARR_MEDIA_ROOT: "/media"}});
+  assert.equal(runtime.storage.mediaRoot, path.normalize("/media"));
+  assert.equal(runtime.storage.services.find(s => s.service === "scriptarr-raven").folders.find(f => f.key === "downloads").hostPath, path.normalize("/media/raven/downloads"));
+});
 
 test("warden runtime snapshot carries self runtime status and managed service health", () => {
   const runtime = resolveWardenRuntimeSnapshot({

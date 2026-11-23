@@ -13,7 +13,21 @@ unpublished migration data tree. Keep VPN configuration, application/database di
 retirement archives. Hold maintenance on any partial failure; restart through Warden only after empty-content and
 protected-state checks pass. No migration cutover or automatic download resume follows this purge.
 
-## Operational sequence
+## Fresh media written directly to the array
+
+After the owner-approved purge, keep core appdata on its existing SSD root and set primary Warden's
+`SCRIPTARR_MEDIA_ROOT=/mnt/user/scriptarr-media`. Create that dedicated private Unraid share as array primary with no
+secondary pool, high-water allocation and a 100 GiB minimum free-space floor. Keep all array disks eligible. Bind the
+media root into Warden at the same host/container path. Warden directs Raven `/downloads` and Moon image caches to
+that root, retains Raven `/downloads/vpn` and `/downloads/.operations` as nested appdata binds, and probes media
+capacity when configured. Startup directory creation, runtime diagnostics and service reconciliation use the same
+layout. Existing deployments without the optional variable retain their previous mounts. No source migration,
+backup schedule, new bulk run or library copy is part of this setup. Confirm empty queues, physical array-only writes,
+same-inode archive and ingest promotion, preserved configuration and healthy monitoring before handing control back.
+
+## Historical whole-root migration sequence
+
+The original whole-root migration below was cancelled; it is not the fresh-download deployment workflow above.
 
 1. Preserve the existing A/T run identities and take a current inventory. A remains paused during storage maintenance.
 2. Configure the core `scriptarr` share for Array primary storage with no secondary pool. All core data, including MySQL, caches, private configuration and temporary work, belongs on the array. Remote service storage and the shared Docker engine keep their existing placement.

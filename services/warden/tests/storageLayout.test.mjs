@@ -34,6 +34,31 @@ test("build scriptarr storage layout keeps per-service folders small and explici
   assert.equal(layout.services["scriptarr-warden"].runtime.containerPath, "/var/lib/scriptarr");
 });
 
+test("separate media storage retains application, VPN and policy state in the data root", async () => {
+  const root = path.normalize("/appdata/scriptarr"), mediaRoot = path.normalize("/array/scriptarr-media");
+  const layout = buildScriptarrStorageLayout(root, {mediaRoot});
+  assert.equal(layout.mediaRoot, mediaRoot);
+  assert.equal(layout.services["scriptarr-raven"].downloads.hostPath, path.join(mediaRoot, "raven", "downloads"));
+  assert.equal(layout.services["scriptarr-raven"].vpn.hostPath, path.join(root, "raven", "downloads", "vpn"));
+  assert.equal(layout.services["scriptarr-raven"].operations.containerPath, "/downloads/.operations");
+  assert.equal(layout.services["scriptarr-raven"].operations.hostPath, path.join(root, "raven", "downloads", ".operations"));
+  assert.equal(layout.services["scriptarr-moon"].readerPageCache.hostPath, path.join(mediaRoot, "moon", "reader-page-cache"));
+  assert.equal(layout.services["scriptarr-mysql"].data.hostPath, path.join(root, "mysql", "data"));
+  assert.equal(layout.services["scriptarr-localai"].models.hostPath, path.join(root, "localai", "models"));
+  assert.equal(layout.services["scriptarr-raven-worker"].scratch.hostPath, path.join(root, "raven-worker", "scratch"));
+  const created = [];
+  await ensureScriptarrStorageFolders(root, {mediaRoot, fsModule: {mkdir: async folder => created.push(folder)}});
+  assert.ok(created.includes(path.join(mediaRoot, "raven", "downloads")));
+  assert.ok(created.includes(path.join(root, "raven", "downloads", "vpn")));
+});
+
+test("media root requires a dedicated absolute directory and same-root configuration keeps legacy mounts", () => {
+  for (const mediaRoot of ["relative/media", "/", "C:\\", 42]) assert.throws(() => buildScriptarrStorageLayout("/appdata", {mediaRoot}), /SCRIPTARR_MEDIA_ROOT/);
+  const layout = buildScriptarrStorageLayout("/appdata", {mediaRoot: "/appdata"});
+  assert.equal(layout.services["scriptarr-raven"].vpn, undefined);
+  assert.equal(layout.services["scriptarr-raven"].downloads.hostPath, path.join(path.normalize("/appdata"), "raven", "downloads"));
+});
+
 test("resolve ephemeral test data root creates an isolated suffix", () => {
   const root = resolveEphemeralTestDataRoot({
     stackId: "demo",

@@ -883,7 +883,7 @@ export const createManagedStackRuntime = ({env = process.env, logger, resolvePla
 
   const initialize = async () => {
     if (dataRoot) {
-      await ensureScriptarrStorageFolders(dataRoot);
+      await ensureScriptarrStorageFolders(dataRoot, {mediaRoot: env.SCRIPTARR_MEDIA_ROOT});
     }
 
     state.socketAvailable = await dockerSocketAvailable();

@@ -73,7 +73,7 @@ export const resolveWardenRuntimeSnapshot = ({env = process.env, localAiStatus =
       installOnFirstBoot: false,
       lifecycle: "manual"
     },
-    storage: describeScriptarrStorageLayout(resolveScriptarrDataRoot({env})),
+    storage: describeScriptarrStorageLayout(resolveScriptarrDataRoot({env}), {mediaRoot: env.SCRIPTARR_MEDIA_ROOT}),
     warden: runtimeStatus?.warden || defaultWardenRuntimeStatus({env}),
     managedServices: runtimeStatus?.managedServices || []
   };

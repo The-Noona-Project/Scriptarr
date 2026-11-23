@@ -160,16 +160,29 @@ const buildFolderEntry = (hostPath, containerPath = null) => ({
  * Describe the Scriptarr on-disk runtime layout rooted at a specific data path.
  *
  * @param {string} rootPath
+ * @param {{mediaRoot?: string | null}} [options] Optional absolute host root for media and reader caches.
  * @returns {{
  *   root: string,
+ *   mediaRoot: string,
  *   services: Record<string, Record<string, {hostPath: string, containerPath: string | null}>>
  * }}
  */
-export const buildScriptarrStorageLayout = (rootPath) => {
+export const buildScriptarrStorageLayout = (rootPath, {mediaRoot = null} = {}) => {
   const root = path.normalize(rootPath);
+  if (mediaRoot != null && typeof mediaRoot !== "string") throw new Error("SCRIPTARR_MEDIA_ROOT must be a path string.");
+  const candidate = normalizeString(mediaRoot);
+  if (candidate && !path.isAbsolute(candidate) && !isWindowsAbsolutePath(candidate)) {
+    throw new Error("SCRIPTARR_MEDIA_ROOT must be an absolute host path.");
+  }
+  const media = candidate ? path.normalize(candidate) : root;
+  if (candidate && (media === path.parse(media).root || /^[A-Za-z]:[\\/]?$/.test(media))) {
+    throw new Error("SCRIPTARR_MEDIA_ROOT must name a dedicated directory, not a filesystem root.");
+  }
+  const separateMedia = media !== root;
 
   return {
     root,
+    mediaRoot: media,
     services: {
       "scriptarr-warden": {
         logs: buildFolderEntry(path.join(root, "warden", "logs"), DEFAULT_WARDEN_LOG_DIR),
@@ -185,12 +198,16 @@ export const buildScriptarrStorageLayout = (rootPath) => {
         logs: buildFolderEntry(path.join(root, "sage", "logs"), "/var/log/scriptarr")
       },
       "scriptarr-moon": {
-        coverCache: buildFolderEntry(path.join(root, "moon", "cover-cache"), "/app/cover-cache"),
-        readerPageCache: buildFolderEntry(path.join(root, "moon", "reader-page-cache"), "/app/reader-page-cache"),
+        coverCache: buildFolderEntry(path.join(media, "moon", "cover-cache"), "/app/cover-cache"),
+        readerPageCache: buildFolderEntry(path.join(media, "moon", "reader-page-cache"), "/app/reader-page-cache"),
         logs: buildFolderEntry(path.join(root, "moon", "logs"), "/var/log/scriptarr")
       },
       "scriptarr-raven": {
-        downloads: buildFolderEntry(path.join(root, "raven", "downloads"), "/downloads"),
+        downloads: buildFolderEntry(path.join(media, "raven", "downloads"), "/downloads"),
+        ...(separateMedia ? {
+          vpn: buildFolderEntry(path.join(root, "raven", "downloads", "vpn"), "/downloads/vpn"),
+          operations: buildFolderEntry(path.join(root, "raven", "downloads", ".operations"), "/downloads/.operations")
+        } : {}),
         logs: buildFolderEntry(path.join(root, "raven", "logs"), "/app/logs")
       },
       "scriptarr-raven-worker": {
@@ -217,16 +234,19 @@ export const buildScriptarrStorageLayout = (rootPath) => {
  * API and for docs.
  *
  * @param {string} rootPath
+ * @param {{mediaRoot?: string | null}} [options] Optional separate media root.
  * @returns {{
  *   root: string,
+ *   mediaRoot: string,
  *   services: Array<{service: string, folders: Array<{key: string, hostPath: string, containerPath: string | null}>}>
  * }}
  */
-export const describeScriptarrStorageLayout = (rootPath) => {
-  const layout = buildScriptarrStorageLayout(rootPath);
+export const describeScriptarrStorageLayout = (rootPath, options = {}) => {
+  const layout = buildScriptarrStorageLayout(rootPath, options);
 
   return {
     root: layout.root,
+    mediaRoot: layout.mediaRoot,
     services: Object.entries(layout.services).map(([service, folders]) => ({
       service,
       folders: Object.entries(folders).map(([key, folder]) => ({
@@ -245,7 +265,8 @@ export const describeScriptarrStorageLayout = (rootPath) => {
  * @param {{
  *   fsModule?: Pick<typeof fs, "mkdir">,
  *   platform?: NodeJS.Platform,
- *   dockerDesktopHostRoot?: string
+ *   dockerDesktopHostRoot?: string,
+ *   mediaRoot?: string | null
  * }} [options]
  * @returns {Promise<void>}
  */
@@ -254,10 +275,11 @@ export const ensureScriptarrStorageFolders = async (
   {
     fsModule = fs,
     platform = process.platform,
-    dockerDesktopHostRoot = DEFAULT_DOCKER_DESKTOP_HOST_ROOT
+    dockerDesktopHostRoot = DEFAULT_DOCKER_DESKTOP_HOST_ROOT,
+    mediaRoot = null
   } = {}
 ) => {
-  const layout = buildScriptarrStorageLayout(rootPath);
+  const layout = buildScriptarrStorageLayout(rootPath, {mediaRoot});
   await fsModule.mkdir(resolveHostFilesystemPath(layout.root, {
     platform,
     dockerDesktopHostRoot
