@@ -46,6 +46,14 @@ Warden also ships the Docker-backed test stack used by repo contributors:
 
 ## Container Contract
 
+Set optional `SCRIPTARR_MEDIA_ROOT` to an absolute host directory to keep downloads, canonical archives, derived
+reader pages and Moon image caches on separate storage. Keep `SCRIPTARR_DATA_ROOT` for the database, logs, settings
+and application state. Bind both roots into Warden at the same absolute paths. The default layout is unchanged when
+the media root is omitted. Raven's VPN and operation-policy directories retain their original appdata bindings.
+For Unraid, use one array-only media share with no secondary pool; staging and final media stay under that same share.
+Changing the media root changes mounts; it does not migrate an existing library. Start with empty media directories
+or complete a separately verified migration before switching it.
+
 - default container name: `scriptarr-warden`
 - required bind: `/var/run/docker.sock:/var/run/docker.sock`
 - required persistent folders:

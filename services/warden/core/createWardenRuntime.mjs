@@ -10,6 +10,7 @@ import {createManagedStackRuntime} from "./managedStackRuntime.mjs";
 import {createUpdateRuntime} from "./updateRuntime.mjs";
 import {createClusterRuntime} from "./clusterRuntime.mjs";
 import {storageReadiness} from "./storageReadiness.mjs";
+import {resolveHostFilesystemPath} from "../filesystem/storageLayout.mjs";
 
 /**
  * Assemble the Warden runtime object shared by the API routes and the repo
@@ -124,7 +125,8 @@ export const createWardenRuntime = ({
     }).storage,
     getHealth: async () => {
       const runtime = await getRuntime();
-      const storage = await storageReadiness(env.SCRIPTARR_WARDEN_RUNTIME_DIR || "/var/lib/scriptarr");
+      const mediaRoot = String(env.SCRIPTARR_MEDIA_ROOT || "").trim();
+      const storage = await storageReadiness(mediaRoot ? resolveHostFilesystemPath(mediaRoot) : env.SCRIPTARR_WARDEN_RUNTIME_DIR || "/var/lib/scriptarr");
       return {
         storage,
         dependenciesReady: runtime.managedServices.length > 0 && runtime.managedServices.every(service => service.running && service.health === "healthy"),

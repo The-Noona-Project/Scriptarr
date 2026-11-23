@@ -74,7 +74,10 @@ downloads can each use their own archive and page format while still sharing the
 
 Storage migration copies can run during a configured overnight window while downloads remain paused. The server
 enforces the daytime pause independently of Codex; final verification and cutover are still required before downloads
-resume. See [ServerAdmin.md](ServerAdmin.md#overnight-storage-migration) for scheduling and recovery.
+resume. See [ServerAdmin.md](ServerAdmin.md#optional-overnight-storage-migration) for scheduling and recovery.
+
+Fresh installations can use `SCRIPTARR_MEDIA_ROOT` to store downloads and reader assets separately from application
+data. An array-only media destination lets new content land directly on the array without a later migration.
 
 Moon requests and admin add-title now use a metadata-first intake flow. Readers pick one exact metadata result first,
 Scriptarr stores that metadata snapshot with the request, and staff choose the concrete Raven source later during

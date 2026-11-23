@@ -1071,11 +1071,19 @@ Missing Content displays canonical chapter numbers and verified missing-page cou
 
 ## Array storage and mass-download readiness
 
-On ItsRainingPlex, configure the complete Scriptarr share with **Array primary storage and no secondary pool**. This includes database files, settings, logs, caches, archives, reader pages and temporary processing data. Verify actual physical array placement after migration and preserve a consistent recovery point before retiring SSD copies. Remote worker/AI storage and the shared Docker engine retain their existing placement.
+For fresh downloads on ItsRainingPlex, use the dedicated `scriptarr-media` share with **Array primary storage and no
+secondary pool**. Set Warden's `SCRIPTARR_MEDIA_ROOT=/mnt/user/scriptarr-media` and bind that path into Warden at the
+same absolute path, alongside its existing appdata bind. Downloads, partial work, CBZ archives, reader pages and Moon
+image caches then write directly to this share. The existing `SCRIPTARR_DATA_ROOT` retains the database, settings,
+logs and application state; Raven's VPN and operation-policy directories stay bound from appdata. Keep staging and
+final media inside this one share so promotion does not require a pool-to-array transfer. The override does not copy
+an old library. Verify physical disk placement and rename/ingest canaries before admitting fresh downloads. Remote
+worker/AI storage and the shared Docker engine retain their existing placement.
 
-### Overnight storage migration
+### Optional overnight storage migration
 
-The current online copy runs only from midnight through 7 AM in `America/Los_Angeles`, including daylight-saving
+The previous whole-root migration is cancelled; no overnight copy is scheduled. Its optional online-copy controller
+supports midnight through 7 AM in `America/Los_Angeles`, including daylight-saving
 changes. Active viewers do not change this window. A persistent Unraid controller checks once per minute and suspends
 the reviewed rsync processes during the day; already-issued disk writes may finish after the pause request. The same
 processes resume overnight without deleting copied files or restarting the transfer. The reader remains online during
@@ -1092,7 +1100,8 @@ sync, full content and metadata verification, cutover and production checks rema
 Downloads pause below a 100 GiB free-space reserve. After recovering capacity, explicit start/continue requires 150 GiB before releasing the storage pause. Existing files and run identities remain available for recovery. The public `/health/downloads` endpoint reports catalog, storage, worker and VPN readiness. Independent monitoring checks backup freshness only for configured backup stores.
 This is a global download pause. The configured owner must explicitly start or continue a bulk run to clear it after capacity recovery, then retry any ordinary downloads affected by the pause. GET requests, background recovery and ordinary retries never clear the latch. Readiness responses have both a time deadline and a streaming byte limit.
 
-Recover the existing A run before starting the full alphabet. The owner-only command below enables automatic advancement through A-Z across all four types:
+After a full content reset, start a new measured A sample before considering the full alphabet. Previously cancelled
+or deleted runs must not be resumed. The owner-only command below enables automatic advancement through A-Z across all four types:
 
 ```text
 /downloadall run type:All nsfw:False titlegroup:all groupsize:4 autoadvance:True

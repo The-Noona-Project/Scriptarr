@@ -5,6 +5,17 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {resolveServicePlan} from "../config/servicePlan.mjs";
+import path from "node:path";
+
+test("media root routes downloads and reader cache to storage while retaining credentials and appdata", () => {
+  const plan = resolveServicePlan({env: {SCRIPTARR_DATA_ROOT: "/appdata", SCRIPTARR_MEDIA_ROOT: "/media", SCRIPTARR_GPU_HINT: "cpu"}});
+  const raven = plan.services.find(s => s.name === "scriptarr-raven"), moon = plan.services.find(s => s.name === "scriptarr-moon");
+  assert.equal(raven.mounts.find(m => m.containerPath === "/downloads").hostPath, path.normalize("/media/raven/downloads"));
+  assert.equal(raven.mounts.find(m => m.containerPath === "/downloads/vpn").hostPath, path.normalize("/appdata/raven/downloads/vpn"));
+  assert.equal(raven.mounts.find(m => m.containerPath === "/downloads/.operations").hostPath, path.normalize("/appdata/raven/downloads/.operations"));
+  assert.equal(moon.mounts.find(m => m.containerPath === "/app/reader-page-cache").hostPath, path.normalize("/media/moon/reader-page-cache"));
+  assert.equal(raven.env.SCRIPTARR_RAVEN_DATA_ROOT, "/downloads");
+});
 
 test("service plan exposes the fixed Scriptarr network and selfhost mysql by default", () => {
   const plan = resolveServicePlan({
