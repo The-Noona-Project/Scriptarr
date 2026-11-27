@@ -22,6 +22,44 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 class SourceFinderTest {
     private HttpServer server;
 
+    /** Page discovery passes provider cooldown headers through the same gate used for title browsing. */
+    @Test void pageDiscoverySharesRetryAfterAndPacing() throws Exception {
+        ProviderCooldown gate = org.mockito.Mockito.mock(ProviderCooldown.class);
+        AtomicInteger requests = new AtomicInteger();
+        server = HttpServer.create(new InetSocketAddress(0), 0);
+        server.createContext("/chapters/paced/images", exchange -> {
+            if (requests.incrementAndGet() == 1) {
+                exchange.getResponseHeaders().set("Content-Type", "application/json");
+                exchange.getResponseHeaders().set("Retry-After", "75");
+                respond(exchange, 429, "{}");
+            } else respond(exchange, 200, "<img src='https://example.invalid/page.webp'>");
+        });
+        server.start();
+        SourceFinder finder = new SourceFinder(new TestLogger()) {
+            /** @param connection fixture source request @return paced fixture HTML @throws Exception on fixture failure */
+            @Override org.jsoup.nodes.Document fetch(org.jsoup.Connection connection) throws Exception {
+                return SourceRequests.fetch(connection, () -> false, gate);
+            }
+        };
+        assertEquals(List.of("https://example.invalid/page.webp"), finder.scrapeWeebCentralChapter("http://127.0.0.1:" + server.getAddress().getPort() + "/chapters/paced"));
+        org.mockito.Mockito.verify(gate, org.mockito.Mockito.times(2)).await(org.mockito.ArgumentMatchers.any());
+        org.mockito.Mockito.verify(gate).limited(org.mockito.ArgumentMatchers.eq("75"), org.mockito.ArgumentMatchers.anyLong());
+        org.mockito.Mockito.verify(gate).succeeded();
+    }
+
+    /** Cancellation while waiting on the shared gate opens no HTTP connection. */
+    @Test void cancellationBeforePageDiscoveryDoesNotRequestSource() throws Exception {
+        ProviderCooldown gate = org.mockito.Mockito.mock(ProviderCooldown.class);
+        org.mockito.Mockito.doThrow(new java.util.concurrent.CancellationException("Cancelled.")).when(gate).await(org.mockito.ArgumentMatchers.any());
+        server = HttpServer.create(new InetSocketAddress(0), 0);
+        AtomicInteger requests = new AtomicInteger();
+        server.createContext("/cancelled", exchange -> { requests.incrementAndGet(); respond(exchange, 200, "<img src='/page.webp'>"); });
+        server.start();
+        assertThrows(java.util.concurrent.CancellationException.class, () -> SourceRequests.fetch(
+            org.jsoup.Jsoup.connect("http://127.0.0.1:" + server.getAddress().getPort() + "/cancelled"), () -> false, gate));
+        assertEquals(0, requests.get());
+    }
+
     /** Exhausted HTTP failures cannot masquerade as an authoritative empty chapter. */
     @Test
     void exhaustedSourceFailureRemainsRecoverable() throws Exception {

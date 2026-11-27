@@ -70,9 +70,7 @@ public class SourceFinder {
         for (int attempt = 1; attempt <= SCRAPE_RETRY_ATTEMPTS; attempt++) {
             checkInterrupted();
             try {
-                Document doc = connect(imagesUrl)
-                    .referrer(chapterUrl)
-                    .get();
+                Document doc = fetch(connect(imagesUrl).referrer(chapterUrl));
                 rejectChallenge(doc);
                 List<String> urls = extractImageUrls(doc.select("img[src], img[data-src]"));
                 if (!urls.isEmpty()) {
@@ -102,7 +100,7 @@ public class SourceFinder {
         for (int attempt = 1; attempt <= SCRAPE_RETRY_ATTEMPTS; attempt++) {
             checkInterrupted();
             try {
-                Document doc = connect(chapterUrl).get();
+                Document doc = fetch(connect(chapterUrl));
                 rejectChallenge(doc);
                 Elements images = doc.select("main img[src], img[src*=/media/], img[data-src]");
                 List<String> urls = extractImageUrls(images);
@@ -156,6 +154,11 @@ public class SourceFinder {
         return Jsoup.connect(url)
             .userAgent(USER_AGENT)
             .timeout((int) SCRAPE_TIMEOUT.toMillis());
+    }
+
+    /** @param connection prepared source request @return paced HTML @throws Exception on source or cancellation failure */
+    Document fetch(org.jsoup.Connection connection) throws Exception {
+        return SourceRequests.fetch(connection, () -> Thread.currentThread().isInterrupted());
     }
 
     private boolean sleepBeforeRetry(String url, int attempt) {

@@ -807,6 +807,8 @@ persistence and complete ready reader pages. Provider failures, unresolved title
 recovery details. Continue retries unresolved work and preserves completed chapters. Cancel stops run-owned work while
 preserving finished archives. Healthy work waiting in the queue or progressing through CPU ingest does not expire
 merely because it has been waiting a long time.
+Chapter-image discovery and title browsing share one source pacing/cooldown gate, including provider `Retry-After`
+responses. Keep title concurrency separate from source request pacing; rate-limit recovery preserves saved chapter plans.
 Paused Discord summaries show unresolved title plans separately from failed title tasks, including failures whose
 retry allowance has not been exhausted. They include the saved recovery reason and identify the paused batch;
 an unfinished batch is not a completed batch. Already acknowledged summary messages are not resent after an update.

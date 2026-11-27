@@ -457,15 +457,7 @@ public class TitleScraper {
 
     /** @param connection validated request @param cancelled durable cancellation @return source HTML @throws Exception on source failure */
     private Document fetch(Connection connection, BooleanSupplier cancelled) throws Exception {
-        // Local fixture origins remain deterministic; all production source HTML shares one gate.
-        boolean production = "weebcentral.com".equalsIgnoreCase(connection.request().url().getHost());
-        if (production) ProviderCooldown.SOURCE.await(cancelled);
-        checkBulkCancelled(cancelled);
-        Document document = SourceHtmlResponse.fetch(connection, cancelled, retryAfter -> {
-            if (production) ProviderCooldown.SOURCE.limited(retryAfter, System.currentTimeMillis());
-        });
-        if (production) ProviderCooldown.SOURCE.succeeded();
-        return document;
+        return SourceRequests.fetch(connection, cancelled);
     }
 
     private Document executeWithRetries(String label, DocumentSupplier supplier) throws Exception {
