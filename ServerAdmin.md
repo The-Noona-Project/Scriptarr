@@ -1101,7 +1101,17 @@ Downloads pause below a 100 GiB free-space reserve. After recovering capacity, e
 This is a global download pause. The configured owner must explicitly start or continue a bulk run to clear it after capacity recovery, then retry any ordinary downloads affected by the pause. GET requests, background recovery and ordinary retries never clear the latch. Readiness responses have both a time deadline and a streaming byte limit.
 
 After a full content reset, start a new measured A sample before considering the full alphabet. Previously cancelled
-or deleted runs must not be resumed. The owner-only command below enables automatic advancement through A-Z across all four types:
+or deleted runs must not be resumed.
+
+For a strictly bounded pilot, queue selected titles through the metadata-first admin flow with an explicit
+`selectedDownload.chapterNumbers` list. This bounds both initial and append downloads and is preserved through recovery.
+Empty or malformed explicit lists are rejected. `/downloadall` group size counts type/letter batches, not titles or
+chapters; it cannot enforce a small selected-title sample. Verify the bounded pilot and a separate Discord bulk pilot
+before approving alphabet automation.
+Unaccepted intake checkpoints and invalid saved selections remain failed for explicit recovery, without blocking other
+restored downloads. Retain the returned task identity when acceptance is uncertain and inspect it before retrying.
+
+The owner-only command below enables automatic advancement through A-Z across all four types:
 
 ```text
 /downloadall run type:All nsfw:False titlegroup:all groupsize:4 autoadvance:True
