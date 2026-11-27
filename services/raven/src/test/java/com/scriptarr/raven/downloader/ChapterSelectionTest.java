@@ -33,5 +33,13 @@ class ChapterSelectionTest {
         }
     }
 
+    /** A caller checkpoint must not omit any selected number, including numerically equivalent spellings. */
+    @Test void checkpointCoversTheEntireSelection() {
+        assertThrows(IllegalArgumentException.class, () -> ChapterSelection.numbers(Map.of("chapterNumbers", List.of("1", "3"),
+            "expectedChapters", List.of(chapter("1")))));
+        assertEquals(2, ChapterSelection.numbers(Map.of("chapterNumbers", List.of("1", "3"),
+            "expectedChapters", List.of(chapter("1.00"), chapter("3.0")))).size());
+    }
+
     private static Map<String, String> chapter(String number) { return Map.of("chapter_number", number, "href", "chapter/" + number); }
 }

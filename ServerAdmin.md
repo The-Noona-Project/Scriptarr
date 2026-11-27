@@ -1108,6 +1108,8 @@ For a strictly bounded pilot, queue selected titles through the metadata-first a
 Empty or malformed explicit lists are rejected. `/downloadall` group size counts type/letter batches, not titles or
 chapters; it cannot enforce a small selected-title sample. Verify the bounded pilot and a separate Discord bulk pilot
 before approving alphabet automation.
+Unaccepted intake checkpoints and invalid saved selections remain failed for explicit recovery, without blocking other
+restored downloads. Retain the returned task identity when acceptance is uncertain and inspect it before retrying.
 
 The owner-only command below enables automatic advancement through A-Z across all four types:
 

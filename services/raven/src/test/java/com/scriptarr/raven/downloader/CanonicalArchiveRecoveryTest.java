@@ -45,6 +45,32 @@ class CanonicalArchiveRecoveryTest {
     private DownloaderService downloader;
     private HttpServer server;
 
+    /** A malformed selection cannot block the restore barrier or recovery of another valid title task. */
+    @Test void invalidRestoredSelectionIsIsolatedFromHealthyWork() throws Exception {
+        restoredIntakeGuard(false);
+    }
+
+    /** A partially written rejected intake remains visible and never resumes even with a ready canonical title. */
+    @Test void pendingIntakeCannotEscapeStartupReconciliation() throws Exception {
+        restoredIntakeGuard(true);
+    }
+
+    private void restoredIntakeGuard(boolean pending) throws Exception {
+        Context context = context();
+        LibraryTitle title = seed(context, 1, 1);
+        Map<String, Object> details = new LinkedHashMap<>();
+        details.put("selectedDownload", Map.of("chapterNumbers", pending ? List.of("1") : List.of()));
+        if (pending) details.put("intakePending", true);
+        context.broker().putDownloadTask("rejected-task", Map.of("taskId", "rejected-task", "titleId", title.id(), "titleName", "Unaccepted request",
+            "titleUrl", "https://example.invalid/series/unaccepted", "providerId", "offline-fixture", "status", "queued", "details", details));
+        seedTask(context, title, List.of(chapter(1)), "offline-fixture", "running", "", false);
+        start(context);
+        assertCompleted(awaitTask());
+        assertEquals("failed", downloader.snapshot().stream().filter(t -> "rejected-task".equals(t.get("taskId"))).findFirst().orElseThrow().get("status"));
+        assertTrue(downloader.bulkRunGateway().restoreCompletion().isDone());
+        verifyNoProvider(context.provider());
+    }
+
     /** A bounded initial request downloads five chapters, then appends two without rewriting its originals. */
     @Test void boundedInitialDownloadAndAppendPreserveArchives() throws Exception {
         Context context = context();

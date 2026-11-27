@@ -5,6 +5,11 @@ restored execution. Initial and append downloads use the same selection; absent 
 behavior. Recovery derives expected chapters from saved numbers until the richer source plan is checkpointed. Explicit
 selection tasks require strict persistence and verified archive/catalog/reader completion, without implying whole-series
 completeness. Never use `/downloadall` approval group counts as a title or chapter cap.
+Saved completion checkpoints must cover every selected number. Invalid restored selections fail only their task.
+Bounded ordinary intake first persists `details.intakePending:true`; rejected preparation can never start during
+recovery. Acceptance is checkpointed as false before dispatch and ambiguous acknowledgements are reconciled by task
+identity. If the outcome cannot be read, return the already-durable identity as a failed accepted intake for explicit
+recovery without dispatching locally. Completion publication and admin cancellation share the downloader monitor.
 
 Chapter page discovery must propagate exhausted transport, challenge and unverified-empty failures through
 `SourcePageLookupException`; never convert them to an empty chapter. Image transport/server and archive I/O failures

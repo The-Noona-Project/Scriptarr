@@ -4,6 +4,7 @@ Explicit `selectedDownload.chapterNumbers` limits both new and append downloads 
 download a new title's complete available chapter set; an empty or malformed explicit selection is rejected. Selected
 plans survive retries and restarts, and task completion verifies those chapters' archives, catalog rows and reader pages.
 Completing a selected sample does not mean the entire source series has been downloaded.
+Interrupted intake stays recoverable by its task identity; unaccepted preparation does not start after a restart.
 
 Selected chapter repair is available in admin Missing Content for chapters with saved source identities.
 It retries only the selected damaged chapters and requires the configured WebP worker. Unsupported local AVIF

@@ -30,6 +30,13 @@ final class ChapterSelection {
             }
             wanted.add(normalize(value.toString()));
         }
+        if (selected.get("expectedChapters") instanceof List<?> rows && !rows.isEmpty()) {
+            Set<String> covered = new LinkedHashSet<>();
+            for (Object row : rows) if (row instanceof Map<?, ?> fields && fields.get("chapter_number") != null) {
+                covered.add(normalize(fields.get("chapter_number").toString()));
+            }
+            if (!covered.containsAll(wanted)) throw new IllegalArgumentException("expectedChapters must cover every selected chapter number.");
+        }
         return wanted;
     }
 

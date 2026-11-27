@@ -266,7 +266,7 @@ public class DownloaderService {
                     }
                     copyIfPresent(detailsNode, task, "startedAt");
                     copyNumberIfPresent(detailsNode, task, "downloadSpeedBytesPerSecond");
-                    for (String key : List.of("bulkRunId", "bulkBatchId", "bulkPlanId", "bulkRetryAttempt", "completionProblems", "chapterRepair", "actualProgressAt", "stage", "ingestCompletedPages", "ingestTotalPages", "ingestCompletedChapters", "ingestTotalChapters", "ingestCompletedSegments", "ingestTotalSegments")) {
+                    for (String key : List.of("bulkRunId", "bulkBatchId", "bulkPlanId", "bulkRetryAttempt", "completionProblems", "chapterRepair", "intakePending", "actualProgressAt", "stage", "ingestCompletedPages", "ingestTotalPages", "ingestCompletedChapters", "ingestTotalChapters", "ingestCompletedSegments", "ingestTotalSegments")) {
                         if (detailsNode.has(key)) task.put(key, brokerClientValue(detailsNode.path(key)));
                     }
                     if (restoredSortOrder < 0) {
@@ -287,6 +287,9 @@ public class DownloaderService {
                     return;
                 }
 
+                try { ChapterSelection.numbers(normalizeMap(task.get("selectedDownload"))); }
+                catch (IllegalArgumentException invalid) { task.put("status", "failed"); task.put("message", invalid.getMessage()); }
+                if (Boolean.TRUE.equals(task.get("intakePending"))) task.put("status", "failed");
                 String status = String.valueOf(task.get("status"));
                 if ("queued".equals(status) || "running".equals(status)) {
                     String dedupeKey = restorableTaskKey(task);
@@ -320,6 +323,16 @@ public class DownloaderService {
                     continue;
                 }
                 tasks.put(taskId, task);
+                try {
+                    ChapterSelection.numbers(normalizeMap(task.get("selectedDownload")));
+                } catch (IllegalArgumentException invalid) {
+                    task.put("status", "failed"); task.put("message", invalid.getMessage());
+                    persistTask(taskId); continue;
+                }
+                if (Boolean.TRUE.equals(task.get("intakePending"))) {
+                    task.put("status", "failed"); task.put("message", "Download intake was not accepted before restart. Retry this task explicitly.");
+                    persistTask(taskId); continue;
+                }
                 persistTask(taskId);
 
                 String status = String.valueOf(task.getOrDefault("status", ""));
@@ -791,7 +804,7 @@ public class DownloaderService {
         task.put("details", buildTaskDetails(task));
         if (!repair.isEmpty()) task.put("chapterRepair", repair);
         tasks.put(taskId, task);
-        try { persistTask(taskId); }
+        try { if (!acceptTaskForDispatch(taskId)) return Map.copyOf(task); }
         catch (RuntimeException failure) { tasks.remove(taskId, task); throw failure; }
         syncLinkedRequest(task, "", "queued", "Queued for Raven download.");
 
@@ -918,7 +931,7 @@ public class DownloaderService {
         task.put("startedAt", "");
         task.put("downloadSpeedBytesPerSecond", 0L);
         task.put("details", buildTaskDetails(task));
-        persistTask(taskId);
+        if (!acceptTaskForDispatch(taskId)) return Map.copyOf(task);
         syncLinkedRequest(task, status, "queued", "Queued for Raven retry.");
         submitQueuedTask(taskId, requestFromTask(task));
         return Map.copyOf(task);
@@ -1796,7 +1809,7 @@ public class DownloaderService {
         return true;
     }
 
-    private void update(String taskId, String status, String message, int percent) {
+    private synchronized void update(String taskId, String status, String message, int percent) {
         Map<String, Object> task = tasks.get(taskId);
         if (task == null) {
             return;
@@ -1853,6 +1866,17 @@ public class DownloaderService {
             return;
         }
         persistTaskSnapshot(taskId, task);
+    }
+
+    private boolean acceptTaskForDispatch(String taskId) {
+        Map<String, Object> task = tasks.get(taskId);
+        if (!ChapterSelection.explicit(normalizeMap(task.get("selectedDownload"))) || !normalizeString(task.get("bulkRunId")).isBlank()) {
+            persistTask(taskId); return true;
+        }
+        return BoundedTaskIntake.accept(task, () -> persistTask(taskId), () -> {
+            try { return brokerClient.listDownloadTasks(); }
+            catch (Exception error) { throw new IllegalStateException("Could not reconcile durable intake acceptance.", error); }
+        });
     }
 
     private void persistTaskSnapshot(String taskId, Map<String, Object> task) {
@@ -1920,7 +1944,7 @@ public class DownloaderService {
         details.put("sortOrder", taskSortOrder(task));
         details.put("startedAt", String.valueOf(task.getOrDefault("startedAt", "")));
         details.put("downloadSpeedBytesPerSecond", toLong(task.get("downloadSpeedBytesPerSecond")));
-        for (String key : List.of("bulkRunId", "bulkBatchId", "bulkPlanId", "bulkRetryAttempt", "completionProblems", "chapterRepair", "actualProgressAt", "stage", "ingestCompletedPages", "ingestTotalPages", "ingestCompletedChapters", "ingestTotalChapters", "ingestCompletedSegments", "ingestTotalSegments")) {
+        for (String key : List.of("bulkRunId", "bulkBatchId", "bulkPlanId", "bulkRetryAttempt", "completionProblems", "chapterRepair", "intakePending", "actualProgressAt", "stage", "ingestCompletedPages", "ingestTotalPages", "ingestCompletedChapters", "ingestTotalChapters", "ingestCompletedSegments", "ingestTotalSegments")) {
             if (task.containsKey(key)) details.put(key, task.get(key));
         }
         return details;
