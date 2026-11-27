@@ -1,5 +1,11 @@
 # Raven AI Notes
 
+`ChapterSelection` validates explicit `selectedDownload.chapterNumbers` before queue persistence and again before
+restored execution. Initial and append downloads use the same selection; absent selection keeps full initial-download
+behavior. Recovery derives expected chapters from saved numbers until the richer source plan is checkpointed. Explicit
+selection tasks require strict persistence and verified archive/catalog/reader completion, without implying whole-series
+completeness. Never use `/downloadall` approval group counts as a title or chapter cap.
+
 Chapter page discovery must propagate exhausted transport, challenge and unverified-empty failures through
 `SourcePageLookupException`; never convert them to an empty chapter. Image transport/server and archive I/O failures
 also fail the title retryably, preserving staged pages. Only explicit image 404 or damaged successful image payloads

@@ -1,5 +1,10 @@
 # Raven
 
+Explicit `selectedDownload.chapterNumbers` limits both new and append downloads to the selected chapters. Omit it to
+download a new title's complete available chapter set; an empty or malformed explicit selection is rejected. Selected
+plans survive retries and restarts, and task completion verifies those chapters' archives, catalog rows and reader pages.
+Completing a selected sample does not mean the entire source series has been downloaded.
+
 Selected chapter repair is available in admin Missing Content for chapters with saved source identities.
 It retries only the selected damaged chapters and requires the configured WebP worker. Unsupported local AVIF
 repair is rejected before conversion, preserving existing reader revisions. The current readable version stays published until the complete

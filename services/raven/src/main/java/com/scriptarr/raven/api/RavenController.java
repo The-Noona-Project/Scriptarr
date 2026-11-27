@@ -620,6 +620,8 @@ public class RavenController {
         );
         try {
             return ResponseEntity.status(HttpStatus.ACCEPTED).body(downloaderService.queueDownload(request));
+        } catch (IllegalArgumentException error) {
+            return ResponseEntity.badRequest().body(Map.of("error", error.getMessage()));
         } catch (IllegalStateException error) {
             return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("error", error.getMessage()));
         }

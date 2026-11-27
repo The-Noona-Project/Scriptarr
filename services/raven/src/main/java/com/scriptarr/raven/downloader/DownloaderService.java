@@ -474,6 +474,7 @@ public class DownloaderService {
 
     /** Persist a stable owned identity before submitting any executable download. */
     synchronized Map<String, Object> queueBulkOwned(String taskId, String runId, String batchId, String planId, DownloadRequest request) {
+        ChapterSelection.numbers(request.selectedDownload());
         if (bulkQueueCoordinator.isRunCancelled(runId)) throw new CancellationException("Bulk run cancelled.");
         Map<String, Object> existing = tasks.get(taskId);
         if (existing == null) {
@@ -555,8 +556,9 @@ public class DownloaderService {
     }
 
     private List<Map<String, String>> expectedChapters(Map<String, Object> task) {
-        Object raw = normalizeMap(task.get("selectedDownload")).get("expectedChapters");
-        if (!(raw instanceof List<?> rows)) return List.of();
+        Map<String, Object> selected = normalizeMap(task.get("selectedDownload"));
+        Object raw = selected.get("expectedChapters");
+        if (!(raw instanceof List<?> rows) || rows.isEmpty()) return ChapterSelection.expected(selected);
         return rows.stream().map(row -> {
             Map<String, String> next = new LinkedHashMap<>();
             normalizeMap(row).forEach((key, value) -> next.put(key, normalizeString(value)));
@@ -566,8 +568,9 @@ public class DownloaderService {
 
     private void rememberExpectedChapters(String taskId, List<Map<String, String>> chapters) {
         Map<String, Object> task = tasks.get(taskId);
-        if (task == null || !expectedChapters(task).isEmpty()) return;
+        if (task == null) return;
         Map<String, Object> selected = new LinkedHashMap<>(normalizeMap(task.get("selectedDownload")));
+        if (selected.get("expectedChapters") instanceof List<?> rows && !rows.isEmpty()) return;
         selected.put("expectedChapters", List.copyOf(chapters));
         task.put("selectedDownload", selected);
         persistTask(taskId);
@@ -750,6 +753,7 @@ public class DownloaderService {
     }
 
     private Map<String, Object> queueDownload(DownloadRequest request, String taskId, Map<String, Object> repair) {
+        ChapterSelection.numbers(request.selectedDownload());
         String activeKey = activeBulkTaskKey(Map.of(
             "providerId", request.providerId() == null ? "" : request.providerId(),
             "titleUrl", request.titleUrl()
@@ -1179,6 +1183,7 @@ public class DownloaderService {
             "logical:" + LibraryNaming.normalizeTypeSlug(request.requestType()) + ":" + LibraryNaming.sanitizeTitleFolder(request.titleName()));
              var attribution = conversionContext(taskId, request); var sourceClaim = claimCanonicalSource(request)) {
             throwIfCancelled(taskId);
+            ChapterSelection.numbers(request.selectedDownload());
             com.scriptarr.raven.support.StorageBudget.require(logger.getDownloadsRoot());
             update(taskId, "running", "Preparing Raven download.", 5);
             verifyCanonicalSourceOwner(taskId, request);
@@ -1217,7 +1222,7 @@ public class DownloaderService {
             boolean replacementDownload = isReplacementDownload(request);
             if (canonicalTitle != null && !normalizeString(canonicalTitle.id()).isBlank()) tasks.get(taskId).put("titleId", canonicalTitle.id());
             verifyExpectedSourceChapters(taskId, chapters);
-            List<Map<String, String>> chaptersToDownload = appendDownload ? filterChaptersForAppendRequest(chapters, request) : chapters;
+            List<Map<String, String>> chaptersToDownload = ChapterSelection.select(chapters, request.selectedDownload(), appendDownload);
             rememberExpectedChapters(taskId, chaptersToDownload);
             if (chaptersToDownload.isEmpty()) {
                 if (recoverCompletedTask(taskId)) return;
@@ -1288,7 +1293,8 @@ public class DownloaderService {
             update(taskId, "running", "Converting downloaded CBZ files into reader-ready pages.", 98);
             tasks.get(taskId).put("titleId", title.id());
             title = libraryService.ingestTitle(title.id(), request.requestedBy(), () -> isCancellationRequested(taskId), progress -> rememberIngestProgress(taskId, progress));
-            if (title == null || isAppendDownload(request) || !normalizeString(tasks.get(taskId).get("bulkRunId")).isBlank()) requireComplete(taskId, title);
+            if (title == null || isAppendDownload(request) || ChapterSelection.explicit(request.selectedDownload())
+                || !normalizeString(tasks.get(taskId).get("bulkRunId")).isBlank()) requireComplete(taskId, title);
             if (title != null) {
                 Map<String, Object> task = tasks.get(taskId);
                 if (task != null) {
@@ -1797,7 +1803,8 @@ public class DownloaderService {
         }
         Map<String, Object> previousSnapshot = task;
         String nextStatus = normalizeString(status).toLowerCase(Locale.ROOT);
-        boolean checkedCompletion = "completed".equals(nextStatus) && (!normalizeString(task.get("bulkRunId")).isBlank() || task.containsKey("chapterRepair"));
+        boolean checkedCompletion = "completed".equals(nextStatus) && (!normalizeString(task.get("bulkRunId")).isBlank() || task.containsKey("chapterRepair")
+            || ChapterSelection.explicit(normalizeMap(task.get("selectedDownload"))));
         if (checkedCompletion) task = new ConcurrentHashMap<>(task);
         String currentStatus = normalizeString(task.get("status")).toLowerCase(Locale.ROOT);
         if (cancellationRequestedTaskIds.contains(taskId) && "failed".equals(currentStatus) && !"failed".equals(nextStatus)) {
@@ -1858,7 +1865,8 @@ public class DownloaderService {
             brokerClient.putJobTask(jobId, jobTaskId(jobId), buildJobTaskPayload(jobId, task));
             if (!normalizeString(task.get("bulkRunId")).isBlank()) brokerClient.putDownloadTask(taskId, task);
         } catch (Exception error) {
-            if (!normalizeString(task.get("bulkRunId")).isBlank() || task.containsKey("chapterRepair")) {
+            if (!normalizeString(task.get("bulkRunId")).isBlank() || task.containsKey("chapterRepair")
+                || ChapterSelection.explicit(normalizeMap(task.get("selectedDownload")))) {
                 task.put("persistenceError", "Could not persist the owned download state.");
                 throw new IllegalStateException("Could not persist an owned download task.", error);
             }
@@ -2095,29 +2103,6 @@ public class DownloaderService {
             }
         }
         return resolveReplacementTargetRoot(request, typeSlug);
-    }
-
-    private List<Map<String, String>> filterChaptersForAppendRequest(List<Map<String, String>> chapters, DownloadRequest request) {
-        Set<String> wanted = new LinkedHashSet<>();
-        Object requestedNumbers = normalizeMap(request.selectedDownload()).get("chapterNumbers");
-        if (requestedNumbers instanceof List<?> values) {
-            for (Object value : values) {
-                String chapterNumber = normalizeStoredChapterNumber(String.valueOf(value));
-                if (!chapterNumber.isBlank()) {
-                    wanted.add(chapterNumber);
-                }
-            }
-        }
-        if (wanted.isEmpty()) {
-            return List.of();
-        }
-        return Optional.ofNullable(chapters).orElse(List.of()).stream()
-            .filter((chapter) -> wanted.contains(normalizeStoredChapterNumber(chapter.getOrDefault("chapter_number", ""))))
-            .map((chapter) -> {
-                Map<String, String> copy = new LinkedHashMap<>(chapter);
-                return copy;
-            })
-            .toList();
     }
 
     private Path resolveReplacementTargetRoot(DownloadRequest request, String typeSlug) {

@@ -45,6 +45,69 @@ class CanonicalArchiveRecoveryTest {
     private DownloaderService downloader;
     private HttpServer server;
 
+    /** A bounded initial request downloads five chapters, then appends two without rewriting its originals. */
+    @Test void boundedInitialDownloadAndAppendPreserveArchives() throws Exception {
+        Context context = context();
+        serveChapters(context, 9);
+        start(context);
+        Map<String, Object> initial = downloader.queueDownload(new DownloadRequest("Recovery Series", "https://example.invalid/series/recovery",
+            "Manhua", "qa", "weebcentral", "", Map.of(), Map.of("chapterNumbers", List.of("1", "2", "3", "4", "5")), "", "normal"));
+        assertCompleted(awaitTask(initial.get("taskId").toString()));
+        LibraryTitle title = context.library().listTitles().getFirst();
+        assertEquals(5, title.chapters().size());
+        Map<Path, Fingerprint> untouched = fingerprints(title, true);
+        verify(context.provider(), never()).resolvePages(chapter(6).get("href"));
+        Map<String, Object> append = downloader.queueDownload(new DownloadRequest("Recovery Series", title.sourceUrl(), "Manhua", "qa",
+            "weebcentral", "", Map.of(), Map.of("downloadMode", "append", "appendTitleId", title.id(), "chapterNumbers", List.of("6", "7")), "", "normal"));
+        assertCompleted(awaitTask(append.get("taskId").toString()));
+        assertEquals(7, context.library().findTitle(title.id()).chapters().size());
+        assertFingerprints(untouched);
+        verify(context.provider(), never()).resolvePages(chapter(8).get("href"));
+        verify(context.provider(), never()).resolvePages(chapter(9).get("href"));
+    }
+
+    /** A restored initial request with only saved numbers cannot complete at its old partial catalog or expand its plan. */
+    @Test void restoredInitialSelectionRetainsScopeBeforeSourceCheckpoint() throws Exception {
+        Context context = context();
+        LibraryTitle title = seed(context, 2, 2);
+        Map<Path, Fingerprint> untouched = fingerprints(title, true);
+        serveChapters(context, 4);
+        context.broker().putDownloadTask("restore-task", Map.of("taskId", "restore-task", "jobId", "restore-task", "titleId", title.id(),
+            "titleName", title.title(), "titleUrl", title.sourceUrl(), "requestType", "Manhua", "providerId", "weebcentral", "status", "running",
+            "downloadRoot", canonicalRoot().toString(), "details", Map.of("selectedDownload", Map.of("chapterNumbers", List.of("1", "2", "3")))));
+        start(context);
+        assertCompleted(awaitTask());
+        assertEquals(3, context.library().findTitle(title.id()).chapters().size());
+        assertFingerprints(untouched);
+        verify(context.provider(), never()).resolvePages(chapter(1).get("href"));
+        verify(context.provider(), never()).resolvePages(chapter(4).get("href"));
+    }
+
+    /** Missing selected source chapters fail before any page work instead of silently shrinking the request. */
+    @Test void missingSelectedChapterFailsBeforePageWrites() throws Exception {
+        Context context = context();
+        serveChapters(context, 2);
+        start(context);
+        Map<String, Object> task = downloader.queueDownload(new DownloadRequest("Recovery Series", "https://example.invalid/series/recovery",
+            "Manhua", "qa", "weebcentral", "", Map.of(), Map.of("chapterNumbers", List.of("1", "3")), "", "normal"));
+        assertEquals("failed", awaitTask(task.get("taskId").toString()).get("status"));
+        verify(context.provider(), never()).resolvePages(anyString());
+        assertTrue(context.library().listTitles().isEmpty());
+    }
+
+    private void serveChapters(Context context, int count) throws Exception {
+        byte[] bytes = image();
+        server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/page.png", exchange -> {
+            exchange.getResponseHeaders().set("Content-Type", "image/png");
+            exchange.sendResponseHeaders(200, bytes.length); exchange.getResponseBody().write(bytes); exchange.close();
+        });
+        server.start();
+        when(context.provider().getChapters(anyString())).thenReturn(java.util.stream.IntStream.rangeClosed(1, count).mapToObj(CanonicalArchiveRecoveryTest::chapter).toList());
+        when(context.provider().getTitleDetails(anyString())).thenReturn(new TitleDetails("", "Manhua", List.of(), "ongoing", "", false, null, null, List.of(), List.of()));
+        when(context.provider().resolvePages(anyString())).thenReturn(List.of("http://127.0.0.1:" + server.getAddress().getPort() + "/page.png"));
+    }
+
     /** Startup discovery without any broker chapter row must restore source quality from the canonical CBZ. */
     @Test
     void startupScanRestoresPlaceholderQualityWithoutCatalog() throws Exception {
@@ -455,10 +518,14 @@ class CanonicalArchiveRecoveryTest {
     }
 
     private Map<String, Object> awaitTask() throws Exception {
+        return awaitTask("restore-task");
+    }
+
+    private Map<String, Object> awaitTask(String taskId) throws Exception {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(15);
         Map<String, Object> task = Map.of();
         while (System.nanoTime() < deadline) {
-            task = downloader.snapshot().stream().filter(t -> "restore-task".equals(t.get("taskId"))).findFirst().orElse(Map.of());
+            task = downloader.snapshot().stream().filter(t -> taskId.equals(t.get("taskId"))).findFirst().orElse(Map.of());
             if (List.of("completed", "failed", "cancelled").contains(task.get("status"))) return task;
             Thread.sleep(20);
         }
