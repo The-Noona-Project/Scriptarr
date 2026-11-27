@@ -1,5 +1,9 @@
 # Raven AI Notes
 
+`SourceRequests` is the shared HTML transport for both `TitleScraper` and `SourceFinder`. Production WeebCentral page
+indexes must use the same `ProviderCooldown.SOURCE` gate as browsing, with `SourceHtmlResponse` reading HTTP 429 headers
+before MIME validation and closing responses. Never add direct Jsoup `.get()` calls to the chapter-page discovery path.
+
 `ChapterSelection` validates explicit `selectedDownload.chapterNumbers` before queue persistence and again before
 restored execution. Initial and append downloads use the same selection; absent selection keeps full initial-download
 behavior. Recovery derives expected chapters from saved numbers until the richer source plan is checkpointed. Explicit

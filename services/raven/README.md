@@ -20,6 +20,8 @@ successful downloads. An empty, challenged, or rate-limited response still requi
 Chapter page-list timeouts and image transport/server failures also remain retryable failures. They do not create
 missing-content catalog rows or generated missing-page artwork. Verified image 404s and damaged image bytes retain
 their explicit source-quality handling.
+Chapter-image discovery shares the source browser's pacing and provider `Retry-After` cooldown. Rate limiting waits
+without reducing the configured title concurrency, and cancellation interrupts the wait.
 Retained placeholder archives preserve their missing-page information across retries. Staged pages are reused only
 for the same ordered source page list, so a refreshed list cannot mix old and replacement images.
 
