@@ -4,6 +4,8 @@
   preserve legacy keyed identities. Preparation persists requests and a `bulk-selection-plan` before enqueueing; selected
   failures retain their slots. Frozen membership and considered dispositions survive restart. Exclude selection records
   from batch enumeration and keep cap/deferred counters on durable checkpoints. Unlimited legacy batches retain their existing path.
+  Metadata-policy rechecks outside frozen membership retain history and become explicit `deferredByLimit` dispositions;
+  they never grow the selection or prevent selected work from continuing. Missing dispositions without recheck evidence still fail closed.
 
 `SourceRequests` is the shared HTML transport for both `TitleScraper` and `SourceFinder`. Production WeebCentral page
 indexes must use the same `ProviderCooldown.SOURCE` gate as browsing, with `SourceHtmlResponse` reading HTTP 429 headers

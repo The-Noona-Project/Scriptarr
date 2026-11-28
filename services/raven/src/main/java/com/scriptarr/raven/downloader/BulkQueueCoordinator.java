@@ -156,6 +156,10 @@ public final class BulkQueueCoordinator implements BulkRunGateway {
             Map<String, Object> priorPayload = prior == null ? Map.of() : map(prior.get("payload"));
             Map<String, Object> outcome = prior == null ? Map.of() : map(prior.get("result"));
             String category = text(outcome.get("category"));
+            if ("deferredByLimit".equals(category)) {
+                limit.deferRecheck(url);
+                continue;
+            }
             if (Set.of("queued", "appended").contains(category) && !knownOwned.containsKey(text(outcome.get("downloadTaskId")))) {
                 category = "unresolved";
             }
@@ -163,7 +167,16 @@ public final class BulkQueueCoordinator implements BulkRunGateway {
                 summary.add(category, name, text(outcome.get("downloadTaskId")));
                 continue;
             }
-            if (titleLimit > 0 && limit.frozen() && !limit.selected(url)) throw new IllegalStateException("A nonselected disposition is missing; reconcile the capped selection.");
+            if (titleLimit > 0 && limit.frozen() && !limit.selected(url)) {
+                if (!"unresolved".equals(category) || map(priorPayload.get("metadataRecheckHistory")).isEmpty()) {
+                    throw new IllegalStateException("A nonselected disposition is missing; reconcile the capped selection.");
+                }
+                save(runId, planId, "bulk-title-plan", batchId, "completed", priorPayload,
+                    Map.of("category", "deferredByLimit", "previousDecision", outcome, "downloadTaskId", "",
+                        "reason", "Metadata recheck is outside this run's frozen title selection; use a new bounded run to select it."));
+                limit.deferRecheck(url);
+                continue;
+            }
             Map<String, Object> plan = new LinkedHashMap<>(priorPayload);
             plan.putAll(Map.of("titleName", name, "titleUrl", url, "requestType", wantedType, "requestedBy", text(actor).isBlank() ? "scriptarr-portal" : text(actor), "downloadTaskId", taskId));
             if (durable && prior == null) save(runId, planId, "bulk-title-plan", batchId, "planned", plan, Map.of());

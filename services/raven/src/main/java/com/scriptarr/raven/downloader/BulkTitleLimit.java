@@ -14,6 +14,7 @@ final class BulkTitleLimit {
     private final boolean frozen;
     private final Set<String> selected = new LinkedHashSet<>();
     private final Set<String> considered = new LinkedHashSet<>();
+    private final Set<String> deferredRechecks = new LinkedHashSet<>();
 
     /** @param value optional positive integer @return zero for legacy unlimited runs */
     static int parse(Object value) {
@@ -67,6 +68,12 @@ final class BulkTitleLimit {
     /** @param url source identity @return whether work was selected in the frozen manifest */
     boolean selected(String url) { return selected.contains(url); }
 
+    /** @param url explicitly reopened policy skip outside immutable membership */
+    void deferRecheck(String url) {
+        if (!frozen || selected.contains(url) || !considered.contains(url)) throw new IllegalStateException("Invalid out-of-scope metadata recheck.");
+        deferredRechecks.add(url);
+    }
+
     /** @return whether a durable membership manifest already exists */
     boolean frozen() { return frozen; }
 
@@ -74,5 +81,5 @@ final class BulkTitleLimit {
     Map<String, Object> payload() { return Map.of("titleLimit", limit, "selectedUrls", new ArrayList<>(selected), "consideredUrls", new ArrayList<>(considered)); }
 
     /** @param total complete discovery count @return observational selection counters */
-    Map<String, Object> counts(int total) { return Map.of("titleLimit", limit, "selectedCount", selected.size(), "deferredByLimitCount", Math.max(0, total - considered.size())); }
+    Map<String, Object> counts(int total) { return Map.of("titleLimit", limit, "selectedCount", selected.size(), "deferredByLimitCount", Math.max(0, total - considered.size()) + deferredRechecks.size()); }
 }

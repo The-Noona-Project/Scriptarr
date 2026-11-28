@@ -86,6 +86,31 @@ class BulkQueueCoordinatorTest {
         assertFalse(f.broker.listJobTasks("run", "").toString().contains("bulk-selection-plan"));
     }
 
+    /** Metadata rechecks of policy skips cannot expand membership or permanently block a frozen capped batch. */
+    @Test void metadataRecheckOutsideFrozenCapIsExplicitlyDeferredWithoutReplacingSelectedWork() {
+        Fixture f = cappedFixture("Manhua", 3);
+        when(f.intake.resolveBulkMetadata(anyString(), eq(candidateUrl(0)), anyString(), anyString(), anyList()))
+            .thenReturn(new DownloadIntakeService.BulkMetadataResolution("unmatched", Map.of(), Map.of()));
+        var state = new java.util.concurrent.atomic.AtomicReference<Map<String, Object>>();
+        var first = f.coordinator().queueBatchLimited("run", "batch", "weebcentral", "Manhua", false, "a", "owner", 1, () -> false, state::set);
+        assertEquals(List.of("Alpha 01"), first.queuedTitles());
+        JsonNode skipped = java.util.stream.StreamSupport.stream(f.broker.listJobTasks("run", "").spliterator(), false)
+            .filter(row -> "noMetadata".equals(row.path("result").path("category").asText())).findFirst().orElseThrow();
+        var row = new com.fasterxml.jackson.databind.ObjectMapper().convertValue(skipped, new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() { });
+        var payload = new java.util.LinkedHashMap<>((Map<String, Object>)row.get("payload"));
+        payload.put("metadataRecheckHistory", Map.of("recheck-1", Map.of("result", row.get("result"))));
+        row.put("payload", payload); row.put("result", Map.of("category", "unresolved", "reason", "Metadata policy recheck requested.")); row.put("status", "planned");
+        f.broker.putJobTask("run", skipped.path("taskId").asText(), row);
+        for (int replay = 0; replay < 2; replay++) {
+            var result = f.coordinator().queueBatchLimited("run", "batch", "weebcentral", "Manhua", false, "a", "owner", 1, () -> false, state::set);
+            assertEquals(first.queuedTaskIds(), result.queuedTaskIds()); assertEquals(0, result.failedCount());
+            assertEquals(1, state.get().get("selectedCount")); assertEquals(2, state.get().get("deferredByLimitCount"));
+        }
+        assertTrue(f.broker.listJobTasks("run", "").toString().contains("use a new bounded run"));
+        assertTrue(f.broker.listJobTasks("run", "").toString().contains("recheck-1"));
+        verify(f.downloader, times(1)).queueBulkOwned(anyString(), anyString(), anyString(), anyString(), any());
+    }
+
     /** Healthy complete titles do not consume slots; partially downloaded titles use one append slot. */
     @Test void cappedSelectionSkipsHealthyCurrentAndRetainsAppendPlan() {
         Fixture f = cappedFixture("Manhua", 4);
