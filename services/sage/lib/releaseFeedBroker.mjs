@@ -5,6 +5,7 @@ import {buildReleaseFeedEvent, releaseReadyChapters, releaseTitleJobId, releaseC
 
 const KIND = "portal-release-title";
 const CONTROL = "portal_release_feed_control";
+const CHAPTER_WINDOW_MS = 10 * 60 * 1000;
 const array = value => Array.isArray(value) ? value : [];
 const fail = (status, message) => Object.assign(new Error(message), {status});
 const receiptId = id => `portal_release_receipt_${createHash("sha256").update(id).digest("hex")}`;
@@ -20,7 +21,7 @@ export const createReleaseFeedBroker = ({vaultClient: vault, config, clock = Dat
   const now = () => new Date(clock()).toISOString();
   const save = (jobId, payload, result, old) => vault.upsertJob(jobId, {jobId, ownerService: "scriptarr-sage",
     kind: jobId === CONTROL ? "portal-release-control" : KIND, label: "Discord release feed", requestedBy: "scriptarr-portal",
-    status: result.pending?.phase === "ambiguous" ? "blocked" : result.pending ? "running" : "completed",
+    status: result.pending?.phase === "ambiguous" ? "blocked" : result.pending || result.chapterWindowOpenedAt ? "running" : "completed",
     payload, result, createdAt: old?.createdAt || now(), updatedAt: now()});
   const jobs = async () => {
     const rows = await vault.listJobs({ownerService: "scriptarr-sage", kind: KIND});
@@ -81,10 +82,14 @@ export const createReleaseFeedBroker = ({vaultClient: vault, config, clock = Dat
         const introduced = Boolean(state.introduced || baseline.length);
         // A new title is advertised only when its whole known chapter set is readable.
         const titleReady = title.ingestStatus === "ready" && ready.length > 0 && ready.length >= Number(title.chapterCount || title.chapters.length);
-        const event = fresh.length && (introduced || titleReady)
+        const openedAt = Number.isFinite(Date.parse(state.chapterWindowOpenedAt)) ? state.chapterWindowOpenedAt : now();
+        const chapterBatchReady = titleReady || clock() - Date.parse(openedAt) >= CHAPTER_WINDOW_MS;
+        const event = fresh.length && (introduced ? chapterBatchReady : titleReady)
           ? buildReleaseFeedEvent({title, chapters: introduced ? fresh : ready, kind: introduced ? "chapters" : "title", channelId, publicBaseUrl: config.publicBaseUrl}) : null;
         await save(releaseTitleJobId(title.id), {titleId: title.id}, {...state, introduced, knownChapterIds: [...known],
-          observedVersion: event || (!introduced && fresh.length) ? "" : releaseCardVersion(card),
+          // Recheck a held window even without another catalog write; retain its clock across restarts.
+          observedVersion: fresh.length ? "" : releaseCardVersion(card),
+          chapterWindowOpenedAt: introduced && fresh.length && !event ? openedAt : "",
           ...(event ? {pending: {event, phase: "pending", createdAt: now()}} : {})}, existing);
         if (event) prepared++;
       }
@@ -116,7 +121,7 @@ export const createReleaseFeedBroker = ({vaultClient: vault, config, clock = Dat
       if (!pending) return {ok: true};
       if (pending.phase !== "sent" || !pending.messageId) throw fail(409, "Record the accepted Discord message before acknowledgement.");
       const result = {...job.result, introduced: true, knownChapterIds: [...new Set([...array(job.result.knownChapterIds), ...pending.event.chapters.map(c => c.id)])],
-        observedVersion: "", pending: null, lastReceipt: {id, messageId: pending.messageId, channelId: pending.channelId}};
+        observedVersion: "", chapterWindowOpenedAt: "", pending: null, lastReceipt: {id, messageId: pending.messageId, channelId: pending.channelId}};
       // Write the per-event tombstone before advancing the title checkpoint, retaining every accepted message.
       await vault.upsertJob(receiptId(id), {jobId: receiptId(id), ownerService: "scriptarr-sage", kind: "portal-release-receipt",
         label: "Discord release receipt", requestedBy: "scriptarr-portal", status: "completed",

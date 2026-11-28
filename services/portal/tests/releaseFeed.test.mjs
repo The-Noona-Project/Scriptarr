@@ -29,6 +29,16 @@ test("chapter updates use actual reader links, remain compact, and never repeat 
   assert.match(payload.embeds[0].title, /^New chapter ·/);
 });
 
+test("large chapter groups fit the embed budget without truncating any reading link", () => {
+  const chapters = Array.from({length: 30}, (_, i) => ({id: `c${i}`, label: `Chapter ${i}`, readerUrl: `https://pax-kun.com/reader/manga/${"t".repeat(100)}/c${i}`}));
+  const description = buildReleaseCard({...event, kind: "chapters", chapters}).embeds[0].description;
+  assert.ok(description.length <= 1800); assert.match(description, /\+\d+ more — see the title page\.$/);
+  const links = [...description.matchAll(/\[Chapter (\d+)\]\((https?:\/\/[^)]+)\)/g)];
+  assert.ok(links.length > 0 && links.length < 12);
+  for (const [, number, url] of links) assert.equal(url, chapters[Number(number)].readerUrl);
+  assert.equal((description.match(/\[/g) || []).length, links.length);
+});
+
 test("accepted send survives receipt and ack failures without resending", async () => {
   let phase = "pending", receipt = null, failReceipt = true, failAck = true, sends = 0, artReads = 0;
   const sage = {
