@@ -25,10 +25,16 @@ export const buildReleaseCard = (event, brand = "Scriptarr") => {
   const actions = [{label: "Open title", url: titleUrl}, {label: event.kind === "title" ? "Start reading" : "Read new chapters", url: readerUrl}]
     .filter(action => action.url).map(action => ({type: 2, style: 5, ...action}));
   if (event.kind === "chapters") {
-    const lines = chapters.slice(0, 12).map(c => `[${truncate(escape(c.label), 90)}](${safeUrl(c.readerUrl)})`);
-    if (chapters.length > 12) lines.push(`+${chapters.length - 12} more — see the title page.`);
+    const lines = [];
+    for (const chapter of chapters.slice(0, 12)) {
+      const label = truncate(escape(chapter.label), 90), link = safeUrl(chapter.readerUrl);
+      const line = link ? `[${label}](${link})` : label;
+      if ([...lines, line].join(" · ").length > 1700) break;
+      lines.push(line);
+    }
+    if (chapters.length > lines.length) lines.push(`+${chapters.length - lines.length} more — see the title page.`);
     return {allowedMentions: {parse: []}, embeds: [{title: `New chapter${chapters.length === 1 ? "" : "s"} · ${title}`, url: titleUrl || undefined,
-      description: truncate(lines.join(" · "), 1800), color: 0x8b5cf6,
+      description: lines.join(" · "), color: 0x8b5cf6,
       footer: {text: `${type} • ${siteName} • Noona`}}], components: actions.length ? [{type: 1, components: actions}] : []};
   }
   const seenTags = new Set();

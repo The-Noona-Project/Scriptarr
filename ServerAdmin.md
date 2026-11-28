@@ -857,7 +857,10 @@ Portal also sends requester DMs when a moderated request is approved, denied, or
 those notifications by request id plus decision state so retries and restarts do not spam Discord.
 Configure the Manga, Manhwa, Manhua and OEL release destinations in `/admin/discord` to separate their feeds. New
 titles receive cover art, a source synopsis, author, tags, chapter availability and title/reading buttons; later chapter
-arrivals receive compact updates. Missing or unusable covers fall back to the first ready reader page. First activation
+arrivals receive compact updates. During active ingest, chapter arrivals group for up to ten minutes per title; title
+completion flushes the group immediately, and the grouping clock survives restarts. Large groups keep their reading
+links intact and report remaining chapters through the title-page link. Missing or unusable covers fall back to the
+first ready reader page. First activation
 baselines existing readable content, without reposting it. Posts require persisted, reader-ready catalog content.
 Each accepted Discord message has a durable receipt. Failed artwork or broker operations retry without discarding the
 post; uncertain older sends require history reconciliation before sending again. The ten-post poll limit drains the

@@ -93,6 +93,21 @@ test("an old unknown send is durable and blocked until reconciled", async () => 
   await feed.record(id, {messageId: "124", channelId: "11"}); await feed.acknowledge(id); assert.deepEqual(await feed.list(), []);
 });
 
+test("bulk chapter arrivals share a restart-durable ten-minute window; completed titles flush immediately", async () => {
+  const f = fixture(), feed = f.make(); f.titles.set("old", title("old")); await feed.prepare();
+  const book = {...title("old", "manga", [chapter("c1"), chapter("c2", "2026-01-03T00:00:00Z")]),
+    ingestStatus: "pending", chapterCount: 20}; f.titles.set("old", book);
+  await feed.prepare(); assert.deepEqual(await feed.list(), []);
+  f.advance(); book.chapters.push(chapter("c3", "2026-01-03T00:00:00Z")); book.ingestedChapterCount++;
+  await f.make().prepare(); assert.deepEqual(await feed.list(), []);
+  f.advance(); f.advance(); await f.make().prepare(); assert.deepEqual(await feed.list(), []);
+  f.advance(); await f.make().prepare(); const event = (await feed.list())[0];
+  assert.deepEqual(event.chapters.map(c => c.id), ["c2", "c3"]);
+  await feed.begin(event.id); await feed.record(event.id, {messageId: "123", channelId: "11"}); await feed.acknowledge(event.id);
+  book.chapters.push(chapter("c4", "2026-01-03T00:00:00Z")); book.ingestStatus = "ready"; book.chapterCount = 4; book.ingestedChapterCount = 4;
+  await feed.prepare(); assert.deepEqual((await feed.list())[0].chapters.map(c => c.id), ["c4"]);
+});
+
 test("over 500 receipts survive restarts and stale acknowledgements cannot consume another chapter event", async () => {
   const f = fixture(), feed = f.make(); await feed.prepare();
   const book = title("serial", "manga", []); f.titles.set("serial", book); let first;

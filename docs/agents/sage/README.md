@@ -223,7 +223,10 @@
   chapter identities and one immutable pending event. Per-event `portal-release-receipt` tombstones retain every accepted
   message before its title checkpoint advances. A persisted cutover time baselines
   older readable chapters, including after interrupted initialization. Prepare paginates compact cards and hydrates only
-  changed exact titles; pending events freeze until acknowledged. POST prepare/begin/delivery/ack routes mutate under
+  changed exact titles; pending events freeze until acknowledged. Introduced titles undergoing ingest retain a durable
+  ten-minute `chapterWindowOpenedAt`; completion flushes sooner. Held fresh chapters leave `observedVersion` empty so
+  quiet windows flush without another catalog write. Acknowledgement clears the window, never the chapter history.
+  POST prepare/begin/delivery/ack routes mutate under
   the supported single Sage runtime lock; GET list/art routes are observational and Portal-authenticated. Artwork is
   fetched from Raven by canonical title identity with bounded binary transport. Legacy digests remain for old callers
   until the new feed is initialized; they do not govern the catalog feed's checkpoints.

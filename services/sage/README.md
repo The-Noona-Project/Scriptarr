@@ -199,7 +199,9 @@ Sage also owns Portal's release and update notification queues. Release feeds an
 source-backed metadata and later chapter additions with direct reading links. Per-library channels are configured in
 `/admin/discord`; a fallback channel remains supported. First activation records the current readable library without
 posting it. Durable catalog checkpoints and accepted message receipts prevent task-history pruning, large backlogs,
-or restarts from dropping posts or replaying the library. The scheduled or manual update-check task also asks GitHub for new
+or restarts from dropping posts or replaying the library. During an active ingest, chapter arrivals group for up to ten
+minutes per title; finishing that title flushes the update immediately. New-title cards post once the title is fully
+readable. The scheduled or manual update-check task also asks GitHub for new
 `The-Noona-Project/Scriptarr` commits since the last posted update, asks Oracle for an AI-written Noona summary, and
 exposes a stable `update:<latestSha>` channel notification when an update channel is configured. If Oracle cannot
 summarize the commits or returns degraded/disabled fallback copy, raw commit rows, invented how-to steps, or generic

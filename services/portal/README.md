@@ -160,7 +160,9 @@ and the right Moon link instead of duplicating notification state in a separate 
 request LocalAI install, start, or remove jobs when those jobs complete or fail.
 Configure a release channel for each library type in `/admin/discord`. New titles receive a card with cover artwork,
 synopsis, author, tags and buttons to open the title or start reading. Later chapter arrivals receive compact updates
-with direct reader links. Existing readable content is baselined on first activation, so enabling feeds does not repost
+with direct reader links. Active ingest updates group chapters for up to ten minutes per title, or post sooner when
+that title finishes. Large groups retain complete links and show an explicit remaining count. Existing readable
+content is baselined on first activation, so enabling feeds does not repost
 the library. Unusable covers fall back to the first readable page. Queued posts survive restarts and accepted Discord
 messages are retained when acknowledgements need retrying; an uncertain older send is reconciled before any resend.
 When `/admin/discord` has an update channel id, Portal also polls Sage for GitHub update digest notifications, posts
