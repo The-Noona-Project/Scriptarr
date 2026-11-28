@@ -33,8 +33,9 @@ HTTP broker.
   `/api/internal/portal/appa-discord-diagnostic`, and Sage should persist only redacted metadata/snippets for audit.
 - Keep AI tool execution Sage-governed. Oracle can assist planning, but Sage must enforce the `ai` domain, enabled
   toggles, grant checks, proposal confirmation, expiry, and durable events.
-- Portal-facing release notifications should be grouped into digest payloads with cursor-style `silenceBefore`
-  acknowledgment state, and should tolerate completed Raven tasks that no longer match a library title.
+- Portal-facing release feeds use exact canonical catalog identities and complete reader revisions, independent of task
+  history. Prepare mutations baseline existing readable chapters and persist per-title pending events; GETs only observe.
+  Accepted Discord receipts must persist before chapter acknowledgements. Legacy digest state remains compatibility-only.
 - Portal-facing downloadall notifications should use stable ack ids and only acknowledge after Portal confirms the
   requester DM was sent.
 - Downloadall delivery, prompt, and action receipts live in dedicated Sage-owned generic Vault jobs. Retain per-id

@@ -3,6 +3,7 @@
  */
 import {createDownloadAllBroker, downloadAllRequestIdError, registerDownloadAllNotificationRoutes} from "./downloadAllBroker.mjs";
 import {registerRavenIngestBroker} from "./registerRavenIngestBroker.mjs";
+import {registerReleaseFeedRoutes} from "./registerReleaseFeedRoutes.mjs";
 import {appendDurableEvent, buildServiceActor} from "./adminEvents.mjs";
 import {knownPortalDiscordCommands, readPortalDiscordSettings} from "./portalDiscordSettings.mjs";
 import {createPortalTriviaService} from "./portalTrivia.mjs";
@@ -1079,6 +1080,7 @@ export const registerInternalBrokerRoutes = (app, {
   logger
 }) => {
   registerRavenIngestBroker(app, {config, vaultClient, requireService});
+  const releaseFeed = registerReleaseFeedRoutes(app, {config, vaultClient, requireService, logger});
   const downloadAllBroker = createDownloadAllBroker({config, vaultClient, serviceJson});
   const triviaService = createPortalTriviaService({
     config,
@@ -2257,12 +2259,17 @@ export const registerInternalBrokerRoutes = (app, {
 
   app.get("/api/internal/portal/notifications/releases", withService(requireService, ["scriptarr-portal"], async (_req, res) => {
     res.json({
-      notifications: await buildReleaseNotifications({config, vaultClient, serviceJson})
+      notifications: await releaseFeed.initialized() ? await releaseFeed.list() : await buildReleaseNotifications({config, vaultClient, serviceJson})
     });
   }));
 
   app.post("/api/internal/portal/notifications/releases/:notificationId/ack", withService(requireService, ["scriptarr-portal"], async (req, res) => {
     const notificationId = normalizeString(req.params.notificationId);
+    if (notificationId.startsWith("release-feed:")) {
+      try { res.json(await releaseFeed.acknowledge(notificationId)); }
+      catch (error) { res.status(error.status || 503).json({error: "Release acknowledgement could not be saved."}); }
+      return;
+    }
     if (!notificationId.startsWith("release:")) {
       res.status(400).json({error: "A valid release notification id is required."});
       return;

@@ -38,8 +38,9 @@ optional Appa admin/reviewer chat, and the Oracle chat bridge through Sage.
   short and redacted, and do not persist raw Discord transcripts. Test both public mention replies and GitHub update
   posts because Portal formatting can make a good Oracle summary feel noisy.
 - Requester completion DMs and channel notifications should stay deduped by stable Sage acknowledgment ids so restarts
-  or retries do not spam Discord users or channels. Release channel notifications should render Sage digest payloads as
-  compact Scriptarr-branded posts and acknowledge digest metadata only after Discord accepts the message.
+  or retries do not spam Discord users or channels. Catalog release feeds render rich new-title cards and compact chapter
+  updates, attach brokered artwork, and persist each accepted message before acknowledging its chapter checkpoint.
+  Keep release delivery separate from downloadall phases. Reconcile older ambiguous sends; never blindly repost them.
 - `downloadall` should always use Sage's durable run path, including legacy raw DM text, and Portal should DM paused,
   completed, failed, or cancelled run summaries only once after Sage exposes a stable notification id.
 - Preserve original Discord interaction/message ids as downloadall `requestId` values. Action retries must reuse their

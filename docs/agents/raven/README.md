@@ -1,5 +1,11 @@
 # Raven AI Notes
 
+Discord artwork serving is isolated in `NotificationArtwork` and `NotificationArtworkController`: the caller supplies
+only a canonical title identity. Fetch only supported HTTPS provider cover hosts, bound bytes and decoded dimensions,
+and fall back to an already-ready whole-page thumbnail. Never extract a CBZ on demand, return a cropped tile, expose a
+private filesystem path, or change the conversion worker protocol for a notification image. Fallback reads use the
+exact stored manifest directly: they must not hydrate the full catalog or mark content damaged from an artwork GET.
+
 - Capped bulk batches use optional positive `titleLimit`, included only when present in the creation fingerprint to
   preserve legacy keyed identities. Preparation persists requests and a `bulk-selection-plan` before enqueueing; selected
   failures retain their slots. Frozen membership and considered dispositions survive restart. Exclude selection records

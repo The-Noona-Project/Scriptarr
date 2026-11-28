@@ -219,11 +219,14 @@
   create expiring proposals and require an authorized admin confirmation before Sage executes the allowlisted action.
 - Sage should expose acked system-notification queues for Portal so Warden LocalAI lifecycle jobs can DM the admin who
   requested them without making Portal poll Warden directly.
-- Sage should expose acked release-channel notification queues for Portal from completed Raven download tasks. Group
-  pending releases into stable `release:digest:<newestTaskId>:<count>` payloads, split deliveries by fallback or
-  per-library-type channel, group chapters under titles, keep the durable state as `ackedIds` plus the
-  `silenceBefore` cursor, tolerate completed tasks with no matching library title, and only mark them acknowledged after
-  Portal confirms every Discord channel send.
+- Catalog release feeds live in `releaseFeedBroker.mjs`. Per-title `portal-release-title` Vault jobs retain all seen
+  chapter identities and one immutable pending event. Per-event `portal-release-receipt` tombstones retain every accepted
+  message before its title checkpoint advances. A persisted cutover time baselines
+  older readable chapters, including after interrupted initialization. Prepare paginates compact cards and hydrates only
+  changed exact titles; pending events freeze until acknowledged. POST prepare/begin/delivery/ack routes mutate under
+  the supported single Sage runtime lock; GET list/art routes are observational and Portal-authenticated. Artwork is
+  fetched from Raven by canonical title identity with bounded binary transport. Legacy digests remain for old callers
+  until the new feed is initialized; they do not govern the catalog feed's checkpoints.
 - Sage should expose acked update-channel notification queues for Portal from GitHub update digests. The `update-check`
   system task must call Warden's image check first, then compare `The-Noona-Project/Scriptarr` commits against the
   last posted update baseline, ask Oracle for the Noona summary, store pending retry state when Oracle is unavailable

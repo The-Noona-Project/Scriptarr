@@ -1,5 +1,8 @@
 # Raven
 
+Discord new-title alerts can use the saved cover or the earliest ready chapter's whole first-page thumbnail. Artwork
+is delivered as a bounded image through the internal broker; reader pages remain authenticated.
+
 Bulk runs accept an optional positive `titleLimit` for each type/letter batch. Capped runs discover the complete source
 list, consider titles alphabetically, and durably select titles needing work before dispatch. Healthy complete titles
 do not consume slots, while partial titles append only missing chapters. Retries and restarts retain the selection;
