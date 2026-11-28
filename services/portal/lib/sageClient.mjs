@@ -258,6 +258,29 @@ export const createSageClient = (config) => {
     listReleaseNotifications() {
       return requestJson(config.sageBaseUrl, authHeader, "/api/internal/portal/notifications/releases");
     },
+    prepareReleaseNotifications() {
+      return requestJson(config.sageBaseUrl, jsonHeaders, "/api/internal/portal/notifications/releases/prepare", {method: "POST", body: {}, timeoutMs: 60000});
+    },
+    beginReleaseDelivery(id) {
+      return requestJson(config.sageBaseUrl, jsonHeaders, `/api/internal/portal/notifications/releases/${encodeURIComponent(id)}/begin`, {method: "POST", body: {}});
+    },
+    recordReleaseDelivery(id, receipt) {
+      return requestJson(config.sageBaseUrl, jsonHeaders, `/api/internal/portal/notifications/releases/${encodeURIComponent(id)}/delivery`, {method: "POST", body: receipt});
+    },
+    async getReleaseArtwork(id) {
+      const response = await fetch(`${config.sageBaseUrl}/api/internal/portal/notifications/releases/${encodeURIComponent(id)}/art`,
+        {headers: authHeader, redirect: "error", signal: AbortSignal.timeout(30000)});
+      if (!response.ok) {await response.body?.cancel(); throw new Error("Release artwork is unavailable.");}
+      const contentType = response.headers.get("content-type")?.split(";")[0];
+      if (!["image/jpeg", "image/png", "image/webp"].includes(contentType)) {await response.body?.cancel(); throw new Error("Invalid release artwork type.");}
+      const chunks = []; let bytes = 0;
+      for await (const chunk of response.body) {
+        bytes += chunk.length;
+        if (bytes > 2 * 1024 * 1024) throw new Error("Release artwork exceeds its bound.");
+        chunks.push(Buffer.from(chunk));
+      }
+      return {buffer: Buffer.concat(chunks), contentType};
+    },
     acknowledgeReleaseNotification(notificationId, payload = {}) {
       return requestJson(
         config.sageBaseUrl,

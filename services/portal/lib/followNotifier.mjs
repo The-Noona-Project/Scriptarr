@@ -1,5 +1,6 @@
 import {FOLLOW_NOTIFICATION_POLL_MS} from "./discord/constants.mjs";
 import {createDownloadAllDelivery} from "./downloadAllDelivery.mjs";
+import {createReleaseFeedDelivery} from "./releaseFeedDelivery.mjs";
 import {resolveBulkRunAttention} from "./discord/downloadAllShared.mjs";
 
 const normalizeArray = (value) => Array.isArray(value) ? value : [];
@@ -815,6 +816,7 @@ export const createFollowNotifier = ({
   let inFlight = false;
   let inFlightPromise = null;
   let generation = 0;
+  const releaseFeedDelivery = createReleaseFeedDelivery({sage, discord, getBrandName, logger});
   const downloadAllDelivery = createDownloadAllDelivery({sage, discord: adminDiscord || discord,
     botIdentity: adminDiscord ? "appa" : "noona", logger,
     discordForIdentity: (identity) => identity === "noona" ? discord : identity === "appa" ? adminDiscord : null});
@@ -859,7 +861,11 @@ export const createFollowNotifier = ({
       if (!canContinue()) {
         return;
       }
-      await deliverReleaseChannelNotifications({
+      if (typeof sage?.prepareReleaseNotifications === "function") {
+        try { await releaseFeedDelivery.poll(canContinue); }
+        catch (error) {logger?.error?.("Release feed preparation failed; other notifications remain active.", {error});}
+      }
+      else await deliverReleaseChannelNotifications({
         list: () => sage?.listReleaseNotifications?.(),
         acknowledge: (id, payload) => sage?.acknowledgeReleaseNotification?.(id, payload),
         discord,

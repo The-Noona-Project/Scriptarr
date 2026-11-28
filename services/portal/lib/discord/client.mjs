@@ -409,6 +409,25 @@ export const createDiscordClient = async ({
     login,
     registerCommands,
     sendChannelMessage,
+    async reconcileChannelMessage(channelId, {nonce, attemptedAt, payload}) {
+      const channel = await fetchChannel(channelId);
+      const start = Date.parse(attemptedAt);
+      if (!Number.isFinite(start)) return null;
+      const signature = embed => JSON.stringify([embed?.title || "", embed?.url || "", embed?.description || "", embed?.fields || []]);
+      const expected = signature(payload.embeds?.[0]);
+      const matches = []; let before;
+      for (let page = 0; page < 10; page++) {
+        const messages = await channel.messages.fetch({limit: 100, ...(before ? {before} : {}), cache: false});
+        const rows = [...messages.values()];
+        for (const message of rows) {
+          if (message.author?.id !== client.user?.id || message.createdTimestamp < start - 1000 || message.createdTimestamp > start + 120000) continue;
+          if (String(message.nonce || "") === nonce || signature(message.embeds?.[0]?.toJSON?.() || message.embeds?.[0]) === expected) matches.push(message);
+        }
+        if (!rows.length || rows.some(m => m.createdTimestamp < start - 1000) || rows.length < 100) return matches.length === 1 ? matches[0] : null;
+        before = rows.reduce((oldest, message) => BigInt(message.id) < BigInt(oldest) ? message.id : oldest, rows[0].id);
+      }
+      return null; // A truncated history never establishes that an ambiguous send was absent.
+    },
     sendDirectMessage,
     async fetchDirectMessage(channelId, messageId) {
       const channel = await fetchChannel(channelId, {cache: true});

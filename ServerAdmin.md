@@ -855,9 +855,16 @@ Vault deduplicates compact title cards before counts, letter totals, sorting, an
 ids resolve through catalog aliases so stale title or reader links land on the canonical title instead of 404ing.
 Portal also sends requester DMs when a moderated request is approved, denied, or finishes downloading, and dedupes
 those notifications by request id plus decision state so retries and restarts do not spam Discord.
-If a release channel id is configured in `/admin/discord`, Portal also posts completed downloads to that channel with
-Moon read or title links. Release channel notifications are grouped into one compact digest per poll, show up to ten
-newest titles plus a `+N more` count, and are only acknowledged after Discord accepts the message.
+Configure the Manga, Manhwa, Manhua and OEL release destinations in `/admin/discord` to separate their feeds. New
+titles receive cover art, a source synopsis, author, tags, chapter availability and title/reading buttons; later chapter
+arrivals receive compact updates. Missing or unusable covers fall back to the first ready reader page. First activation
+baselines existing readable content, without reposting it. Posts require persisted, reader-ready catalog content.
+Each accepted Discord message has a durable receipt. Failed artwork or broker operations retry without discarding the
+post; uncertain older sends require history reconciliation before sending again. The ten-post poll limit drains the
+backlog over subsequent polls rather than acknowledging hidden entries. Keep bot View Channel, Send Messages, Embed
+Links, Attach Files and Read Message History permissions enabled. Reader roles need View Channel and Read Message
+History; deny Send Messages for announcement-only feeds. Delete an old combined channel only after verifying its
+replacement destinations and clearing the old fallback setting.
 If an update channel id is configured, Sage checks `The-Noona-Project/Scriptarr` after the managed image update refresh
 inside the scheduled or manual `update-check` task. New commits since the last posted update are summarized by Oracle
 in Noona's voice, stored durably, and posted by Portal with a stable `update:<latestSha>` id. If Oracle is unavailable
