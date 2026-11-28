@@ -36,6 +36,14 @@ const preparePrompt = async (f) => {
   return notification;
 };
 
+test("bounded pilot notifications retain the cap and distinguish deferred scope from failed work", async () => {
+  const f = fixture(), run = f.jobs.get("run-1");
+  run.payload.titleLimit = 30; run.result.selectedCount = 30; run.result.deferredByLimitCount = 14; run.result.failedTitleTaskCount = 2;
+  const n = (await f.broker.listNotifications()).notifications[0];
+  assert.equal(n.filters.titleLimit, 30); assert.equal(n.counts.selectedCount, 30);
+  assert.equal(n.counts.deferredByLimitCount, 14); assert.equal(n.counts.failedTitleTaskCount, 2);
+});
+
 test("paused summary revisions edit one acknowledged delivery without resetting its prompt", async () => {
   const f = fixture(), notification = await preparePrompt(f);
   await f.broker.acknowledge(notification.id);
@@ -306,5 +314,8 @@ test("authenticated create route forwards exact Manhua false t 20 and requestId"
     const automatic = {...body, type: "all", titlePrefix: "all", batchesPerApproval: 4, autoAdvance: true, requestId: "discord:interaction:auto"};
     assert.equal((await fetch(url, {method: "POST", headers, body: JSON.stringify(automatic)})).status, 200);
     assert.deepEqual(calls[2].options.body, {...automatic, titlegroup: "all", groupsize: 4});
+    const capped = {...body, type: "all", titlePrefix: "a", batchesPerApproval: 1, titleLimit: 30, requestId: "discord:interaction:capped"};
+    assert.equal((await fetch(url, {method: "POST", headers, body: JSON.stringify(capped)})).status, 200);
+    assert.deepEqual(calls[3].options.body, {...capped, titlegroup: "a", groupsize: 1});
   } finally { await new Promise((resolve) => server.close(resolve)); }
 });

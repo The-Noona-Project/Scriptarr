@@ -1,5 +1,12 @@
 # Raven
 
+Bulk runs accept an optional positive `titleLimit` for each type/letter batch. Capped runs discover the complete source
+list, consider titles alphabetically, and durably select titles needing work before dispatch. Healthy complete titles
+do not consume slots, while partial titles append only missing chapters. Retries and restarts retain the selection;
+failed selected titles are not replaced with additional titles. Candidates beyond the cap are reported as deferred.
+Metadata rechecks of earlier policy skips outside the frozen selection are also deferred with their history intact;
+select those titles through a new bounded run rather than expanding an existing run.
+
 Explicit `selectedDownload.chapterNumbers` limits both new and append downloads to the selected chapters. Omit it to
 download a new title's complete available chapter set; an empty or malformed explicit selection is rejected. Selected
 plans survive retries and restarts, and task completion verifies those chapters' archives, catalog rows and reader pages.

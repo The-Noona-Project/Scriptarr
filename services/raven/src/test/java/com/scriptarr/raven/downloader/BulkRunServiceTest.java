@@ -48,6 +48,33 @@ class BulkRunServiceTest {
     private static final Instant NOW = Instant.parse("2026-11-07T12:00:00Z");
     private final List<BulkRunService> services = new ArrayList<>();
 
+    /** Capped creation freezes the cap on all four batches and rejects conflicting request-key replay. */
+    @Test void cappedCreationRepairsOnlyItsFourBatchesAndPreservesLegacyIdentity() {
+        Fixture f = fixture();
+        Map<String, Object> request = Map.of("type", "all", "titlegroup", "a", "groupsize", 1, "titleLimit", 30, "requestId", "capped", "start", false);
+        String id = f.create(request);
+        assertEquals(id, f.create(request));
+        var status = f.service.status(id);
+        assertEquals(30, ((Number)map(status.get("filters")).get("titleLimit")).intValue());
+        assertEquals(4, ((List<?>)status.get("batches")).size());
+        for (Object row : (List<?>)status.get("batches")) assertEquals(30, ((Number)map(map(row).get("filters")).get("titleLimit")).intValue());
+        f.broker.putJobTask(id, "selection", Map.of("taskId", "selection", "payload", Map.of("kind", "bulk-selection-plan"), "status", "completed"));
+        assertEquals(4, ((List<?>)f.service.status(id).get("batches")).size());
+        Map<String, Object> changed = new LinkedHashMap<>(request); changed.put("titleLimit", 31);
+        assertThrows(BulkRunConflictException.class, () -> f.create(changed));
+        changed.remove("titleLimit"); assertThrows(BulkRunConflictException.class, () -> f.create(changed));
+        assertThrows(IllegalArgumentException.class, () -> f.create(Map.of("titleLimit", 0)));
+    }
+
+    /** Run dispatch passes the same saved cap to each type without creating another letter. @throws Exception on timeout */
+    @Test void cappedRunDispatchesExactlyFourAWindowsWithTheirSavedCap() throws Exception {
+        Fixture f = fixture();
+        String id = f.create(Map.of("type", "all", "titlegroup", "a", "groupsize", 4, "titleLimit", 30));
+        assertEquals("completed", awaitStatus(f.service, id, "completed").get("status"));
+        assertEquals(List.of(30, 30, 30, 30), f.gateway.limits);
+        assertEquals(4, f.gateway.queueCalls.get());
+    }
+
     /** Automatic owner consent covers all 104 batches; changed consent cannot reuse a creation key. @throws Exception when fixture execution fails */
     @Test void automaticRunKeepsDurableConsentAndHonorsDependencyGates() throws Exception {
         Fixture fixture = fixture();
@@ -1011,6 +1038,7 @@ class BulkRunServiceTest {
 
     /** Minimal durable gateway with controllable discovery and task outcomes. */
     private static final class TestGateway implements BulkRunGateway {
+        private final List<Integer> limits = java.util.Collections.synchronizedList(new ArrayList<>());
         private CompletableFuture<Void> restored = CompletableFuture.completedFuture(null);
         private final Map<String, Map<String, Object>> tasks = new ConcurrentHashMap<>();
         private final Map<String, List<String>> batchIds = new ConcurrentHashMap<>();
@@ -1029,6 +1057,13 @@ class BulkRunServiceTest {
         @Override
         public CompletableFuture<Void> restoreCompletion() {
             return restored;
+        }
+
+        @Override
+        public BulkQueueDownloadResult queueBatchLimited(String runId, String batchId, String provider, String type,
+            boolean nsfw, String prefix, String actor, int limit, BooleanSupplier cancelled, Consumer<Map<String, Object>> checkpoint) {
+            limits.add(limit);
+            return queueBatch(runId, batchId, provider, type, nsfw, prefix, actor, cancelled, checkpoint);
         }
 
         @Override

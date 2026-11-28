@@ -62,17 +62,29 @@ public final class BulkQueueCoordinator implements BulkRunGateway {
         }
         if (text(runId).isEmpty() || text(batchId).isEmpty()) throw new IllegalArgumentException("A durable bulk run and batch are required.");
         return queue(runId, batchId, providerId, type, nsfw, prefix, actor,
-            cancelled == null ? () -> false : cancelled, checkpoint == null ? value -> { } : checkpoint);
+            cancelled == null ? () -> false : cancelled, checkpoint == null ? value -> { } : checkpoint, 0, false);
+    }
+
+    @Override
+    public BulkQueueDownloadResult queueBatchLimited(String runId, String batchId, String providerId, String type,
+        boolean nsfw, String prefix, String actor, int titleLimit, BooleanSupplier cancelled, Consumer<Map<String, Object>> checkpoint) {
+        if (titleLimit <= 0 || text(runId).isBlank() || text(batchId).isBlank()) throw new IllegalArgumentException("A durable batch and positive title limit are required.");
+        if (!restoreCompletion().isDone() || restoreCompletion().isCompletedExceptionally()) throw new IllegalStateException("Download restoration is incomplete.");
+        BooleanSupplier stop = cancelled == null ? () -> false : cancelled;
+        Consumer<Map<String, Object>> progress = checkpoint == null ? value -> { } : checkpoint;
+        BulkQueueDownloadResult prepared = queue(runId, batchId, providerId, type, nsfw, prefix, actor, stop, progress, titleLimit, true);
+        if (prepared.failedCount() > 0 || prepared.invalidSourceCount() > 0 || BulkQueueDownloadResult.STATUS_INVALID_REQUEST.equals(prepared.status())) return prepared;
+        return queue(runId, batchId, providerId, type, nsfw, prefix, actor, stop, progress, titleLimit, false);
     }
 
     /** Preserve the direct single-batch API while sharing strict source selection. */
     BulkQueueDownloadResult queueLegacy(String providerId, String type, Boolean nsfw, String prefix, String actor) {
         if (nsfw == null) return invalid(type, false, prefix, "providerId, type, nsfw, and titlePrefix are required.");
-        return queue("", "", providerId, type, nsfw, prefix, actor, () -> false, value -> { });
+        return queue("", "", providerId, type, nsfw, prefix, actor, () -> false, value -> { }, 0, false);
     }
 
     private BulkQueueDownloadResult queue(String runId, String batchId, String providerId, String type,
-        boolean nsfw, String prefix, String actor, BooleanSupplier cancelled, Consumer<Map<String, Object>> checkpoint) {
+        boolean nsfw, String prefix, String actor, BooleanSupplier cancelled, Consumer<Map<String, Object>> checkpoint, int titleLimit, boolean preparing) {
         String wantedType = BulkTitleSelection.type(type);
         if (!"weebcentral".equals(text(providerId).toLowerCase(Locale.ROOT)) || wantedType == null || text(prefix).isEmpty()) {
             return invalid(type, nsfw, prefix, "A supported WeebCentral type, nsfw flag, and titlePrefix are required.");
@@ -121,6 +133,11 @@ public final class BulkQueueCoordinator implements BulkRunGateway {
                 Map.of("titles", titles, "pagesScanned", pages, "discoveryComplete", true), Map.of());
         }
         Summary summary = new Summary(wantedType, nsfw, text(prefix), pages, titles.size());
+        String selectionId = "bulk_selection_" + hash(batchId);
+        Map<String, Object> savedSelection = records.containsKey(selectionId) ? map(records.get(selectionId).get("payload")) : null;
+        BulkTitleLimit limit = new BulkTitleLimit(titleLimit, savedSelection);
+        if (titleLimit > 0 && !preparing && !limit.frozen()) throw new IllegalStateException("Capped membership was not durably accepted.");
+        titles = limit.ordered(titles);
         List<LibraryTitle> existing = library == null ? List.of() : library.listTitles();
         List<String> unresolved = new ArrayList<>();
         Map<String, Map<String, Object>> knownOwned = new LinkedHashMap<>();
@@ -130,6 +147,7 @@ public final class BulkQueueCoordinator implements BulkRunGateway {
         for (Map<String, String> title : titles) {
             checkCancelled(stop);
             String url = text(title.get("href"));
+            if (!limit.consider(url)) continue;
             String name = text(title.get("title"));
             String planId = "bulk_title_" + hash(batchId + "\n" + url);
             String taskId = "task_bulk_" + hash(runId + "\n" + batchId + "\n" + url);
@@ -138,11 +156,25 @@ public final class BulkQueueCoordinator implements BulkRunGateway {
             Map<String, Object> priorPayload = prior == null ? Map.of() : map(prior.get("payload"));
             Map<String, Object> outcome = prior == null ? Map.of() : map(prior.get("result"));
             String category = text(outcome.get("category"));
+            if ("deferredByLimit".equals(category)) {
+                limit.deferRecheck(url);
+                continue;
+            }
             if (Set.of("queued", "appended").contains(category) && !knownOwned.containsKey(text(outcome.get("downloadTaskId")))) {
                 category = "unresolved";
             }
-            if (!category.isEmpty() && !"unresolved".equals(category)) {
+            if (!category.isEmpty() && !Set.of("unresolved", "prepared").contains(category)) {
                 summary.add(category, name, text(outcome.get("downloadTaskId")));
+                continue;
+            }
+            if (titleLimit > 0 && limit.frozen() && !limit.selected(url)) {
+                if (!"unresolved".equals(category) || map(priorPayload.get("metadataRecheckHistory")).isEmpty()) {
+                    throw new IllegalStateException("A nonselected disposition is missing; reconcile the capped selection.");
+                }
+                save(runId, planId, "bulk-title-plan", batchId, "completed", priorPayload,
+                    Map.of("category", "deferredByLimit", "previousDecision", outcome, "downloadTaskId", "",
+                        "reason", "Metadata recheck is outside this run's frozen title selection; use a new bounded run to select it."));
+                limit.deferRecheck(url);
                 continue;
             }
             Map<String, Object> plan = new LinkedHashMap<>(priorPayload);
@@ -224,6 +256,10 @@ public final class BulkQueueCoordinator implements BulkRunGateway {
                                 }
                         }
                     } else category = "";
+                    if (category.isEmpty() && preparing) {
+                        limit.select(url);
+                        category = "prepared";
+                    }
                     if (category.isEmpty()) {
                         Map<String, Object> request = map(plan.get("request"));
                         DownloadRequest download = new DownloadRequest(name, url, wantedType, text(plan.get("requestedBy")), provider.id(), "",
@@ -242,10 +278,11 @@ public final class BulkQueueCoordinator implements BulkRunGateway {
                     }
                 }
                 if ("invalidSource".equals(category)) {
+                    if (preparing) limit.select(url);
                     unresolved.add(planId);
                     if (durable) save(runId, planId, "bulk-title-plan", batchId, "failed", plan,
                         Map.of("category", "unresolved", "failureKind", "invalidSource", "error", "Rejected source origin or series path.", "downloadTaskId", taskId));
-                } else if (durable) save(runId, planId, "bulk-title-plan", batchId, "queued".equals(category) || "appended".equals(category) ? "queued" : "completed",
+                } else if (durable) save(runId, planId, "bulk-title-plan", batchId, "prepared".equals(category) ? "prepared" : "queued".equals(category) || "appended".equals(category) ? "queued" : "completed",
                     plan, Map.of("category", category, "downloadTaskId", category.equals("queued") || category.equals("appended") ? taskId : ""));
                 summary.add(category, name, taskId);
             } catch (SourceUnavailableException unavailable) {
@@ -265,13 +302,22 @@ public final class BulkQueueCoordinator implements BulkRunGateway {
                     continue;
                 }
                 unresolved.add(planId);
+                if (preparing) limit.select(url);
                 summary.add("failed", name, "");
                 if (durable) save(runId, planId, "bulk-title-plan", batchId, "failed", plan,
                     Map.of("category", "unresolved", "error", safeError(error), "downloadTaskId", taskId));
             }
-            checkpoint.accept(summary.checkpoint(unresolved));
+            Map<String, Object> state = summary.checkpoint(unresolved);
+            if (titleLimit > 0) state.putAll(limit.counts(titles.size()));
+            checkpoint.accept(state);
         }
-        checkpoint.accept(summary.checkpoint(unresolved));
+        if (titleLimit > 0 && preparing && !limit.frozen()) {
+            checkCancelled(stop);
+            save(runId, selectionId, "bulk-selection-plan", batchId, "completed", limit.payload(), Map.of());
+        }
+        Map<String, Object> state = summary.checkpoint(unresolved);
+        if (titleLimit > 0) state.putAll(limit.counts(titles.size()));
+        checkpoint.accept(state);
         return summary.result(null, null);
     }
 
@@ -339,7 +385,7 @@ public final class BulkQueueCoordinator implements BulkRunGateway {
             Map<String, Map<String, Object>> result = new LinkedHashMap<>();
             payload.forEach(node -> {Map<String, Object> record = JSON.convertValue(node, MAP); Map<String, Object> detail = map(record.get("payload"));
                 if (batchId.equals(text(record.get("taskId"))) && map(record.get("result")).get("taskIds") instanceof List<?> ids && !ids.isEmpty()) result.put("__legacy_batch", record);
-                if (Set.of("bulk-title-plan", "bulk-discovery-plan").contains(text(detail.get("kind")))
+                if (Set.of("bulk-title-plan", "bulk-discovery-plan", "bulk-selection-plan").contains(text(detail.get("kind")))
                     && (batchId.isEmpty() || batchId.equals(text(detail.get("batchId"))))) result.put(text(record.get("taskId")), record);});
             return result;
         } catch (Exception error) {throw new IllegalStateException("Could not load durable bulk title plans.", error);}

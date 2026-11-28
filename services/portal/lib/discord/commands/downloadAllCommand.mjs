@@ -71,6 +71,7 @@ export const createDownloadAllCommand = ({
         booleanOption("nsfw", "Whether adult titles are allowed.", true),
         stringOption("titlegroup", "Enter a single letter a-z, or all.", true),
         integerOption("groupsize", "Batch groups to run before pausing for approval.", false, 1, 25),
+        integerOption("titlelimit", "Maximum titles needing work per type/letter batch.", false, 1, 2147483647),
         booleanOption("autoadvance", "Advance A-Z automatically with health, storage and backup gates.")
       ]),
       subcommand("continue", "Continue the next batch for a paused mega downloadall run.", [
@@ -146,6 +147,7 @@ export const createDownloadAllCommand = ({
       nsfw: interaction.options?.getBoolean?.("nsfw"),
       titlePrefix: interaction.options?.getString?.("titlegroup"),
       batchesPerApproval: interaction.options?.getInteger?.("groupsize") || 1,
+      ...(interaction.options?.getInteger?.("titlelimit") != null ? {titleLimit: interaction.options.getInteger("titlelimit")} : {}),
       autoAdvance: interaction.options?.getBoolean?.("autoadvance") === true
     };
 

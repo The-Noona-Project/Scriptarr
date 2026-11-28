@@ -775,6 +775,14 @@ all Noona memory from `/admin/discord`. The memory helper rejects obvious tokens
 sessions, cookies, and credentials.
 Use `/downloadall run type:<type> nsfw:<true|false> titlegroup:<prefix> groupsize:<count>` in a DM with Appa when the
 split admin bot is enabled, or with Noona in single-bot fallback mode.
+For a bounded A pilot, use `/downloadall run type:all nsfw:false titlegroup:a groupsize:1 titlelimit:30 autoadvance:false`.
+The optional positive `titlelimit` caps titles needing work per type/letter, so this selects at most 120 titles across
+Manga, Manhwa, Manhua, and OEL. Full available chapters are downloaded. Healthy current titles do not consume slots;
+partial titles append missing chapters. Candidates are considered alphabetically and the saved membership survives
+retry or restart without adding replacements. Deferred-by-limit counts are not failures. `groupsize` remains an approval
+batch count. A-only manual runs do not require the automatic A-Z capacity forecast; ordinary low-space protection remains active.
+If a metadata recheck reopens a policy skip outside the saved capped selection, it is explicitly deferred without
+blocking selected work. Its recheck history is retained; use a new bounded run to select that title.
 Every `downloadall` request creates a durable Raven run now, including single concrete type plus single `titlegroup`
 requests, so Portal can deliver delayed summaries even if the batch takes hours. `type:all` or `titlegroup:all`
 starts a multi-batch run that pauses after the configured group size. `groupsize` defaults to `1`, accepts `1-25`,

@@ -132,11 +132,14 @@ public class BulkRunService {
             throw new IllegalArgumentException("autoAdvance requires type all, titlegroup all, and nsfw false.");
         }
         int batchesPerApproval = resolveBatchesPerApproval(request.get("batchesPerApproval"), request.get("groupsize"));
+        if (request.containsKey("titleLimit") && request.get("titleLimit") == null) throw new IllegalArgumentException("titleLimit must be a positive integer.");
+        int titleLimit = BulkTitleLimit.parse(request.get("titleLimit"));
         if (autoAdvance && batchesPerApproval != 4) throw new IllegalArgumentException("autoAdvance requires a four-type letter window (groupsize 4).");
         String requestId = BulkRunIdentity.requestId(request.get("requestId"));
         String fingerprint = BulkRunIdentity.fingerprint(normalizeRunTypeFilter(typeFilter), normalizeRunGroupFilter(groupFilter),
             nsfw, batchesPerApproval, requestedBy);
         if (autoAdvance) fingerprint = BulkRunIdentity.digest(List.of(fingerprint, "autoAdvance:true"));
+        if (titleLimit > 0) fingerprint = BulkRunIdentity.digest(List.of(fingerprint, "titleLimit:" + titleLimit));
         String runId = BulkRunIdentity.runId(requestId);
         String now = now();
         Map<String, Object> existing = findRun(runId);
@@ -156,6 +159,7 @@ public class BulkRunService {
         runPayload.put("autoAdvance", autoAdvance);
         runPayload.put("batchCount", groups.size() * types.size());
         runPayload.put("batchesPerApproval", batchesPerApproval);
+        if (titleLimit > 0) runPayload.put("titleLimit", titleLimit);
         runPayload.put("requestId", requestId);
         runPayload.put("fingerprint", fingerprint);
         runPayload.put("schemaVersion", 2);
@@ -795,15 +799,19 @@ public class BulkRunService {
         Map<String, Object> payload = normalizeMap(batch.get("payload"));
         Map<String, Object> current = new LinkedHashMap<>(batch);
         try {
-            BulkQueueDownloadResult bulkResult = gateway.queueBatch(
-                runId, stringValue(batch.get("taskId")), PROVIDER_ID,
-                stringValue(payload.get("type")), booleanValue(payload.get("nsfw")),
-                stringValue(payload.get("titleGroup")), stringValue(payload.get("requestedBy")),
-                () -> runCancelled(runId), (checkpoint) -> {
+            java.util.function.Consumer<Map<String, Object>> progress = (checkpoint) -> {
                     throwIfRunCancelled(runId);
                     current.put("result", mergeCheckpoint(normalizeMap(current.get("result")), checkpoint));
                     putBatchTask(runId, current);
-                });
+                };
+            int titleLimit = BulkTitleLimit.parse(payload.get("titleLimit"));
+            BulkQueueDownloadResult bulkResult = titleLimit > 0
+                ? gateway.queueBatchLimited(runId, stringValue(batch.get("taskId")), PROVIDER_ID,
+                    stringValue(payload.get("type")), booleanValue(payload.get("nsfw")), stringValue(payload.get("titleGroup")),
+                    stringValue(payload.get("requestedBy")), titleLimit, () -> runCancelled(runId), progress)
+                : gateway.queueBatch(runId, stringValue(batch.get("taskId")), PROVIDER_ID,
+                    stringValue(payload.get("type")), booleanValue(payload.get("nsfw")), stringValue(payload.get("titleGroup")),
+                    stringValue(payload.get("requestedBy")), () -> runCancelled(runId), progress);
             throwIfRunCancelled(runId);
             Map<String, Object> result = mergeCheckpoint(normalizeMap(current.get("result")), bulkResultToMap(bulkResult));
             result.put("discoveryComplete", !BulkQueueDownloadResult.STATUS_INVALID_REQUEST.equals(bulkResult.status()));
@@ -1205,6 +1213,8 @@ public class BulkRunService {
         summary.put("pagesScanned", 0);
         summary.put("matchedCount", 0);
         summary.put("queuedCount", 0);
+        summary.put("selectedCount", 0);
+        summary.put("deferredByLimitCount", 0);
         summary.put("skippedActiveCount", 0);
         summary.put("skippedAdultContentCount", 0);
         summary.put("skippedNoMetadataCount", 0);
@@ -1253,6 +1263,8 @@ public class BulkRunService {
             increment(summary, "pagesScanned", toInt(result.get("pagesScanned"), 0));
             increment(summary, "matchedCount", toInt(result.get("matchedCount"), 0));
             increment(summary, "queuedCount", toInt(result.get("queuedCount"), 0));
+            increment(summary, "selectedCount", toInt(result.get("selectedCount"), 0));
+            increment(summary, "deferredByLimitCount", toInt(result.get("deferredByLimitCount"), 0));
             increment(summary, "skippedActiveCount", toInt(result.get("skippedActiveCount"), 0));
             increment(summary, "skippedAdultContentCount", toInt(result.get("skippedAdultContentCount"), 0));
             increment(summary, "skippedNoMetadataCount", toInt(result.get("skippedNoMetadataCount"), 0));
@@ -1423,7 +1435,7 @@ public class BulkRunService {
     private Map<String, Object> publicFilters(Map<String, Object> job) {
         Map<String, Object> payload = normalizeMap(job.get("payload"));
         Map<String, Object> filters = new LinkedHashMap<>();
-        for (String key : List.of("providerId", "type", "titlegroup", "nsfw", "batchCount", "batchesPerApproval", "autoAdvance")) {
+        for (String key : List.of("providerId", "type", "titlegroup", "nsfw", "batchCount", "batchesPerApproval", "autoAdvance", "titleLimit")) {
             if (payload.containsKey(key)) {
                 filters.put(key, payload.get(key));
             }
@@ -1441,8 +1453,14 @@ public class BulkRunService {
             for (String type : resolveTypes(stringValue(payload.get("type")))) {
                 String taskId = batchTaskId(runId, type, group);
                 if (!existingIds.contains(taskId)) {
-                    putBatchTask(runId, buildBatchTask(runId, stringValue(job.get("requestedBy")), type, group,
-                        booleanValue(payload.get("nsfw")), sortOrder, now()));
+                    Map<String, Object> batch = buildBatchTask(runId, stringValue(job.get("requestedBy")), type, group,
+                        booleanValue(payload.get("nsfw")), sortOrder, now());
+                    if (payload.containsKey("titleLimit")) {
+                        Map<String, Object> batchPayload = normalizeMap(batch.get("payload"));
+                        batchPayload.put("titleLimit", payload.get("titleLimit"));
+                        batch.put("payload", batchPayload);
+                    }
+                    putBatchTask(runId, batch);
                 }
                 sortOrder++;
             }
@@ -1604,7 +1622,7 @@ public class BulkRunService {
             List<Map<String, Object>> batches = new ArrayList<>();
             payload.forEach((node) -> {
                 String kind = node.path("payload").path("kind").asText("");
-                if (!"bulk-title-plan".equals(kind) && !"bulk-discovery-plan".equals(kind)) {
+                if (!Set.of("bulk-title-plan", "bulk-discovery-plan", "bulk-selection-plan").contains(kind)) {
                     batches.add(jsonToMap(node));
                 }
             });
