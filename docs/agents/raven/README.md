@@ -1,5 +1,10 @@
 # Raven AI Notes
 
+- Capped bulk batches use optional positive `titleLimit`, included only when present in the creation fingerprint to
+  preserve legacy keyed identities. Preparation persists requests and a `bulk-selection-plan` before enqueueing; selected
+  failures retain their slots. Frozen membership and considered dispositions survive restart. Exclude selection records
+  from batch enumeration and keep cap/deferred counters on durable checkpoints. Unlimited legacy batches retain their existing path.
+
 `SourceRequests` is the shared HTML transport for both `TitleScraper` and `SourceFinder`. Production WeebCentral page
 indexes must use the same `ProviderCooldown.SOURCE` gate as browsing, with `SourceHtmlResponse` reading HTTP 429 headers
 before MIME validation and closing responses. Never add direct Jsoup `.get()` calls to the chapter-page discovery path.

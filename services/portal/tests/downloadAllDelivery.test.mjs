@@ -162,7 +162,7 @@ test("slash run and action propagate stable original interaction identifiers", a
   }});
   let action = "run";
   const interaction = {id: "original-interaction", user: {id: "owner"}, deferred: true,
-    options: {getSubcommand: () => action, getString: (name) => ({type: "Manhua", titlegroup: "t", runid: "run"})[name], getBoolean: () => false, getInteger: () => 20},
+    options: {getSubcommand: () => action, getString: (name) => ({type: "Manhua", titlegroup: "t", runid: "run"})[name], getBoolean: () => false, getInteger: name => name === "groupsize" ? 20 : null},
     deferReply: async () => {}, editReply: async () => {}};
   await command.execute(interaction); await command.execute(interaction);
   assert.deepEqual(forwarded[0], forwarded[1]);

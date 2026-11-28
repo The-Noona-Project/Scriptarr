@@ -203,7 +203,10 @@ export const buildDownloadAllDirectMessagePayload = (notification = {}, publicBa
           name: "Progress",
           value: [
             `Batches: **${completedBatches}** done / **${remainingBatches}** remaining`,
-            `Title tasks completed: **${completedTitles}**`
+            `Title tasks completed: **${completedTitles}**`,
+            ...(filters.titleLimit ? [`Title limit: **${filters.titleLimit}** per type/letter`,
+              `Selected titles: **${toCount(counts.selectedCount ?? summary.selectedTitles, 0)}**`,
+              `Deferred by limit: **${toCount(counts.deferredByLimitCount ?? summary.deferredByLimit, 0)}**`] : [])
           ].filter(Boolean).join("\n"),
           inline: true
         },

@@ -107,6 +107,10 @@ export const parseDownloadAllCommand = (content) => {
     errors.push("titlegroup must be one letter a-z or all.");
   }
   const groupsize = normalizeGroupSize(parsed.get("groupsize"));
+  const titleLimit = parsed.has("titlelimit") ? Number(parsed.get("titlelimit")) : undefined;
+  if (titleLimit !== undefined && (!/^[1-9][0-9]*$/.test(parsed.get("titlelimit")) || !Number.isInteger(titleLimit) || titleLimit > 2147483647)) {
+    errors.push("titlelimit must be a positive integer up to 2147483647.");
+  }
   if (parsed.has("groupsize") && String(groupsize) !== normalizeString(parsed.get("groupsize"))) {
     errors.push("groupsize must be a whole number from 1 to 25.");
   }
@@ -114,7 +118,7 @@ export const parseDownloadAllCommand = (content) => {
   return {
     matched: true,
     valid: errors.length === 0,
-    filters: type && nsfw != null && titlePrefix ? {type, nsfw, titlePrefix, batchesPerApproval: groupsize} : undefined,
+    filters: type && nsfw != null && titlePrefix ? {type, nsfw, titlePrefix, batchesPerApproval: groupsize, ...(titleLimit !== undefined ? {titleLimit} : {})} : undefined,
     errors
   };
 };
@@ -125,6 +129,7 @@ export const formatDownloadAllUsage = (errors = []) => {
     "Use `type:all` or `titlegroup:all` for an async mega run that pauses after each batch.",
     "Manage mega runs with `/downloadall status runid:<id>`, `/downloadall continue runid:<id>`, or `/downloadall cancel runid:<id>`.",
     "Add `groupsize:5` to run five batch groups one at a time before Scriptarr pauses for approval.",
+    "Add `titlelimit:30` to select up to 30 titles needing work per type/letter batch; groupsize does not limit titles.",
     "Use `/downloadall help` to show this guide again.",
     "Legacy fallback: `downloadall type:manga nsfw:false titlegroup:a`.",
     "Supported `type` values: manga, manhwa, manhua, oel, all.",
@@ -238,6 +243,7 @@ export const formatBulkRunSummary = (result = {}) => {
     `- NSFW: ${String(filters.nsfw)}`,
     `- Title group: ${normalizeString(filters.titlePrefix || filters.titlegroup) || "unknown"}`,
     `- Batch window: ${batchesPerApproval}`,
+    ...(filters.titleLimit ? [`- Title limit: ${filters.titleLimit} per type/letter batch`, `- Selected: ${toCount(counts.selectedCount ?? result.selectedCount, 0)}`, `- Deferred by limit: ${toCount(counts.deferredByLimitCount ?? result.deferredByLimitCount, 0)}`] : []),
     "",
     "Progress",
     `- Batches: ${completedBatches} done / ${remainingBatches} remaining`,

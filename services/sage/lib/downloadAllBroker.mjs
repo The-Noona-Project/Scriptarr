@@ -37,7 +37,8 @@ const notificationFromJob = (job, tasks, publicBaseUrl) => {
   const batch = interrupted || completed[0] || tasks.find((task) => !["completed", "failed", "cancelled"].includes(task.status)) || {};
   const runPayload = job.payload || {};
   const filters = {providerId: runPayload.providerId, type: runPayload.type, nsfw: runPayload.nsfw,
-    titlegroup: runPayload.titlegroup, titlePrefix: runPayload.titlegroup, batchesPerApproval: runPayload.batchesPerApproval};
+    titlegroup: runPayload.titlegroup, titlePrefix: runPayload.titlegroup, batchesPerApproval: runPayload.batchesPerApproval,
+    ...(runPayload.titleLimit !== undefined ? {titleLimit: runPayload.titleLimit} : {})};
   const result = job.result || {};
   const approvalId = text(runPayload.approvalId);
   const batchId = text(batch.taskId) || status;
@@ -45,7 +46,7 @@ const notificationFromJob = (job, tasks, publicBaseUrl) => {
   const batchesPerApproval = Number(filters.batchesPerApproval) || 1;
   const currentBatchLabel = text(batch.label) || [batch.payload?.titlePrefix, batch.payload?.type].filter(Boolean).join(" ");
   const counts = {completedBatches: completed.length, remainingBatches: Math.max(0, tasks.length - completed.length)};
-  for (const field of ["queuedCount", "appendedCount", "completedTitleTaskCount", "failedTitleTaskCount", "staleTitleTaskCount", "skippedCompletedCount", "skippedCurrentCount",
+  for (const field of ["selectedCount", "deferredByLimitCount", "queuedCount", "appendedCount", "completedTitleTaskCount", "failedTitleTaskCount", "staleTitleTaskCount", "skippedCompletedCount", "skippedCurrentCount",
     "skippedActiveCount", "skippedAdultContentCount", "skippedNoMetadataCount", "skippedAmbiguousMetadataCount", "invalidSourceCount", "skippedUnavailableCount", "runningTitleTaskCount", "queuedTitleTaskCount", "missingTitleTaskCount"]) counts[field] = Number(result[field]) || 0;
   const failedIds = new Set(tasks.flatMap((task) => [
     ...array(task.result?.failedTaskIds),
@@ -78,6 +79,7 @@ const notificationFromJob = (job, tasks, publicBaseUrl) => {
       : `Downloadall ${status}. ${counts.completedTitleTaskCount} title task(s) completed.`,
     summary: {batchesPerApproval, completedBatches: completed.length, remainingBatches: counts.remainingBatches,
       completedTitles: counts.completedTitleTaskCount, queued: counts.queuedCount, appended: counts.appendedCount,
+      selectedTitles: counts.selectedCount, deferredByLimit: counts.deferredByLimitCount,
       skippedCompleted: counts.skippedCompletedCount, skippedCurrent: counts.skippedCurrentCount,
       skippedActive: counts.skippedActiveCount, skippedAdultContent: counts.skippedAdultContentCount,
       skippedNoMetadata: counts.skippedNoMetadataCount, skippedAmbiguousMetadata: counts.skippedAmbiguousMetadataCount,

@@ -1,5 +1,8 @@
 # Sage AI Notes
 
+- Preserve optional `titleLimit` through Portal creation, Raven filters, and notification snapshots. Retain selected
+  and deferred-by-limit counters without folding them into policy skips or failure counts. Vault generic jobs hold the durable selection.
+
 - Cover cards and title summaries always advertise the lazy Moon cover-cache URL. Only an authenticated artwork
   request hydrates the title's chapters. `libraryCoverSource.mjs` selects page zero of the numerically earliest ready
   AVIF chapter with complete pages and emits a same-title Sage reader path; Moon must proxy that path with the current

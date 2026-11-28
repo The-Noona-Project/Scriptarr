@@ -1,5 +1,10 @@
 # Portal
 
+Owner-only `/downloadall run` accepts optional `titlelimit:30` to select up to thirty titles needing work in each
+type/letter batch. `groupsize` still controls batches before approval. Existing complete titles do not consume slots;
+partial titles append missing chapters. Summaries distinguish selected work, policy skips, failures, and candidates
+deferred by the limit. Omitting `titlelimit` preserves the normal unlimited selection.
+
 Downloadall pause summaries include bounded chapter-specific failure reasons where available. Progress and failure
 updates edit the existing pause message, keeping its approval decision intact. A missing source chapter remains an
 unresolved failure until genuine source content can be verified.

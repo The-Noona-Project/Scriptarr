@@ -471,6 +471,7 @@ const buildPortalBulkDownloadPayload = (body = {}) => {
     titlePrefix: titleGroup,
     groupsize: batchesPerApproval,
     batchesPerApproval,
+    ...(body?.titleLimit !== undefined ? {titleLimit: body.titleLimit} : {}),
     ...(body?.autoAdvance === true ? {autoAdvance: true} : {}),
     requestedBy: normalizeString(body?.requestedBy, "scriptarr-portal"),
     ...(body?.requestId ? {requestId: body.requestId} : {})

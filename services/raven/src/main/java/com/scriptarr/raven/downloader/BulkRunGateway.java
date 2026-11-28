@@ -33,6 +33,14 @@ public interface BulkRunGateway {
         boolean nsfw, String prefix, String actor, BooleanSupplier cancelled,
         Consumer<Map<String, Object>> checkpoint);
 
+    /** @param runId parent @param batchId batch @param providerId source @param type type @param nsfw adult policy
+     * @param prefix letter @param actor owner @param titleLimit positive per-batch cap @param cancelled cancellation
+     * @param checkpoint durable progress @return bounded queue result */
+    default BulkQueueDownloadResult queueBatchLimited(String runId, String batchId, String providerId, String type,
+        boolean nsfw, String prefix, String actor, int titleLimit, BooleanSupplier cancelled, Consumer<Map<String, Object>> checkpoint) {
+        throw new UnsupportedOperationException("This bulk gateway does not support a title limit.");
+    }
+
     /**
      * Load owned task evidence without the local terminal-history retention limit.
      *

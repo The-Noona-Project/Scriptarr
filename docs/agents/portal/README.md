@@ -1,5 +1,8 @@
 # Portal AI Notes
 
+- `titlelimit` is an optional positive Discord integer forwarded as `titleLimit` through Sage. Do not confuse it with
+  `groupsize`, drop it from retries, or present deferred candidates as failures. Existing uncapped command payloads remain compatible.
+
 - Portal owns Discord-facing request creation, moderation messaging, subscriptions, onboarding, public Noona mention
   chat, optional Appa admin/reviewer chat, and Oracle chat entry through Sage.
 - It no longer bridges Kavita or Komf.

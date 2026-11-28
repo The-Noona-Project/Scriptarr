@@ -20,6 +20,115 @@ import static org.mockito.Mockito.*;
 
 /** Verify durable replay, checked persistence, cancellation and uncapped ownership evidence. */
 class BulkQueueCoordinatorTest {
+    /** Every supported type selects thirty stable titles after complete discovery and before its first enqueue. */
+    @Test void cappedTypeBatchesPersistAllMembershipBeforeEnqueueAndReplay() {
+        for (String type : List.of("Manga", "Manhwa", "Manhua", "OEL")) {
+            Fixture f = cappedFixture(type, 35);
+            when(f.downloader.queueBulkOwned(anyString(), anyString(), anyString(), anyString(), any())).thenAnswer(call -> {
+                var rows = f.broker.listJobTasks("run", "");
+                assertTrue(rows.toString().contains("bulk-selection-plan"));
+                assertEquals(30, java.util.stream.StreamSupport.stream(rows.spliterator(), false)
+                    .filter(row -> row.path("payload").has("request")).count());
+                return f.accept(call);
+            });
+            var state = new java.util.concurrent.atomic.AtomicReference<Map<String, Object>>();
+            BulkQueueCoordinator coordinator = f.coordinator();
+            var first = coordinator.queueBatchLimited("run", "batch", "weebcentral", type, false, "a", "owner", 30, () -> false, state::set);
+            assertEquals(30, first.queuedCount()); assertEquals(35, first.matchedCount());
+            assertEquals(30, state.get().get("selectedCount")); assertEquals(5, state.get().get("deferredByLimitCount"));
+            var replay = f.coordinator().queueBatchLimited("run", "batch", "weebcentral", type, false, "a", "owner", 30, () -> false, state::set);
+            assertEquals(first.queuedTaskIds(), replay.queuedTaskIds());
+            assertEquals("Alpha 00", first.queuedTitles().getFirst()); assertEquals("Alpha 29", first.queuedTitles().getLast());
+            verify(f.downloader, times(30)).queueBulkOwned(anyString(), anyString(), anyString(), anyString(), any());
+            verify(f.provider, times(1)).browseTitlesAlphabetically(anyString(), anyBoolean(), anyString(), any(), any());
+        }
+    }
+
+    /** An unresolved selected slot pauses all dispatch and survives explicit retry without replacement. */
+    @Test void cappedPreparationFailureRetainsSlotAndDefersDispatchUntilResolved() {
+        Fixture f = cappedFixture("Manhua", 5);
+        String failed = candidateUrl(0);
+        when(f.provider.getTitleDetails(eq(failed))).thenThrow(new IllegalStateException("Source temporarily unavailable."));
+        var state = new java.util.concurrent.atomic.AtomicReference<Map<String, Object>>();
+        var first = f.coordinator().queueBatchLimited("run", "batch", "weebcentral", "Manhua", false, "a", "owner", 3, () -> false, state::set);
+        assertEquals(1, first.failedCount()); assertEquals(3, state.get().get("selectedCount"));
+        verify(f.downloader, never()).queueBulkOwned(anyString(), anyString(), anyString(), anyString(), any());
+        when(f.provider.getTitleDetails(eq(failed))).thenReturn(new TitleDetails("", "Manhua", List.of(), "Ongoing", "", false, false, false, List.of(), List.of()));
+        var retry = f.coordinator().queueBatchLimited("run", "batch", "weebcentral", "Manhua", false, "a", "owner", 3, () -> false, state::set);
+        assertEquals(List.of("Alpha 00", "Alpha 01", "Alpha 02"), retry.queuedTitles());
+        assertEquals(2, state.get().get("deferredByLimitCount"));
+    }
+
+    /** A failed membership commit cannot dispatch any title, even when every request was prepared. */
+    @Test void cappedManifestWriteFailureDoesNotDispatch() {
+        FakeRavenBrokerClient broker = new FakeRavenBrokerClient() {
+            @Override public JsonNode putJobTask(String jobId, String taskId, Map<String, Object> payload) {
+                if (taskId.startsWith("bulk_selection_")) throw new IllegalStateException("Lost manifest write.");
+                return super.putJobTask(jobId, taskId, payload);
+            }
+        };
+        Fixture f = new Fixture(broker);
+        assertThrows(IllegalStateException.class, () -> f.coordinator().queueBatchLimited("run", "batch", "weebcentral", "Manhua", false, "a", "owner", 30, () -> false, ignored -> { }));
+        verify(f.downloader, never()).queueBulkOwned(anyString(), anyString(), anyString(), anyString(), any());
+    }
+
+    /** Cancellation during capped preparation cannot dispatch any partially prepared title. */
+    @Test void cancellationDuringCappedPreparationCannotEscapeToQueue() {
+        Fixture f = cappedFixture("Manhua", 5);
+        var cancelled = new java.util.concurrent.atomic.AtomicBoolean();
+        when(f.provider.getTitleDetails(anyString())).thenAnswer(call -> {
+            cancelled.set(true);
+            return new TitleDetails("", "Manhua", List.of(), "Ongoing", "", false, false, false, List.of(), List.of());
+        });
+        assertThrows(java.util.concurrent.CancellationException.class, () -> f.coordinator().queueBatchLimited(
+            "run", "batch", "weebcentral", "Manhua", false, "a", "owner", 3, cancelled::get, ignored -> { }));
+        verify(f.downloader, never()).queueBulkOwned(anyString(), anyString(), anyString(), anyString(), any());
+        assertFalse(f.broker.listJobTasks("run", "").toString().contains("bulk-selection-plan"));
+    }
+
+    /** Healthy complete titles do not consume slots; partially downloaded titles use one append slot. */
+    @Test void cappedSelectionSkipsHealthyCurrentAndRetainsAppendPlan() {
+        Fixture f = cappedFixture("Manhua", 4);
+        var current = mock(com.scriptarr.raven.library.LibraryTitle.class);
+        var partial = mock(com.scriptarr.raven.library.LibraryTitle.class);
+        var chapter = mock(com.scriptarr.raven.library.LibraryChapter.class);
+        when(chapter.chapterNumber()).thenReturn("1"); when(f.downloader.bulkChapterHealthy(chapter)).thenReturn(true);
+        for (var title : List.of(current, partial)) {
+            int index = title == current ? 0 : 1;
+            when(title.id()).thenReturn("catalog-" + index); when(title.title()).thenReturn("Alpha 0" + index);
+            when(title.sourceUrl()).thenReturn(candidateUrl(index)); when(title.libraryTypeSlug()).thenReturn("manhua");
+            when(title.status()).thenReturn("Ongoing"); when(title.chapters()).thenReturn(title == current ? List.of(chapter) : List.of());
+        }
+        when(f.library.listTitles()).thenReturn(List.of(current, partial));
+        var result = f.coordinator().queueBatchLimited("run", "batch", "weebcentral", "Manhua", false, "a", "owner", 2, () -> false, ignored -> { });
+        assertEquals(List.of("Alpha 01", "Alpha 02"), result.queuedTitles());
+        assertEquals(1, result.skippedCurrentCount()); assertEquals(1, result.appendedCount());
+        var request = org.mockito.ArgumentCaptor.forClass(DownloadRequest.class);
+        verify(f.downloader, times(2)).queueBulkOwned(anyString(), anyString(), anyString(), anyString(), request.capture());
+        assertEquals("catalog-1", request.getAllValues().getFirst().selectedDownload().get("appendTitleId"));
+        assertEquals(List.of("1"), request.getAllValues().getFirst().selectedDownload().get("chapterNumbers"));
+    }
+
+    /** Strict cap parsing never truncates fractions, overflows, zero, or booleans into an uncapped run. */
+    @Test void titleLimitParsingIsExactAndLegacyAbsenceRemainsUnlimited() {
+        assertEquals(0, BulkTitleLimit.parse(null)); assertEquals(30, BulkTitleLimit.parse(30));
+        for (Object value : List.of(0, -1, 1.5, true, "", "30x", "2147483648")) assertThrows(IllegalArgumentException.class, () -> BulkTitleLimit.parse(value));
+    }
+
+    /** @param index candidate identity @return valid canonical source URL */
+    private static String candidateUrl(int index) { return "https://weebcentral.com/series/" + String.format(java.util.Locale.ROOT, "%026d", index); }
+
+    /** @param type exact source type @param count candidate count @return deterministic reversed source fixture */
+    private Fixture cappedFixture(String type, int count) {
+        Fixture f = new Fixture(new FakeRavenBrokerClient());
+        var rows = new java.util.ArrayList<Map<String, String>>();
+        for (int index = count - 1; index >= 0; index--) rows.add(Map.of("title", String.format(java.util.Locale.ROOT, "Alpha %02d", index), "href", candidateUrl(index), "type", type));
+        when(f.provider.browseTitlesAlphabetically(anyString(), anyBoolean(), anyString(), any(), any())).thenReturn(new BulkBrowseResult(rows, 2));
+        when(f.provider.getTitleDetails(anyString())).thenReturn(new TitleDetails("", type, List.of(), "Ongoing", "", false, false, false, List.of(), List.of()));
+        when(f.intake.resolveBulkMetadata(anyString(), anyString(), anyString(), anyString(), anyList())).thenAnswer(call ->
+            new DownloadIntakeService.BulkMetadataResolution("matched", Map.of("title", call.getArgument(2), "provider", "mangadex", "providerSeriesId", call.getArgument(1)), Map.of()));
+        return f;
+    }
     /** A verified unavailable row retains evidence and is separately skipped without accepting a title task. */
     @Test void unavailableSourceIsAnExplicitRetainedPolicySkip() {
         Fixture f = new Fixture(new FakeRavenBrokerClient());

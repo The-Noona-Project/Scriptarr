@@ -1,5 +1,8 @@
 # Sage
 
+Discord bulk runs can carry an optional per-type/letter title limit. Sage preserves that limit in creation and status
+payloads and reports deferred candidates separately from failed downloads. Continued runs retain their saved selection.
+
 Selected chapter repairs use the authenticated library root permission and the existing durable download queue.
 Missing Content shows chapter-specific failures and read-only repair progress. Repeated submissions with the same
 request identity reuse the accepted repair; changing its title or selection requires a new request.
